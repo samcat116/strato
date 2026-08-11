@@ -446,6 +446,28 @@ final class VMNetworkSelectionTests {
         }
     }
 
+    @Test("POST /api/vms rejects IMDS bootstrap for firecracker VMs (400)")
+    func createFirecrackerWithIMDSRejected() async throws {
+        try await withApp { app, _, _, project, image, token in
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "fc-imds-vm", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: "default",
+                        hypervisorType: "firecracker", metadataSource: "imds"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("metadataSource: imds"))
+                #expect(res.body.string.contains("firecracker"))
+            }
+
+            let vm = try await VM.query(on: app.db).filter(\.$name == "fc-imds-vm").first()
+            #expect(vm == nil)
+        }
+    }
+
     @Test("VM status and update responses do not expose cloud-init user data")
     func statusAndUpdateRedactUserData() async throws {
         try await withApp { app, _, _, project, image, token in

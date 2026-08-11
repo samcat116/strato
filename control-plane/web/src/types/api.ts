@@ -1175,7 +1175,10 @@ export interface CreateVMRequest {
    * `metadataSource: imds` also needs the service for cloud-init bootstrap.
    */
   metadataEnabled?: boolean;
-  /** Guest bootstrap source. Omitted means the server's current `iso` default. */
+  /**
+   * Guest bootstrap source. Omitted means the server's current `iso` default.
+   * `imds` requires QEMU and an OVN-backed agent.
+   */
   metadataSource?: MetadataSource;
 }
 

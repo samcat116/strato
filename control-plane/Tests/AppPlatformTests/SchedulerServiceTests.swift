@@ -551,6 +551,31 @@ struct SchedulerServiceTests {
         #expect(selectedId == "ovn")
     }
 
+    @Test("IMDS bootstrap derives the OVN placement requirement")
+    func testIMDSBootstrapRequiresOverlayNetworking() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+        let isoVM = createTestVM()
+        let imdsVM = createTestVM()
+        imdsVM.metadataSource = .imds
+
+        #expect(!SchedulerService.placementRequirements(for: isoVM).requiresInterVMNetworking)
+        #expect(SchedulerService.placementRequirements(for: imdsVM).requiresInterVMNetworking)
+
+        let agents = [
+            createTestAgent(
+                id: "slirp", name: "slirp", availableCPU: 8,
+                supportsInterVMNetworking: false),
+            createTestAgent(
+                id: "ovn", name: "ovn", availableCPU: 2,
+                supportsInterVMNetworking: true),
+        ]
+
+        let selectedId = try scheduler.selectAgent(for: imdsVM, from: agents)
+
+        #expect(selectedId == "ovn")
+    }
+
     @Test("Inter-VM networking requirement fails placement on user-mode-only fleet")
     func testNetworkCapabilityConstraintFails() throws {
         let logger = Logger(label: "test")

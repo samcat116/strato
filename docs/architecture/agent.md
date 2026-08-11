@@ -552,13 +552,16 @@ shape at creation:
 
 The ISO cannot disappear even in `imds` mode: a statically addressed guest
 needs `network-config` before it can reach the link-local listener. Guest
-bootstrap is deliberately per-backend: Firecracker VMs inject configuration
-through kernel args instead and do not use this path.
+bootstrap is deliberately per-backend. Firecracker currently has no cloud-init
+injection path, so VM creation rejects both `imds` and caller-supplied user data
+for that hypervisor instead of accepting configuration it cannot deliver.
 
 VM creation rejects `imds` when the VM-level metadata switch is off or when
 none of its selected logical networks publish metadata. Either configuration
 would create a seed whose hand-off URL has no reachable listener; `iso` remains
 valid on metadata-disabled networks because its bootstrap is self-contained.
+IMDS-backed VMs also require a QEMU agent that advertises OVN networking, since
+user-mode networking cannot realize the metadata localport.
 
 The seed's `local-hostname` is the VM's **desired hostname**, taken from
 `DesiredVMState.metadata.hostname` (STR-48) and passed to `createVM` alongside

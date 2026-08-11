@@ -130,6 +130,10 @@ export function CreateVMDialog({
     (imageId: string) => {
       const selectedImage = readyImages.find((img) => img.id === imageId);
       if (selectedImage) {
+        const compatible = selectedImage.compatibleHypervisors ?? [];
+        if (compatible.length === 1 && compatible[0] === "firecracker") {
+          setMetadataSource("iso");
+        }
         setFormData((prev) => ({
           ...prev,
           imageId,
@@ -220,7 +224,7 @@ export function CreateVMDialog({
           metadataEnabled: metadataEnabled ? undefined : false,
           // The phase-one default is explicit in the form so users can opt a
           // VM into the IMDS-backed seed without changing the fleet default.
-          metadataSource,
+          metadataSource: isFirecracker ? "iso" : metadataSource,
         }),
       watch: {
         kind: "create",
@@ -586,13 +590,18 @@ export function CreateVMDialog({
                 onChange={(e) =>
                   setMetadataSource(e.target.value as MetadataSource)
                 }
-                disabled={isLoading}
+                disabled={isLoading || isFirecracker}
                 className="w-full px-3 py-2 bg-background border border-input text-foreground rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <option value="iso">Seed ISO (default)</option>
                 <option value="imds">Instance metadata service</option>
               </select>
-              {metadataSource === "imds" ? (
+              {isFirecracker ? (
+                <p className="text-xs text-muted-foreground">
+                  Firecracker does not have a cloud-init bootstrap path, so an
+                  IMDS-backed seed is unavailable for this image.
+                </p>
+              ) : metadataSource === "imds" ? (
                 <p className="text-xs text-muted-foreground">
                   The ISO keeps the network configuration needed to get online,
                   then follows a <code>seedfrom</code> stub to

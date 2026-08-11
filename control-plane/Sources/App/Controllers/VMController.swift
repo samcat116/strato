@@ -653,6 +653,11 @@ struct VMController: RouteCollection {
                 .badRequest,
                 reason: "'metadataSource: imds' requires 'metadataEnabled' to be true during VM creation")
         }
+        if metadataSource == .imds, chosenHypervisor == .firecracker {
+            throw Abort(
+                .badRequest,
+                reason: "'metadataSource: imds' is not supported for firecracker VMs; use the qemu hypervisor")
+        }
 
         let vm = VM(
             name: createRequest.name,

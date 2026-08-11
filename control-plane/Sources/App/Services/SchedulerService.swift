@@ -335,12 +335,12 @@ final class SchedulerService: Sendable {
     /// (unconstrained) — the arch hard constraint only engages once the image
     /// carries architecture metadata.
     ///
-    /// Inter-VM networking is likewise unconstrained here: every VM gets a
-    /// NIC (a MAC is assigned at creation), and a plain NIC is satisfiable
-    /// by user-mode/SLIRP agents (outbound NAT). Deriving the requirement
-    /// from NIC presence would make every VM unplaceable on macOS dev
-    /// agents. It becomes derivable once VMs can express attachment to a
-    /// shared/tenant network at creation time.
+    /// A plain NIC remains satisfiable by user-mode/SLIRP agents (outbound
+    /// NAT), so NIC presence alone does not require overlay networking. An
+    /// IMDS-backed NoCloud seed is different: its `seedfrom` hand-off must
+    /// reach the per-VM metadata localport, which only an OVN-backed agent can
+    /// realize. That bootstrap choice therefore imposes the hard network
+    /// capability requirement.
     static func placementRequirements(
         for vm: VM, architecture: CPUArchitecture? = nil, siteID: UUID? = nil
     ) -> VMPlacementRequirements {
@@ -350,6 +350,7 @@ final class SchedulerService: Sendable {
             disk: vm.disk,
             hypervisorType: vm.hypervisorType,
             architecture: architecture,
+            requiresInterVMNetworking: vm.metadataSource == .imds,
             siteID: siteID,
             requiresVTPM: vm.tpmEnabled,
             requiresVsock: vm.guestAgentEnabled
