@@ -559,6 +559,9 @@ struct ProjectsAPIService: APIProtocol {
             let networkCount = try await LogicalNetwork.query(on: db)
                 .filter(\.$project.$id == projectID)
                 .count()
+            let loadBalancerCount = try await LoadBalancer.query(on: db)
+                .filter(\.$project.$id == projectID)
+                .count()
 
             project.$organization.id = destinationOrganizationIDParam
             project.$organizationalUnit.id = destinationOUID
@@ -569,6 +572,7 @@ struct ProjectsAPIService: APIProtocol {
                 for: project, on: db)
             let affectedQuotas = try await QuotaEnforcementService.validateNetworkTransfer(
                 networkCount: networkCount,
+                loadBalancerCount: loadBalancerCount,
                 sourceQuotas: sourceQuotas,
                 destinationQuotas: destinationQuotas,
                 on: db)

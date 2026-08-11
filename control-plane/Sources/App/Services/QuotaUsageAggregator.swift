@@ -48,10 +48,11 @@ struct QuotaMeasuredUsage: Sendable {
     var sandboxCount: Int
     var volumeCount: Int
     var networkCount: Int
+    var loadBalancerCount: Int = 0
 
     static let none = QuotaMeasuredUsage(
         vcpus: 0, memoryBytes: 0, storageBytes: 0, vmCount: 0, sandboxCount: 0, volumeCount: 0,
-        networkCount: 0)
+        networkCount: 0, loadBalancerCount: 0)
 
     /// The API-facing projection.
     var asQuotaUsage: QuotaUsage {
@@ -62,7 +63,8 @@ struct QuotaMeasuredUsage: Sendable {
             vms: vmCount,
             sandboxes: sandboxCount,
             volumes: volumeCount,
-            networks: networkCount
+            networks: networkCount,
+            loadBalancers: loadBalancerCount
         )
     }
 }
@@ -73,8 +75,10 @@ struct QuotaInfrastructureTotals: Sendable {
     let storageBytes: Int64
     let volumeCount: Int
     let networkCount: Int
+    let loadBalancerCount: Int
 
-    static let none = QuotaInfrastructureTotals(storageBytes: 0, volumeCount: 0, networkCount: 0)
+    static let none = QuotaInfrastructureTotals(
+        storageBytes: 0, volumeCount: 0, networkCount: 0, loadBalancerCount: 0)
 }
 
 /// A breakdown of a scope's VMs by environment and by status, for the quota
@@ -172,7 +176,8 @@ struct QuotaUsageAggregator {
             vmCount: Int(vms?.vm_count ?? 0),
             sandboxCount: Int(sandboxes?.sandbox_count ?? 0),
             volumeCount: infrastructure.volumeCount,
-            networkCount: infrastructure.networkCount
+            networkCount: infrastructure.networkCount,
+            loadBalancerCount: infrastructure.loadBalancerCount
         )
     }
 
@@ -287,6 +292,7 @@ struct QuotaUsageAggregator {
             let volume_count: Int64
             let snapshot_bytes: Int64
             let network_count: Int64
+            let load_balancer_count: Int64
         }
         let totals = try await sql.raw(
             """
@@ -300,14 +306,17 @@ struct QuotaUsageAggregator {
                  WHERE \(inScope) AND status::text <> \(bind: SnapshotStatus.error.rawValue)
                 ) AS snapshot_bytes,
                 (SELECT COUNT(*)::bigint FROM logical_networks
-                 WHERE \(networkScope)) AS network_count
+                 WHERE \(networkScope)) AS network_count,
+                (SELECT COUNT(*)::bigint FROM load_balancers
+                 WHERE \(networkScope)) AS load_balancer_count
             """
         ).first(decoding: Totals.self)
 
         return QuotaInfrastructureTotals(
             storageBytes: (totals?.volume_bytes ?? 0) + (totals?.snapshot_bytes ?? 0),
             volumeCount: Int(totals?.volume_count ?? 0),
-            networkCount: Int(totals?.network_count ?? 0))
+            networkCount: Int(totals?.network_count ?? 0),
+            loadBalancerCount: Int(totals?.load_balancer_count ?? 0))
     }
 
     /// Counts the scope's VMs by environment and by status in one grouped

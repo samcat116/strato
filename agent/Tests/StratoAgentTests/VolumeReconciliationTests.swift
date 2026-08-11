@@ -50,6 +50,7 @@ struct VolumeReconciliationTests {
 
     /// Actuator double that holds volumes and records the steps driven at them.
     private actor MockVolumeActuator: ReconcileActuator {
+        var vms: [String: VMPresence]
         var volumes: [String: VolumePresence]
         private(set) var performed: [(step: ReconcileStep, id: String)] = []
         private(set) var reportCount = 0
@@ -57,7 +58,11 @@ struct VolumeReconciliationTests {
         /// (STR-138).
         var presenceComplete = true
 
-        init(volumes: [String: VolumePresence] = [:]) {
+        init(
+            vms: [String: VMPresence] = [:],
+            volumes: [String: VolumePresence] = [:]
+        ) {
+            self.vms = vms
             self.volumes = volumes
         }
 
@@ -83,7 +88,7 @@ struct VolumeReconciliationTests {
             return reportCount
         }
         func presenceIsComplete() -> Bool { presenceComplete }
-        func observedPresence() -> [String: VMPresence] { [:] }
+        func observedPresence() -> [String: VMPresence] { vms }
         func observedSizing() -> [String: VMSizing] { [:] }
         func observedNetworkSpecs() -> [String: [NetworkSpec]] { [:] }
         func adoptVM(_ item: ReconcileWorkItem) throws -> VMStatus { .running }
@@ -481,6 +486,93 @@ struct VolumeReconciliationTests {
         #expect(
             performed.map(\.id)
                 == [volumeId.uuidString, volumeId.uuidString, vmId.uuidString, vmId.uuidString])
+    }
+
+    /// The STR-242 race: an image-backed root disk is present and attached, but
+    /// still has the source image's smaller virtual size when a start sync lands.
+    /// Both items hold the VM lane; the resize has to enter it first.
+    @Test("An undersized attached boot volume is grown before a rapid VM start")
+    func bootVolumeGrowPrecedesRapidStart() async {
+        let volumeId = UUID()
+        let vmId = UUID()
+        let requestedSize: Int64 = 1 << 30
+        let sourceSize: Int64 = 112 << 20
+        let vm = DesiredVMState(
+            vmId: vmId,
+            hypervisorType: .qemu,
+            spec: VMSpec(
+                cpus: 1,
+                memoryBytes: 1 << 30,
+                diskBytes: requestedSize,
+                boot: .disk(firmware: nil),
+                volumes: [
+                    VolumeSpec(
+                        volumeId: volumeId, deviceName: .disk(0), readonly: false,
+                        bootOrder: 0)
+                ]),
+            desiredStatus: .running,
+            generation: 2)
+        let volume = Self.desired(
+            volumeId,
+            generation: 1,
+            sizeBytes: requestedSize,
+            attachment: DesiredVolumeAttachment(vmId: vmId, deviceName: .disk(0)))
+        let actuator = MockVolumeActuator(
+            vms: [vmId.uuidString: .managed(.created)],
+            volumes: [
+                volumeId.uuidString: .managed(
+                    Self.facts(
+                        sizeBytes: sourceSize, attachedVMId: vmId.uuidString,
+                        deviceName: "disk0"))
+            ])
+        let reconciler = Self.reconciler(actuator)
+
+        await reconciler.apply(DesiredStateMessage(vms: [vm], volumes: [volume]))
+        _ = await actuator.waitForReports(2)
+
+        let performed = await actuator.performed
+        #expect(performed.map(\.step) == [.resize, .boot])
+        #expect(performed.map(\.id) == [volumeId.uuidString, vmId.uuidString])
+    }
+
+    @Test("VM boot-volume readiness requires the requested observed size and attachment")
+    func bootVolumeReadinessChecksSizeAndAttachment() {
+        let volumeId = UUID()
+        let vmId = UUID()
+        let requestedSize: Int64 = 1 << 30
+        let spec = VMSpec(
+            cpus: 1,
+            memoryBytes: 1 << 30,
+            boot: .disk(firmware: nil),
+            volumes: [
+                VolumeSpec(
+                    volumeId: volumeId, deviceName: .disk(0), readonly: false,
+                    bootOrder: 0)
+            ])
+        let undersized = ObservedVolumeFacts(
+            path: "/volumes/root.qcow2", format: .qcow2, sizeBytes: 112 << 20,
+            attachedVMId: vmId.uuidString, deviceName: "disk0")
+
+        let reason = VMBootVolumeDependency.pendingReason(
+            vmId: vmId.uuidString,
+            spec: spec,
+            desiredVolumes: [
+                volumeId.uuidString: Self.desired(volumeId, sizeBytes: requestedSize)
+            ],
+            observedVolumes: [volumeId.uuidString: undersized])
+        #expect(reason?.contains("waiting for the requested \(requestedSize) bytes") == true)
+
+        let ready = ObservedVolumeFacts(
+            path: "/volumes/root.qcow2", format: .qcow2, sizeBytes: requestedSize,
+            attachedVMId: vmId.uuidString, deviceName: "disk0")
+        #expect(
+            VMBootVolumeDependency.pendingReason(
+                vmId: vmId.uuidString,
+                spec: spec,
+                desiredVolumes: [
+                    volumeId.uuidString: Self.desired(volumeId, sizeBytes: requestedSize)
+                ],
+                observedVolumes: [volumeId.uuidString: ready]) == nil)
     }
 
     /// An agent that cannot read its own workload manifest converges no volumes

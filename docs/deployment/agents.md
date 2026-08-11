@@ -520,10 +520,11 @@ VM's spec — being what libvirt starts when the VM boots:
   One case a restart cannot fix: a VM with so many disks and NICs of its own
   that the root complex is full at create time gets fewer than four spares —
   possibly none — for good. The agent logs that when it creates such a VM.
-- **A resize the guest cannot take online lands at its next boot.** vCPU
-  removal is never attempted on a live guest, and a VM with no memory headroom
-  cannot be resized in place; both are written into the domain definition
-  instead, so the VM comes up at its new size when it is next started.
+- **Running vCPU shrink is rejected.** Guest vCPU unplug support is unreliable,
+  and a config-only write would leave the live domain at its old count while the
+  API claimed convergence. Stop the VM, resize it, and start it again. A memory
+  resize on a VM with no memory headroom remains config-only and lands when the
+  VM is next started.
 
 Two host packages change what a node can be asked to run rather than how it
 runs: `ovmf` (the signed EDK2 firmware Secure Boot needs) and `swtpm` (which
@@ -627,9 +628,9 @@ Control-plane environment reference:
 | `SPIFFE_JWT_SVID_AUTH_ENABLED` | Accept **JWT-SVIDs** as bearer credentials on the HTTP API, for registered service accounts and workloads (issue #495). Needs `SPIRE_ENABLED` and `SPIRE_SERVER_API_ADDRESS` — the trust domain's JWT authorities come from the SPIRE server's bundle API. See [IAM](../architecture/iam.md). | `false` |
 | `SPIFFE_JWT_AUDIENCE` | Audience a JWT-SVID must name to be accepted here. A token minted for any other relying party is rejected. | `spiffe://<trust-domain>/control-plane` |
 | `SPIFFE_JWT_BUNDLE_REFRESH_INTERVAL` | How long the JWT authorities are cached (seconds) before the next request re-fetches them — there is no background refresh. Rotation is also picked up on demand when a token names an unknown key. | `300` |
-| `GUEST_IDENTITY_AUDIENCES` | Comma-separated relying-party audiences for which a hosting agent may mint a VM JWT-SVID through `POST /agent/vms/{vmID}/jwt-svid`. Empty disables guest issuance. | empty (issuance off) |
+| `GUEST_IDENTITY_AUDIENCES` | Comma-separated relying-party audiences (at most 255 characters each and small enough to fit the 2 KiB metadata endpoint after percent encoding) for which a hosting agent may mint a VM JWT-SVID through `POST /agent/vms/{vmID}/jwt-svid`. Invalid entries fail control-plane startup. Empty disables guest issuance. | empty (issuance off) |
 | `GUEST_IDENTITY_JWT_TTL` | Default guest JWT-SVID lifetime in seconds when the agent does not request one. | `300` |
-| `GUEST_IDENTITY_JWT_MAX_TTL` | Maximum guest JWT-SVID lifetime in seconds; larger requests are clamped to this value. | `3600` |
+| `GUEST_IDENTITY_JWT_MAX_TTL` | Maximum guest JWT-SVID lifetime in seconds; larger requests are clamped to this value. The guest-facing `/strato/v1/identity` endpoint applies its own tighter 900-second ceiling and requests 300 seconds by default. | `3600` |
 
 ### Connectivity (remote nodes)
 

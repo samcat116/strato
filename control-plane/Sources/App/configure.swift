@@ -380,6 +380,13 @@ public func configure(_ app: Application) async throws {
     // fresh database; see ADR 0009 for the cutover decision.
     app.migrations.add(CurrentSchemaBaseline())
 
+    // STR-28: project-scoped native OVN load balancers, incremental listener
+    // and backend membership, external Floating IP attachment, and quota.
+    app.migrations.add(CreateLoadBalancer())
+    app.migrations.add(CreateLoadBalancerListener())
+    app.migrations.add(CreateLoadBalancerBackend())
+    app.migrations.add(AddLoadBalancerCountToResourceQuota())
+
     // STR-236: initialize the previously inert network counter from the
     // project-wide logical networks each global quota actually governs.
     app.migrations.add(BackfillNetworkQuotaAccounting())
@@ -470,7 +477,7 @@ public func configure(_ app: Application) async throws {
 
     // Guest JWT-SVID issuance is default-off until an operator supplies an
     // explicit audience allowlist.
-    app.configureGuestIdentityIssuance()
+    try app.configureGuestIdentityIssuance()
 
     // Configure SVID issuance telemetry for the Workload Identity view
     // (requires SPIRE_METRICS_PROMETHEUS_URL; otherwise the panel stays empty)

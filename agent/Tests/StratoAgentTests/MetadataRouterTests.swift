@@ -92,15 +92,30 @@ struct MetadataRouterTests {
         #expect(Self.route("GET", "/latest") == .document(.root))
         #expect(Self.route("GET", "/latest/") == .document(.root))
         #expect(Self.route("GET", "/latest/meta-data") == .document(.noCloudMetaData))
-        #expect(Self.route("GET", "/latest/meta-data/") == .document(.metaDataIndex))
+        #expect(Self.route("GET", "/latest/meta-data/") == .document(.ec2MetaData(.index)))
         #expect(Self.route("GET", "/latest/user-data") == .document(.userData))
         #expect(Self.route("GET", "/latest/user-data/") == .document(.userData))
         #expect(Self.route("GET", "/latest/network-config") == .document(.networkConfig))
         #expect(Self.route("GET", "/latest/network-config/") == .document(.networkConfig))
-        #expect(Self.route("GET", "/latest/meta-data/instance-id") == .document(.instanceID))
-        #expect(Self.route("GET", "/latest/meta-data/instance-id/") == .document(.instanceID))
-        #expect(Self.route("GET", "/latest/meta-data/hostname") == .document(.hostname))
-        #expect(Self.route("GET", "/latest/meta-data/hostname/") == .document(.hostname))
+        #expect(Self.route("GET", "/latest/meta-data/instance-id") == .document(.ec2MetaData(.instanceID)))
+        #expect(Self.route("GET", "/latest/meta-data/instance-id/") == .document(.ec2MetaData(.instanceID)))
+        #expect(Self.route("GET", "/latest/meta-data/hostname") == .document(.ec2MetaData(.hostname)))
+        #expect(Self.route("GET", "/latest/meta-data/hostname/") == .document(.ec2MetaData(.hostname)))
+        #expect(Self.route("GET", "/latest/meta-data/local-hostname") == .document(.ec2MetaData(.localHostname)))
+        #expect(
+            Self.route("GET", "/latest/meta-data/network/interfaces/macs/52:54:00:12:34:56/local-ipv4s")
+                == .document(
+                    .ec2MetaData(
+                        .networkInterfaceLeaf(macAddress: "52:54:00:12:34:56", leaf: .localIPv4s))))
+        #expect(
+            Self.route("GET", "/latest/meta-data/public-keys/0/openssh-key")
+                == .document(.ec2MetaData(.publicKeyOpenSSH(index: 0))))
+        #expect(
+            Self.route("GET", "/latest/dynamic/instance-identity/document")
+                == .document(.ec2Dynamic(.instanceIdentityDocument)))
+        #expect(
+            Self.route("GET", "/latest/dynamic/instance-identity/")
+                == .document(.ec2Dynamic(.instanceIdentity)))
     }
 
     @Test("An unserved path is not rejected at the router, so its 404 can wait for authentication")
@@ -108,6 +123,8 @@ struct MetadataRouterTests {
         // If the router rejected here, anything that could reach the address
         // could map the tree without ever holding a session.
         #expect(Self.route("GET", "/latest/meta-data/ami-id") == .unknownDocument)
+        #expect(Self.route("GET", "/latest/meta-data/public-keys/00/openssh-key") == .unknownDocument)
+        #expect(Self.route("GET", "/latest/dynamic/instance-identity/signature") == .unknownDocument)
         #expect(Self.route("GET", "/latest/vendor-data/") == .unknownDocument)
         #expect(Self.route("GET", "/latest/meta-data/instance-id//") == .unknownDocument)
         #expect(Self.route("GET", "/") == .unknownDocument)
@@ -136,6 +153,7 @@ struct MetadataRouterTests {
             "latest/meta-data",  // not origin-form
             "http://169.254.169.254/latest/meta-data",
             "/latest/../../etc/passwd",
+            "/latest/meta-data/tags/instance/release..channel",
             "/latest/meta-data/%2e%2e",
             "/latest/meta-data?x=1",
             "/latest/meta-data#frag",
@@ -149,6 +167,36 @@ struct MetadataRouterTests {
     func overlongTarget() {
         let target = "/latest/" + String(repeating: "a", count: MetadataLimits.maxTargetBytes)
         #expect(Self.status(of: Self.route("GET", target)) == 400)
+    }
+
+    @Test("Identity audiences use the issuer's character and encoded target limits")
+    func identityAudienceLengthLimit() {
+        let accepted = String(repeating: "a", count: 255)
+        let rejected = String(repeating: "a", count: 256)
+
+        #expect(
+            Self.route("GET", "\(MetadataRouter.identityPath)?audience=\(accepted)")
+                == .identity(audience: accepted))
+        #expect(
+            Self.status(
+                of: Self.route("GET", "\(MetadataRouter.identityPath)?audience=\(rejected)"))
+                == 400)
+
+        let multibyteAccepted = String(repeating: "😀", count: 168)
+        let multibyteRejected = String(repeating: "😀", count: 169)
+        let encodedAccepted =
+            multibyteAccepted
+            .addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+        let encodedRejected =
+            multibyteRejected
+            .addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+        #expect(
+            Self.route("GET", "\(MetadataRouter.identityPath)?audience=\(encodedAccepted)")
+                == .identity(audience: multibyteAccepted))
+        #expect(
+            Self.status(
+                of: Self.route("GET", "\(MetadataRouter.identityPath)?audience=\(encodedRejected)"))
+                == 400)
     }
 
     @Test("Header lookup is case-insensitive in the name and exact in the value")

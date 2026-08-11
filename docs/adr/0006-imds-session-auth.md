@@ -87,9 +87,11 @@ Sessions are keyed by `SHA256(token)`. Nothing retains the token itself.
   avoids the problem rather than a mitigation of it, which matters because the
   repository has no constant-time helper to reach for. A heap dump yields
   digests.
-- **Guest tooling works; the EC2 tree remains partial.** cloud-init's Ec2
-  datasource can complete the handshake and read instance ID, hostname, and
-  user data, but will get 404 for the rest of the tree until STR-65. STR-60's
+- **Guest tooling gets an EC2-shaped projection, not fabricated AWS state.**
+  cloud-init's Ec2 datasource can complete the handshake and crawl STR-65's
+  nested instance, SSH-key, network, tag, and identity-document paths. Fields
+  with no truthful `InstanceMetadata` source remain 404, and placement remains
+  hidden unless the renderer's disclosure policy is enabled. STR-60's
   NoCloud-net documents share those authenticated paths and are byte-identical
   to the seed ISO renderer; nothing depends on them until STR-64 supplies the
   guest's `seedfrom` stub.

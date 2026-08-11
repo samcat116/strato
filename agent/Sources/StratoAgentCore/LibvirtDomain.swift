@@ -269,6 +269,26 @@ public enum LibvirtDomain {
     /// deliberately not applied to a running guest.
     public static let affectConfig: UInt32 = 1 << 1
 
+    /// Flags for changing a domain's current vCPU count, or nil when the
+    /// requested count already matches.
+    ///
+    /// A running shrink is deliberately refused. libvirt can persist the
+    /// smaller count without changing the live domain, but returning success
+    /// for that write lets reconciliation advance `observedGeneration` while
+    /// the guest still has the old CPUs. Strato's running-resize contract is
+    /// online, so an effect that needs a stop/start is not a successful resize.
+    public static func vcpuResizeFlags(
+        current: Int, target: Int, domainIsLive: Bool
+    ) throws -> UInt32? {
+        guard current != target else { return nil }
+        if domainIsLive, target < current {
+            throw HypervisorServiceError.notSupported(
+                "reducing vCPUs from \(current) to \(target) while the VM is running; "
+                    + "stop the VM, resize it, then start it again because live vCPU unplug is not supported")
+        }
+        return domainIsLive ? affectLiveAndConfig : affectConfig
+    }
+
     /// `virDomainXMLFlags.VIR_DOMAIN_XML_INACTIVE` — describe the domain's
     /// persistent definition rather than the running guest.
     ///

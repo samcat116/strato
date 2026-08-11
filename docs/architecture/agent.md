@@ -268,9 +268,10 @@ guest *and* in the persistent definition. A process driver can leave the
 definition alone because it respawns from a stored configuration the agent keeps
 in step and re-reads the spec at every boot; here a live-only change silently
 un-happens at the guest's next power cycle. The same correction applies to a
-resize that would otherwise be "deferred to the next reboot" — a vCPU shrink, or
-a memory change on a VM with no virtio-mem device — which is written to `CONFIG`
-alone rather than left for a boot that would not pick it up.
+memory change on a VM with no virtio-mem device: it is written to `CONFIG` alone
+rather than left for a boot that would not pick it up. A running vCPU shrink is
+different: because it cannot change the live domain, it is rejected rather than
+reported as a completed online resize.
 
 Three consequences follow:
 
@@ -700,8 +701,13 @@ The step reaches `LibvirtService.resizeVM`:
   region above boot memory.
 
 Hot-*remove* of vCPUs is deliberately not attempted — guest support for CPU
-unplug is unreliable — and memory never shrinks below the boot size; both
-smaller figures are written to `CONFIG` alone and apply at the next reboot.
+unplug is unreliable — so the API rejects a running vCPU shrink and tells the
+caller to stop the VM, resize it, and start it again. The libvirt driver repeats
+that guard so a desired entry accepted by an older control plane — or a smaller
+last-writer target racing with pending growth — cannot advance
+`observedGeneration` without changing the live count. Memory never shrinks below
+the boot size; that smaller figure is written to `CONFIG` and applies at the
+next reboot.
 Growing past the ceilings the domain was defined with fails on the agent and is
 a `422` at the API, both naming a restart as the remedy — and since STR-187 that
 remedy works, because the boot rewrites `<vcpu>`'s maximum and `<maxMemory>` to
@@ -1317,10 +1323,22 @@ network rather than of the agent.
 paths are `/latest/meta-data`, `/latest/user-data`, and
 `/latest/network-config` (404 when no NIC needs a network document). The
 no-trailing-slash metadata path matters: `/latest/meta-data/` remains the EC2
-index proved by STR-56, with `instance-id` and optional `hostname` children,
-and STR-65 extends that tree. All documents render from the listener's latest
+index proved by STR-56. The EC2 projection below it exposes only values the
+shared `InstanceMetadata` can state truthfully: instance identity and hostname,
+SSH keys, per-NIC addresses and network identity, safe instance tags, and the
+instance-identity document under
+`/latest/dynamic/instance-identity/document`. It does not invent AMI, instance
+type, VPC, or interface identifiers. Directory listings follow EC2's nested
+shape (including the `0=<name>` public-key index), so stock EC2 datasource
+crawlers can discover the leaves rather than depending on a second endpoint
+tree. Placement is a renderer policy and defaults to hidden; enabling it adds
+region and availability zone to both the metadata tree and identity document.
+
+Both projections, and `/latest/user-data`, render from the listener's latest
 `InstanceMetadata` snapshot, so an applied metadata sync changes the next HTTP
-response without rebuilding guest media.
+response without rebuilding guest media. The EC2 and NoCloud surfaces are
+therefore different serializations of one current value, not independently
+maintained metadata stores.
 
 **Bounds, because the peer is untrusted guest code that can retry forever:**
 a raw-byte cap in front of the HTTP decoder (`ByteToMessageHandler`'s

@@ -9,11 +9,11 @@ public protocol ResolverHandle: Sendable {
     /// When the child exited, or nil while it is still running.
     ///
     /// The *moment* matters, not just the fact: the failure counter is cleared
-    /// by a run that lasted, and exits are noticed on the next reconcile — which
-    /// can be `desired_state_full_refetch_seconds` later. Measuring to the
-    /// moment it was noticed would make a child that died instantly look like
-    /// one that ran for five minutes, which is the same bug as resetting the
-    /// counter on a successful spawn, reached a different way.
+    /// by a run that lasted, and delivery of the host's exit observation can lag
+    /// the exit itself. Measuring to the moment it was handled would make a
+    /// child that died instantly look like one that ran for minutes, which is
+    /// the same bug as resetting the counter on a successful spawn, reached a
+    /// different way.
     var exitedAt: Date? { get }
     /// SIGTERM, then SIGKILL after a grace period.
     func terminate() async
@@ -43,8 +43,10 @@ public protocol ResolverHosting: Sendable {
     func writeConfiguration(_ resolver: DesiredResolver, root: String) throws
     /// Remove the resolver's directory entirely.
     func removeConfiguration(root: String)
-    /// Start CoreDNS in the host namespace.
-    func spawn(root: String) throws -> any ResolverHandle
+    /// Start CoreDNS in the host namespace and invoke `onExit` once it exits.
+    func spawn(
+        root: String, onExit: @escaping @Sendable () async -> Void
+    ) throws -> any ResolverHandle
     /// A resolver a previous agent process left running, recovered from the pid
     /// file under `root`. Returned only when the pid is alive *and* is this
     /// agent's CoreDNS; otherwise the directory is swept.
@@ -52,6 +54,38 @@ public protocol ResolverHosting: Sendable {
     func isAlive(pid: Int32) -> Bool
     /// Signal a process this agent did not fork, and so holds no handle for.
     func terminate(pid: Int32) async
+}
+
+/// Schedules one resolver restart and returns a cancellation action.
+///
+/// The production scheduler sleeps on the continuous clock. Tests replace it
+/// with a controllable clock that runs due work inline, so crossing the backoff
+/// boundary never depends on wall time or cooperative-executor timing.
+struct ResolverRestartScheduler: Sendable {
+    typealias Operation = @Sendable () async -> Void
+    typealias Cancellation = @Sendable () -> Void
+
+    private let scheduleOperation: @Sendable (Date, @escaping Operation) -> Cancellation
+
+    init(_ scheduleOperation: @escaping @Sendable (Date, @escaping Operation) -> Cancellation) {
+        self.scheduleOperation = scheduleOperation
+    }
+
+    func schedule(at deadline: Date, operation: @escaping Operation) -> Cancellation {
+        scheduleOperation(deadline, operation)
+    }
+
+    static let continuous = ResolverRestartScheduler { deadline, operation in
+        let task = Task {
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining > 0 {
+                try? await Task.sleep(for: .seconds(remaining))
+            }
+            guard !Task.isCancelled else { return }
+            await operation()
+        }
+        return { task.cancel() }
+    }
 }
 
 /// Runs the single CoreDNS that serves every resolver-enabled network on this
@@ -85,10 +119,15 @@ public actor ResolverSupervisor {
     private let root: String
     private let host: any ResolverHosting
     private let now: @Sendable () -> Date
+    private let restartScheduler: ResolverRestartScheduler
     private let logger: Logger
 
     private var state = ResolverState()
     private var adopted = false
+    private var scheduledRestart: (deadline: Date, cancel: ResolverRestartScheduler.Cancellation)?
+    /// An exit callback for this child is expected because the supervisor is
+    /// deliberately terminating it, not because CoreDNS failed.
+    private var stoppingChildID: UUID?
 
     private struct ResolverState {
         var handle: (any ResolverHandle)?
@@ -107,6 +146,9 @@ public actor ResolverSupervisor {
         /// how long it survived rather than against the fact that `fork`
         /// succeeded. See `recordExit`.
         var startedAt: Date?
+        /// Identifies the child whose asynchronous exit callback is current.
+        /// A callback from an older child must not mutate a replacement's state.
+        var childID: UUID?
         /// When a restart may next be attempted. Nil means immediately.
         var nextStartAllowedAt: Date?
 
@@ -134,6 +176,21 @@ public actor ResolverSupervisor {
         self.root = root
         self.host = host
         self.now = now
+        self.restartScheduler = .continuous
+        self.logger = logger
+    }
+
+    init(
+        root: String,
+        host: any ResolverHosting,
+        now: @escaping @Sendable () -> Date,
+        restartScheduler: ResolverRestartScheduler,
+        logger: Logger
+    ) {
+        self.root = root
+        self.host = host
+        self.now = now
+        self.restartScheduler = restartScheduler
         self.logger = logger
     }
 
@@ -151,10 +208,9 @@ public actor ResolverSupervisor {
             adopted = true
         }
 
-        // A child that died on its own is not running, whatever the map says.
-        // Recording the exit here rather than from a termination callback is
-        // what makes the failure accounting deterministic — and it is the shape
-        // `MetadataServerSupervisor` already uses for the same job.
+        // The host callback normally records an exit immediately. Keep this
+        // level-triggered check as a fallback: observed host state remains the
+        // authority if callback delivery was delayed or lost during shutdown.
         if state.handle?.isRunning == false { recordExit() }
 
         // Render only what moved. The key folds in every network's per-zone
@@ -168,15 +224,13 @@ public actor ResolverSupervisor {
         }
         guard let desired = state.rendering else { return }
 
-        for action in ResolverSupervisionPolicy.actions(
-            desired: desired, observed: observedState())
-        {
-            switch action {
-            case .writeConfiguration: write(desired)
-            case .start: start(desired)
-            case .stop: await stop()
-            }
-        }
+        // A pending restart was scheduled for an earlier non-empty desired
+        // state. Once the host serves no resolver-enabled network, that work is
+        // no longer authorized even if there is no live process for `.stop` to
+        // reap.
+        if desired.servesNothing { cancelScheduledRestart() }
+
+        _ = await applyActions(for: desired)
     }
 
     /// Stops the resolver, for agent shutdown. A draining host must not keep
@@ -201,7 +255,25 @@ public actor ResolverSupervisor {
 
     // MARK: - Effects
 
-    private func write(_ desired: DesiredResolver) {
+    /// Apply policy actions in their declared order. A failed write stops the
+    /// pass so `.start` can never run against a missing or partial Corefile.
+    /// The return value lets a scheduled restart retain autonomous ownership
+    /// of the retry when the write at its deadline fails.
+    private func applyActions(for desired: DesiredResolver) async -> Bool {
+        for action in ResolverSupervisionPolicy.actions(
+            desired: desired, observed: observedState())
+        {
+            switch action {
+            case .writeConfiguration:
+                guard write(desired) else { return false }
+            case .start: start(desired)
+            case .stop: await stop()
+            }
+        }
+        return true
+    }
+
+    private func write(_ desired: DesiredResolver) -> Bool {
         do {
             try host.writeConfiguration(desired, root: root)
             state.configurationDigest = desired.configurationDigest
@@ -209,6 +281,7 @@ public actor ResolverSupervisor {
                 logger.warning(
                     "Resolver zone rendering skipped a record", metadata: ["detail": .string(diagnostic)])
             }
+            return true
         } catch {
             logger.error(
                 "Failed to write resolver configuration",
@@ -216,6 +289,7 @@ public actor ResolverSupervisor {
             // Leave the digest unset so the next pass rewrites and retries
             // rather than believing the files on disk match what was rendered.
             state.configurationDigest = nil
+            return false
         }
     }
 
@@ -224,6 +298,14 @@ public actor ResolverSupervisor {
             // Still inside the backoff window. Returning silently is deliberate:
             // this runs on every sync, and a log line per suppressed retry would
             // drown the one that explains the failure.
+            scheduleRestart(at: allowed)
+            return
+        }
+        // A scheduled retry and an ordinary desired-state reconcile can become
+        // runnable together. Actor isolation serializes them, and this liveness
+        // check makes the second arrival a no-op rather than a second CoreDNS.
+        guard !state.isRunning(isAlive: host.isAlive) else {
+            cancelScheduledRestart()
             return
         }
         // Nothing was written yet — the write failed, and starting CoreDNS
@@ -231,11 +313,16 @@ public actor ResolverSupervisor {
         guard state.configurationDigest != nil else { return }
 
         do {
-            let handle = try host.spawn(root: root)
+            let childID = UUID()
+            let handle = try host.spawn(root: root) { [weak self] in
+                await self?.recordExit(childID: childID)
+            }
             state.handle = handle
             state.adoptedPID = nil
             state.startedAt = now()
+            state.childID = childID
             state.nextStartAllowedAt = nil
+            cancelScheduledRestart()
             // Deliberately *not* clearing `consecutiveFailures` here. A
             // successful `fork` proves nothing: the failures this backoff exists
             // for spawn cleanly and exit a moment later, so clearing on spawn
@@ -248,11 +335,12 @@ public actor ResolverSupervisor {
             state.consecutiveFailures += 1
             state.nextStartAllowedAt = now().addingTimeInterval(
                 delaySeconds(state.consecutiveFailures))
+            if let deadline = state.nextStartAllowedAt { scheduleRestart(at: deadline) }
             log(failure: error.localizedDescription)
         }
     }
 
-    /// Records the child's exit, so the next sync restarts it.
+    /// Records the current child's exit and schedules its next bounded retry.
     ///
     /// **The failure counter is cleared by a run, never by a spawn.** The
     /// failures this backoff exists for — a Corefile CoreDNS refuses to parse,
@@ -261,21 +349,31 @@ public actor ResolverSupervisor {
     /// first step and `crashLoopThreshold` would never be reached. Judging the
     /// exit by how long the child survived is what makes the escalation
     /// reachable, and it still forgives the ordinary case.
-    private func recordExit() {
+    private func recordExit(childID: UUID? = nil) {
+        // The callback may arrive after a newer child was started. Only the
+        // child that still owns state is allowed to advance the failure budget.
+        if let childID, state.childID != childID { return }
+        // `terminate` suspends while the process exits, so its callback can
+        // re-enter this actor before `stop` resumes. That is an intentional exit,
+        // not a crash, and must never arm a restart behind the stop operation.
+        if let currentChildID = state.childID, currentChildID == stoppingChildID { return }
         guard state.handle?.isRunning == false else { return }
         let exitedAt = state.handle?.exitedAt ?? now()
         let ranFor = state.startedAt.map { exitedAt.timeIntervalSince($0) } ?? 0
         state.handle = nil
         state.startedAt = nil
+        state.childID = nil
         if ResolverSupervisionPolicy.runProvedHealthy(ranForSeconds: ranFor) {
             state.consecutiveFailures = 0
         }
         state.consecutiveFailures += 1
         state.nextStartAllowedAt = now().addingTimeInterval(delaySeconds(state.consecutiveFailures))
         log(failure: "exited after \(Int(ranFor))s")
+        scheduleRestartIfNeeded()
     }
 
     private func stop() async {
+        cancelScheduledRestart()
         // The pid this call is stopping, captured before the suspension below.
         // `terminate` sleeps through its SIGTERM→SIGKILL grace, and a reconcile
         // can interleave in that window: if it re-desires the resolver it will
@@ -285,6 +383,11 @@ public actor ResolverSupervisor {
         // can ever find again.
         let stopping = state.handle?.processIdentifier ?? state.adoptedPID
         guard stopping != nil else { return }
+        let stoppingChildID = state.childID
+        if let stoppingChildID { self.stoppingChildID = stoppingChildID }
+        defer {
+            if self.stoppingChildID == stoppingChildID { self.stoppingChildID = nil }
+        }
         if let handle = state.handle {
             await handle.terminate()
         } else if let pid = state.adoptedPID, host.isAlive(pid: pid) {
@@ -295,6 +398,78 @@ public actor ResolverSupervisor {
         state = ResolverState()
         host.removeConfiguration(root: root)
         logger.info("Stopped the host resolver")
+    }
+
+    // MARK: - Restart scheduling
+
+    /// Own exactly one wakeup for the current backoff deadline.
+    private func scheduleRestart(at deadline: Date) {
+        if scheduledRestart?.deadline == deadline { return }
+        cancelScheduledRestart()
+        let cancel = restartScheduler.schedule(at: deadline) { [weak self] in
+            await self?.restartIfNeeded(at: deadline)
+        }
+        scheduledRestart = (deadline, cancel)
+    }
+
+    /// Start another backoff timer only while current desired and observed
+    /// state still call for a resolver. This is used directly by exit callbacks,
+    /// so crash-loop retries do not depend on another desired-state sync.
+    private func scheduleRestartIfNeeded() {
+        guard let deadline = state.nextStartAllowedAt,
+            let desired = state.rendering,
+            ResolverSupervisionPolicy.actions(
+                desired: desired, observed: observedState()
+            ).contains(.start)
+        else { return }
+        scheduleRestart(at: deadline)
+    }
+
+    /// Re-check desired and observed state when the backoff expires. Both may
+    /// have changed while this task slept, so the deadline is a generation
+    /// token and the supervision policy remains the authority for whether a
+    /// start is still wanted.
+    private func restartIfNeeded(at deadline: Date) async {
+        guard scheduledRestart?.deadline == deadline,
+            state.nextStartAllowedAt == deadline
+        else { return }
+        scheduledRestart = nil
+
+        // A scheduler returning early must not bypass the backoff. The
+        // production scheduler does not, but this keeps the invariant local.
+        if deadline > now() {
+            scheduleRestart(at: deadline)
+            return
+        }
+        guard let desired = state.rendering,
+            ResolverSupervisionPolicy.actions(
+                desired: desired, observed: observedState()
+            ).contains(.start)
+        else { return }
+        guard await applyActions(for: desired) else {
+            scheduleRestartAfterFailedWrite(desired)
+            return
+        }
+    }
+
+    /// A configuration write can fail at the restart deadline after the child
+    /// has already exited. Keep one bounded retry alive so recovery still does
+    /// not depend on a control-plane mutation or full desired-state refetch.
+    private func scheduleRestartAfterFailedWrite(_ desired: DesiredResolver) {
+        guard
+            ResolverSupervisionPolicy.actions(
+                desired: desired, observed: observedState()
+            ).contains(.start)
+        else { return }
+        let deadline = now().addingTimeInterval(
+            delaySeconds(max(1, state.consecutiveFailures)))
+        state.nextStartAllowedAt = deadline
+        scheduleRestart(at: deadline)
+    }
+
+    private func cancelScheduledRestart() {
+        scheduledRestart?.cancel()
+        scheduledRestart = nil
     }
 
     // MARK: - Restart adoption

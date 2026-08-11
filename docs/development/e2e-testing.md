@@ -132,6 +132,24 @@ converged resource — which is why the comparison is by generation, not presenc
 Prefer that over `status` alone. VMs are still created in `Created` rather than
 running, so start them explicitly with `POST /api/vms/{id}/start`.
 
+### Live vCPU shrink contract
+
+`deploy/compose/vcpu-shrink-test.sh` exercises STR-241 on the libvirt agent
+host. It starts a 2-vCPU VM, checks that API convergence agrees with
+`virsh vcpucount --live`, proves a running 2→1 request is rejected without
+changing either result, then stops, resizes, and starts the VM and checks both
+surfaces again at 1 vCPU:
+
+```bash
+sudo deploy/compose/vcpu-shrink-test.sh \
+  --origin "$ORIGIN" --api-key "$(cat "$KEY_FILE")" \
+  --project "$PROJECT_ID" --network "$NET_ID" --image "$IMAGE_ID"
+```
+
+Run it as an account that can read `qemu:///system`; the script deletes its VM
+on exit. Running vCPU shrink is intentionally not pending-reboot state: the API
+returns `422` and tells the caller to stop, resize, and start the VM.
+
 One carve-out keeps the older machinery:
 
 - **Delete** is the one mutation whose success is the resource's *absence*, so

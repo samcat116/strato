@@ -10,6 +10,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
     private let maxMACGenerationAttempts = 100
 
     private var usedMACs: Set<String> = []
+    private var lastObservedLoadBalancers: [ObservedLoadBalancerState]?
 
     init(logger: Logger) {
         self.logger = logger
@@ -74,6 +75,37 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
         logger.info(
             "Detaching VM from user-mode network",
             metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
+    }
+
+    func reconcileNetworks(
+        _ networks: [DesiredNetworkState], authoritative: Bool,
+        securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership],
+        metadataNetworks: [UUID]?, resolverNetworks: [ResolverNetworkConfig]?,
+        dnsZones: [DesiredDNSZone]?
+    ) async {
+        guard authoritative, networks.allSatisfy({ $0.loadBalancers != nil }) else {
+            lastObservedLoadBalancers = nil
+            return
+        }
+        let reason = "Native OVN load balancers are not supported with user-mode networking"
+        let desired = networks.flatMap { $0.loadBalancers ?? [] }
+        if !desired.isEmpty {
+            logger.error("\(reason)")
+        }
+        lastObservedLoadBalancers = desired.map {
+            ObservedLoadBalancerState(
+                id: $0.id,
+                observedGeneration: $0.generation,
+                status: .error,
+                lastError: reason,
+                backends: $0.backends.map {
+                    ObservedLoadBalancerBackend(id: $0.id, healthStatus: .error)
+                })
+        }
+    }
+
+    func observedLoadBalancers() async -> [ObservedLoadBalancerState]? {
+        lastObservedLoadBalancers
     }
 
     private func generateMACAddress() -> String {

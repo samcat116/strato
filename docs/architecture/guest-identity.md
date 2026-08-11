@@ -8,9 +8,11 @@ is implemented: STR-55 gives every VM a `workload_registrations` row under
 `spiffe://<trust-domain>/vm/<vm-id>` and publishes that ID through the instance
 metadata service. STR-57 lets the hosting agent obtain a short-lived,
 allowlisted **JWT-SVID** for that principal after the control plane verifies the
-VM's current placement. That is not the X.509 SVID, key, bundle, or standard
-Workload API path this proposal designs, and sandboxes still have no registration
-(STR-166). Issue
+VM's current placement. STR-62 exposes that token to an IMDSv2-authenticated VM
+at `GET /strato/v1/identity?audience=<audience>`; the agent enforces the
+published audience policy and caches each `(VM, audience)` token through its
+half-life. That is not the X.509 SVID, key, bundle, or standard Workload API path
+this proposal designs, and sandboxes still have no registration (STR-166). Issue
 [#496](https://github.com/samcat116/strato/issues/496) (STR-16) is the umbrella.
 
 ## What this is
@@ -67,11 +69,15 @@ A Unix domain socket inside the guest, at a conventional path
 Set `SPIFFE_ENDPOINT_SOCKET` and every SPIFFE-aware library finds it. Nothing in
 the guest needs to know Strato exists.
 
-JWT-SVIDs (`FetchJWTSVID`, `FetchJWTBundles`) are deliberately out of the first
-cut: they are bearer tokens, which is a wider credential surface than mTLS, and
-they are only useful once something is prepared to accept them. See
-[#495](https://github.com/samcat116/strato/issues/495) for the shape that would
-take on the control-plane side.
+The shipped JWT path is deliberately separate from that future socket. A guest
+first completes the IMDSv2 PUT handshake, then GETs
+`/strato/v1/identity?audience=<audience>` with its session token. The path is not
+under `/latest/`, because it is a Strato credential surface rather than an
+EC2-compatible metadata document. Issuance is disabled when the VM's published
+audience policy is empty; an unlisted audience is refused before any SPIRE call.
+Tokens use a five-minute request TTL, never exceed fifteen minutes on this
+surface, and refresh at half-life. If that refresh fails, the agent serves the
+cached token only until its signed expiry.
 
 ## The attestation model
 

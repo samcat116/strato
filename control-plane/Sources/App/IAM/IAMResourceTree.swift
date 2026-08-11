@@ -364,6 +364,11 @@ enum IAMResourceTree {
                 try await FloatingIP.query(on: db).filter(\.$id ~~ idList).all(),
                 id: \.id, projectID: { $0.$project.id })
 
+        case .loadBalancer:
+            return projectParents(
+                try await LoadBalancer.query(on: db).filter(\.$id ~~ idList).all(),
+                id: \.id, projectID: { $0.$project.id })
+
         case .securityGroup:
             return projectParents(
                 try await SecurityGroup.query(on: db).filter(\.$id ~~ idList).all(),

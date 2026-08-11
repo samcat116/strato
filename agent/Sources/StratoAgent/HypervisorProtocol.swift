@@ -209,9 +209,9 @@ public protocol HypervisorService: Actor, Sendable {
     func detachNetworkInterface(vmId: String, spec: NetworkSpec) async throws
 
     /// Converges a running VM's vCPU count and memory size on `spec`
-    /// (issue #568), within the headroom the VM was created with. Growth
-    /// applies online; anything the backend cannot do without a restart is
-    /// left for the next boot, which uses the spec wholesale.
+    /// (issue #568), within the headroom the VM was created with. A backend
+    /// that cannot unplug a live vCPU must throw rather than report a
+    /// config-only write as a completed online CPU resize.
     /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot
     ///   resize a running VM at all
     func resizeVM(vmId: String, spec: VMSpec) async throws
@@ -369,8 +369,8 @@ public extension HypervisorService {
             reservation: HostReservation(cpus: reserved.vcpus, memoryBytes: reserved.memoryBytes))
     }
 
-    /// Backends must opt in to online resize; without an explicit
-    /// implementation a sizing change waits for the VM's next boot.
+    /// Backends must opt in to running resize. The default refuses rather than
+    /// implying any online resize support.
     func resizeVM(vmId: String, spec: VMSpec) async throws {
         throw HypervisorServiceError.notSupported(
             "\(hypervisorType.displayName) does not support resizing a running VM")

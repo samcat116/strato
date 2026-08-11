@@ -49,17 +49,22 @@ public actor MetadataHTTPServer {
     /// one and be refused, never wrap around into a plausible TTL.
     private let hopLimit: ChannelOptions.Types.SocketOption.Value
     private let logger: Logger
+    private let idleTimeout: TimeAmount
     private var channels: [any Channel] = []
     /// Shared by every address this listener binds, so the cap is per *listener*
     /// as documented rather than per address family — a box created inside
     /// `listen` would give a dual-stack namespace twice the intended budget.
     private let connections = NIOLockedValueBox(ConnectionLedger())
 
-    public init(group: any EventLoopGroup, responder: MetadataResponder, hopLimit: Int, logger: Logger) {
+    public init(
+        group: any EventLoopGroup, responder: MetadataResponder, hopLimit: Int, logger: Logger,
+        idleTimeout: TimeAmount = .seconds(Int64(MetadataLimits.idleTimeoutSeconds))
+    ) {
         self.group = group
         self.responder = responder
         self.hopLimit = .init(clamping: hopLimit)
         self.logger = logger
+        self.idleTimeout = idleTimeout
     }
 
     /// Binds one address and starts serving. Returns the port actually bound,
@@ -71,10 +76,16 @@ public actor MetadataHTTPServer {
         let responder = self.responder
         let logger = self.logger
         let hopLimitOption = Self.hopLimitOption(for: socketAddress)
+        let idleTimeout = self.idleTimeout
 
         var bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(.backlog, value: 64)
             .serverChannelOption(.socketOption(.so_reuseaddr), value: 1)
+            // One socket read at a time. The channel handler does not request
+            // the next read until every request already decoded from the
+            // current one has received its response, preserving HTTP/1.1
+            // ordering and bounding stalled pipelined work.
+            .childChannelOption(ChannelOptions.autoRead, value: false)
             .childChannelInitializer { channel in
                 // Refused before a single byte is read, so a connection flood
                 // costs an accept and a close rather than a pipeline.
@@ -97,9 +108,6 @@ public actor MetadataHTTPServer {
                 // boundary.
                 return channel.eventLoop.makeCompletedFuture {
                     try channel.pipeline.syncOperations.addHandlers([
-                        // A guest that opens a connection and says nothing must
-                        // not hold a slot against the cap above.
-                        IdleStateHandler(readTimeout: .seconds(Int64(MetadataLimits.idleTimeoutSeconds))),
                         // Ahead of the decoder, because that is the only place
                         // the head's *total* size can be bounded. See the type.
                         MetadataRequestSizeHandler(),
@@ -111,7 +119,8 @@ public actor MetadataHTTPServer {
                             maximumBufferSize: MetadataLimits.maxRequestHeadBytes),
                         HTTPResponseEncoder(),
                         HTTPServerPipelineHandler(),
-                        MetadataChannelHandler(responder: responder, logger: logger),
+                        MetadataChannelHandler(
+                            responder: responder, logger: logger, idleTimeout: idleTimeout),
                     ])
                 }
             }
@@ -248,15 +257,27 @@ private final class MetadataChannelHandler: ChannelInboundHandler {
 
     private let responder: MetadataResponder
     private let logger: Logger
+    private let idleTimeout: TimeAmount
     private var head: HTTPRequestHead?
     private var sawBody = false
+    private var queuedRequests: [(head: HTTPRequestHead, hadBody: Bool)] = []
+    private var isAnswering = false
+    private var idleTask: Scheduled<Void>?
 
-    init(responder: MetadataResponder, logger: Logger) {
+    init(responder: MetadataResponder, logger: Logger, idleTimeout: TimeAmount) {
         self.responder = responder
         self.logger = logger
+        self.idleTimeout = idleTimeout
+    }
+
+    func channelActive(context: ChannelHandlerContext) {
+        context.fireChannelActive()
+        armIdleTimeout(context: context)
+        context.read()
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        armIdleTimeout(context: context)
         switch unwrapInboundIn(data) {
         case .head(let head):
             self.head = head
@@ -266,17 +287,14 @@ private final class MetadataChannelHandler: ChannelInboundHandler {
         case .end:
             guard let head else { return }
             self.head = nil
-            answer(context: context, head: head, hadBody: sawBody)
+            queuedRequests.append((head, sawBody))
+            answerNext(context: context)
         }
     }
 
-    // `Any` is required by NIO's ChannelInboundHandler callback signature.
-    func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
-        if event is IdleStateHandler.IdleStateEvent {
-            context.close(promise: nil)
-            return
-        }
-        context.fireUserInboundEventTriggered(event)
+    func channelInactive(context: ChannelHandlerContext) {
+        pauseIdleTimeout()
+        context.fireChannelInactive()
     }
 
     func errorCaught(context: ChannelHandlerContext, error: any Error) {
@@ -286,13 +304,21 @@ private final class MetadataChannelHandler: ChannelInboundHandler {
         context.close(promise: nil)
     }
 
+    private func answerNext(context: ChannelHandlerContext) {
+        guard !isAnswering, !queuedRequests.isEmpty else { return }
+        pauseIdleTimeout()
+        isAnswering = true
+        let request = queuedRequests.removeFirst()
+        answer(context: context, head: request.head, hadBody: request.hadBody)
+    }
+
     private func answer(context: ChannelHandlerContext, head: HTTPRequestHead, hadBody: Bool) {
         let keepAlive = head.isKeepAlive
 
         guard !hadBody else {
             // No route here reads a body, so accepting one is free memory for a
             // guest to waste.
-            write(
+            finish(
                 context: context, response: MetadataResponse(status: 400, body: "unexpected request body"),
                 keepAlive: false)
             return
@@ -302,7 +328,7 @@ private final class MetadataChannelHandler: ChannelInboundHandler {
         else {
             // No usable peer address means no caller identity, and identity is
             // the entire security model of an instance metadata service.
-            write(context: context, response: MetadataResponse(status: 404, body: "not found"), keepAlive: false)
+            finish(context: context, response: MetadataResponse(status: 404, body: "not found"), keepAlive: false)
             return
         }
 
@@ -339,11 +365,51 @@ private final class MetadataChannelHandler: ChannelInboundHandler {
                     "status": .stringConvertible(response.status),
                     "source": .string(request.source.description),
                 ])
-            handler.write(context: context, response: response, keepAlive: keepAlive)
+            handler.finish(context: context, response: response, keepAlive: keepAlive)
         }
     }
 
-    private func write(context: ChannelHandlerContext, response: MetadataResponse, keepAlive: Bool) {
+    private func finish(context: ChannelHandlerContext, response: MetadataResponse, keepAlive: Bool) {
+        let bound = NIOLoopBound((context, self), eventLoop: context.eventLoop)
+        write(context: context, response: response, keepAlive: keepAlive).whenComplete { result in
+            let (context, handler) = bound.value
+            handler.isAnswering = false
+
+            guard case .success = result, keepAlive, context.channel.isActive else {
+                handler.pauseIdleTimeout()
+                handler.queuedRequests.removeAll(keepingCapacity: false)
+                if context.channel.isActive { context.close(promise: nil) }
+                return
+            }
+
+            handler.answerNext(context: context)
+            if !handler.isAnswering {
+                handler.armIdleTimeout(context: context)
+                context.read()
+            }
+        }
+    }
+
+    private func armIdleTimeout(context: ChannelHandlerContext) {
+        guard !isAnswering, queuedRequests.isEmpty else { return }
+        pauseIdleTimeout()
+        let bound = NIOLoopBound((context, self), eventLoop: context.eventLoop)
+        idleTask = context.eventLoop.scheduleTask(in: idleTimeout) {
+            let (context, handler) = bound.value
+            handler.idleTask = nil
+            guard !handler.isAnswering, handler.queuedRequests.isEmpty else { return }
+            context.close(promise: nil)
+        }
+    }
+
+    private func pauseIdleTimeout() {
+        idleTask?.cancel()
+        idleTask = nil
+    }
+
+    private func write(
+        context: ChannelHandlerContext, response: MetadataResponse, keepAlive: Bool
+    ) -> EventLoopFuture<Void> {
         var headers = HTTPHeaders()
         for header in response.headers { headers.add(name: header.name, value: header.value) }
         headers.add(name: "content-length", value: String(response.body.utf8.count))
@@ -355,9 +421,6 @@ private final class MetadataChannelHandler: ChannelInboundHandler {
         var buffer = context.channel.allocator.buffer(capacity: response.body.utf8.count)
         buffer.writeString(response.body)
         context.write(wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
-        let bound = NIOLoopBound(context, eventLoop: context.eventLoop)
-        context.writeAndFlush(wrapOutboundOut(.end(nil))).whenComplete { _ in
-            if !keepAlive { bound.value.close(promise: nil) }
-        }
+        return context.writeAndFlush(wrapOutboundOut(.end(nil)))
     }
 }

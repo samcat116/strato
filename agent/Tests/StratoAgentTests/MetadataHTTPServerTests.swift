@@ -5,6 +5,7 @@ import Darwin
 #endif
 import Foundation
 import Logging
+import NIOCore
 import NIOPosix
 import StratoShared
 import Testing
@@ -21,7 +22,44 @@ struct MetadataHTTPServerTests {
 
     // MARK: - Fixtures
 
-    private static func instance(_ vmId: UUID, hostname: String? = nil, network: UUID, address: String)
+    private actor SuspendedIdentityMinter {
+        private var started = false
+        private var released = false
+        private var startWaiters: [CheckedContinuation<Void, Never>] = []
+        private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+        func mint(vmId: UUID, audience: String) async -> GuestJWTSVIDResponse {
+            started = true
+            let waiters = startWaiters
+            startWaiters.removeAll(keepingCapacity: false)
+            for waiter in waiters { waiter.resume() }
+
+            if !released {
+                await withCheckedContinuation { releaseWaiter = $0 }
+            }
+            let issuedAt = Date()
+            return GuestJWTSVIDResponse(
+                token: "ordered-jwt", spiffeId: "spiffe://strato.local/vm/\(vmId.uuidString)",
+                audiences: [audience], expiresAt: issuedAt.addingTimeInterval(300),
+                issuedAt: issuedAt)
+        }
+
+        func waitUntilStarted() async {
+            if started { return }
+            await withCheckedContinuation { startWaiters.append($0) }
+        }
+
+        func release() {
+            released = true
+            releaseWaiter?.resume()
+            releaseWaiter = nil
+        }
+    }
+
+    private static func instance(
+        _ vmId: UUID, hostname: String? = nil, network: UUID, address: String,
+        identity: IdentityPolicy? = nil
+    )
         -> InstanceMetadata
     {
         let isV6 = address.contains(":")
@@ -34,23 +72,32 @@ struct MetadataHTTPServerTests {
                     ipAddress: isV6 ? nil : address, prefixLength: isV6 ? nil : 24,
                     ipv6Address: isV6 ? address : nil, ipv6PrefixLength: isV6 ? 128 : nil)
             ],
+            identity: identity,
             serviceEnabled: true)
     }
 
     /// Stands a listener up on `host`, port 0, serving one instance at that
     /// address. Returns the port and a teardown.
     private static func serve(
-        host: String = "127.0.0.1", vmId: UUID = UUID(), hostname: String? = "web-01"
+        host: String = "127.0.0.1", vmId: UUID = UUID(), hostname: String? = "web-01",
+        identity: IdentityPolicy? = nil, identityMinter: GuestIdentityMinter? = nil,
+        idleTimeout: TimeAmount = .seconds(Int64(MetadataLimits.idleTimeoutSeconds))
     ) async throws -> (port: Int, vmId: UUID, stop: @Sendable () async -> Void) {
         let network = UUID()
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         let responder = MetadataResponder(
             snapshot: MetadataSnapshot(
                 networkId: network, origin: .live,
-                instances: [instance(vmId, hostname: hostname, network: network, address: host)]),
+                instances: [
+                    instance(
+                        vmId, hostname: hostname, network: network, address: host,
+                        identity: identity)
+                ]),
+            identityMinter: identityMinter,
             logger: Logger(label: "test"))
         let server = MetadataHTTPServer(
-            group: group, responder: responder, hopLimit: 1, logger: Logger(label: "test"))
+            group: group, responder: responder, hopLimit: 1, logger: Logger(label: "test"),
+            idleTimeout: idleTimeout)
         // A successful bind is itself evidence about the hop limit: the option
         // is applied to the listening socket through the bootstrap, so a
         // wrong-family `IP_TTL`/`IPV6_UNICAST_HOPS` would fail the bind rather
@@ -126,6 +173,49 @@ struct MetadataHTTPServerTests {
         #expect(second.body == "web-01")
     }
 
+    @Test("Pipelined responses remain ordered beyond the read-idle deadline")
+    func pipelinedResponseOrder() async throws {
+        let vmId = UUID()
+        let audience = "spiffe://strato.local/control-plane"
+        let gate = SuspendedIdentityMinter()
+        let policy = IdentityPolicy(
+            spiffeId: "spiffe://strato.local/vm/\(vmId.uuidString)",
+            audiences: [audience], ttlSeconds: 300)
+        let (port, _, stop) = try await Self.serve(
+            vmId: vmId, identity: policy,
+            identityMinter: GuestIdentityMinter { vmId, audience, _ in
+                await gate.mint(vmId: vmId, audience: audience)
+            }, idleTimeout: .milliseconds(50))
+        defer {
+            Task {
+                await gate.release()
+                await stop()
+            }
+        }
+
+        let connection = try RawHTTP.Connection(port: port)
+        defer { connection.disconnect() }
+        let session = try connection.roundTrip(
+            "PUT /latest/api/token HTTP/1.1\r\nHost: x\r\n\(MetadataHeaderName.tokenTTL): 60\r\n\r\n")
+
+        try connection.write(
+            "GET \(MetadataRouter.identityPath)?audience=\(audience) HTTP/1.1\r\nHost: x\r\n"
+                + "\(MetadataHeaderName.token): \(session.body)\r\n\r\n"
+                + "GET /latest/meta-data/instance-id HTTP/1.1\r\nHost: x\r\n"
+                + "\(MetadataHeaderName.token): \(session.body)\r\nConnection: close\r\n\r\n")
+        await gate.waitUntilStarted()
+        // The complete document request is already queued. Holding the first
+        // response beyond the read-idle deadline must not close the channel.
+        try await Task.sleep(for: .milliseconds(100))
+        await gate.release()
+
+        let raw = connection.readAvailable()
+        let jwt = try #require(raw.range(of: "ordered-jwt"))
+        let instanceId = try #require(raw.range(of: vmId.uuidString))
+        #expect(jwt.lowerBound < instanceId.lowerBound)
+        #expect(raw.components(separatedBy: "HTTP/1.1 200").count - 1 == 2)
+    }
+
     @Test("An IPv6 guest is served on the ULA endpoint")
     func ipv6() async throws {
         let (port, vmId, stop) = try await Self.serve(host: "::1")
@@ -147,6 +237,21 @@ struct MetadataHTTPServerTests {
     }
 
     // MARK: - Bounds
+
+    @Test("A connection with no outstanding request still closes at the idle deadline")
+    func idleConnectionCloses() async throws {
+        let (port, _, stop) = try await Self.serve(idleTimeout: .milliseconds(50))
+        defer { Task { await stop() } }
+
+        let connection = try RawHTTP.Connection(port: port)
+        defer { connection.disconnect() }
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(throws: RawHTTP.ClientError.self) {
+            try connection.roundTrip(
+                "GET /latest/meta-data/instance-id HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        }
+    }
 
     @Test("An over-long request head is dropped rather than buffered")
     func oversizedHead() async throws {

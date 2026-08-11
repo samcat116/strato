@@ -40,7 +40,7 @@ enum ResourceBindingCleanup {
         .virtualMachine: [.vmSnapshot],
         .sandbox: [.sandboxSnapshot],
         .project: [
-            .image, .network, .securityGroup, .floatingIP, .dnsZone, .volume, .volumeSnapshot,
+            .image, .network, .securityGroup, .floatingIP, .loadBalancer, .dnsZone, .volume, .volumeSnapshot,
             .serviceAccount,
         ],
         .dnsZone: [.dnsRecord],
@@ -195,6 +195,11 @@ enum ResourceBindingCleanup {
 
         let floatingIPIDs = try await FloatingIP.query(on: db).filter(\.$project.$id ~~ projectIDs).all(\.$id)
         try await RoleBindingService.revokeAll(nodeType: .floatingIP, nodeIDs: floatingIPIDs, on: db)
+
+        let loadBalancerIDs = try await LoadBalancer.query(on: db)
+            .filter(\.$project.$id ~~ projectIDs).all(\.$id)
+        try await RoleBindingService.revokeAll(
+            nodeType: .loadBalancer, nodeIDs: loadBalancerIDs, on: db)
 
         // `volume_snapshots` carries its own (denormalized) `project_id`, so it
         // cascades directly rather than through its volume.
