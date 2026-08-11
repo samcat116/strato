@@ -12,7 +12,6 @@ struct AgentWebSocketController: RouteCollection {
     private static let streamingFrameTypes = [
         MessageType.consoleData.rawValue,
         MessageType.guestExecOutput.rawValue,
-        MessageType.sandboxExecOutput.rawValue,
         MessageType.sandboxLog.rawValue,
     ]
 
@@ -447,24 +446,24 @@ struct AgentWebSocketController: RouteCollection {
                 req.consoleSessionManager.closeSession(
                     sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
 
-            case .guestExecStarted, .sandboxExecStarted:
+            case .guestExecStarted:
                 let message = try envelope.decode(as: GuestExecStartedMessage.self)
                 req.sandboxExecSessionManager.handleStarted(
                     sessionId: message.sessionId, fromAgentKey: agentKey)
 
-            case .guestExecOutput, .sandboxExecOutput:
+            case .guestExecOutput:
                 let message = try envelope.decode(as: GuestExecOutputMessage.self)
                 if let data = message.rawData {
                     req.sandboxExecSessionManager.handleOutput(
                         sessionId: message.sessionId, fromAgentKey: agentKey, data: data)
                 }
 
-            case .guestExecExit, .sandboxExecExit:
+            case .guestExecExit:
                 let message = try envelope.decode(as: GuestExecExitMessage.self)
                 req.sandboxExecSessionManager.handleExit(
                     sessionId: message.sessionId, fromAgentKey: agentKey, exitCode: message.exitCode)
 
-            case .guestExecClosed, .sandboxExecClosed:
+            case .guestExecClosed:
                 let message = try envelope.decode(as: GuestExecClosedMessage.self)
                 req.sandboxExecSessionManager.handleClosed(
                     sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)

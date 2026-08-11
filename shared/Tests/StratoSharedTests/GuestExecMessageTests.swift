@@ -87,39 +87,6 @@ struct GuestExecMessageTests {
         #expect(started.sessionId == "s-1")
     }
 
-    @Test("wire v43 sandbox start translates to the new sandbox target")
-    func legacySandboxStartTranslates() throws {
-        let legacy = try throughEnvelope(
-            LegacySandboxExecStartMessage(
-                requestId: Fixtures.requestId,
-                timestamp: Fixtures.timestamp,
-                sandboxId: Fixtures.uuidA.uuidString,
-                sessionId: Fixtures.uuidB.uuidString,
-                command: ["/bin/true"]))
-        let translated = legacy.guestMessage
-        #expect(translated.resourceKind == .sandbox)
-        #expect(translated.resourceId == legacy.sandboxId)
-        #expect(translated.sessionId == legacy.sessionId)
-        #expect(translated.command == legacy.command)
-    }
-
-    @Test("wire v43 responses retain sandbox-prefixed discriminators")
-    func legacySandboxResponseDiscriminators() throws {
-        let started = try MessageEnvelope(message: LegacySandboxExecStartedMessage(sessionId: "s-1"))
-        #expect(started.type == .sandboxExecStarted)
-
-        let output = try MessageEnvelope(
-            message: LegacySandboxExecOutputMessage(sessionId: "s-1", rawData: Data("hello".utf8)))
-        #expect(output.type == .sandboxExecOutput)
-
-        let exit = try MessageEnvelope(message: LegacySandboxExecExitMessage(sessionId: "s-1", exitCode: 0))
-        #expect(exit.type == .sandboxExecExit)
-
-        let closed = try MessageEnvelope(
-            message: LegacySandboxExecClosedMessage(sessionId: "s-1", reason: "done"))
-        #expect(closed.type == .sandboxExecClosed)
-    }
-
     @Test("sandbox log round-trips")
     func sandboxLogRoundTrips() throws {
         let message = SandboxLogMessage(

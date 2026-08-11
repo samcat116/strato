@@ -114,7 +114,7 @@ observed state. Concretely:
 | `agent_update` (imperative form) | Deleted; `DesiredAgentUpdate` (issue #434) already exists and is the proof this migration works |
 | `vm_reboot`, `vm_restore`, `sandbox_restore` | Edge-as-nonce: a monotonic `rebootGeneration` (and restore analog) on the desired entry; the agent persists last-applied in its manifest and acts when desired > applied (**landed**, STR-151) |
 | `volume_info` | Deleted; its fields were already on the observed report or in the control plane's own database (see the stage 7 amendment) |
-| `console_*`, `sandbox_exec_*`, `vm_log`, `sandbox_log` | **Stay imperative, permanently.** Live byte pipes with a human on the end; the uniformity that matters is Cedar authorization and addressing, not transport |
+| `console_*`, `guest_exec_*`, `vm_log`, `sandbox_log` | **Stay imperative, permanently.** Live byte pipes with a human on the end; the uniformity that matters is Cedar authorization and addressing, not transport |
 
 The nonce counters must be durable on the agent (`VMManifestStore`);
 a manifest-less re-registration must not replay reboots.
