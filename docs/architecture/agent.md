@@ -555,6 +555,11 @@ needs `network-config` before it can reach the link-local listener. Guest
 bootstrap is deliberately per-backend: Firecracker VMs inject configuration
 through kernel args instead and do not use this path.
 
+VM creation rejects `imds` when the VM-level metadata switch is off or when
+none of its selected logical networks publish metadata. Either configuration
+would create a seed whose hand-off URL has no reachable listener; `iso` remains
+valid on metadata-disabled networks because its bootstrap is self-contained.
+
 The seed's `local-hostname` is the VM's **desired hostname**, taken from
 `DesiredVMState.metadata.hostname` (STR-48) and passed to `createVM` alongside
 the spec. It must be the name the control plane publishes, because a VM's DNS
