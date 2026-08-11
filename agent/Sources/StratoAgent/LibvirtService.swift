@@ -1504,16 +1504,14 @@ actor LibvirtService: HypervisorService {
     /// virtio-mem's `<requested>` clamps to the region, so `resizeMemory` raises
     /// it here instead, naming the boot that would fix it.
     ///
-    /// Semantics are the QEMU path's, with one correction that the driver
-    /// forces. There, "deferred to the next reboot" works because the next boot
-    /// respawns from the recorded spec; here the next boot reads libvirt's
-    /// definition, so a deferred change that is not written to `CONFIG` never
-    /// happens at all. So:
+    /// Semantics are the QEMU path's, with the persistent-domain correction
+    /// this driver requires. A live change that succeeds must also reach
+    /// `CONFIG`, because the next boot reads libvirt's definition rather than
+    /// respawning from the agent's recorded spec. So:
     ///
     /// - **vCPU growth** applies live and to the definition.
-    /// - **vCPU shrink** is not attempted online — guest support for unplug is
-    ///   unreliable — and is written to the definition alone, which is what
-    ///   makes "it takes effect at the next reboot" true.
+    /// - **vCPU shrink** is rejected on a running domain. Guest support for
+    ///   unplug is unreliable, and a config-only write is not an online resize.
     /// - **Memory** moves through the virtio-mem device's `<requested>` where
     ///   the VM has one, live and in the definition; a VM with no device gets
     ///   its new size written to the definition alone.
@@ -1580,24 +1578,19 @@ actor LibvirtService: HypervisorService {
     private func resizeCPUs(
         _ dom: Domain, vmId: String, spec: VMSpec, currentCPUs: Int, live: Bool
     ) async throws {
-        guard spec.cpus != currentCPUs else { return }
-        // Direction and liveness are separate facts and are kept separate.
-        // Only a *grow* on a *live* domain is applied online — guest support
-        // for vCPU unplug is unreliable, so a shrink is never attempted there —
-        // but folding the two into one flag would then have this report a grow
-        // on a stopped domain as a shrink, in exactly the situation an operator
-        // is reading the log.
+        guard
+            let flags = try LibvirtDomain.vcpuResizeFlags(
+                current: currentCPUs, target: spec.cpus, domainIsLive: live)
+        else { return }
         let growing = spec.cpus > currentCPUs
-        let online = growing && live
-        let flags = online ? LibvirtDomain.affectLiveAndConfig : LibvirtDomain.affectConfig
         try await call("libvirt-resize-cpus", vmId: vmId) { client, deadline in
             try await client.domainSetVCPUSFlags(
                 dom: dom, nvcpus: UInt32(clamping: spec.cpus), flags: flags, deadline: deadline)
         }
         logger.info(
-            online
+            live
                 ? "Hot-added vCPUs"
-                : "vCPU \(growing ? "grow" : "shrink") written to the domain definition; it lands at the next boot",
+                : "vCPU \(growing ? "grow" : "shrink") written to the stopped domain definition",
             metadata: [
                 "vmId": .string(vmId), "from": .stringConvertible(currentCPUs),
                 "to": .stringConvertible(spec.cpus),

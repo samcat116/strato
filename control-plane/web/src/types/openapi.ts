@@ -142,7 +142,7 @@ export interface paths {
         get: operations["getVM"];
         /**
          * Update a virtual machine
-         * @description Updates `name`/`description`, and `cpu`/`memory` (issue #568). A sizing change to a *running* VM is applied online within the `maxCpu`/`maxMemory` ceilings it was started with and answers `202` with a `resize` operation; a sizing change to a stopped VM (which may also raise those ceilings, since the next boot re-spawns the VM) and a metadata-only update answer `200`.
+         * @description Updates `name`/`description`, and `cpu`/`memory` (issue #568). vCPU growth and memory changes on a *running* VM are applied online within the `maxCpu`/`maxMemory` ceilings it was started with and answer `202` with a `resize` operation. Running vCPU shrink is rejected because live vCPU unplug is not supported. A sizing change to a stopped VM (which may also raise those ceilings, since the next boot re-spawns the VM) and a metadata-only update answer `200`.
          */
         put: operations["updateVM"];
         post?: never;
@@ -5383,7 +5383,7 @@ export interface components {
             /** @description The VM's DNS label. Renaming the VM deliberately does not move its records, so this is the only way its name in DNS changes. */
             hostname?: string;
             description?: string;
-            /** @description Target boot vCPU count. On a running VM it must not exceed `maxCpu`. */
+            /** @description Target boot vCPU count. On a running VM it must be at least the current count and must not exceed `maxCpu`; reduce it while stopped. */
             cpu?: number;
             /**
              * Format: int64
@@ -9764,7 +9764,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
-            /** @description The requested size exceeds the ceilings the running VM was started with, or its agent is too old to resize online; restart the VM to apply it. */
+            /** @description The requested size exceeds the ceilings the running VM was started with, its agent is too old to resize online, or the request would reduce a running VM's vCPU count. Stop the VM before reducing vCPUs; otherwise restart it to raise its online-resize ceiling. */
             422: {
                 headers: {
                     [name: string]: unknown;

@@ -6,12 +6,12 @@ import StratoShared
 import AppTestSupport
 @testable import App
 
-/// Tests for online CPU/memory resize (issue #568): `PUT /api/vms/:id` moves a
-/// VM's sizing, applying it as a desired-state change with a `resize`
+/// Tests for online CPU growth/memory resize (issue #568): `PUT /api/vms/:id`
+/// moves a VM's sizing, applying it as a desired-state change with a `resize`
 /// operation while the VM runs, or as a plain edit (which may also raise the
-/// hot-add ceilings) while it rests. The same endpoint carries an operator's
-/// balloon target (issue #567 phase 2), which moves the guest's usable memory
-/// without moving the grant it is charged for.
+/// hot-add ceilings) while it rests. Live CPU shrink is rejected. The same
+/// endpoint carries an operator's balloon target (issue #567 phase 2), which
+/// moves the guest's usable memory without moving the grant it is charged for.
 @Suite("VM Resize Tests", .serialized)
 final class VMResizeTests {
 
@@ -285,17 +285,46 @@ final class VMResizeTests {
         }
     }
 
-    @Test("Shrink passes on a full host")
-    func shrinkOnFullHost() async throws {
+    @Test("A running memory shrink passes on a full host")
+    func memoryShrinkOnFullHost() async throws {
         try await withResizeTestApp(agentAvailableCPU: 0, agentAvailableMemory: 0) {
             app, _, vm, _, token in
             try await running(vm, on: app.db)
             try await put(
                 app, vm, token: token,
-                body: ["cpu": 1, "memory": Int64(1024 * 1024 * 1024)]
+                body: ["memory": Int64(1024 * 1024 * 1024)]
             ) { res in
                 #expect(res.status == .accepted)
             }
+        }
+    }
+
+    @Test("A running vCPU shrink is rejected without changing convergence, sizing, or quota")
+    func runningVCPUShrinkRejected() async throws {
+        try await withResizeTestApp { app, _, vm, project, token in
+            try await running(vm, on: app.db)
+            let generationBefore = vm.generation
+            let observedBefore = vm.observedGeneration
+            let quotasBefore = try await QuotaEnforcementService.applicableQuotas(
+                for: project, environment: vm.environment, on: app.db)
+            let reservedBefore = try #require(quotasBefore.first).reservedVCPUs
+
+            try await put(app, vm, token: token, body: ["cpu": 1]) { res in
+                #expect(res.status == .unprocessableEntity)
+                #expect(res.body.string.contains("live vCPU unplug is not supported"))
+                #expect(res.body.string.contains("Stop the VM, resize it, then start it again"))
+                #expect(res.body.string.contains("no resize was recorded"))
+            }
+
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(refreshed.cpu == 2)
+            #expect(refreshed.generation == generationBefore)
+            #expect(refreshed.observedGeneration == observedBefore)
+            #expect(refreshed.conditions.converged)
+            #expect(refreshed.convergenceDeadline == nil)
+            let quotasAfter = try await QuotaEnforcementService.applicableQuotas(
+                for: project, environment: vm.environment, on: app.db)
+            #expect(try #require(quotasAfter.first).reservedVCPUs == reservedBefore)
         }
     }
 
@@ -378,13 +407,11 @@ final class VMResizeTests {
         }
     }
 
-    @Test("A resize credits the quota back when the VM shrinks")
-    func shrinkReleasesQuota() async throws {
+    @Test("A stopped vCPU shrink credits the quota back")
+    func stoppedShrinkReleasesQuota() async throws {
         try await withResizeTestApp { app, _, vm, project, token in
-            try await running(vm, on: app.db)
-
             try await put(app, vm, token: token, body: ["cpu": 1]) { res in
-                #expect(res.status == .accepted)
+                #expect(res.status == .ok)
             }
 
             let quotas = try await QuotaEnforcementService.applicableQuotas(

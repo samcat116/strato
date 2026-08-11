@@ -152,6 +152,29 @@ struct LibvirtDomainTests {
         #expect(LibvirtDomain.affectMaximum == 4)
     }
 
+    @Test("A running vCPU shrink is refused instead of becoming a config-only success")
+    func runningVCPUShrinkIsNotAnOnlineResize() throws {
+        #expect(
+            try LibvirtDomain.vcpuResizeFlags(current: 2, target: 4, domainIsLive: true)
+                == LibvirtDomain.affectLiveAndConfig)
+        #expect(
+            try LibvirtDomain.vcpuResizeFlags(current: 2, target: 1, domainIsLive: false)
+                == LibvirtDomain.affectConfig)
+        #expect(try LibvirtDomain.vcpuResizeFlags(current: 2, target: 2, domainIsLive: true) == nil)
+
+        do {
+            _ = try LibvirtDomain.vcpuResizeFlags(current: 2, target: 1, domainIsLive: true)
+            Issue.record("expected a running shrink to be refused")
+        } catch let error as HypervisorServiceError {
+            guard case .notSupported(let reason) = error else {
+                Issue.record("expected notSupported, got \(error)")
+                return
+            }
+            #expect(reason.contains("stop the VM"))
+            #expect(reason.contains("live vCPU unplug is not supported"))
+        }
+    }
+
     @Test("Checkpoint flags select a running revert and the completed job")
     func checkpointFlags() {
         // VIR_DOMAIN_SNAPSHOT_REVERT_RUNNING. Without it the revert leaves the
