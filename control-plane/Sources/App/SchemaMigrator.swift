@@ -86,11 +86,11 @@ enum SchemaMigrator {
         var lockPoll: Double = SchemaMigrator.defaultLockPoll
         var statementTimeouts: StatementTimeouts?
 
-        static func fromEnvironment() -> Options {
+        static func fromConfiguration(_ configuration: ControlPlaneConfiguration) -> Options {
             Options(
-                runMigrations: Environment.get(runMigrationsKey).flatMap(Bool.init) ?? true,
-                lockTimeout: Environment.get(lockTimeoutKey).flatMap(Double.init) ?? defaultLockTimeout,
-                lockPoll: Environment.get(lockPollKey).flatMap(Double.init) ?? defaultLockPoll
+                runMigrations: configuration.bool(.runMigrations)!,
+                lockTimeout: configuration.double(.migrationLockTimeoutSeconds),
+                lockPoll: configuration.double(.migrationLockPollSeconds)
             )
         }
     }
@@ -107,7 +107,7 @@ enum SchemaMigrator {
 
     /// Applies every unapplied migration, or verifies that none are outstanding
     /// when this process is not the one that migrates.
-    static func run(on app: Application, options: Options = .fromEnvironment()) async throws {
+    static func run(on app: Application, options: Options) async throws {
         let logger = app.logger
         let migrations = app.migrations
 

@@ -136,9 +136,7 @@ actor AgentService {
     /// heartbeat monitor after `shutdown()` already ran.
     private var isShutDown = false
 
-    /// Overrides `AgentVersionTarget.version` for the auto-update sweep.
-    /// Test-only: the real target is compiled from the process environment
-    /// once, which a test cannot vary.
+    /// Overrides the startup-resolved agent target for the auto-update sweep.
     private var autoUpdateTargetOverride: String?
 
     func setAutoUpdateTargetForTesting(_ target: String?) {
@@ -147,7 +145,8 @@ actor AgentService {
 
     /// The version auto-updating agents should converge on.
     private var autoUpdateTarget: String? {
-        autoUpdateTargetOverride ?? AgentVersionTarget.version
+        autoUpdateTargetOverride
+            ?? AgentVersionTarget.version(configuration: app.controlPlaneConfiguration)
     }
 
     init(app: Application, heartbeatInterval: Duration = .seconds(30)) {
@@ -1605,10 +1604,8 @@ actor AgentService {
     /// off. `SANDBOX_RETENTION_HOURS` overrides the default; a non-positive
     /// value keeps terminal records — and the quota they still hold — forever,
     /// which is a deliberate opt-in, not the default.
-    static var sandboxRetentionHours: Int? {
-        guard let raw = Environment.get("SANDBOX_RETENTION_HOURS").flatMap(Int.init) else {
-            return defaultSandboxRetentionHours
-        }
+    static func sandboxRetentionHours(configuration: ControlPlaneConfiguration) -> Int? {
+        guard let raw = configuration.int(.sandboxRetentionHours) else { return nil }
         return raw > 0 ? raw : nil
     }
 
@@ -1670,7 +1667,7 @@ actor AgentService {
                 expiring.append((sandbox, .ttl(seconds: sandbox.ttlSeconds ?? 0)))
             }
 
-            if let hours = Self.sandboxRetentionHours {
+            if let hours = Self.sandboxRetentionHours(configuration: app.controlPlaneConfiguration) {
                 let window = TimeInterval(hours) * 3600
                 // A sandbox already expiring on TTL must not be queued twice:
                 // the second `begin` would collide with the first's pending
@@ -2727,7 +2724,10 @@ actor AgentService {
             let agent = try await Agent.find(agentUUID, on: db),
             agent.supportsInterVMNetworking
         else { return }
-        let authority = try await SiteNetworkAuthority.resolve(forAgent: agent, on: db)
+        let authority = try await SiteNetworkAuthority.resolve(
+            forAgent: agent,
+            offlineGrace: app.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+            on: db)
         guard
             let reason = SiteNetworkAuthority.refusalReason(
                 authority, host: agent, consequence: consequence)

@@ -30,14 +30,20 @@ enum SSFValidation {
     /// URL the receiver fetches, including transmitter-returned poll
     /// endpoints — a compromised transmitter must not be able to point the
     /// recurring sweep at internal services either.
-    static func validateTransmitterURL(_ raw: String, label: String = "transmitterURL") throws {
+    static func validateTransmitterURL(
+        _ raw: String,
+        label: String = "transmitterURL",
+        configuration: ControlPlaneConfiguration
+    ) throws {
         try validateTransmitterURL(
             raw,
             label: label,
-            allowedHosts: Environment.get("SSF_TRANSMITTER_ALLOWED_HOSTS")
-                .map { Set(OIDCValidation.parseAllowList($0)) } ?? OIDCValidation.allowedHosts(),
-            allowedSuffixes: Environment.get("SSF_TRANSMITTER_ALLOWED_SUFFIXES")
-                .map(OIDCValidation.parseAllowList) ?? OIDCValidation.allowedDomainSuffixes())
+            allowedHosts: configuration.string(.ssfTransmitterAllowedHosts)
+                .map { Set(OIDCValidation.parseAllowList($0)) }
+                ?? OIDCValidation.allowedHosts(configuration: configuration),
+            allowedSuffixes: configuration.string(.ssfTransmitterAllowedSuffixes)
+                .map(OIDCValidation.parseAllowList)
+                ?? OIDCValidation.allowedDomainSuffixes(configuration: configuration))
     }
 
     /// The rule itself, with the lists passed in — so it can be exercised
@@ -97,13 +103,14 @@ actor SSFService {
 
         // Re-validated here (not just at create) so rows predating a
         // tightened allow-list can't reach a now-disallowed host.
-        try SSFValidation.validateTransmitterURL(stream.transmitterURL)
+        try SSFValidation.validateTransmitterURL(
+            stream.transmitterURL, configuration: app.controlPlaneConfiguration)
         guard let transmitterURL = URL(string: stream.transmitterURL) else {
             throw Abort(.unprocessableEntity, reason: "Invalid transmitter URL")
         }
         let allowUnverified =
             app.environment == .testing
-            && Environment.get("SSF_ALLOW_UNVERIFIED_TOKENS").flatMap(Bool.init) == true
+            && app.controlPlaneConfiguration.bool(.ssfAllowUnverifiedTokens) == true
         let audience = stream.expectedAudienceArray
         let configuration = SSFReceiverConfiguration(
             transmitterURL: transmitterURL,
@@ -140,10 +147,13 @@ actor SSFService {
 
     /// The public URL a transmitter delivers push events to for a stream, or
     /// nil when no public base URL is configured.
-    nonisolated static func pushEndpointURL(for streamID: UUID) -> String? {
+    nonisolated static func pushEndpointURL(
+        for streamID: UUID,
+        configuration: ControlPlaneConfiguration
+    ) -> String? {
         let base =
-            Environment.get("SSF_CALLBACK_BASE_URL")
-            ?? Environment.get("WEBAUTHN_RELYING_PARTY_ORIGIN")
+            configuration.string(.ssfCallbackBaseURL)
+            ?? configuration.string(.webauthnRelyingPartyOrigin)
         guard let base, !base.isEmpty else { return nil }
         let trimmed = base.hasSuffix("/") ? String(base.dropLast()) : base
         return "\(trimmed)/ssf/events/\(streamID.uuidString)"
@@ -180,7 +190,9 @@ actor SSFService {
         let delivery: DeliveryConfiguration
         switch method {
         case .push:
-            guard let endpoint = Self.pushEndpointURL(for: try stream.requireID()),
+            guard
+                let endpoint = Self.pushEndpointURL(
+                    for: try stream.requireID(), configuration: app.controlPlaneConfiguration),
                 let endpointURL = URL(string: endpoint)
             else {
                 throw Abort(
@@ -216,7 +228,10 @@ actor SSFService {
             // same HTTPS/allow-list rules as the transmitter itself. On
             // failure, undo the remote registration we just made.
             do {
-                try SSFValidation.validateTransmitterURL(endpoint, label: "Transmitter poll endpoint")
+                try SSFValidation.validateTransmitterURL(
+                    endpoint,
+                    label: "Transmitter poll endpoint",
+                    configuration: app.controlPlaneConfiguration)
             } catch {
                 try? await receiver.deleteStream(id: configuration.stream_id)
                 stream.remoteStreamID = nil
@@ -283,7 +298,10 @@ actor SSFService {
         }
         // Re-validated on every use so stored endpoints predating a
         // tightened allow-list can't keep being polled.
-        try SSFValidation.validateTransmitterURL(endpointRaw, label: "Transmitter poll endpoint")
+        try SSFValidation.validateTransmitterURL(
+            endpointRaw,
+            label: "Transmitter poll endpoint",
+            configuration: app.controlPlaneConfiguration)
         guard let endpoint = URL(string: endpointRaw) else {
             throw Abort(.unprocessableEntity, reason: "Invalid poll endpoint URL")
         }
@@ -353,11 +371,11 @@ actor SSFService {
     // MARK: - Poll sweep lifecycle
 
     private var pollIntervalSeconds: Int {
-        Environment.get("SSF_POLL_INTERVAL_SECONDS").flatMap(Int.init) ?? 60
+        app.controlPlaneConfiguration.int(.ssfPollIntervalSeconds)!
     }
 
     private var pollSweepEnabled: Bool {
-        Environment.get("SSF_POLL_ENABLED").flatMap(Bool.init) ?? (app.environment != .testing)
+        app.controlPlaneConfiguration.bool(.ssfPollEnabled)!
     }
 
     /// Arm the periodic poll sweep. Called once from the boot lifecycle.

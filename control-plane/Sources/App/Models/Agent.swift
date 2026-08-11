@@ -712,7 +712,11 @@ struct AgentResponse: Content {
         }
     }
 
-    init(from agent: Agent, heldWorkloads: [HeldWorkloadSummary]? = nil) throws {
+    init(
+        from agent: Agent,
+        targetVersion: String?,
+        heldWorkloads: [HeldWorkloadSummary]? = nil
+    ) throws {
         guard let id = agent.id else {
             throw Abort(.internalServerError, reason: "Agent missing ID")
         }
@@ -740,10 +744,10 @@ struct AgentResponse: Content {
         self.lastHeartbeat = agent.lastHeartbeat
         self.createdAt = agent.createdAt
         self.isOnline = agent.isOnline
-        self.targetVersion = AgentVersionTarget.version
+        self.targetVersion = targetVersion
         self.updateAvailable = AgentVersionTarget.updateAvailable(
             agentVersion: agent.version,
-            target: AgentVersionTarget.version
+            target: targetVersion
         )
         self.autoUpdate = agent.autoUpdate
         self.updateDesiredVersion = agent.updateDesiredVersion

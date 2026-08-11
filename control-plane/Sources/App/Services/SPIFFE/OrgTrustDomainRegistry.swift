@@ -7,21 +7,9 @@ import Vapor
 /// domains — the existing agents, their enrollments, the CP Envoy SVID — belongs
 /// to it.
 enum PlatformTrustDomain {
-    static var current: String {
-        Environment.get("SPIRE_TRUST_DOMAIN") ?? "strato.local"
-    }
-}
-
-/// Feature flag for per-organization trust domains (issue #600).
-///
-/// Off by default, and off is the whole point of phase 2: the table, the
-/// TD-keyed bundle map and the SPIFFE-ID-keyed connection maps all ship dark, so
-/// only the platform trust domain is ever in play and behavior is byte-identical
-/// to before. Phase 3 brings the reconciler that actually provisions instances.
-enum OrgTrustDomainsFeature {
-    static var isEnabled: Bool {
-        Environment.get("SPIRE_ORG_TRUST_DOMAINS_ENABLED")?.lowercased() == "true"
-    }
+    /// Default used by model/test convenience initializers. Runtime SPIRE
+    /// services use the startup-resolved `spireTrustDomain` setting instead.
+    static let current = "strato.local"
 }
 
 /// One organization's trust domain as `SPIREService` needs it: the domain
@@ -54,7 +42,7 @@ struct DatabaseOrgTrustDomainSource: OrgTrustDomainSource {
     let app: Application
 
     public func loadOrgTrustDomains() async throws -> [OrgTrustDomainSnapshot] {
-        guard OrgTrustDomainsFeature.isEnabled else { return [] }
+        guard app.controlPlaneConfiguration.bool(.spireOrgTrustDomainsEnabled) == true else { return [] }
 
         let rows = try await OrgTrustDomain.query(on: app.db)
             .filter(\.$phase == .active)

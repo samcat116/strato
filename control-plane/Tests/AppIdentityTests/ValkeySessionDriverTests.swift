@@ -206,28 +206,29 @@ struct ValkeySessionDriverTests {
     // MARK: - TTL configuration
 
     @Test("SESSION_TTL_SECONDS overrides the default lifetime")
-    func ttlFromEnvironment() async throws {
-        setenv("SESSION_TTL_SECONDS", "1800", 1)
-        defer { unsetenv("SESSION_TTL_SECONDS") }
-        let ttl = ValkeySessionDriver.ttlFromEnvironment(logger: Logger(label: "test"))
+    func ttlFromConfiguration() async throws {
+        let configuration = try await ControlPlaneConfiguration.load(
+            environmentVariables: ["SESSION_TTL_SECONDS": "1800"], for: .testing)
+        let ttl = ValkeySessionDriver.ttlFromConfiguration(configuration)
         #expect(ttl == 1800)
     }
 
     @Test(
-        "An unusable SESSION_TTL_SECONDS falls back to the default",
+        "An unusable SESSION_TTL_SECONDS fails configuration",
         arguments: ["not-a-number", "0", "-1", "5"]
     )
-    func invalidTTLFallsBackToDefault(value: String) async throws {
-        setenv("SESSION_TTL_SECONDS", value, 1)
-        defer { unsetenv("SESSION_TTL_SECONDS") }
-        let ttl = ValkeySessionDriver.ttlFromEnvironment(logger: Logger(label: "test"))
-        #expect(ttl == ValkeySessionDriver.defaultTTL)
+    func invalidTTLIsRejected(value: String) async {
+        await #expect(throws: ControlPlaneConfigurationError.self) {
+            _ = try await ControlPlaneConfiguration.load(
+                environmentVariables: ["SESSION_TTL_SECONDS": value], for: .testing)
+        }
     }
 
     @Test("An unset SESSION_TTL_SECONDS uses the default lifetime")
     func unsetTTLUsesDefault() async throws {
-        unsetenv("SESSION_TTL_SECONDS")
-        let ttl = ValkeySessionDriver.ttlFromEnvironment(logger: Logger(label: "test"))
+        let configuration = try await ControlPlaneConfiguration.load(
+            environmentVariables: [:], for: .testing)
+        let ttl = ValkeySessionDriver.ttlFromConfiguration(configuration)
         #expect(ttl == ValkeySessionDriver.defaultTTL)
     }
 

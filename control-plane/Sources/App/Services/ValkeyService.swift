@@ -13,14 +13,6 @@ import Vapor
 enum ValkeyRole: String, Sendable, CaseIterable {
     case coordination
     case session
-
-    /// Environment-variable prefix this role reads its endpoint from.
-    var environmentPrefix: String {
-        switch self {
-        case .coordination: return "VALKEY_"
-        case .session: return "SESSION_VALKEY_"
-        }
-    }
 }
 
 /// Configuration for one Valkey/Redis endpoint.
@@ -40,31 +32,6 @@ struct ValkeyConfiguration: Sendable, Equatable {
         self.port = port
         self.password = password
         self.database = database
-    }
-
-    /// Resolve one prefixed group of variables (`<prefix>HOST`, `PORT`,
-    /// `PASSWORD`, `DATABASE`), or nil when the group's host is unset.
-    ///
-    /// The group is **all-or-nothing**: the remaining fields fall back to their
-    /// own defaults (6379 / no password / database 0) rather than borrowing from
-    /// another prefix. That is deliberate — a per-field merge would let
-    /// `SESSION_VALKEY_HOST` alone send the *coordination* password to a
-    /// different server, so one variable can never produce a half-merged
-    /// endpoint. See `ValkeyStoreConfiguration.resolve`.
-    ///
-    /// `lookup` is injected so precedence is a pure function: setting process
-    /// environment variables from tests races the parallel suite's own
-    /// `Environment.get` calls (same reasoning as `DatabaseTLSMode.resolve`).
-    static func resolve(prefix: String, _ lookup: (String) -> String?) -> ValkeyConfiguration? {
-        guard let hostname = lookup(prefix + "HOST"), !hostname.isEmpty else {
-            return nil
-        }
-        return ValkeyConfiguration(
-            hostname: hostname,
-            port: lookup(prefix + "PORT").flatMap(Int.init) ?? 6379,
-            password: lookup(prefix + "PASSWORD"),
-            database: lookup(prefix + "DATABASE").flatMap(Int.init) ?? 0
-        )
     }
 }
 
@@ -97,40 +64,38 @@ struct ValkeyStoreConfiguration: Sendable, Equatable {
         }
     }
 
-    /// Resolve both roles, or nil when coordination has no host (Valkey
-    /// unconfigured, which is fatal outside `.testing`).
-    static func resolve(_ lookup: (String) -> String?) -> ValkeyStoreConfiguration? {
-        guard
-            let coordination = ValkeyConfiguration.resolve(
-                prefix: ValkeyRole.coordination.environmentPrefix, lookup)
-        else {
-            return nil
+    /// Resolve from the startup configuration snapshot.
+    static func fromConfiguration(
+        _ configuration: ControlPlaneConfiguration
+    ) -> ValkeyStoreConfiguration? {
+        guard let host = configuration.string(.valkeyHost), !host.isEmpty else { return nil }
+        let coordination = ValkeyConfiguration(
+            hostname: host,
+            port: configuration.int(.valkeyPort)!,
+            password: configuration.string(.valkeyPassword),
+            database: configuration.int(.valkeyDatabase)!)
+
+        if let sessionHost = configuration.string(.sessionValkeyHost), !sessionHost.isEmpty {
+            let session = ValkeyConfiguration(
+                hostname: sessionHost,
+                port: configuration.int(.sessionValkeyPort)!,
+                password: configuration.string(.sessionValkeyPassword),
+                database: configuration.int(.sessionValkeyDatabase)!)
+            return ValkeyStoreConfiguration(
+                coordination: coordination, session: session, warnings: [])
         }
 
-        let sessionPrefix = ValkeyRole.session.environmentPrefix
-        if let session = ValkeyConfiguration.resolve(prefix: sessionPrefix, lookup) {
-            return ValkeyStoreConfiguration(coordination: coordination, session: session, warnings: [])
-        }
-
-        // The mirror hazard of the all-or-nothing rule: a half-set session group
-        // (`SESSION_VALKEY_DATABASE` without `SESSION_VALKEY_HOST`) is silently
-        // inert. Say so rather than letting an operator believe it took effect.
-        let orphans = ["PORT", "PASSWORD", "DATABASE"]
-            .map { sessionPrefix + $0 }
-            .filter { lookup($0)?.isEmpty == false }
+        let orphans = ["SESSION_VALKEY_PORT", "SESSION_VALKEY_PASSWORD", "SESSION_VALKEY_DATABASE"]
+            .filter(configuration.isConfigured)
         let warnings =
             orphans.isEmpty
             ? []
             : [
-                "Ignoring \(orphans.joined(separator: ", ")): \(sessionPrefix)HOST is not set, "
+                "Ignoring \(orphans.joined(separator: ", ")): SESSION_VALKEY_HOST is not set, "
                     + "so session storage uses the coordination endpoint."
             ]
-        return ValkeyStoreConfiguration(coordination: coordination, session: coordination, warnings: warnings)
-    }
-
-    /// Resolve from the process environment.
-    static func fromEnvironment() -> ValkeyStoreConfiguration? {
-        resolve { Environment.get($0) }
+        return ValkeyStoreConfiguration(
+            coordination: coordination, session: coordination, warnings: warnings)
     }
 }
 

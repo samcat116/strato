@@ -178,7 +178,10 @@ struct NetworkController: RouteCollection {
             // and the first OVN-capable node to join becomes the controller
             // automatically. (A site with an unusable controller has a member
             // by definition, so only the unassigned case reaches that count.)
-            let authority = try await SiteNetworkAuthority.resolve(forSite: site, on: req.db)
+            let authority = try await SiteNetworkAuthority.resolve(
+                forSite: site,
+                offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+                on: req.db)
             if let refusal = SiteNetworkAuthority.refusal(
                 authority, consequence: "a network pinned to it would be realized nowhere")
             {

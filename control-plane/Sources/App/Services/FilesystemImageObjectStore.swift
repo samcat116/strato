@@ -24,11 +24,8 @@ struct FilesystemImageObjectStore: ImageObjectStore {
         self.threadPool = threadPool
     }
 
-    /// Platform-appropriate default, overridable with `IMAGE_STORAGE_PATH`.
+    /// Platform-appropriate default when `IMAGE_STORAGE_PATH` is unset.
     static var defaultRootPath: String {
-        if let configured = Environment.get("IMAGE_STORAGE_PATH") {
-            return configured
-        }
         #if os(macOS)
         // On macOS, use the user's data directory (writable without root).
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -37,6 +34,10 @@ struct FilesystemImageObjectStore: ImageObjectStore {
         // On Linux, use the system data directory.
         return "/var/lib/strato/images"
         #endif
+    }
+
+    static func rootPath(configuration: ControlPlaneConfiguration) -> String {
+        configuration.string(.imageStoragePath) ?? defaultRootPath
     }
 
     func path(for key: String) -> String {

@@ -64,6 +64,20 @@ struct SecurityHeadersTests {
         try await app.shutdownForTesting()
     }
 
+    @Test("HTTP_TLS_ENABLED=1 enables HSTS and Secure session cookies")
+    func testUpstreamTruthyTLSValue() async throws {
+        let app = try await Application.makeForTesting()
+        try await configure(app, environmentVariables: ["HTTP_TLS_ENABLED": "1"])
+
+        try await app.test(.GET, "/health") { res async throws in
+            #expect(res.headers.first(name: "Strict-Transport-Security") != nil)
+        }
+        let cookie = app.sessions.configuration.cookieFactory(SessionID(string: "test"))
+        #expect(cookie.isSecure)
+
+        try await app.shutdownForTesting()
+    }
+
     @Test("API docs page supplies its own CSP allowing Swagger CDN")
     func testDocsPageOverridesCSP() async throws {
         let app = try await Application.makeForTesting()

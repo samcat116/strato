@@ -252,7 +252,11 @@ struct BootstrapCommand: AsyncCommand {
             // only in flag combinations that did not exist before, so no script
             // reading the first line can break.
             if let fullKey { console.print(fullKey) }
-            if let claimToken { console.print(UserController.claimURL(for: claimToken)) }
+            if let claimToken {
+                console.print(
+                    UserController.claimURL(
+                        for: claimToken, configuration: app.controlPlaneConfiguration))
+            }
             return
         }
 
@@ -283,7 +287,10 @@ struct BootstrapCommand: AsyncCommand {
         console.success("  Next: open this link in a browser to register your passkey.")
         console.print("  Single use, valid until \(Self.expiryFormatter.string(from: claimExpiresAt)).")
         console.print()
-        console.print("    \(UserController.claimURL(for: claimToken))")
+        let claimURL = UserController.claimURL(
+            for: claimToken,
+            configuration: app.controlPlaneConfiguration)
+        console.print("    \(claimURL)")
         console.print()
         console.warning("The link's origin comes from WEBAUTHN_RELYING_PARTY_ORIGIN and must match")
         console.warning("the URL you browse to, or the passkey ceremony will fail.")

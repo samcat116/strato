@@ -26,20 +26,14 @@ final class GuestIdentityTests {
         try await app.shutdownForTesting()
     }
 
-    /// Runs `body` with the per-org trust domain feature flag on.
-    ///
-    /// Through `EnvironmentFlag` rather than a bare `setenv`: `.serialized`
-    /// orders tests within this suite but suites run in parallel, and
-    /// `OrgTrustDomainTests` in this same target drives the same variable.
-    private func withFeatureFlagOn<T>(_ body: () async throws -> T) async throws -> T {
-        try await EnvironmentFlag.withValue("SPIRE_ORG_TRUST_DOMAINS_ENABLED", "true", body)
-    }
-
-    /// …and the same for asserting flag-*off* behavior, which is the direction
-    /// that actually loses the race: a parallel suite holding the flag on would
-    /// make an unguarded off-path assertion fail.
-    private func withFeatureFlagOff<T>(_ body: () async throws -> T) async throws -> T {
-        try await EnvironmentFlag.withValue("SPIRE_ORG_TRUST_DOMAINS_ENABLED", nil, body)
+    private func configuration(orgTrustDomainsEnabled: Bool) async throws
+        -> ControlPlaneConfiguration
+    {
+        try await ControlPlaneConfiguration.load(
+            environmentVariables: [
+                "SPIRE_ORG_TRUST_DOMAINS_ENABLED": orgTrustDomainsEnabled ? "true" : "false"
+            ],
+            for: .testing)
     }
 
     @discardableResult
@@ -93,65 +87,61 @@ final class GuestIdentityTests {
             let row = try await claimTrustDomain(
                 app, organizationID: orgID, phase: .active, bundlePEM: "-----BEGIN CERTIFICATE-----")
 
-            try await self.withFeatureFlagOff {
-                // The row exists and would qualify — the flag alone keeps the
-                // multi-domain path dormant, which is the whole point of phase 2.
-                let resolved = try await GuestIdentity.trustDomain(
-                    forOrganization: orgID, on: app.db)
-                #expect(resolved == PlatformTrustDomain.current)
-                #expect(resolved != row.trustDomain)
-            }
+            let configuration = try await self.configuration(orgTrustDomainsEnabled: false)
+            // The row exists and would qualify — the flag alone keeps the
+            // multi-domain path dormant, which is the whole point of phase 2.
+            let resolved = try await GuestIdentity.trustDomain(
+                forOrganization: orgID, configuration: configuration, on: app.db)
+            #expect(resolved == PlatformTrustDomain.current)
+            #expect(resolved != row.trustDomain)
         }
     }
 
     @Test("With the flag on, an active org domain holding a bundle is used")
     func flagOnUsesActiveOrgDomain() async throws {
         try await withApp { app in
-            try await withFeatureFlagOn {
-                let orgID = UUID()
-                let row = try await claimTrustDomain(
-                    app, organizationID: orgID, phase: .active,
-                    bundlePEM: "-----BEGIN CERTIFICATE-----")
+            let configuration = try await self.configuration(orgTrustDomainsEnabled: true)
+            let orgID = UUID()
+            let row = try await claimTrustDomain(
+                app, organizationID: orgID, phase: .active,
+                bundlePEM: "-----BEGIN CERTIFICATE-----")
 
-                let resolved = try await GuestIdentity.trustDomain(
-                    forOrganization: orgID, on: app.db)
-                #expect(resolved == row.trustDomain)
-            }
+            let resolved = try await GuestIdentity.trustDomain(
+                forOrganization: orgID, configuration: configuration, on: app.db)
+            #expect(resolved == row.trustDomain)
         }
     }
 
     @Test("An active domain with no cached bundle falls back to the platform")
     func activeWithoutBundleFallsBack() async throws {
         try await withApp { app in
-            try await withFeatureFlagOn {
-                let orgID = UUID()
-                // `acceptsIdentities` demands the bundle: the control plane
-                // holds no roots for this domain, so it would refuse an SVID
-                // minted into it. Minting one anyway is the mistake this guards.
-                try await claimTrustDomain(
-                    app, organizationID: orgID, phase: .active, bundlePEM: nil)
+            let configuration = try await self.configuration(orgTrustDomainsEnabled: true)
+            let orgID = UUID()
+            // `acceptsIdentities` demands the bundle: the control plane
+            // holds no roots for this domain, so it would refuse an SVID
+            // minted into it. Minting one anyway is the mistake this guards.
+            try await claimTrustDomain(
+                app, organizationID: orgID, phase: .active, bundlePEM: nil)
 
-                let resolved = try await GuestIdentity.trustDomain(
-                    forOrganization: orgID, on: app.db)
-                #expect(resolved == PlatformTrustDomain.current)
-            }
+            let resolved = try await GuestIdentity.trustDomain(
+                forOrganization: orgID, configuration: configuration, on: app.db)
+            #expect(resolved == PlatformTrustDomain.current)
         }
     }
 
     @Test("A domain that is not active falls back to the platform, whatever its phase")
     func nonActivePhasesFallBack() async throws {
         try await withApp { app in
-            try await withFeatureFlagOn {
-                for phase in [OrgTrustDomainPhase.pending, .provisioning, .failed, .deleting] {
-                    let orgID = UUID()
-                    try await claimTrustDomain(
-                        app, organizationID: orgID, phase: phase,
-                        bundlePEM: "-----BEGIN CERTIFICATE-----")
+            let configuration = try await self.configuration(orgTrustDomainsEnabled: true)
+            for phase in [OrgTrustDomainPhase.pending, .provisioning, .failed, .deleting] {
+                let orgID = UUID()
+                try await claimTrustDomain(
+                    app, organizationID: orgID, phase: phase,
+                    bundlePEM: "-----BEGIN CERTIFICATE-----")
 
-                    let resolved = try await GuestIdentity.trustDomain(
-                        forOrganization: orgID, on: app.db)
-                    #expect(resolved == PlatformTrustDomain.current, "phase \(phase.rawValue)")
-                }
+                let resolved = try await GuestIdentity.trustDomain(
+                    forOrganization: orgID, configuration: configuration, on: app.db)
+                #expect(resolved == PlatformTrustDomain.current, "phase \(phase.rawValue)")
             }
         }
     }
@@ -159,11 +149,10 @@ final class GuestIdentityTests {
     @Test("A VM in no organization gets the platform trust domain")
     func noOrganizationUsesPlatform() async throws {
         try await withApp { app in
-            try await withFeatureFlagOn {
-                let resolved = try await GuestIdentity.trustDomain(
-                    forOrganization: nil, on: app.db)
-                #expect(resolved == PlatformTrustDomain.current)
-            }
+            let configuration = try await self.configuration(orgTrustDomainsEnabled: true)
+            let resolved = try await GuestIdentity.trustDomain(
+                forOrganization: nil, configuration: configuration, on: app.db)
+            #expect(resolved == PlatformTrustDomain.current)
         }
     }
 
