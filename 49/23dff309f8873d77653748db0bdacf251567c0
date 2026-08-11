@@ -1,0 +1,42 @@
+agent/Sources/StratoAgentCore/LoadBalancerReconciler.swift
+  s_29c73f0503496f::t_6a8222f3c4f2fc 27-37,39-46,48-96,98-102,108-117
+  s_29c73f0503496f::t_a482ea3dcfc0af 38,47,97
+  s_29c73f0503496f::t_cec05e66a13ede 129-133,203-213,219-220
+  s_29c73f0503496f::t_4d81f1d0f2ab7d 158-161
+  s_29c73f0503496f::t_83c2c52032f114 103-107
+control-plane/Sources/App/Controllers/LoadBalancerController.swift
+  s_29c73f0503496f::t_f52f77b3257ec2 350-358,361
+  s_29c73f0503496f::t_4d81f1d0f2ab7d 347-349,359-360
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_29c73f0503496f::t_f1aff981d5aa44 662-663
+control-plane/Tests/AppPlatformTests/LoadBalancerControllerTests.swift
+  s_29c73f0503496f::t_d94c62705af9cb 1-99,103-115
+  s_29c73f0503496f::t_dc5f95850c9cc9 100-102
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_29c73f0503496f::t_6a8222f3c4f2fc 3274-3286,3389-3403
+  s_29c73f0503496f::t_6329d2fbeb6a1d 70-73,204-235,249,256,266-281
+  s_29c73f0503496f::t_ec21224dfdbf9a 3261-3273,3287-3288
+  s_29c73f0503496f::t_bdef4f3eb79a9f 1464,1467-1469
+  s_29c73f0503496f::t_2d169d4d4a34c0 282
+agent/Sources/StratoAgent/NetworkServiceMacOS.swift
+  s_29c73f0503496f::t_a3e68a64a27a00 93
+agent/Tests/StratoAgentTests/LoadBalancerReconcilerTests.swift
+  s_29c73f0503496f::t_4e02933761a63d 1-137,165-293
+  s_29c73f0503496f::t_83c2c52032f114 138-164
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "4923dff309f8873d77653748db0bdacf251567c0",
+  "prompts": {},
+  "sessions": {
+    "s_29c73f0503496f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee44-e04e-77c1-8bb6-33ca2ed727bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
