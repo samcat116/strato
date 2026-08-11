@@ -1,0 +1,19 @@
+docs/architecture/iam.md
+  s_3ea4601d4518a0::t_84b057f7ecad11 960-967
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c9ba033d9308eb45f9eb1b13631e63f7a9e3f170",
+  "prompts": {},
+  "sessions": {
+    "s_3ea4601d4518a0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee41-bb79-70b2-b297-223a47bd8a4d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
