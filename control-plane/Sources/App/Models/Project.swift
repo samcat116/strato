@@ -2,6 +2,8 @@ import Fluent
 import Vapor
 import Foundation
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class Project: Model, @unchecked Sendable {
     static let schema = "projects"
 

@@ -10,6 +10,8 @@ import Vapor
 /// holds no bearer secret of its own — the agent authenticates with its SVID,
 /// and the join token is returned once from the create endpoint and never
 /// persisted here.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class AgentEnrollment: Model, Content, @unchecked Sendable {
     static let schema = "agent_enrollments"
 

@@ -22,6 +22,8 @@ import Vapor
 /// group with no members filters nothing, and its existing means the first
 /// sandbox port to come up joins it immediately instead of parking on
 /// `DependencyPendingError`.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class SandboxInterfaceSecurityGroup: Model, @unchecked Sendable {
     static let schema = "sandbox_interface_security_groups"
 

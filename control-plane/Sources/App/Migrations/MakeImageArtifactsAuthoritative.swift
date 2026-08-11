@@ -192,6 +192,8 @@ struct MakeImageArtifactsAuthoritative: AsyncMigration {
 }
 
 /// Snapshot of the image schema immediately before the cutover.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class AuthoritativeImageLegacyRow: Model, @unchecked Sendable {
     static let schema = "images"
 
@@ -213,6 +215,8 @@ final class AuthoritativeImageLegacyRow: Model, @unchecked Sendable {
 }
 
 /// Snapshot of the artifact schema after adding `expected_checksum`.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class AuthoritativeImageArtifactRow: Model, @unchecked Sendable {
     static let schema = "image_artifacts"
 

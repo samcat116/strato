@@ -390,6 +390,8 @@ private enum MembershipRoleMigrationError: Error, CustomStringConvertible {
     }
 }
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 private final class LegacyRoleBinding: Model, @unchecked Sendable {
     static let schema = "role_bindings"
     @ID(key: .id) var id: UUID?
@@ -406,6 +408,8 @@ private final class LegacyRoleBinding: Model, @unchecked Sendable {
     init() {}
 }
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 private final class LegacyOrganizationMembership: Model, @unchecked Sendable {
     static let schema = "user_organizations"
     @ID(key: .id) var id: UUID?
@@ -417,6 +421,8 @@ private final class LegacyOrganizationMembership: Model, @unchecked Sendable {
     init() {}
 }
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 private final class LegacyProjectMembership: Model, @unchecked Sendable {
     static let schema = "project_members"
     @ID(key: .id) var id: UUID?
@@ -427,6 +433,8 @@ private final class LegacyProjectMembership: Model, @unchecked Sendable {
     init() {}
 }
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 private final class LegacyProjectGroupGrant: Model, @unchecked Sendable {
     static let schema = "project_group_grants"
     @ID(key: .id) var id: UUID?
@@ -437,6 +445,8 @@ private final class LegacyProjectGroupGrant: Model, @unchecked Sendable {
     init() {}
 }
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 private final class LegacyOIDCProviderRole: Model, @unchecked Sendable {
     static let schema = "oidc_providers"
     @ID(key: .id) var id: UUID?

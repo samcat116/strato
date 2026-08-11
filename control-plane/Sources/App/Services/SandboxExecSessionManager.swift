@@ -22,6 +22,9 @@ import Vapor
 /// and documented in `docs/architecture/sandboxes.md`).
 ///
 /// This is NOT an actor to avoid event loop conflicts with NIO WebSockets.
+/// Safety: `app` is immutable and every access to pending, attached, browser,
+/// and sandbox-index state is inside `lock`. Returned session values are
+/// immutable snapshots rather than references to that state.
 final class SandboxExecSessionManager: @unchecked Sendable {
     /// How long a pending session may sit unattached before it expires.
     static let pendingSessionTTL: TimeInterval = 60

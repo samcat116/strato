@@ -2,7 +2,10 @@ import Fluent
 import Vapor
 import SwiftSCIM
 
-struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
+/// Fluent's database handle predates checked sendability. It is immutable here;
+/// every mutable model is created or reloaded inside one method and never sent
+/// to a child task or retained by the handler.
+struct UserSCIMHandler: SCIMResourceHandler, Sendable {
     typealias Resource = SCIMUser
 
     static let endpoint = "Users"

@@ -7,6 +7,8 @@ import Vapor
 /// chain, and FluentKit traps while decoding a malformed `@Enum` raw value.
 /// Keeping the snapshot minimal also prevents later VM fields from breaking
 /// this historical migration.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 private final class VMVolumeBackfillRow: Model, @unchecked Sendable {
     static let schema = "vms"
 
@@ -35,6 +37,8 @@ private final class VMVolumeBackfillRow: Model, @unchecked Sendable {
 /// in the order. The live `Volume` model has since grown fields (e.g.
 /// `pool_id`) whose columns don't exist yet when this migration runs — and no
 /// longer exist when it reverts — so querying through it fails on both paths.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 private final class LegacyVolume: Model, @unchecked Sendable {
     static let schema = "volumes"
 

@@ -1,4 +1,5 @@
 import Fluent
+import Synchronization
 import Testing
 import Vapor
 
@@ -7,14 +8,27 @@ import AppTestSupport
 
 /// Captures console output so printed secrets (the API key, a claim URL) can be
 /// recovered and checked. Shared with `GrantPlatformAdminCommandTests`.
-final class CaptureConsole: Console, @unchecked Sendable {
-    var lines: [String] = []
-    var userInfo: [AnySendableHashable: any Sendable] = [:]
+final class CaptureConsole: Console, Sendable {
+    private struct State {
+        var lines: [String] = []
+        var userInfo: [AnySendableHashable: any Sendable] = [:]
+    }
+
+    private let state = Mutex(State())
+    var lines: [String] { state.withLock { $0.lines } }
+    var userInfo: [AnySendableHashable: any Sendable] {
+        get { state.withLock { $0.userInfo } }
+        set { state.withLock { $0.userInfo = newValue } }
+    }
     var size: (width: Int, height: Int) { (80, 25) }
     func input(isSecure: Bool) -> String { "" }
-    func output(_ text: ConsoleText, newLine: Bool) { lines.append(text.description) }
+    func output(_ text: ConsoleText, newLine: Bool) {
+        state.withLock { $0.lines.append(text.description) }
+    }
     func clear(_ type: ConsoleClear) {}
-    func report(error: String, newLine: Bool) { lines.append(error) }
+    func report(error: String, newLine: Bool) {
+        state.withLock { $0.lines.append(error) }
+    }
 }
 
 @Suite("Bootstrap Command Tests")

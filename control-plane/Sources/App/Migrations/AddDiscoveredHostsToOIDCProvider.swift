@@ -50,6 +50,8 @@ struct AddDiscoveredHostsToOIDCProvider: AsyncMigration {
 /// Column snapshot frozen at this migration. The live `OIDCProvider` model
 /// gains and loses fields over time; querying it here would break this
 /// migration the moment the schema moves on.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 private final class ProviderRow: Model, @unchecked Sendable {
     static let schema = "oidc_providers"
 

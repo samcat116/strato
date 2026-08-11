@@ -5,6 +5,8 @@ import Vapor
 /// group's port group. Rules are immutable — editing is delete + recreate —
 /// so concurrent editors can never half-overwrite each other's changes; every
 /// mutation bumps the owning group's `generation`.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class SecurityGroupRule: Model, @unchecked Sendable {
     static let schema = "security_group_rules"
 

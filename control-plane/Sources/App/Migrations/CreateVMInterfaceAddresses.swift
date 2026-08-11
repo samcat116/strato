@@ -13,6 +13,8 @@ struct CreateVMInterfaceAddresses: AsyncMigration {
     /// Point-in-time mapping of `vm_network_interfaces` with only the columns
     /// this migration reads, so later model changes cannot break it (see
     /// `AddGatewayToVMNetworkInterface` for the same pattern).
+    /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+    /// receive IDs or immutable snapshots and reload their own instance.
     private final class InterfaceRow: Model, @unchecked Sendable {
         static let schema = "vm_network_interfaces"
 
@@ -35,6 +37,8 @@ struct CreateVMInterfaceAddresses: AsyncMigration {
     }
 
     /// Point-in-time mapping of `logical_networks`, for the netmask fallback.
+    /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+    /// receive IDs or immutable snapshots and reload their own instance.
     private final class NetworkRow: Model, @unchecked Sendable {
         static let schema = "logical_networks"
 
@@ -50,6 +54,8 @@ struct CreateVMInterfaceAddresses: AsyncMigration {
         init() {}
     }
 
+    /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+    /// receive IDs or immutable snapshots and reload their own instance.
     private final class AddressRow: Model, @unchecked Sendable {
         static let schema = "vm_interface_addresses"
 

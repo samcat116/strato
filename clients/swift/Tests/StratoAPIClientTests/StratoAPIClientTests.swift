@@ -1,6 +1,7 @@
 import Foundation
 import HTTPTypes
 import OpenAPIRuntime
+import Synchronization
 import Testing
 
 @testable import StratoAPIClient
@@ -16,8 +17,9 @@ struct StratoAPIClientTests {
 
     /// A transport that answers every request from a canned response, recording
     /// what it was asked for.
-    final class RecordingTransport: ClientTransport, @unchecked Sendable {
-        var lastRequest: HTTPRequest?
+    final class RecordingTransport: ClientTransport, Sendable {
+        private let recordedRequest = Mutex<HTTPRequest?>(nil)
+        var lastRequest: HTTPRequest? { recordedRequest.withLock { $0 } }
         let response: HTTPResponse
         let responseBody: HTTPBody?
 
@@ -32,7 +34,7 @@ struct StratoAPIClientTests {
             baseURL: URL,
             operationID: String
         ) async throws -> (HTTPResponse, HTTPBody?) {
-            lastRequest = request
+            recordedRequest.withLock { $0 = request }
             return (response, responseBody)
         }
     }

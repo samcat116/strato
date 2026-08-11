@@ -26,6 +26,8 @@ enum WorkloadClaimDisposition: String, Codable, CaseIterable, Sendable {
 ///
 /// Deliberately no foreign key on `resource_id`: the common case is a workload
 /// whose row does not exist, which is precisely what an FK would forbid.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class AgentWorkloadClaim: Model, @unchecked Sendable {
     static let schema = "agent_workload_claims"
 

@@ -42,7 +42,7 @@ extension VMLogMessage: AgentLoggedResourceMessage {
 /// Dependencies are injected as closures so the pipeline can be unit-tested
 /// without an application (see `Application.sandboxLogIngestor` and
 /// `Application.vmLogIngestor` for the production wiring).
-final class AgentLogIngestor<Message: AgentLoggedResourceMessage>: @unchecked Sendable {
+final class AgentLogIngestor<Message: AgentLoggedResourceMessage>: Sendable {
     typealias OwnershipCheck = @Sendable (_ resourceId: String, _ agentKey: String) async -> Bool
     typealias Push = @Sendable (_ message: Message) async throws -> Void
 
@@ -71,9 +71,6 @@ final class AgentLogIngestor<Message: AgentLoggedResourceMessage>: @unchecked Se
     private let now: @Sendable () -> Date
     private let continuation: AsyncStream<Entry>.Continuation
 
-    /// Only ever touched from the single consumer task, so no lock is needed.
-    private var ownershipCache: [CacheKey: (owned: Bool, expiresAt: Date)] = [:]
-
     init(
         logger: Logger,
         now: @escaping @Sendable () -> Date = Date.init,
@@ -93,9 +90,44 @@ final class AgentLogIngestor<Message: AgentLoggedResourceMessage>: @unchecked Se
         // exits instead of pinning the process.
         Task { [weak self] in
             var iterator = stream.makeAsyncIterator()
+            // This cache is task-local by construction. Keeping it here makes
+            // the single-consumer ownership explicit to the compiler instead
+            // of relying on a mutable class property plus an unchecked
+            // conformance.
+            var ownershipCache: [CacheKey: (owned: Bool, expiresAt: Date)] = [:]
             while let entry = await iterator.next() {
                 guard let self else { return }
-                await self.process(entry)
+                let resourceId = entry.message.owningResourceID
+                let key = CacheKey(resourceId: resourceId, agentKey: entry.agentKey)
+                let currentTime = self.now()
+                let owned: Bool
+                if let cached = ownershipCache[key], cached.expiresAt > currentTime {
+                    owned = cached.owned
+                } else {
+                    owned = await self.checkOwnership(resourceId, entry.agentKey)
+                    ownershipCache[key] = (
+                        owned: owned,
+                        expiresAt: currentTime.addingTimeInterval(Self.ownershipTTL)
+                    )
+                    if ownershipCache.count > Self.ownershipCacheSweepThreshold {
+                        ownershipCache = ownershipCache.filter { $0.value.expiresAt > currentTime }
+                    }
+                }
+
+                guard owned else {
+                    self.logger.warning(
+                        "Dropping \(Message.resourceKind) log for a \(Message.resourceKind) not owned by the reporting agent",
+                        metadata: [
+                            Message.resourceIDMetadataKey: .string(resourceId),
+                            "agentKey": .string(entry.agentKey),
+                        ])
+                    continue
+                }
+                do {
+                    try await self.push(entry.message)
+                } catch {
+                    self.logger.error("Failed to push \(Message.resourceKind) log to Loki: \(error)")
+                }
             }
         }
     }
@@ -115,42 +147,6 @@ final class AgentLogIngestor<Message: AgentLoggedResourceMessage>: @unchecked Se
         continuation.finish()
     }
 
-    private func process(_ entry: Entry) async {
-        // Only accept logs for a resource actually assigned to the reporting
-        // agent. Without this a compromised agent could push fabricated log
-        // lines tagged with another tenant's resource id, which would then
-        // surface in that tenant's console/log view.
-        let resourceId = entry.message.owningResourceID
-        let owned = await resourceIsOwned(resourceId: resourceId, agentKey: entry.agentKey)
-        guard owned else {
-            logger.warning(
-                "Dropping \(Message.resourceKind) log for a \(Message.resourceKind) not owned by the reporting agent",
-                metadata: [
-                    Message.resourceIDMetadataKey: .string(resourceId),
-                    "agentKey": .string(entry.agentKey),
-                ])
-            return
-        }
-        do {
-            try await push(entry.message)
-        } catch {
-            logger.error("Failed to push \(Message.resourceKind) log to Loki: \(error)")
-        }
-    }
-
-    private func resourceIsOwned(resourceId: String, agentKey: String) async -> Bool {
-        let key = CacheKey(resourceId: resourceId, agentKey: agentKey)
-        let currentTime = now()
-        if let cached = ownershipCache[key], cached.expiresAt > currentTime {
-            return cached.owned
-        }
-        let owned = await checkOwnership(resourceId, agentKey)
-        ownershipCache[key] = (owned: owned, expiresAt: currentTime.addingTimeInterval(Self.ownershipTTL))
-        if ownershipCache.count > Self.ownershipCacheSweepThreshold {
-            ownershipCache = ownershipCache.filter { $0.value.expiresAt > currentTime }
-        }
-        return owned
-    }
 }
 
 typealias SandboxLogIngestor = AgentLogIngestor<SandboxLogMessage>

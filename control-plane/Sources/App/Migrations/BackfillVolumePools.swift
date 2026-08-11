@@ -5,6 +5,8 @@ import SQLKit
 /// Snapshot of the `volumes` columns this backfill reads. Going through the
 /// live `Volume` model would break this migration as soon as the model grows
 /// a field whose column postdates this point in the migration order.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 private final class BackfillVolume: Model, @unchecked Sendable {
     static let schema = "volumes"
 
@@ -22,6 +24,8 @@ private final class BackfillVolume: Model, @unchecked Sendable {
 
 /// Snapshot of the `volume_replicas` columns as created by
 /// `CreateVolumeReplica`, for the same reason as `BackfillVolume`.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 private final class BackfillVolumeReplica: Model, @unchecked Sendable {
     static let schema = "volume_replicas"
 

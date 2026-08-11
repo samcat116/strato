@@ -29,6 +29,8 @@ enum SiteStatus: String, Codable, CaseIterable, Sendable {
 ///
 /// Agents without a site keep the legacy single-node model: a private local
 /// NB they are always authoritative over.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class Site: Model, Content, @unchecked Sendable {
     static let schema = "sites"
 

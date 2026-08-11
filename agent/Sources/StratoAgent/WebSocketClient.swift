@@ -7,44 +7,39 @@ import NIOHTTP1
 import Logging
 import StratoAgentSPIFFE
 import StratoShared
+import Synchronization
 
 // Thread-safe boolean wrapper for continuation resume tracking
-final class AtomicBool: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Bool
+final class AtomicBool: Sendable {
+    private let value: Mutex<Bool>
 
     init(_ initialValue: Bool) {
-        self.value = initialValue
+        self.value = Mutex(initialValue)
     }
 
     func testAndSet(_ newValue: Bool) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        let oldValue = value
-        value = newValue
-        return oldValue
+        value.withLock { value in
+            let oldValue = value
+            value = newValue
+            return oldValue
+        }
     }
 }
 
 // Thread-safe WebSocket wrapper to avoid EventLoop affinity issues
-final class LockedWebSocket: @unchecked Sendable {
-    private let lock = NSLock()
-    private var ws: WebSocket?
+final class LockedWebSocket: Sendable {
+    private let websocket: Mutex<WebSocket?>
 
     init() {
-        self.ws = nil
+        self.websocket = Mutex(nil)
     }
 
     func set(_ newValue: WebSocket?) {
-        lock.lock()
-        defer { lock.unlock() }
-        ws = newValue
+        websocket.withLock { $0 = newValue }
     }
 
     func get() -> WebSocket? {
-        lock.lock()
-        defer { lock.unlock() }
-        return ws
+        websocket.withLock { $0 }
     }
 }
 

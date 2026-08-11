@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Per-stage time budgets for long VM operations (reconciliation phase 2,
 /// issue #260). A multi-GB image download and a domain start have wildly
@@ -188,34 +189,33 @@ public enum StageBudget {
 /// Registration and resolution share one lock so a deadline that fires before
 /// the caller parks cannot slip through the gap — the caller then observes the
 /// stored result instead of waiting for a resolution that already happened.
-private final class FirstOutcome<T: Sendable>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var result: Result<T, any Error>?
-    private var continuation: CheckedContinuation<T, any Error>?
+private final class FirstOutcome<T: Sendable>: Sendable {
+    private struct State {
+        var result: Result<T, any Error>?
+        var continuation: CheckedContinuation<T, any Error>?
+    }
+
+    private let state = Mutex(State())
 
     func resolve(_ value: Result<T, any Error>) {
-        lock.lock()
-        guard result == nil else {
-            lock.unlock()
-            return
+        let waiter = state.withLock { state -> CheckedContinuation<T, any Error>? in
+            guard state.result == nil else { return nil }
+            state.result = value
+            let waiter = state.continuation
+            state.continuation = nil
+            return waiter
         }
-        result = value
-        let waiter = continuation
-        continuation = nil
-        lock.unlock()
         waiter?.resume(with: value)
     }
 
     func value() async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
-            lock.lock()
-            if let result {
-                lock.unlock()
-                continuation.resume(with: result)
-                return
+            let result = state.withLock { state -> Result<T, any Error>? in
+                if let result = state.result { return result }
+                state.continuation = continuation
+                return nil
             }
-            self.continuation = continuation
-            lock.unlock()
+            if let result { continuation.resume(with: result) }
         }
     }
 }

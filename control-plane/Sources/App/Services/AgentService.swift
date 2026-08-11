@@ -11,6 +11,9 @@ import Tracing
 /// Thread-safe WebSocket connection manager
 /// This is NOT an actor to avoid event loop conflicts with NIO
 /// WebSocket objects are event-loop-bound and must only be accessed from their event loop
+/// Safety: every access to `connections` and its mutable `Connection` values is
+/// inside `lock`; callers remain responsible for the documented WebSocket event
+/// loop precondition after retrieving a socket.
 final class WebSocketManager: @unchecked Sendable {
     private struct Connection {
         let websocket: WebSocket

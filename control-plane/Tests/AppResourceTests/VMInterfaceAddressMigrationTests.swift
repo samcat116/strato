@@ -11,6 +11,8 @@ import AppTestSupport
 /// pre-applied, which makes before/after tests impossible).
 @Suite("VMInterfaceAddress backfill migration")
 struct VMInterfaceAddressMigrationTests {
+    /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+    /// receive IDs or immutable snapshots and reload their own instance.
     private final class LegacyInterface: Model, @unchecked Sendable {
         static let schema = "vm_network_interfaces"
 
@@ -44,6 +46,8 @@ struct VMInterfaceAddressMigrationTests {
     /// rather than the live `VMInterfaceAddress`, which has since traded its
     /// `network` name column for a `logical_network_id` foreign key (issue
     /// #765) that does not exist at this point in migration history.
+    /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+    /// receive IDs or immutable snapshots and reload their own instance.
     private final class AddressRow: Model, @unchecked Sendable {
         static let schema = "vm_interface_addresses"
 
@@ -82,6 +86,8 @@ struct VMInterfaceAddressMigrationTests {
         }
     }
 
+    /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+    /// receive IDs or immutable snapshots and reload their own instance.
     private final class NetworkRow: Model, @unchecked Sendable {
         static let schema = "logical_networks"
 

@@ -85,6 +85,8 @@ struct MigratePendingTokensToEnrollments: AsyncMigration {
 
 // MARK: - Column snapshots
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 private final class TokenRow: Model, @unchecked Sendable {
     static let schema = "agent_registration_tokens"
 
@@ -100,6 +102,8 @@ private final class TokenRow: Model, @unchecked Sendable {
     init() {}
 }
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 private final class EnrollmentRow: Model, @unchecked Sendable {
     static let schema = "agent_enrollments"
 
@@ -117,6 +121,8 @@ private final class EnrollmentRow: Model, @unchecked Sendable {
     init() {}
 }
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 private final class AgentNameRow: Model, @unchecked Sendable {
     static let schema = "agents"
 

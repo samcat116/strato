@@ -11,6 +11,8 @@ import Vapor
 /// project), so access to the account itself — including the
 /// `serviceaccount:impersonate` permission — is governed by ordinary bindings
 /// and guardrails.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class ServiceAccount: Model, Content, @unchecked Sendable {
     static let schema = "service_accounts"
 

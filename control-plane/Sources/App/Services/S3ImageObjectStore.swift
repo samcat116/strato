@@ -160,6 +160,13 @@ struct S3ImageObjectStore: ImageObjectStore {
 /// Buffers into ≥5 MiB parts and uploads them as it goes, so a multi-gigabyte
 /// image never lands in memory whole.
 private actor S3ImageObjectWriter: ImageObjectWriter {
+    private enum Lifecycle {
+        case open
+        case finished
+        case aborted
+        case failed
+    }
+
     private let s3: S3
     private let bucket: String
     private let key: String
@@ -168,7 +175,7 @@ private actor S3ImageObjectWriter: ImageObjectWriter {
     private var pending: ByteBuffer
     private var completedParts: [S3.CompletedPart] = []
     private var nextPartNumber = 1
-    private var aborted = false
+    private var lifecycle: Lifecycle = .open
 
     init(s3: S3, bucket: String, key: String, uploadId: String) {
         self.s3 = s3
@@ -179,8 +186,8 @@ private actor S3ImageObjectWriter: ImageObjectWriter {
     }
 
     func write(_ buffer: ByteBuffer) async throws {
-        guard !aborted else {
-            throw ImageError.storageFailed("Write to an aborted upload")
+        guard case .open = lifecycle else {
+            throw ImageError.storageFailed("Write after the image upload terminated")
         }
         var buffer = buffer
         pending.writeBuffer(&buffer)
@@ -193,28 +200,50 @@ private actor S3ImageObjectWriter: ImageObjectWriter {
     }
 
     func finish() async throws {
-        // The final part is the only one allowed below the 5 MiB minimum.
-        //
-        // It is uploaded even when empty: S3 rejects `completeMultipartUpload`
-        // with an empty part list, so a zero-byte object needs one zero-byte
-        // part rather than none.
-        if pending.readableBytes > 0 || completedParts.isEmpty {
-            let tail = pending.readSlice(length: pending.readableBytes) ?? ByteBuffer()
-            try await uploadPart(tail)
+        switch lifecycle {
+        case .finished:
+            return
+        case .aborted:
+            throw ImageError.storageFailed("Cannot finish an aborted image upload")
+        case .failed:
+            throw ImageError.storageFailed("Cannot finish an image upload whose publish failed")
+        case .open:
+            break
         }
 
-        _ = try await s3.completeMultipartUpload(
-            .init(
-                bucket: bucket,
-                key: key,
-                multipartUpload: S3.CompletedMultipartUpload(parts: completedParts),
-                uploadId: uploadId
+        do {
+            // The final part is the only one allowed below the 5 MiB minimum.
+            //
+            // It is uploaded even when empty: S3 rejects `completeMultipartUpload`
+            // with an empty part list, so a zero-byte object needs one zero-byte
+            // part rather than none.
+            if pending.readableBytes > 0 || completedParts.isEmpty {
+                let tail = pending.readSlice(length: pending.readableBytes) ?? ByteBuffer()
+                try await uploadPart(tail)
+            }
+
+            _ = try await s3.completeMultipartUpload(
+                .init(
+                    bucket: bucket,
+                    key: key,
+                    multipartUpload: S3.CompletedMultipartUpload(parts: completedParts),
+                    uploadId: uploadId
+                )
             )
-        )
+            lifecycle = .finished
+        } catch {
+            lifecycle = .failed
+            throw error
+        }
     }
 
     func abort() async {
-        aborted = true
+        switch lifecycle {
+        case .finished, .aborted:
+            return
+        case .open, .failed:
+            lifecycle = .aborted
+        }
         // Best effort: leaving the multipart upload dangling would keep billing
         // for its parts, but a failure here must not mask the original error.
         _ = try? await s3.abortMultipartUpload(

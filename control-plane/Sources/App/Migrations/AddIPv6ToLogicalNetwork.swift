@@ -15,6 +15,8 @@ import Vapor
 /// Overrides: `STRATO_DEFAULT_NETWORK_SUBNET6` supplies an explicit /64;
 /// `STRATO_DEFAULT_NETWORK_IPV6=false` keeps the default network v4-only.
 struct AddIPv6ToLogicalNetwork: AsyncMigration {
+    /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+    /// receive IDs or immutable snapshots and reload their own instance.
     private final class VMRow: Model, @unchecked Sendable {
         static let schema = "vms"
 
@@ -24,6 +26,8 @@ struct AddIPv6ToLogicalNetwork: AsyncMigration {
         init() {}
     }
 
+    /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+    /// receive IDs or immutable snapshots and reload their own instance.
     private final class InterfaceRow: Model, @unchecked Sendable {
         static let schema = "vm_network_interfaces"
 

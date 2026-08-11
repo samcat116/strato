@@ -23,6 +23,8 @@ struct ReplaceIAMRoleRegistry: AsyncMigration {
 
     /// Column snapshot of the seeded role rows — migrations never touch live
     /// models (they drift; see MigrateVMDisksToVolumes).
+    /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+    /// receive IDs or immutable snapshots and reload their own instance.
     private final class SeededRole: Model, @unchecked Sendable {
         static let schema = "iam_roles"
 

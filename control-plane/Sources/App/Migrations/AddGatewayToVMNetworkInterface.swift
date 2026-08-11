@@ -10,6 +10,8 @@ struct AddGatewayToVMNetworkInterface: AsyncMigration {
     /// Point-in-time mapping of `vm_network_interfaces` with only the columns
     /// this migration touches, so later model changes cannot break it (see
     /// `MigrateVMNetworkConfigToInterfaces` for the same pattern).
+    /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+    /// receive IDs or immutable snapshots and reload their own instance.
     private final class InterfaceRow: Model, @unchecked Sendable {
         static let schema = "vm_network_interfaces"
 

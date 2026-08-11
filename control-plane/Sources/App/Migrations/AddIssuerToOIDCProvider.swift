@@ -46,6 +46,8 @@ struct AddIssuerToOIDCProvider: AsyncMigration {
 /// A column-snapshot model pinned to just the fields the backfill touches, so it
 /// doesn't depend on the live `OIDCProvider` model (whose schema may drift in
 /// later migrations).
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class OIDCProviderIssuerBackfillRow: Model, @unchecked Sendable {
     static let schema = "oidc_providers"
 

@@ -8,6 +8,8 @@ import Vapor
 struct MigrateVMNetworkConfigToInterfaces: AsyncMigration {
     /// The `VM` model no longer declares the legacy network fields, so this
     /// migration reads them through its own minimal mapping of the `vms` table.
+    /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+    /// receive IDs or immutable snapshots and reload their own instance.
     private final class LegacyVM: Model, @unchecked Sendable {
         static let schema = "vms"
 
@@ -31,6 +33,8 @@ struct MigrateVMNetworkConfigToInterfaces: AsyncMigration {
     /// model has since grown columns (e.g. `gateway`) that are added by later
     /// migrations, so using it here would reference columns that don't exist
     /// yet on prepare (fresh database) or no longer exist on revert.
+    /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+    /// receive IDs or immutable snapshots and reload their own instance.
     private final class MigrationInterface: Model, @unchecked Sendable {
         static let schema = "vm_network_interfaces"
 

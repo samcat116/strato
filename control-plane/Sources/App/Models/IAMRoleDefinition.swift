@@ -57,6 +57,8 @@ enum IAMRoleOwnerType: String, Codable, Sendable, CaseIterable {
 /// Bindings referencing a role deleted out from under them (org-delete
 /// cascade) are dangling UUID ids that every read path drops — a harmless
 /// under-grant.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class IAMRoleDefinition: Model, @unchecked Sendable {
     static let schema = "iam_roles"
 

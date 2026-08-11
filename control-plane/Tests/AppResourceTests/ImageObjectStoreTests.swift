@@ -168,6 +168,71 @@ final class ImageObjectStoreTests {
         #expect(siblings.isEmpty)
     }
 
+    @Test("Repeated and concurrent finish calls publish exactly once")
+    func repeatedFinishIsIdempotent() async throws {
+        let root = try Self.createTempStorageDirectory()
+        defer { Self.cleanupTempStorageDirectory(root) }
+        let store = FilesystemImageObjectStore(rootPath: root)
+        let key = "p/i/repeated-finish.img"
+        let writer = try await store.openWriter(key: key)
+        try await writer.write(Self.buffer("complete"))
+
+        async let first: Void = writer.finish()
+        async let second: Void = writer.finish()
+        _ = try await (first, second)
+        try await writer.finish()
+
+        #expect(try String(contentsOfFile: "\(root)/\(key)", encoding: .utf8) == "complete")
+        await #expect(throws: (any Error).self) {
+            try await writer.write(Self.buffer("late"))
+        }
+    }
+
+    @Test("Abort after finish is harmless, while finish after abort fails")
+    func terminalOrderIsEncoded() async throws {
+        let root = try Self.createTempStorageDirectory()
+        defer { Self.cleanupTempStorageDirectory(root) }
+        let store = FilesystemImageObjectStore(rootPath: root)
+
+        let publishedKey = "p/i/published.img"
+        let published = try await store.openWriter(key: publishedKey)
+        try await published.write(Self.buffer("kept"))
+        try await published.finish()
+        await published.abort()
+        #expect(try String(contentsOfFile: "\(root)/\(publishedKey)", encoding: .utf8) == "kept")
+
+        let aborted = try await store.openWriter(key: "p/i/aborted-terminal.img")
+        await aborted.abort()
+        await aborted.abort()
+        await #expect(throws: (any Error).self) {
+            try await aborted.finish()
+        }
+    }
+
+    @Test("Overlapping finish and abort settle on one terminal outcome")
+    func overlappingTerminalCalls() async throws {
+        let root = try Self.createTempStorageDirectory()
+        defer { Self.cleanupTempStorageDirectory(root) }
+        let store = FilesystemImageObjectStore(rootPath: root)
+        let key = "p/i/terminal-race.img"
+        let writer = try await store.openWriter(key: key)
+        try await writer.write(Self.buffer("whole object"))
+
+        let finish = Task { try await writer.finish() }
+        let abort = Task { await writer.abort() }
+        await abort.value
+        _ = try? await finish.value
+
+        await #expect(throws: (any Error).self) {
+            try await writer.write(Self.buffer("late"))
+        }
+        if FileManager.default.fileExists(atPath: "\(root)/\(key)") {
+            #expect(try String(contentsOfFile: "\(root)/\(key)", encoding: .utf8) == "whole object")
+        }
+        let siblings = try FileManager.default.contentsOfDirectory(atPath: "\(root)/p/i")
+        #expect(!siblings.contains(where: { $0.contains(".partial.") }))
+    }
+
     @Test("Opening a writer sweeps staging files abandoned by an earlier crash")
     func staleStagingFilesAreSwept() async throws {
         let root = try Self.createTempStorageDirectory()

@@ -20,6 +20,8 @@ public enum ArtifactStatus: String, Codable, CaseIterable, Sendable {
 /// format, size, checksum, and fetch lifecycle. Kernel/rootfs/initramfs
 /// artifacts make an image usable by direct-kernel-boot hypervisors like
 /// Firecracker; a disk-image artifact makes it usable by QEMU.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class ImageArtifact: Model, @unchecked Sendable {
     static let schema = "image_artifacts"
 

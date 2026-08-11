@@ -5,6 +5,10 @@ import NIOConcurrencyHelpers
 
 /// Manages console sessions between frontend WebSockets and agents
 /// This is NOT an actor to avoid event loop conflicts with NIO WebSockets
+///
+/// Safety: `app` is immutable and every access to the four mutable maps is
+/// inside `lock`. WebSockets may leave the map, but this manager invokes them
+/// only through their event-loop-safe APIs.
 final class ConsoleSessionManager: @unchecked Sendable {
     private let lock = NIOLock()
     private let app: Application

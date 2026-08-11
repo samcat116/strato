@@ -8,6 +8,8 @@ struct MigrateExistingDataToProjects: AsyncMigration {
     /// as, and only becomes a native `text[]` in `ConvertProjectEnvironmentsToArray`.
     /// Querying the live `Project` model here would bind a Swift array against a
     /// text column.
+    /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+    /// receive IDs or immutable snapshots and reload their own instance.
     private final class ProjectSnapshot: Model, @unchecked Sendable {
         static let schema = "projects"
 

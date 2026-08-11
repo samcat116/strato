@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import NIOConcurrencyHelpers
 import Testing
 
 #if os(Linux)
@@ -151,7 +152,7 @@ struct VsockConnectionTests {
 
 /// Minimal stand-in for Firecracker's vsock multiplexing UDS. Accepts a
 /// connection, reads the `CONNECT <port>` line, and responds per `behavior`.
-private final class FakeVsockUDSServer: @unchecked Sendable {
+private final class FakeVsockUDSServer: Sendable {
     enum Behavior {
         /// Reply `OK <hostPort>` and then ignore further traffic.
         case accept(hostPort: UInt32)
@@ -161,13 +162,16 @@ private final class FakeVsockUDSServer: @unchecked Sendable {
         case reject
     }
 
+    private struct State {
+        var stopped = false
+        var connectPort: UInt32?
+    }
+
     private let socketPath: String
     private let behavior: Behavior
     private let listenFD: Int32
     private let queue = DispatchQueue(label: "fake-vsock-uds")
-    private let lock = NSLock()
-    private var stopped = false
-    private var connectPort: UInt32?
+    private let state = NIOLockedValueBox(State())
 
     init(socketPath: String, behavior: Behavior) throws {
         self.socketPath = socketPath
@@ -228,23 +232,17 @@ private final class FakeVsockUDSServer: @unchecked Sendable {
     }
 
     func stop() {
-        lock.lock()
-        stopped = true
-        lock.unlock()
+        state.withLockedValue { $0.stopped = true }
         close(listenFD)
         try? FileManager.default.removeItem(atPath: socketPath)
     }
 
     func lastConnectPort() -> UInt32? {
-        lock.lock()
-        defer { lock.unlock() }
-        return connectPort
+        state.withLockedValue { $0.connectPort }
     }
 
     private func isStopped() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return stopped
+        state.withLockedValue { $0.stopped }
     }
 
     private func serveConnection(_ fd: Int32) {
@@ -258,9 +256,10 @@ private final class FakeVsockUDSServer: @unchecked Sendable {
         }
         let line = String(decoding: buffer, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         if line.hasPrefix("CONNECT ") {
-            lock.lock()
-            connectPort = UInt32(line.dropFirst("CONNECT ".count).trimmingCharacters(in: .whitespaces))
-            lock.unlock()
+            state.withLockedValue {
+                $0.connectPort = UInt32(
+                    line.dropFirst("CONNECT ".count).trimmingCharacters(in: .whitespaces))
+            }
         }
 
         switch behavior {

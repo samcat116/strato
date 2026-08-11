@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Synchronization
 @testable import StratoAgentCore
 import StratoShared
 import Logging
@@ -70,20 +71,15 @@ struct ReconciliationTests {
         #expect(VMNetworkInterfaceDiff.between(current: legacy, desired: desired).removed.isEmpty)
     }
 
-    private final class TestClock: @unchecked Sendable {
-        private let lock = NSLock()
-        private var instant = Date(timeIntervalSince1970: 1_000)
+    private final class TestClock: Sendable {
+        private let instant = Mutex(Date(timeIntervalSince1970: 1_000))
 
         func now() -> Date {
-            lock.lock()
-            defer { lock.unlock() }
-            return instant
+            instant.withLock { $0 }
         }
 
         func advance(by interval: TimeInterval) {
-            lock.lock()
-            defer { lock.unlock() }
-            instant = instant.addingTimeInterval(interval)
+            instant.withLock { $0 = $0.addingTimeInterval(interval) }
         }
     }
 

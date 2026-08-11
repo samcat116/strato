@@ -50,6 +50,8 @@ struct BackfillImageArtifacts: AsyncMigration {
 /// time a later migration adds a column: Fluent selects every field the model
 /// declares, so a column that doesn't exist yet turns into `no such column` and
 /// aborts the whole chain — taking every downstream migration with it.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class ImageArtifactBackfillRow: Model, @unchecked Sendable {
     static let schema = "images"
 
@@ -78,6 +80,8 @@ final class ImageArtifactBackfillRow: Model, @unchecked Sendable {
 ///
 /// `image_id` is a plain field rather than a `@Parent` so this row type doesn't
 /// reference the live `Image` model at all.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class ImageArtifactBackfillArtifactRow: Model, @unchecked Sendable {
     static let schema = "image_artifacts"
 

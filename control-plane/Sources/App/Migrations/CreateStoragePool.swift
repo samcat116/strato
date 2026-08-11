@@ -5,6 +5,8 @@ import SQLKit
 /// Snapshot of the `storage_pools` columns as created here. Seeding through
 /// the live `StoragePool` model would break once it grows fields whose
 /// columns postdate this migration.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 private final class SeedStoragePool: Model, @unchecked Sendable {
     static let schema = "storage_pools"
 
