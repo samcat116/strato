@@ -199,20 +199,6 @@ struct MessageOrderingTests {
         #expect(a != b)
     }
 
-    @Test("Wire v43 sandbox exec frames retain the per-session lane")
-    func legacySandboxExecFramesRetainSessionLane() {
-        let sessionId = UUID().uuidString
-        let types: [MessageType] = [
-            .sandboxExecStart, .sandboxExecInput, .sandboxExecResize, .sandboxExecClose,
-        ]
-
-        for type in types {
-            let keys = MessageEnvelope.serializationKeys(
-                type: type, payload: payload(["sessionId": sessionId]))
-            #expect(keys == ["exec:\(sessionId)"])
-        }
-    }
-
     @Test("Frames without a resource id fall back to the shared unkeyed lane")
     func unkeyedFramesShareLane() {
         let successKeys = MessageEnvelope.serializationKeys(

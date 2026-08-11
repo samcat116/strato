@@ -50,7 +50,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 46). The required registration fields
+currently 47). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -61,20 +61,19 @@ refuse missing, older, and future versions before desired or observed state is
 exchanged. There is no rolling mixed-version window and no per-feature protocol
 gate.
 
-Wire v44 introduced `guest_exec_*` and kept the v43 `sandbox_exec_*`
-discriminators routable. Wire v46 retains that tolerance because it can follow
-v45 before a fleet rollout completes; the aliases are scheduled for removal in
-v47. An upgraded agent translates a legacy start to `resourceKind: sandbox`, and
-the control plane accepts legacy response names. This message-level tolerance
-does not weaken the exact registration handshake.
+Wire v44 generalized the interactive exec stream across VMs and sandboxes with
+`guest_exec_*` messages and a resource-kind discriminator on start.
 
-Wire v45 adds typed dependency observations to agent registration and heartbeats.
-The control plane uses the latest received snapshot for feature-scoped placement
-gates without terminating workloads that are already running.
-
-Wire v46 adds QEMU guest-agent intent, fixed host-global vsock CIDs, and the
+Wire v45 adds QEMU guest-agent intent, fixed host-global vsock CIDs, and the
 per-hypervisor host capability used to keep those VMs off nodes without
 `/dev/vhost-vsock`.
+
+Wire v46 adds authoritative native-OVN load-balancer desired state, programming,
+and backend-health observations.
+
+Wire v47 adds typed dependency observations to agent registration and heartbeats.
+The control plane uses the latest received snapshot for feature-scoped placement
+gates without terminating workloads that are already running.
 
 Two consequences worth knowing:
 
