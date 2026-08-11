@@ -156,6 +156,8 @@ export {
   useRevokeProjectMember,
   useGrantProjectGroup,
   useRevokeProjectGroup,
+  useSetProjectWorkloadRole,
+  useRevokeProjectWorkload,
   projectMemberErrorMessage,
 } from "./use-project-members";
 export { useNetworks, useInvalidateNetworks } from "./use-networks";

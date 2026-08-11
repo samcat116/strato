@@ -61,6 +61,29 @@ export function useRevokeProjectGroup(projectId: string) {
   });
 }
 
+export function useSetProjectWorkloadRole(projectId: string) {
+  const invalidate = useInvalidateMembers(projectId);
+  return useMutation({
+    mutationFn: ({
+      registrationId,
+      role,
+    }: {
+      registrationId: string;
+      role: ProjectRole;
+    }) => projectMembersApi.grantWorkload(projectId, registrationId, role),
+    onSuccess: invalidate,
+  });
+}
+
+export function useRevokeProjectWorkload(projectId: string) {
+  const invalidate = useInvalidateMembers(projectId);
+  return useMutation({
+    mutationFn: (registrationId: string) =>
+      projectMembersApi.revokeWorkload(projectId, registrationId),
+    onSuccess: invalidate,
+  });
+}
+
 /** Turns an API error into a project-role-management-friendly message. */
 export function projectMemberErrorMessage(
   error: unknown,

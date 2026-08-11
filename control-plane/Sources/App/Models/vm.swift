@@ -681,6 +681,9 @@ struct VMDetailResponse: Content {
     /// do comes from role bindings against that principal. Nil when the caller
     /// did not resolve it, and when an administrator revoked the registration.
     let spiffeId: String?
+    /// The workload-registration row id, which is also the IAM principal id
+    /// role bindings name. Nil together with `spiffeId` after revocation.
+    let instanceIdentityPrincipalId: UUID?
     /// How far the VM is from the state the API was last asked to put it in
     /// (STR-142), derived from the generation pair and the agent's reported
     /// convergence progress. A client can refetch the VM until
@@ -690,7 +693,12 @@ struct VMDetailResponse: Content {
     let createdAt: Date?
     let updatedAt: Date?
 
-    init(from vm: VM, securityGroupsEnforced: Bool? = nil, spiffeId: String? = nil) {
+    init(
+        from vm: VM,
+        securityGroupsEnforced: Bool? = nil,
+        spiffeId: String? = nil,
+        instanceIdentityPrincipalId: UUID? = nil
+    ) {
         self.id = vm.id
         self.name = vm.name
         self.description = vm.description
@@ -714,6 +722,7 @@ struct VMDetailResponse: Content {
             .map { NetworkInterfaceResponse(from: $0, vm: vm) }
         self.securityGroupsEnforced = securityGroupsEnforced
         self.spiffeId = spiffeId
+        self.instanceIdentityPrincipalId = instanceIdentityPrincipalId
         self.hostname = vm.hostname
         self.secureBoot = vm.secureBoot
         self.tpmEnabled = vm.tpmEnabled

@@ -197,6 +197,8 @@ export interface VM {
    * administrator revoked the registration — not that the VM has no identity.
    */
   spiffeId?: string;
+  /** Workload-registration row id and IAM principal id for this identity. */
+  instanceIdentityPrincipalId?: string;
   /**
    * Graphics console (backend issue #566): whether the guest has a display
    * device whose framebuffer the Display tab can attach to. Fixed at creation
@@ -322,9 +324,22 @@ export interface ProjectGroupGrant {
   external: boolean;
 }
 
+export interface ProjectWorkloadGrant {
+  /** Workload-registration row id and IAM principal id. */
+  registrationId: string;
+  spiffeId: string;
+  /** Present when this principal is a VM's instance identity. */
+  vmId?: string;
+  displayName: string;
+  role: string;
+  roleDisplayName: string;
+  grantedAt?: string;
+}
+
 export interface ProjectMembers {
   users: ProjectMember[];
   groups: ProjectGroupGrant[];
+  workloads: ProjectWorkloadGrant[];
 }
 
 // Batch canonical action check ("can I?")

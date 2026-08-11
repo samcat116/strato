@@ -1,4 +1,4 @@
-// Project-level role grant endpoints (users and groups)
+// Project-level role grant endpoints (users, groups, and workloads)
 
 import { api } from "./client";
 import type { GrantWriteResponse, ProjectMembers, ProjectRole } from "@/types/api";
@@ -38,5 +38,22 @@ export const projectMembersApi = {
 
   revokeGroup(projectId: string, groupId: string): Promise<void> {
     return api.delete(`/api/projects/${projectId}/groups/${groupId}`);
+  },
+
+  grantWorkload(
+    projectId: string,
+    registrationId: string,
+    role: ProjectRole
+  ): Promise<GrantWriteResponse> {
+    return api.put(
+      `/api/projects/${projectId}/workload-grants/${registrationId}`,
+      { role }
+    );
+  },
+
+  revokeWorkload(projectId: string, registrationId: string): Promise<void> {
+    return api.delete(
+      `/api/projects/${projectId}/workload-grants/${registrationId}`
+    );
   },
 };

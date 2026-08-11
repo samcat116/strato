@@ -5481,6 +5481,11 @@ export interface components {
             securityGroupsEnforced?: boolean;
             /** @description The VM's SPIFFE instance identity — `spiffe://<trust-domain>/vm/<vm-id>`, the lookup key its workload registration is filed under. A name, never an authorization: what the identity may do comes from role bindings against that principal, and a registration with none authorizes nothing. Absent means either an older control plane that does not report the field, or a registration an administrator revoked — never that the VM is exempt. */
             spiffeId?: string;
+            /**
+             * Format: uuid
+             * @description The workload-registration row id and IAM principal id for this instance identity. Use it as the subject of a project workload grant. Absent together with `spiffeId` after identity revocation.
+             */
+            instanceIdentityPrincipalId?: string;
             conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
@@ -7327,10 +7332,11 @@ export interface components {
             /** @enum {string} */
             type: "organization" | "organizational_unit" | "project";
         };
-        /** @description A project's user role grants and group role grants. */
+        /** @description A project's direct user, group, and workload role grants. */
         ProjectMembers: {
             users: components["schemas"]["ProjectMember"][];
             groups: components["schemas"]["ProjectGroupGrant"][];
+            workloads: components["schemas"]["ProjectWorkloadGrant"][];
         };
         ProjectMember: {
             /** Format: uuid */
@@ -7365,6 +7371,28 @@ export interface components {
             grantedAt?: string;
             /** @description The group belongs to another organization — a cross-org grant, which UIs should render prominently. */
             external: boolean;
+        };
+        ProjectWorkloadGrant: {
+            /**
+             * Format: uuid
+             * @description The workload registration id and IAM principal id.
+             */
+            registrationId: string;
+            spiffeId: string;
+            /**
+             * Format: uuid
+             * @description Present when this principal is a VM's instance identity.
+             */
+            vmId?: string;
+            displayName: string;
+            /**
+             * Format: uuid
+             * @description The role's canonical `iam_roles` id.
+             */
+            role: string;
+            roleDisplayName: string;
+            /** Format: date-time */
+            grantedAt?: string;
         };
         /**
          * Format: uuid
@@ -7416,6 +7444,10 @@ export interface components {
         };
         SetSeededRoleRequest: {
             role: components["schemas"]["SeededRoleName"];
+        };
+        SetWorkloadRoleRequest: {
+            /** @description The canonical id of a role returned by `GET /api/iam/roles/bindable` for the project. Seeded role names remain accepted for compatibility with older clients. */
+            role: string;
         };
         /** @description One workload-registry row: a SPIFFE identity and the principal it names. The SPIFFE ID is a lookup key only — nothing is ever parsed out of an SVID. */
         WorkloadRegistration: {
@@ -16248,7 +16280,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SetSeededRoleRequest"];
+                "application/json": components["schemas"]["SetWorkloadRoleRequest"];
             };
         };
         responses: {

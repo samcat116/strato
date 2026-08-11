@@ -2,8 +2,9 @@ import Fluent
 import Foundation
 import Vapor
 
-/// Manages direct project grants for users and groups. Both listing and
-/// mutation operate on `role_bindings`; there is no relational grant mirror.
+/// Manages direct project grants for users, groups, and workload principals.
+/// Both listing and mutation operate on `role_bindings`; there is no
+/// relational grant mirror.
 struct ProjectMemberController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let members = routes.grouped("api", "projects", ":projectID", "members")
@@ -40,6 +41,17 @@ struct ProjectMemberController: RouteCollection {
     struct ProjectMembersResponse: Content {
         let users: [ProjectMemberResponse]
         let groups: [ProjectGroupGrantResponse]
+        let workloads: [ProjectWorkloadGrantResponse]
+    }
+
+    struct ProjectWorkloadGrantResponse: Content {
+        let registrationId: UUID
+        let spiffeId: String
+        let vmId: UUID?
+        let displayName: String
+        let role: UUID
+        let roleDisplayName: String
+        let grantedAt: Date?
     }
 
     struct GrantMemberRequest: Content {
@@ -66,6 +78,7 @@ struct ProjectMemberController: RouteCollection {
             nodeType: .project, nodeID: projectID, on: req.db)
         let userBindings = bindings.filter { $0.principalType == IAMPrincipalType.user.rawValue }
         let groupBindings = bindings.filter { $0.principalType == IAMPrincipalType.group.rawValue }
+        let workloadBindings = bindings.filter { $0.principalType == IAMPrincipalType.workload.rawValue }
 
         var users: [UUID: User] = [:]
         if !userBindings.isEmpty {
@@ -85,6 +98,18 @@ struct ProjectMemberController: RouteCollection {
                 groups[try group.requireID()] = group
             }
         }
+        var workloads: [UUID: WorkloadRegistration] = [:]
+        if !workloadBindings.isEmpty {
+            for workload in try await WorkloadRegistration.query(on: req.db)
+                .filter(\.$id ~~ Array(Set(workloadBindings.map(\.principalID))))
+                .filter(\.$kind == .workload)
+                .all()
+            {
+                workloads[try workload.requireID()] = workload
+            }
+        }
+        let workloadVMNames = try await GuestIdentity.names(
+            forVMs: workloads.values.compactMap { $0.$vm.id }, on: req.db)
 
         let rootOrgID = try await project.getRootOrganizationId(on: req.db)
         var internalUserIDs: Set<UUID> = []
@@ -120,6 +145,18 @@ struct ProjectMemberController: RouteCollection {
                     roleDisplayName: displayNames.displayName(forRoleID: binding.roleID),
                     grantedAt: binding.createdAt,
                     external: rootOrgID != nil && group.$organization.id != rootOrgID)
+            },
+            workloads: workloadBindings.compactMap { binding in
+                guard let workload = workloads[binding.principalID] else { return nil }
+                return ProjectWorkloadGrantResponse(
+                    registrationId: binding.principalID,
+                    spiffeId: workload.spiffeID,
+                    vmId: workload.$vm.id,
+                    displayName: workload.$vm.id.flatMap { workloadVMNames[$0] }
+                        ?? workload.displayName ?? workload.spiffeID,
+                    role: binding.roleID,
+                    roleDisplayName: displayNames.displayName(forRoleID: binding.roleID),
+                    grantedAt: binding.createdAt)
             })
     }
 

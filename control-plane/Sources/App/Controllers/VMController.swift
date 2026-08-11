@@ -363,13 +363,16 @@ struct VMController: RouteCollection {
         // also the one worth not widening with rows whose identity is about to
         // be discarded — and resolving an identity for a VM the caller may not
         // read is work with no reader.
-        let spiffeIDs = try await GuestIdentity.spiffeIDs(
+        let identities = try await GuestIdentity.registrations(
             forVMs: visible.compactMap(\.id), on: req.db)
 
         return visible.compactMap { vm in
             guard let id = vm.id else { return nil }
             return VMDetailResponse(
-                from: vm, securityGroupsEnforced: enforcement[id], spiffeId: spiffeIDs[id])
+                from: vm,
+                securityGroupsEnforced: enforcement[id],
+                spiffeId: identities[id]?.spiffeID,
+                instanceIdentityPrincipalId: identities[id]?.principalID)
         }
     }
 
@@ -398,10 +401,13 @@ struct VMController: RouteCollection {
             try await interface.$securityGroupMemberships.load(on: req.db)
         }
 
-        return try await VMDetailResponse(
+        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
+        let enforcement = try await SecurityGroupService.enforcement(for: vm, on: req.db)
+        return VMDetailResponse(
             from: vm,
-            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db),
-            spiffeId: GuestIdentity.spiffeID(forVM: vm.requireID(), on: req.db))
+            securityGroupsEnforced: enforcement,
+            spiffeId: identity?.spiffeID,
+            instanceIdentityPrincipalId: identity?.principalID)
     }
 
     func create(req: Request) async throws -> Response {
@@ -1529,16 +1535,20 @@ struct VMController: RouteCollection {
         for vm: VM, on req: Request, resolvingEnforcement: Bool = true
     ) async throws -> VMDetailResponse {
         try await loadInterfaces(for: vm, on: req.db)
-        return try await VMDetailResponse(
+        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
+        let enforcement =
+            resolvingEnforcement
+            ? try await SecurityGroupService.enforcement(for: vm, on: req.db) : nil
+        return VMDetailResponse(
             from: vm,
-            securityGroupsEnforced: resolvingEnforcement
-                ? SecurityGroupService.enforcement(for: vm, on: req.db) : nil,
+            securityGroupsEnforced: enforcement,
             // Deliberately not behind `resolvingEnforcement`: that flag exists
             // because the enforcement walk costs its own queries and answers
             // nothing for a VM being torn down. This is one indexed point
             // lookup, and a client polling a delete still wants to know which
             // identity is going away.
-            spiffeId: GuestIdentity.spiffeID(forVM: vm.requireID(), on: req.db))
+            spiffeId: identity?.spiffeID,
+            instanceIdentityPrincipalId: identity?.principalID)
     }
 
     /// The `202` body every accepted VM lifecycle mutation answers with
@@ -1724,10 +1734,13 @@ struct VMController: RouteCollection {
             try await interface.$observedAddresses.load(on: req.db)
             try await interface.$securityGroupMemberships.load(on: req.db)
         }
-        return try await VMDetailResponse(
+        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
+        let enforcement = try await SecurityGroupService.enforcement(for: vm, on: req.db)
+        return VMDetailResponse(
             from: vm,
-            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db),
-            spiffeId: GuestIdentity.spiffeID(forVM: vm.requireID(), on: req.db))
+            securityGroupsEnforced: enforcement,
+            spiffeId: identity?.spiffeID,
+            instanceIdentityPrincipalId: identity?.principalID)
     }
 
     func start(req: Request) async throws -> Response {
