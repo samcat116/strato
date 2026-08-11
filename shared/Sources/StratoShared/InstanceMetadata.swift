@@ -267,6 +267,18 @@ public struct MetadataNIC: Codable, Sendable, Equatable {
     public let dnsServers: [String]
     /// DNS search domain for this NIC's network, when set.
     public let domainName: String?
+    /// Whether this NIC should ask the network's DHCP responder for its guest
+    /// configuration. The NoCloud-net renderer needs the same decision the
+    /// seed ISO renderer receives on `NetworkSpec`; an allocated address alone
+    /// cannot distinguish DHCP from static configuration.
+    public let dhcpEnabled: Bool
+    /// Whether this NIC's network publishes the link-local metadata endpoint.
+    /// Used only to render the on-link routes the existing seed ISO carries.
+    public let metadataEnabled: Bool
+    /// This network's link-local resolver addresses, or an empty list when the
+    /// resolver is unavailable. When present these replace `dnsServers` in
+    /// static guest configuration, exactly as in the seed ISO renderer.
+    public let resolverAddresses: [String]
 
     public init(
         deviceName: String,
@@ -281,7 +293,10 @@ public struct MetadataNIC: Codable, Sendable, Equatable {
         gateway6: String? = nil,
         mtu: Int? = nil,
         dnsServers: [String] = [],
-        domainName: String? = nil
+        domainName: String? = nil,
+        dhcpEnabled: Bool = false,
+        metadataEnabled: Bool = false,
+        resolverAddresses: [String] = []
     ) {
         self.deviceName = deviceName
         self.macAddress = macAddress
@@ -296,6 +311,9 @@ public struct MetadataNIC: Codable, Sendable, Equatable {
         self.mtu = mtu
         self.dnsServers = dnsServers
         self.domainName = domainName
+        self.dhcpEnabled = dhcpEnabled
+        self.metadataEnabled = metadataEnabled
+        self.resolverAddresses = resolverAddresses
     }
 
     // `dnsServers` tolerates absence for the same reason the collections on
@@ -317,6 +335,9 @@ public struct MetadataNIC: Codable, Sendable, Equatable {
         mtu = try c.decodeIfPresent(Int.self, forKey: .mtu)
         dnsServers = try c.decodeIfPresent([String].self, forKey: .dnsServers) ?? []
         domainName = try c.decodeIfPresent(String.self, forKey: .domainName)
+        dhcpEnabled = try c.decodeIfPresent(Bool.self, forKey: .dhcpEnabled) ?? false
+        metadataEnabled = try c.decodeIfPresent(Bool.self, forKey: .metadataEnabled) ?? false
+        resolverAddresses = try c.decodeIfPresent([String].self, forKey: .resolverAddresses) ?? []
     }
 
     /// `ipAddress` with its prefix, e.g. `10.0.0.5/24` — the form cloud-init's

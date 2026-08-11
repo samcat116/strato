@@ -2518,7 +2518,7 @@ extension Agent {
                 let message = try envelope.decode(as: ConsoleDataMessage.self)
                 await handleConsoleData(message)
             // Guest exec sessions (STR-78). The sandbox-prefixed cases are the
-            // one-release v42 decode path; their payloads translate directly
+            // one-release v43 decode path; their payloads translate directly
             // except for start, which supplies the implied `.sandbox` kind.
             case .guestExecStart:
                 let message = try envelope.decode(as: GuestExecStartMessage.self)

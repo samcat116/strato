@@ -199,7 +199,7 @@ struct MessageOrderingTests {
         #expect(a != b)
     }
 
-    @Test("Wire v42 sandbox exec frames retain the per-session lane")
+    @Test("Wire v43 sandbox exec frames retain the per-session lane")
     func legacySandboxExecFramesRetainSessionLane() {
         let sessionId = UUID().uuidString
         let types: [MessageType] = [

@@ -52,6 +52,12 @@ final class OIDCIdentityMappingTests {
         let missing = try fakeToken(payload: ["sub": "u1"])
         let missingValues = try OIDCIdentityService.extractGroupClaimValues(idToken: missing, claim: "groups")
         #expect(missingValues.isEmpty)
+
+        let null = try fakeToken(payload: ["groups": NSNull()])
+        #expect(try OIDCIdentityService.extractGroupClaimValues(idToken: null, claim: "groups").isEmpty)
+
+        let object = try fakeToken(payload: ["groups": ["unexpected": "shape"]])
+        #expect(try OIDCIdentityService.extractGroupClaimValues(idToken: object, claim: "groups").isEmpty)
     }
 
     @Test("extractGroupClaimValues rejects malformed tokens")

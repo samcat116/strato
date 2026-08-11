@@ -77,8 +77,8 @@ public enum MessageType: String, Codable, Sendable {
     case guestExecClose = "guest_exec_close"
     case guestExecClosed = "guest_exec_closed"
 
-    // Wire v42 legacy names, retained for one release so agents can decode
-    // both sides of the STR-78 rename. Remove these aliases in wire v44.
+    // Wire v43 legacy names, retained for one release so agents can decode
+    // both sides of the STR-78 rename. Remove these aliases in wire v45.
     case sandboxExecStart = "sandbox_exec_start"
     case sandboxExecStarted = "sandbox_exec_started"
     case sandboxExecInput = "sandbox_exec_input"
@@ -496,13 +496,16 @@ public struct AnyCodableValue: Codable, Sendable {
     }
 }
 
-public enum CodableValue: Codable, Sendable {
+/// A version-tolerant JSON tree for data whose complete schema is not owned by
+/// Strato. Unknown object fields and array elements remain available without
+/// falling back to unchecked `Any` values.
+public enum JSONValue: Codable, Sendable, Equatable {
     case string(String)
     case int(Int)
     case double(Double)
     case bool(Bool)
-    case array([CodableValue])
-    case object([String: CodableValue])
+    case array([JSONValue])
+    case object([String: JSONValue])
     case null
 
     public init(from decoder: Decoder) throws {
@@ -518,13 +521,13 @@ public enum CodableValue: Codable, Sendable {
             self = .double(doubleValue)
         } else if let boolValue = try? container.decode(Bool.self) {
             self = .bool(boolValue)
-        } else if let arrayValue = try? container.decode([CodableValue].self) {
+        } else if let arrayValue = try? container.decode([JSONValue].self) {
             self = .array(arrayValue)
-        } else if let objectValue = try? container.decode([String: CodableValue].self) {
+        } else if let objectValue = try? container.decode([String: JSONValue].self) {
             self = .object(objectValue)
         } else {
             throw DecodingError.typeMismatch(
-                CodableValue.self,
+                JSONValue.self,
                 DecodingError.Context(
                     codingPath: decoder.codingPath,
                     debugDescription: "Unsupported type"))
@@ -551,7 +554,30 @@ public enum CodableValue: Codable, Sendable {
             try container.encodeNil()
         }
     }
+
+    public var objectValue: [String: JSONValue]? {
+        guard case .object(let value) = self else { return nil }
+        return value
+    }
+
+    public var arrayValue: [JSONValue]? {
+        guard case .array(let value) = self else { return nil }
+        return value
+    }
+
+    public var stringValue: String? {
+        guard case .string(let value) = self else { return nil }
+        return value
+    }
+
+    public subscript(key: String) -> JSONValue? {
+        objectValue?[key]
+    }
 }
+
+/// The original wire-protocol name remains source-compatible. New generic
+/// JSON parsing should use `JSONValue` to make its purpose explicit.
+public typealias CodableValue = JSONValue
 
 // MARK: - Console Operation Messages
 

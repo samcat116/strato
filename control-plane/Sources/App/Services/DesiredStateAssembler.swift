@@ -198,7 +198,8 @@ struct DesiredStateAssembler {
             let metadata = InstanceMetadata.build(
                 vm: vm, vmId: vmId, resolvedInterfaces: resolvedInterfaces,
                 region: region, availabilityZone: availabilityZone,
-                instanceSPIFFEID: spiffeIDsByVM[vmId])
+                instanceSPIFFEID: spiffeIDsByVM[vmId],
+                siteResolverCapable: siteResolverCapable)
 
             // A zero nonce is "never asked for", and sending it would be a
             // slightly different claim than sending nothing — so both are

@@ -87,7 +87,7 @@ struct GuestExecMessageTests {
         #expect(started.sessionId == "s-1")
     }
 
-    @Test("wire v42 sandbox start translates to the new sandbox target")
+    @Test("wire v43 sandbox start translates to the new sandbox target")
     func legacySandboxStartTranslates() throws {
         let legacy = try throughEnvelope(
             LegacySandboxExecStartMessage(
@@ -103,7 +103,7 @@ struct GuestExecMessageTests {
         #expect(translated.command == legacy.command)
     }
 
-    @Test("wire v42 responses retain sandbox-prefixed discriminators")
+    @Test("wire v43 responses retain sandbox-prefixed discriminators")
     func legacySandboxResponseDiscriminators() throws {
         let started = try MessageEnvelope(message: LegacySandboxExecStartedMessage(sessionId: "s-1"))
         #expect(started.type == .sandboxExecStarted)

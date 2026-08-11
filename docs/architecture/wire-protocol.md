@@ -50,7 +50,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 43). The required registration fields
+currently 44). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -61,7 +61,7 @@ refuse missing, older, and future versions before desired or observed state is
 exchanged. There is no rolling mixed-version window and no per-feature protocol
 gate.
 
-Wire v43 keeps the v42 `sandbox_exec_*` discriminators routable for one release.
+Wire v44 keeps the v43 `sandbox_exec_*` discriminators routable for one release.
 An upgraded agent translates a legacy start to `resourceKind: sandbox`, and the
 control plane accepts legacy response names. This is message-level tolerance for
 the exec rename only; it does not weaken the exact registration handshake.
@@ -113,7 +113,7 @@ bump and a coordinated deployment of both sides.
 | `agent_register_response` | Registration reply: assigns the agent's DB UUID and name, echoes the protocol version |
 | `desired_state` | The authoritative `DesiredStateMessage` sync (see below) |
 | `console_connect`, `console_disconnect`, `console_data` | Console session control and input. `console_connect.stream` picks the serial console (default) or the VNC framebuffer (v23+) |
-| `guest_exec_start`, `guest_exec_input`, `guest_exec_resize`, `guest_exec_close` | Interactive exec into a VM or sandbox; start carries `resourceKind` and `resourceId` (v43+) |
+| `guest_exec_start`, `guest_exec_input`, `guest_exec_resize`, `guest_exec_close` | Interactive exec into a VM or sandbox; start carries `resourceKind` and `resourceId` (v44+) |
 
 Everything the control plane sends is now either the sync or a live byte
 stream — the disposition ADR 0001 set out to reach. There are deliberately no

@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Guest Exec Messages (STR-78, protocol version >= 43)
+// MARK: - Guest Exec Messages (STR-78, protocol version >= 44)
 //
 // Control plane ⟷ agent messages carrying an interactive exec session inside a
 // guest. The resource discriminator selects either a VM or a sandbox; the agent
@@ -255,10 +255,10 @@ public struct GuestExecClosedMessage: WebSocketMessage {
     }
 }
 
-// MARK: - One-release legacy decode (wire v42)
+// MARK: - One-release legacy decode (wire v43)
 
 /// The only legacy exec payload whose shape differs from its `guest_exec_*`
-/// replacement. The v42 message types stay routable for one release so an
+/// replacement. The v43 message types stay routable for one release so an
 /// upgraded agent can translate an old sandbox start into `.sandbox`.
 public struct LegacySandboxExecStartMessage: WebSocketMessage {
     public var type: MessageType { .sandboxExecStart }
@@ -313,8 +313,8 @@ public struct LegacySandboxExecStartMessage: WebSocketMessage {
     }
 }
 
-/// Wire v42 response payloads. Their fields are identical to the guest forms,
-/// but their envelope types must remain sandbox-prefixed when a v42 start
+/// Wire v43 response payloads. Their fields are identical to the guest forms,
+/// but their envelope types must remain sandbox-prefixed when a v43 start
 /// initiated the session.
 public struct LegacySandboxExecStartedMessage: WebSocketMessage {
     public var type: MessageType { .sandboxExecStarted }
