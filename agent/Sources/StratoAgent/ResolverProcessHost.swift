@@ -80,23 +80,28 @@ struct ResolverProcessHost: ResolverHosting {
 
     // MARK: - Process
 
-    func spawn(root: String) throws -> any ResolverHandle {
+    func spawn(
+        root: String, onExit: @escaping @Sendable () async -> Void
+    ) throws -> any ResolverHandle {
         let layout = ResolverDirectoryLayout(root: root)
         // No `ip netns exec`: the resolver runs in the *host* namespace, which
         // is the whole point — forwarding upstream is then the hypervisor's own
         // routing, which a chassis namespace could never provide.
         //
         // The exit *time* is stamped from the termination handler, which is the
-        // only place that knows it: the supervisor notices exits on its next
-        // reconcile, which may be minutes later, and it judges a run by how long
-        // it lasted rather than by how long ago it was noticed.
+        // only place that knows it. The same handler wakes the supervisor so a
+        // crash-looping child schedules its next backoff without waiting for a
+        // desired-state reconciliation.
         let exit = ExitStamp()
         let spawned = try ProcessRunner.spawn(
             executableURL: URL(fileURLWithPath: binaryPath),
             arguments: ["-conf", "Corefile"],
             workingDirectory: layout.directory,
             logPath: "\(layout.directory)/coredns.log",
-            onExit: { _ in exit.stamp() })
+            onExit: { _ in
+                exit.stamp()
+                Task { await onExit() }
+            })
         try? Data(String(spawned.processIdentifier).utf8)
             .write(to: URL(fileURLWithPath: layout.pidFilePath), options: .atomic)
         return SpawnedResolverHandle(process: spawned, exit: exit)
