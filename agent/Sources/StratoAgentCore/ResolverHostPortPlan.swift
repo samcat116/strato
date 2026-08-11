@@ -72,8 +72,8 @@ public struct ResolverHostPortPlan: Sendable, Equatable {
     /// resolver; 0 disables the policer. `tcBinaryPath` is only consulted when
     /// it is non-zero.
     public static func plan(
-        networkId: UUID, addresses: [String], ipBinaryPath: String, tcBinaryPath: String,
-        bridge: String, ovsTimeoutSeconds: Int, ratePPS: Int
+        networkId: UUID, addresses: [String], ipBinaryPath: String, sysctlBinaryPath: String,
+        tcBinaryPath: String, bridge: String, ovsTimeoutSeconds: Int, ratePPS: Int
     ) -> ResolverHostPortPlan {
         let device = resolverHostInterfaceName(networkId: networkId.uuidString)
         let logicalPort = OVNNaming.resolverPortName(networkId: networkId)
@@ -83,6 +83,9 @@ public struct ResolverHostPortPlan: Sendable, Equatable {
 
         let ip = { (args: [String], tolerated: [String]) in
             NetnsCommand(ipBinaryPath, args, tolerated: tolerated)
+        }
+        let sysctl = { (setting: String, tolerated: [String]) in
+            NetnsCommand(sysctlBinaryPath, ["-w", setting], tolerated: tolerated)
         }
         var setup: [NetnsCommand] = [
             // The guest sends to the MAC OVN's ARP/ND responder advertised for
@@ -99,7 +102,7 @@ public struct ResolverHostPortPlan: Sendable, Equatable {
         // failure ADR 0003 named when it rejected this shape, and the one thing
         // that would turn a routing bug into a cross-tenant leak rather than a
         // dropped packet.
-        for sysctl in [
+        for setting in [
             "net.ipv4.conf.\(device).forwarding=0",
             "net.ipv6.conf.\(device).forwarding=0",
             // Loose reverse-path filtering, not strict: a guest's packet arrives
@@ -132,7 +135,7 @@ public struct ResolverHostPortPlan: Sendable, Equatable {
             // gateway from it.
             "net.ipv6.conf.\(device).accept_ra=0",
         ] {
-            setup.append(ip(["sysctl", "-w", sysctl], ["cannot stat", "No such file"]))
+            setup.append(sysctl(setting, ["cannot stat", "No such file"]))
         }
 
         if let v4 {
