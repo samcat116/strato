@@ -81,43 +81,91 @@ public enum MetadataControlProtocol {
 
 /// Listener-side request/reply adapter over the child's stdout and stdin.
 public actor MetadataIdentityIPCClient {
+    private struct Pending {
+        let continuation: CheckedContinuation<GuestJWTSVIDResponse, Error>
+        let timeoutTask: Task<Void, Never>
+    }
+
     private let output: FileHandle
-    private var pending: [UUID: CheckedContinuation<GuestJWTSVIDResponse, Error>] = [:]
+    private let requestTimeout: Duration
+    private var pending: [UUID: Pending] = [:]
 
     public init(output: FileHandle) {
         self.output = output
+        // Finish before the HTTP listener's 10-second read-idle deadline so a
+        // wedged parent becomes a deliberate 503 rather than a socket reset.
+        self.requestTimeout = .seconds(8)
+    }
+
+    init(output: FileHandle, requestTimeout: Duration) {
+        self.output = output
+        self.requestTimeout = requestTimeout
     }
 
     public func mint(vmId: UUID, audience: String, ttlSeconds: Int) async throws -> GuestJWTSVIDResponse {
         let request = MetadataIdentityRequest(
             requestId: UUID(), vmId: vmId, audience: audience, ttlSeconds: ttlSeconds)
         let frame = try MetadataControlProtocol.encode(request)
-        return try await withCheckedThrowingContinuation { continuation in
-            pending[request.requestId] = continuation
-            do {
-                try output.write(contentsOf: frame)
-            } catch {
-                pending.removeValue(forKey: request.requestId)
-                continuation.resume(throwing: error)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let timeout = requestTimeout
+                let timeoutTask = Task { [weak self] in
+                    do {
+                        try await Task.sleep(for: timeout, clock: .continuous)
+                    } catch {
+                        return
+                    }
+                    await self?.complete(
+                        requestId: request.requestId,
+                        with: .failure(GuestIdentityMintingError.unavailable))
+                }
+                pending[request.requestId] = Pending(
+                    continuation: continuation, timeoutTask: timeoutTask)
+                do {
+                    try output.write(contentsOf: frame)
+                } catch {
+                    complete(requestId: request.requestId, with: .failure(error))
+                    return
+                }
+                if Task.isCancelled {
+                    complete(requestId: request.requestId, with: .failure(CancellationError()))
+                }
             }
+        } onCancel: {
+            Task { await self.cancel(requestId: request.requestId) }
         }
     }
 
     public func receive(_ response: MetadataIdentityResponse) {
-        guard let continuation = pending.removeValue(forKey: response.requestId) else { return }
         guard let svid = response.svid else {
-            continuation.resume(throwing: GuestIdentityMintingError.unavailable)
+            complete(
+                requestId: response.requestId,
+                with: .failure(GuestIdentityMintingError.unavailable))
             return
         }
-        continuation.resume(returning: svid)
+        complete(requestId: response.requestId, with: .success(svid))
     }
 
     public func finish() {
-        let continuations = Array(pending.values)
+        let requests = Array(pending.values)
         pending = [:]
-        for continuation in continuations {
-            continuation.resume(throwing: GuestIdentityMintingError.unavailable)
+        for request in requests {
+            request.timeoutTask.cancel()
+            request.continuation.resume(throwing: GuestIdentityMintingError.unavailable)
         }
+    }
+
+    private func cancel(requestId: UUID) {
+        complete(requestId: requestId, with: .failure(CancellationError()))
+    }
+
+    private func complete(
+        requestId: UUID,
+        with result: Result<GuestJWTSVIDResponse, Error>
+    ) {
+        guard let request = pending.removeValue(forKey: requestId) else { return }
+        request.timeoutTask.cancel()
+        request.continuation.resume(with: result)
     }
 }
 

@@ -329,4 +329,66 @@ struct MetadataControlProtocolTests {
             _ = try reader.append(Data([0x7f, 0xff, 0xff, 0xff]))
         }
     }
+
+    @Test("An identity request times out and ignores a late reply")
+    func identityRequestTimeout() async throws {
+        let pipe = Pipe()
+        defer {
+            try? pipe.fileHandleForReading.close()
+            try? pipe.fileHandleForWriting.close()
+        }
+        let client = MetadataIdentityIPCClient(
+            output: pipe.fileHandleForWriting,
+            requestTimeout: .milliseconds(25))
+        let mint = Task {
+            try await client.mint(
+                vmId: UUID(), audience: "spiffe://strato.local/control-plane",
+                ttlSeconds: 300)
+        }
+
+        let bytes = pipe.fileHandleForReading.availableData
+        var reader = MetadataFrameReader()
+        let frames = try reader.append(bytes)
+        let request = try JSONDecoder().decode(MetadataIdentityRequest.self, from: #require(frames.first))
+
+        await #expect(throws: GuestIdentityMintingError.unavailable) {
+            try await mint.value
+        }
+        await client.receive(
+            MetadataIdentityResponse(
+                requestId: request.requestId,
+                svid: GuestJWTSVIDResponse(
+                    token: "late", spiffeId: "spiffe://strato.local/vm/late",
+                    audiences: [request.audience], expiresAt: Date().addingTimeInterval(300))))
+        await client.finish()
+    }
+
+    @Test("Cancelling an identity request retires its continuation")
+    func identityRequestCancellation() async throws {
+        let pipe = Pipe()
+        defer {
+            try? pipe.fileHandleForReading.close()
+            try? pipe.fileHandleForWriting.close()
+        }
+        let client = MetadataIdentityIPCClient(
+            output: pipe.fileHandleForWriting,
+            requestTimeout: .seconds(1))
+        let mint = Task {
+            try await client.mint(
+                vmId: UUID(), audience: "spiffe://strato.local/control-plane",
+                ttlSeconds: 300)
+        }
+
+        let bytes = pipe.fileHandleForReading.availableData
+        var reader = MetadataFrameReader()
+        let frames = try reader.append(bytes)
+        let request = try JSONDecoder().decode(MetadataIdentityRequest.self, from: #require(frames.first))
+        mint.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            try await mint.value
+        }
+        await client.receive(MetadataIdentityResponse(requestId: request.requestId, svid: nil))
+        await client.finish()
+    }
 }

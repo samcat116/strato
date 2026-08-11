@@ -1,6 +1,7 @@
 import Foundation
 import Logging
 import StratoShared
+import Synchronization
 import Testing
 
 @testable import StratoAgentCore
@@ -268,5 +269,71 @@ struct MetadataIdentityTests {
         #expect(afterUpdate.body == "token-b")
         let requests = await minter.requests
         #expect(requests.map { $0.2 } == [300, 120])
+    }
+
+    @Test("A mint response cannot exceed the policy lifetime")
+    func policyLifetimeBoundsResponse() async {
+        let vmId = UUID()
+        let wallStart = Date(timeIntervalSince1970: 2_000_000_000)
+        let tooLong = Self.token(
+            "too-long", vmId: vmId, issuedAt: wallStart,
+            expiresAt: wallStart.addingTimeInterval(121))
+        let minter = ScriptedMinter([.token(tooLong)])
+        let policy = IdentityPolicy(
+            spiffeId: "spiffe://strato.local/vm/\(vmId.uuidString)",
+            audiences: [Self.audience], ttlSeconds: 120)
+        let responder = MetadataResponder(
+            snapshot: MetadataSnapshot(
+                networkId: Self.networkId, origin: .live,
+                instances: [Self.instance(vmId: vmId, identity: policy)]),
+            identityMinter: GuestIdentityMinter { vmId, audience, ttl in
+                try await minter.mint(vmId: vmId, audience: audience, ttlSeconds: ttl)
+            },
+            logger: Logger(label: "test"))
+        let monotonic = ContinuousClock.now
+        let session = await Self.session(from: responder, at: monotonic)
+
+        let response = await responder.respond(
+            to: Self.request("GET", Self.endpoint(), token: session),
+            at: monotonic,
+            wallTime: wallStart)
+
+        #expect(response.status == 503)
+        let requests = await minter.requests
+        #expect(requests.map { $0.2 } == [120])
+    }
+
+    @Test("A token that expires while minting is never served")
+    func expiryIsRecheckedAfterMint() async {
+        let vmId = UUID()
+        let wallStart = Date(timeIntervalSince1970: 2_000_000_000)
+        let currentDate = Mutex(wallStart)
+        let cache = GuestIdentityTokenCache(
+            currentDate: { currentDate.withLock { $0 } })
+        let response = Self.token(
+            "already-expired", vmId: vmId, issuedAt: wallStart,
+            expiresAt: wallStart.addingTimeInterval(1))
+        let policy = IdentityPolicy(
+            spiffeId: "spiffe://strato.local/vm/\(vmId.uuidString)",
+            audiences: [Self.audience], ttlSeconds: 1)
+        let responder = MetadataResponder(
+            snapshot: MetadataSnapshot(
+                networkId: Self.networkId, origin: .live,
+                instances: [Self.instance(vmId: vmId, identity: policy)]),
+            identityTokens: cache,
+            identityMinter: GuestIdentityMinter { _, _, _ in
+                currentDate.withLock { $0 = wallStart.addingTimeInterval(2) }
+                return response
+            },
+            logger: Logger(label: "test"))
+        let monotonic = ContinuousClock.now
+        let session = await Self.session(from: responder, at: monotonic)
+
+        let result = await responder.respond(
+            to: Self.request("GET", Self.endpoint(), token: session),
+            at: monotonic,
+            wallTime: wallStart)
+
+        #expect(result.status == 503)
     }
 }

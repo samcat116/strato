@@ -46,8 +46,15 @@ public actor GuestIdentityTokenCache {
 
     private var entries: [Key: Entry] = [:]
     private var inFlight: [Key: Pending] = [:]
+    private let currentDate: @Sendable () -> Date
 
-    public init() {}
+    public init() {
+        self.currentDate = { Date() }
+    }
+
+    init(currentDate: @escaping @Sendable () -> Date) {
+        self.currentDate = currentDate
+    }
 
     public func token(
         vmId: UUID,
@@ -62,6 +69,7 @@ public actor GuestIdentityTokenCache {
             return cached.response
         }
 
+        let ttl = min(900, max(1, min(300, policy.ttlSeconds ?? 300)))
         let pending: Pending
         let task: Task<GuestJWTSVIDResponse, Error>
         if let existing = inFlight[key], existing.policy == policy {
@@ -72,7 +80,6 @@ public actor GuestIdentityTokenCache {
             // The endpoint exposes no TTL input. Five minutes is therefore the
             // requested default, reduced by a stricter policy if one exists;
             // the hard 15-minute ceiling remains defense in depth.
-            let ttl = min(900, max(1, min(300, policy.ttlSeconds ?? 300)))
             task = Task {
                 try await minter.mint(vmId: vmId, audience: audience, ttlSeconds: ttl)
             }
@@ -82,22 +89,24 @@ public actor GuestIdentityTokenCache {
 
         do {
             let response = try await task.value
+            let completedAt = max(now, currentDate())
             if inFlight[key]?.id == pending.id { inFlight.removeValue(forKey: key) }
             guard !task.isCancelled else { throw CancellationError() }
+            let issuedAt = min(response.issuedAt ?? completedAt, completedAt)
             guard response.spiffeId == policy.spiffeId,
                 response.audiences == [audience],
-                response.expiresAt > now,
-                response.expiresAt.timeIntervalSince(now) <= 900
+                response.expiresAt > completedAt,
+                response.expiresAt.timeIntervalSince(issuedAt) <= TimeInterval(ttl)
             else {
                 throw GuestIdentityMintingError.invalidResponse
             }
-            let issuedAt = min(response.issuedAt ?? now, now)
             let refreshAfter = issuedAt.addingTimeInterval(response.expiresAt.timeIntervalSince(issuedAt) / 2)
             entries[key] = Entry(response: response, refreshAfter: refreshAfter, policy: policy)
             return response
         } catch {
+            let completedAt = max(now, currentDate())
             if inFlight[key]?.id == pending.id { inFlight.removeValue(forKey: key) }
-            if let cached, cached.policy == policy, now < cached.response.expiresAt {
+            if let cached, cached.policy == policy, completedAt < cached.response.expiresAt {
                 return cached.response
             }
             throw error
