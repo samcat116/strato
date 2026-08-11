@@ -5814,7 +5814,13 @@ extension Agent {
         }
         let spawner = MetadataServerProcessSpawner(
             ipBinaryPath: ipBinaryPath, logLevel: logger.logLevel.rawValue,
-            hopLimit: metadataHopLimit, logger: logger)
+            hopLimit: metadataHopLimit,
+            identityMinter: GuestIdentityMinter { [weak self] vmId, audience, ttlSeconds in
+                guard let self else { throw GuestIdentityMintingError.unavailable }
+                return try await self.mintGuestIdentity(
+                    vmId: vmId, audience: audience, ttlSeconds: ttlSeconds)
+            },
+            logger: logger)
         metadataServers = MetadataServerSupervisor(spawner: spawner, logger: logger)
 
         // Start serving before the first sync, from the namespaces this host
@@ -5881,5 +5887,25 @@ extension Agent {
                 continuation.resume()
             }
         }
+    }
+
+    private func mintGuestIdentity(
+        vmId: UUID, audience: String, ttlSeconds: Int
+    ) async throws -> GuestJWTSVIDResponse {
+        guard let metadata = await metadataStore.metadata(for: vmId),
+            metadata.isServiceEnabled,
+            let policy = metadata.identity,
+            !policy.audiences.isEmpty,
+            policy.audiences.contains(audience),
+            ttlSeconds > 0,
+            ttlSeconds <= min(900, policy.ttlSeconds ?? 300)
+        else {
+            throw GuestIdentityMintingError.unavailable
+        }
+        return try await makeMTLSArtifactDownloader().mintGuestIdentity(
+            controlPlaneBaseURL: controlPlaneHTTPBase,
+            vmId: vmId,
+            audience: audience,
+            ttlSeconds: ttlSeconds)
     }
 }

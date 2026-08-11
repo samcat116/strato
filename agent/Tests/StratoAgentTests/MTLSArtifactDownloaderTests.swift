@@ -4,6 +4,7 @@ import NIOCore
 import NIOHTTP1
 import NIOPosix
 import NIOSSL
+import StratoShared
 import Testing
 
 @testable import StratoAgentCore
@@ -151,6 +152,28 @@ struct MTLSArtifactDownloaderTests {
         }
 
         #expect(try String(contentsOfFile: destination, encoding: .utf8) == payload)
+    }
+
+    @Test("A guest identity mint decodes the bounded STR-57 response")
+    func mintsGuestIdentity() async throws {
+        let vmId = UUID()
+        let expected = GuestJWTSVIDResponse(
+            token: "header.payload.signature",
+            spiffeId: "spiffe://strato.local/vm/\(vmId.uuidString)",
+            audiences: ["spiffe://strato.local/control-plane"],
+            expiresAt: Date(timeIntervalSince1970: 2_000_000_300),
+            issuedAt: Date(timeIntervalSince1970: 2_000_000_000))
+        let body = String(decoding: try WireProtocol.makeEncoder().encode(expected), as: UTF8.self)
+
+        let received = try await withOrigin(body: body) { port in
+            try await makeDownloader().mintGuestIdentity(
+                controlPlaneBaseURL: "http://127.0.0.1:\(port)",
+                vmId: vmId,
+                audience: "spiffe://strato.local/control-plane",
+                ttlSeconds: 300)
+        }
+
+        #expect(received == expected)
     }
 
     // MARK: - Failure classification

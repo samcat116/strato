@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 import Vapor
 
 /// Policy for control-plane issuance of guest JWT-SVIDs (STR-57).
@@ -14,8 +15,8 @@ struct GuestIdentityIssuanceConfig: Sendable, Equatable {
     static let disabled = GuestIdentityIssuanceConfig(
         allowedAudiences: [], defaultTTLSeconds: 300, maximumTTLSeconds: 3600)
 
-    static func fromEnvironment() -> Self {
-        GuestIdentityIssuanceConfig(
+    static func fromEnvironment() throws -> Self {
+        try GuestIdentityIssuanceConfig(
             allowedAudiences: audiences(rawValue: Environment.get("GUEST_IDENTITY_AUDIENCES")),
             defaultTTLSeconds: ttlSeconds(
                 rawValue: Environment.get("GUEST_IDENTITY_JWT_TTL"), fallback: 300),
@@ -27,12 +28,16 @@ struct GuestIdentityIssuanceConfig: Sendable, Equatable {
     /// Pure parsing for a comma-separated allowlist. Keeping environment reads
     /// out of this function lets concurrent suites exercise every edge without
     /// racing through process-global `setenv`.
-    static func audiences(rawValue: String?) -> Set<String> {
+    static func audiences(rawValue: String?) throws -> Set<String> {
         guard let rawValue else { return [] }
-        return Set(
+        let audiences = Set(
             rawValue.split(separator: ",", omittingEmptySubsequences: false)
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty })
+        guard audiences.allSatisfy(GuestIdentityLimits.isValidAudience) else {
+            throw GuestIdentityIssuanceConfigurationError.invalidAudience
+        }
+        return audiences
     }
 
     /// Parse a strictly positive TTL, falling back for absent or unusable
@@ -67,7 +72,21 @@ extension Application {
         set { setStorageValue(GuestIdentityIssuanceConfigKey.self, to: newValue) }
     }
 
-    func configureGuestIdentityIssuance() {
-        guestIdentityIssuanceConfig = .fromEnvironment()
+    func configureGuestIdentityIssuance() throws {
+        guestIdentityIssuanceConfig = try .fromEnvironment()
+    }
+}
+
+enum GuestIdentityIssuanceConfigurationError: Error, LocalizedError {
+    case invalidAudience
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidAudience:
+            return "GUEST_IDENTITY_AUDIENCES entries must be non-empty, contain no control "
+                + "characters, contain at most \(GuestIdentityLimits.maximumAudienceCharacters) "
+                + "characters, and fit within \(GuestIdentityLimits.maximumMetadataRequestTargetBytes) "
+                + "bytes after metadata endpoint encoding"
+        }
     }
 }

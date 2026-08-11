@@ -71,7 +71,14 @@ extension StratoAgent {
 
             // Cold until the first push: a listener that has been told nothing
             // answers 503, never a confident 404 (see `MetadataSnapshotOrigin`).
-            let responder = MetadataResponder(snapshot: .cold(networkId: network), logger: logger)
+            let identityIPC = MetadataIdentityIPCClient(output: .standardOutput)
+            let responder = MetadataResponder(
+                snapshot: .cold(networkId: network),
+                identityMinter: GuestIdentityMinter { vmId, audience, ttlSeconds in
+                    try await identityIPC.mint(
+                        vmId: vmId, audience: audience, ttlSeconds: ttlSeconds)
+                },
+                logger: logger)
             let server = MetadataHTTPServer(
                 group: group, responder: responder, hopLimit: hopLimit, logger: logger)
 
@@ -81,7 +88,8 @@ extension StratoAgent {
                 try? await group.shutdownGracefully()
                 throw error
             }
-            await serve(pushesTo: server, logger: logger)
+            await serve(pushesTo: server, identityIPC: identityIPC, logger: logger)
+            await identityIPC.finish()
             await server.shutdown()
             try? await group.shutdownGracefully()
         }
@@ -137,7 +145,11 @@ extension StratoAgent {
         }
 
         /// Reads snapshot frames until stdin closes.
-        private func serve(pushesTo server: MetadataHTTPServer, logger: Logger) async {
+        private func serve(
+            pushesTo server: MetadataHTTPServer,
+            identityIPC: MetadataIdentityIPCClient,
+            logger: Logger
+        ) async {
             var reader = MetadataFrameReader()
             let decoder = JSONDecoder()
 
@@ -154,14 +166,18 @@ extension StratoAgent {
                 }
                 for frame in frames {
                     do {
-                        let snapshot = try decoder.decode(MetadataSnapshot.self, from: frame)
-                        await server.update(snapshot)
-                        logger.debug(
-                            "Adopted a metadata snapshot",
-                            metadata: [
-                                "instances": .stringConvertible(snapshot.instances.count),
-                                "origin": .string(snapshot.origin.rawValue),
-                            ])
+                        switch try decoder.decode(MetadataParentMessage.self, from: frame) {
+                        case .snapshot(let snapshot):
+                            await server.update(snapshot)
+                            logger.debug(
+                                "Adopted a metadata snapshot",
+                                metadata: [
+                                    "instances": .stringConvertible(snapshot.instances.count),
+                                    "origin": .string(snapshot.origin.rawValue),
+                                ])
+                        case .identityResponse(let response):
+                            await identityIPC.receive(response)
+                        }
                     } catch {
                         // One unreadable frame is survivable: the channel is
                         // level-triggered, so the next push is a full

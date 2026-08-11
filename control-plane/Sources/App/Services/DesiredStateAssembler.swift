@@ -140,6 +140,13 @@ struct DesiredStateAssembler {
         // same reason: this runs for every agent on every sync, so a per-VM
         // lookup would be a fleet-wide load multiplier.
         let spiffeIDsByVM = try await GuestIdentity.spiffeIDs(forVMs: vms.compactMap(\.id), on: db)
+        let identityIssuance = app.guestIdentityIssuanceConfig
+        let identityAudiences = identityIssuance.allowedAudiences.sorted()
+        // STR-57 may permit longer lifetimes for other trusted agent callers;
+        // the guest-facing IMDS surface has the tighter 15-minute ceiling.
+        let identityTTLSeconds =
+            identityAudiences.isEmpty
+            ? nil : min(900, max(1, identityIssuance.maximumTTLSeconds))
         let volumeStoragePaths = try await VolumeService.storagePaths(
             for: vms.flatMap(\.volumes), accessibleFrom: agentId, on: db)
 
@@ -199,6 +206,8 @@ struct DesiredStateAssembler {
                 vm: vm, vmId: vmId, resolvedInterfaces: resolvedInterfaces,
                 region: region, availabilityZone: availabilityZone,
                 instanceSPIFFEID: spiffeIDsByVM[vmId],
+                identityAudiences: identityAudiences,
+                identityTTLSeconds: identityTTLSeconds,
                 siteResolverCapable: siteResolverCapable)
 
             // A zero nonce is "never asked for", and sending it would be a

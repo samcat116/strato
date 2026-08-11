@@ -19,16 +19,18 @@ public struct MetadataServerProcessSpawner: MetadataServerSpawning {
     private let agentBinaryPath: String
     private let logLevel: String
     private let hopLimit: Int
+    private let identityMinter: GuestIdentityMinter
     private let logger: Logger
 
     public init(
         ipBinaryPath: String, agentBinaryPath: String = MetadataServerProcessSpawner.currentBinaryPath(),
-        logLevel: String, hopLimit: Int, logger: Logger
+        logLevel: String, hopLimit: Int, identityMinter: GuestIdentityMinter, logger: Logger
     ) {
         self.ipBinaryPath = ipBinaryPath
         self.agentBinaryPath = agentBinaryPath
         self.logLevel = logLevel
         self.hopLimit = hopLimit
+        self.identityMinter = identityMinter
         self.logger = logger
     }
 
@@ -58,14 +60,16 @@ public struct MetadataServerProcessSpawner: MetadataServerSpawning {
         ]
 
         let input = Pipe()
+        let requests = Pipe()
         let errors = Pipe()
         process.standardInput = input
-        process.standardOutput = FileHandle.nullDevice
+        process.standardOutput = requests
         process.standardError = errors
 
         try process.run()
         return MetadataServerProcessHandle(
-            process: process, input: input, errors: errors, networkId: networkId, logger: logger)
+            process: process, input: input, requests: requests, errors: errors,
+            networkId: networkId, identityMinter: identityMinter, logger: logger)
     }
 
     /// This binary's own path, so a child is always the same build as its
@@ -136,6 +140,7 @@ private enum MetadataServerProcessLifecycleError: Error {
 final class MetadataServerProcessHandle: MetadataServerHandle, Sendable {
     private struct State {
         var pending: MetadataSnapshot?
+        var pendingIdentityResponses: [MetadataIdentityResponse] = []
         var draining = false
         var failure: (any Error)?
         var terminated = false
@@ -156,10 +161,14 @@ final class MetadataServerProcessHandle: MetadataServerHandle, Sendable {
     private let queue: DispatchQueue
     private let state = Mutex(State())
 
-    convenience init(process: Process, input: Pipe, errors: Pipe, networkId: UUID, logger: Logger) {
+    convenience init(
+        process: Process, input: Pipe, requests: Pipe, errors: Pipe, networkId: UUID,
+        identityMinter: GuestIdentityMinter, logger: Logger
+    ) {
         self.init(
             io: .live(process: process, input: input), errors: errors,
             networkId: networkId, logger: logger)
+        receiveIdentityRequests(requests, minter: identityMinter)
     }
 
     init(
@@ -202,6 +211,7 @@ final class MetadataServerProcessHandle: MetadataServerHandle, Sendable {
             guard !state.terminated else { return false }
             state.terminated = true
             state.pending = nil
+            state.pendingIdentityResponses = []
             return true
         }
         guard shouldTerminate else { return }
@@ -229,24 +239,72 @@ final class MetadataServerProcessHandle: MetadataServerHandle, Sendable {
 
     private func drain() {
         while true {
-            let snapshot = state.withLock { state -> MetadataSnapshot? in
-                guard !state.terminated, let snapshot = state.pending else {
+            let message = state.withLock { state -> MetadataParentMessage? in
+                guard !state.terminated else {
                     state.draining = false
                     return nil
                 }
-                state.pending = nil
-                return snapshot
+                // Policy and placement snapshots outrank credential replies so
+                // a busy guest cannot delay a revocation behind mint traffic.
+                if let snapshot = state.pending {
+                    state.pending = nil
+                    return .snapshot(snapshot)
+                }
+                if !state.pendingIdentityResponses.isEmpty {
+                    return .identityResponse(state.pendingIdentityResponses.removeFirst())
+                }
+                state.draining = false
+                return nil
             }
-            guard let snapshot else { return }
+            guard let message else { return }
 
             do {
-                try io.write(MetadataControlProtocol.encode(snapshot))
+                try io.write(MetadataControlProtocol.encode(message))
             } catch {
                 state.withLock { state in
                     if !state.terminated { state.failure = error }
                     state.draining = false
                 }
                 return
+            }
+        }
+    }
+
+    private func enqueue(_ response: MetadataIdentityResponse) {
+        let shouldDrain = state.withLock { state -> Bool in
+            guard !state.terminated else { return false }
+            state.pendingIdentityResponses.append(response)
+            let shouldDrain = !state.draining
+            state.draining = true
+            return shouldDrain
+        }
+        if shouldDrain { queue.async { self.drain() } }
+    }
+
+    private func receiveIdentityRequests(_ requests: Pipe, minter: GuestIdentityMinter) {
+        let reader = MetadataChildRequestReader()
+        requests.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                return
+            }
+            let decoded: [MetadataIdentityRequest]
+            do {
+                decoded = try reader.append(data)
+            } catch {
+                self?.logger.warning(
+                    "Metadata listener sent an unreadable identity request",
+                    metadata: ["error": .string("\(error)")])
+                return
+            }
+            for request in decoded {
+                Task { [weak self] in
+                    let svid = try? await minter.mint(
+                        vmId: request.vmId, audience: request.audience,
+                        ttlSeconds: request.ttlSeconds)
+                    self?.enqueue(MetadataIdentityResponse(requestId: request.requestId, svid: svid))
+                }
             }
         }
     }
@@ -287,5 +345,19 @@ final class MetadataServerProcessHandle: MetadataServerHandle, Sendable {
             return (.info, line)
         }
         return (level, String(line[line.index(after: tab)...]))
+    }
+}
+
+/// Mutable frame reassembly behind a lock because `FileHandle` owns the queue
+/// on which its readability callback runs.
+private final class MetadataChildRequestReader: Sendable {
+    private let reader = Mutex(MetadataFrameReader())
+
+    func append(_ data: Data) throws -> [MetadataIdentityRequest] {
+        try reader.withLock { reader in
+            try reader.append(data).map {
+                try JSONDecoder().decode(MetadataIdentityRequest.self, from: $0)
+            }
+        }
     }
 }

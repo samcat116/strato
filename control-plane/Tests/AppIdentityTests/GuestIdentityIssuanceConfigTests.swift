@@ -13,8 +13,31 @@ struct GuestIdentityIssuanceConfigTests {
             ("vault", Set(["vault"])),
             (" vault,registry,vault, ", Set(["vault", "registry"])),
         ])
-    func audienceParsing(raw: String?, expected: Set<String>) {
-        #expect(GuestIdentityIssuanceConfig.audiences(rawValue: raw) == expected)
+    func audienceParsing(raw: String?, expected: Set<String>) throws {
+        #expect(try GuestIdentityIssuanceConfig.audiences(rawValue: raw) == expected)
+    }
+
+    @Test("Audience parsing rejects values the issuer cannot mint")
+    func audienceLengthLimit() throws {
+        let accepted = String(repeating: "a", count: 255)
+        let rejected = String(repeating: "a", count: 256)
+
+        #expect(try GuestIdentityIssuanceConfig.audiences(rawValue: accepted) == [accepted])
+        #expect(throws: GuestIdentityIssuanceConfigurationError.self) {
+            try GuestIdentityIssuanceConfig.audiences(rawValue: rejected)
+        }
+    }
+
+    @Test("Audience parsing rejects values that cannot fit the encoded metadata endpoint")
+    func encodedAudienceLengthLimit() throws {
+        // A four-byte scalar becomes twelve ASCII bytes when percent encoded.
+        let accepted = String(repeating: "😀", count: 168)
+        let rejected = String(repeating: "😀", count: 169)
+
+        #expect(try GuestIdentityIssuanceConfig.audiences(rawValue: accepted) == [accepted])
+        #expect(throws: GuestIdentityIssuanceConfigurationError.self) {
+            try GuestIdentityIssuanceConfig.audiences(rawValue: rejected)
+        }
     }
 
     @Test(

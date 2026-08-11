@@ -466,7 +466,7 @@ public func configure(_ app: Application) async throws {
 
     // Guest JWT-SVID issuance is default-off until an operator supplies an
     // explicit audience allowlist.
-    app.configureGuestIdentityIssuance()
+    try app.configureGuestIdentityIssuance()
 
     // Configure SVID issuance telemetry for the Workload Identity view
     // (requires SPIRE_METRICS_PROMETHEUS_URL; otherwise the panel stays empty)

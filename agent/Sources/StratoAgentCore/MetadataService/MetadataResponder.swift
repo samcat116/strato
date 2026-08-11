@@ -32,13 +32,23 @@ public actor MetadataResponder {
     private var index: MetadataCallerIndex
     private var byVM: [UUID: InstanceMetadata]
     private let tokens: MetadataTokenStore
+    private let identityTokens: GuestIdentityTokenCache
+    private let identityMinter: GuestIdentityMinter?
     private let logger: Logger
 
-    public init(snapshot: MetadataSnapshot, tokens: MetadataTokenStore = MetadataTokenStore(), logger: Logger) {
+    public init(
+        snapshot: MetadataSnapshot,
+        tokens: MetadataTokenStore = MetadataTokenStore(),
+        identityTokens: GuestIdentityTokenCache = GuestIdentityTokenCache(),
+        identityMinter: GuestIdentityMinter? = nil,
+        logger: Logger
+    ) {
         self.snapshot = snapshot
         self.index = MetadataCallerIndex(networkId: snapshot.networkId, instances: snapshot.instances)
         self.byVM = Dictionary(snapshot.instances.map { ($0.instanceId, $0) }, uniquingKeysWith: { first, _ in first })
         self.tokens = tokens
+        self.identityTokens = identityTokens
+        self.identityMinter = identityMinter
         self.logger = logger
     }
 
@@ -59,13 +69,25 @@ public actor MetadataResponder {
         self.index = MetadataCallerIndex(networkId: snapshot.networkId, instances: snapshot.instances)
         self.byVM = Dictionary(snapshot.instances.map { ($0.instanceId, $0) }, uniquingKeysWith: { first, _ in first })
         await tokens.retain(servable: Set(byVM.filter { $0.value.isServiceEnabled }.keys))
+        await identityTokens.retain(
+            policies: Dictionary(
+                uniqueKeysWithValues: byVM.compactMap { vmId, metadata in
+                    guard metadata.isServiceEnabled, let identity = metadata.identity,
+                        !identity.audiences.isEmpty
+                    else { return nil }
+                    return (vmId, identity)
+                }))
     }
 
     /// The response to `request`.
     ///
     /// The order of the checks is load-bearing, and each step says why it is
     /// where it is.
-    public func respond(to request: MetadataRequest, at now: ContinuousClock.Instant) async -> MetadataResponse {
+    public func respond(
+        to request: MetadataRequest,
+        at now: ContinuousClock.Instant,
+        wallTime: Date = Date()
+    ) async -> MetadataResponse {
         // 1. Syntax, method and path shape. Pure and cheap, and it answers a
         //    malformed request without consulting — or revealing — any state.
         let route = MetadataRouter.route(method: request.method, target: request.target, headers: request.headers)
@@ -152,7 +174,7 @@ public actor MetadataResponder {
                 headers: [.init(MetadataHeaderName.tokenTTL, String(ttlSeconds))],
                 body: token)
 
-        case .document, .unknownDocument:
+        case .document, .identity, .unknownDocument:
             guard case .one(let presented) = request.headers.lookup(MetadataHeaderName.token) else {
                 return .rejected(
                     401, "missing \(MetadataHeaderName.token)",
@@ -174,6 +196,56 @@ public actor MetadataResponder {
         }
 
         // 6. The document itself, now that the caller is known and authenticated.
+        if case .identity(let audience) = route {
+            // A missing or empty policy is the VM-level opt-in boundary. Use
+            // the same 404 as an unknown caller so this endpoint never confirms
+            // that a disabled VM has an instance identity registration.
+            guard let metadata = byVM[vmId], let policy = metadata.identity,
+                !policy.audiences.isEmpty
+            else {
+                return .rejected(404, "not found")
+            }
+            guard policy.audiences.contains(audience) else {
+                return .rejected(403, "audience is not allowed")
+            }
+            guard let identityMinter else {
+                return .rejected(
+                    503, "identity is temporarily unavailable", headers: [.init("retry-after", "2")])
+            }
+            do {
+                let svid = try await identityTokens.token(
+                    vmId: vmId, audience: audience, policy: policy, now: wallTime,
+                    minter: identityMinter)
+                guard byVM[vmId]?.isServiceEnabled == true,
+                    byVM[vmId]?.identity == policy,
+                    policy.audiences.contains(audience)
+                else {
+                    return .rejected(404, "not found")
+                }
+                return MetadataResponse(status: 200, body: svid.token)
+            } catch {
+                guard byVM[vmId]?.isServiceEnabled == true,
+                    let currentPolicy = byVM[vmId]?.identity,
+                    !currentPolicy.audiences.isEmpty
+                else {
+                    return .rejected(404, "not found")
+                }
+                guard currentPolicy.audiences.contains(audience) else {
+                    return .rejected(403, "audience is not allowed")
+                }
+                logger.warning(
+                    "Could not mint a guest identity",
+                    metadata: [
+                        "networkId": .string(snapshot.networkId.uuidString),
+                        "vmId": .string(vmId.uuidString),
+                        "audience": .string(audience),
+                        "error": .string("\(error)"),
+                    ])
+                return .rejected(
+                    503, "identity is temporarily unavailable", headers: [.init("retry-after", "2")])
+            }
+        }
+
         guard case .document(let path) = route else { return .rejected(404, "not found") }
         guard let metadata = byVM[vmId], let body = MetadataDocument.render(path, for: metadata) else {
             // A key that exists in the tree but not for this instance — a

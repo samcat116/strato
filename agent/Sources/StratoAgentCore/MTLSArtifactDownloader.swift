@@ -4,6 +4,7 @@ import Logging
 import NIOCore
 import NIOFileSystem
 import NIOSSL
+import StratoShared
 
 /// Downloads control-plane artifacts over mTLS, presenting the agent's SPIFFE
 /// SVID as the client certificate (issue #493).
@@ -269,6 +270,67 @@ public struct MTLSArtifactDownloader: Sendable {
                 client, url: url, ifNoneMatch: ifNoneMatch, maximumBodyBytes: maximumBodyBytes)
             try await client.shutdown()
             return response
+        } catch {
+            try? await client.shutdown()
+            throw error
+        }
+    }
+
+    /// Placement-checked guest JWT-SVID minting through the control plane's
+    /// existing agent-mTLS route (STR-57). The response is tiny and bounded;
+    /// bearer tokens are returned to the caller only and never logged here.
+    @Sendable
+    public func mintGuestIdentity(
+        controlPlaneBaseURL: String,
+        vmId: UUID,
+        audience: String,
+        ttlSeconds: Int
+    ) async throws -> GuestJWTSVIDResponse {
+        guard
+            let url = URL(
+                string: controlPlaneBaseURL + "/agent/vms/\(vmId.uuidString)/jwt-svid")
+        else {
+            throw DownloadFailure(reason: "invalid control-plane URL", isTransient: false)
+        }
+
+        var configuration = HTTPClient.Configuration()
+        do {
+            configuration.tlsConfiguration = try await tlsConfigurationProvider()
+        } catch {
+            throw DownloadFailure(
+                reason: "no SVID available for guest identity minting: \(error)",
+                isTransient: false)
+        }
+        configuration.timeout.connect = timeouts.connect
+        configuration.timeout.read = .seconds(10)
+        configuration.connectionPool.retryConnectionEstablishment = false
+
+        let client = HTTPClient(eventLoopGroupProvider: .singleton, configuration: configuration)
+        do {
+            var request = HTTPClientRequest(url: url.absoluteString)
+            request.method = .POST
+            request.headers.add(name: "Content-Type", value: "application/json")
+            let encoded = try WireProtocol.makeEncoder().encode(
+                GuestJWTSVIDRequest(audiences: [audience], ttlSeconds: ttlSeconds))
+            var buffer = ByteBufferAllocator().buffer(capacity: encoded.count)
+            buffer.writeBytes(encoded)
+            request.body = .bytes(buffer)
+
+            let response = try await client.execute(
+                request, deadline: .now() + .seconds(15), logger: logger)
+            guard response.status == .ok else {
+                let transient =
+                    response.status.code >= 500 || response.status.code == 408
+                    || response.status.code == 429
+                throw DownloadFailure(
+                    reason: "guest identity mint rejected: HTTP \(response.status.code)",
+                    isTransient: transient)
+            }
+            let body = try await response.body.collect(upTo: 64 * 1024)
+            let decoded = try WireProtocol.makeDecoder().decode(
+                GuestJWTSVIDResponse.self, from: Data(body.readableBytesView))
+            try await client.shutdown()
+            return decoded
         } catch {
             try? await client.shutdown()
             throw error
