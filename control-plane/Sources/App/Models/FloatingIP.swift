@@ -122,7 +122,8 @@ struct FloatingIPResponse: Content {
         self.fixedIP = interface?.ipv4Address?.address
         self.loadBalancerId = floatingIP.$loadBalancer.id
         self.networkId = interface?.$logicalNetwork.id ?? loadBalancer?.$logicalNetwork.id
-        self.networkName = interface?.$logicalNetwork.value?.name
+        self.networkName =
+            interface?.$logicalNetwork.value?.name
             ?? loadBalancer?.$logicalNetwork.value?.name
         self.createdAt = floatingIP.createdAt
     }

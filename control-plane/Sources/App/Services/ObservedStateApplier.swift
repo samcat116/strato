@@ -298,26 +298,29 @@ struct ObservedStateApplier {
                 else { return }
 
                 loadBalancer.observedGeneration = observed.observedGeneration
-                loadBalancer.observedState = switch observed.status {
-                case .pending: .pending
-                case .active: .active
-                case .error: .error
-                }
+                loadBalancer.observedState =
+                    switch observed.status {
+                    case .pending: .pending
+                    case .active: .active
+                    case .error: .error
+                    }
                 loadBalancer.lastError = observed.lastError
                 try await loadBalancer.save(on: tx)
 
                 for backendObservation in observed.backends {
-                    guard let backend = try await LoadBalancerBackend.query(on: tx)
-                        .filter(\.$id == backendObservation.id)
-                        .filter(\.$loadBalancer.$id == observed.id)
-                        .first()
+                    guard
+                        let backend = try await LoadBalancerBackend.query(on: tx)
+                            .filter(\.$id == backendObservation.id)
+                            .filter(\.$loadBalancer.$id == observed.id)
+                            .first()
                     else { continue }
-                    backend.healthStatus = switch backendObservation.healthStatus {
-                    case .unknown: .unknown
-                    case .online: .online
-                    case .offline: .offline
-                    case .error: .error
-                    }
+                    backend.healthStatus =
+                        switch backendObservation.healthStatus {
+                        case .unknown: .unknown
+                        case .online: .online
+                        case .offline: .offline
+                        case .error: .error
+                        }
                     backend.lastHealthCheckAt = backendObservation.lastCheckedAt
                     try await backend.save(on: tx)
                 }

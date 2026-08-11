@@ -6,10 +6,12 @@ struct CreateLoadBalancerBackend: AsyncMigration {
             .id()
             .field(
                 "load_balancer_id", .uuid, .required,
-                .references(LoadBalancer.schema, "id", onDelete: .cascade))
+                .references(LoadBalancer.schema, "id", onDelete: .cascade)
+            )
             .field(
                 "interface_id", .uuid,
-                .references(VMNetworkInterface.schema, "id", onDelete: .setNull))
+                .references(VMNetworkInterface.schema, "id", onDelete: .setNull)
+            )
             .field("address", .string)
             .field("health_status", .string, .required)
             .field("last_health_check_at", .datetime)

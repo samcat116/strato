@@ -203,7 +203,9 @@ struct ResourceQuotaController: RouteCollection {
         {
             throw Abort(
                 .badRequest,
-                reason: "Environment-scoped quotas cannot set network or load-balancer limits because those resources are project-wide")
+                reason:
+                    "Environment-scoped quotas cannot set network or load-balancer limits because those resources are project-wide"
+            )
         }
 
         // Measure the scope before evaluating the "not below current usage" guards
@@ -307,7 +309,8 @@ struct ResourceQuotaController: RouteCollection {
                 throw Abort(
                     .badRequest,
                     reason:
-                        "New load balancer limit (\(maxLoadBalancers)) cannot be below current count (\(quota.loadBalancerCount))")
+                        "New load balancer limit (\(maxLoadBalancers)) cannot be below current count (\(quota.loadBalancerCount))"
+                )
             }
             quota.maxLoadBalancers = maxLoadBalancers
         }
@@ -694,7 +697,9 @@ struct ResourceQuotaController: RouteCollection {
         {
             throw Abort(
                 .badRequest,
-                reason: "Environment-scoped quotas cannot set network or load-balancer limits because those resources are project-wide")
+                reason:
+                    "Environment-scoped quotas cannot set network or load-balancer limits because those resources are project-wide"
+            )
         }
 
         let maxMemoryBytes = createRequest.maxMemoryGB.gbToBytes

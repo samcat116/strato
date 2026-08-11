@@ -9,7 +9,8 @@ struct CreateLoadBalancer: AsyncMigration {
             .field("project_id", .uuid, .required, .references(Project.schema, "id", onDelete: .cascade))
             .field(
                 "logical_network_id", .uuid, .required,
-                .references(LogicalNetwork.schema, "id", onDelete: .cascade))
+                .references(LogicalNetwork.schema, "id", onDelete: .cascade)
+            )
             .field("vip", .string, .required)
             .field("protocol", .string, .required)
             .field("desired_state", .string, .required)
@@ -35,7 +36,8 @@ struct CreateLoadBalancer: AsyncMigration {
         try await database.schema(FloatingIP.schema)
             .field(
                 "load_balancer_id", .uuid,
-                .references(LoadBalancer.schema, "id", onDelete: .setNull))
+                .references(LoadBalancer.schema, "id", onDelete: .setNull)
+            )
             .update()
 
         if let sql = database as? any SQLDatabase {

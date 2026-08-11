@@ -146,7 +146,9 @@ struct LoadBalancerController: RouteCollection {
                 try await Self.bumpGeneration(of: id, on: db)
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
-            throw Abort(.conflict, reason: "A load balancer named '\(name ?? loadBalancer.name)' already exists in this project")
+            throw Abort(
+                .conflict, reason: "A load balancer named '\(name ?? loadBalancer.name)' already exists in this project"
+            )
         }
         await req.application.agentService.syncDesiredStateToFleet()
         guard let refreshed = try await LoadBalancer.find(id, on: req.db) else { throw Abort(.notFound) }
@@ -274,10 +276,11 @@ struct LoadBalancerController: RouteCollection {
         guard let backendID = req.parameters.get("backendId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid backend ID")
         }
-        guard let backend = try await LoadBalancerBackend.query(on: req.db)
-            .filter(\.$id == backendID)
-            .filter(\.$loadBalancer.$id == loadBalancerID)
-            .first()
+        guard
+            let backend = try await LoadBalancerBackend.query(on: req.db)
+                .filter(\.$id == backendID)
+                .filter(\.$loadBalancer.$id == loadBalancerID)
+                .first()
         else { throw Abort(.notFound, reason: "Backend not found on this load balancer") }
         try await req.db.transaction { db in
             try await backend.delete(on: db)
@@ -300,10 +303,11 @@ struct LoadBalancerController: RouteCollection {
         guard let listenerID = req.parameters.get("listenerId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid listener ID")
         }
-        guard let listener = try await LoadBalancerListener.query(on: req.db)
-            .filter(\.$id == listenerID)
-            .filter(\.$loadBalancer.$id == loadBalancerID)
-            .first()
+        guard
+            let listener = try await LoadBalancerListener.query(on: req.db)
+                .filter(\.$id == listenerID)
+                .filter(\.$loadBalancer.$id == loadBalancerID)
+                .first()
         else { throw Abort(.notFound, reason: "Listener not found on this load balancer") }
         return listener
     }
@@ -335,11 +339,12 @@ struct LoadBalancerController: RouteCollection {
         try ProjectContainment.require(
             "VM", in: vm.$project.id,
             sameProjectAs: "the load balancer", in: loadBalancer.$project.id)
-        guard let interface = try await VMNetworkInterface.query(on: req.db)
-            .filter(\.$vm.$id == vmID)
-            .filter(\.$orderIndex == nicIndex)
-            .with(\.$addresses)
-            .first()
+        guard
+            let interface = try await VMNetworkInterface.query(on: req.db)
+                .filter(\.$vm.$id == vmID)
+                .filter(\.$orderIndex == nicIndex)
+                .with(\.$addresses)
+                .first()
         else { throw Abort(.notFound, reason: "VM interface at nicIndex \(nicIndex) not found") }
         guard interface.ipv4Address != nil else {
             throw Abort(.conflict, reason: "Backend interface has no IPv4 address")

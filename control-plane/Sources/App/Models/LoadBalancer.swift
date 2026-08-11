@@ -246,7 +246,8 @@ struct LoadBalancerHealthCheckConfig: Content, Equatable, Sendable {
             throw Abort(.badRequest, reason: "Health-check interval must be 1-300 seconds")
         }
         guard (1...60).contains(timeoutSeconds), timeoutSeconds <= intervalSeconds else {
-            throw Abort(.badRequest, reason: "Health-check timeout must be 1-60 seconds and no longer than the interval")
+            throw Abort(
+                .badRequest, reason: "Health-check timeout must be 1-60 seconds and no longer than the interval")
         }
         guard (1...10).contains(successThreshold), (1...10).contains(failureThreshold) else {
             throw Abort(.badRequest, reason: "Health-check thresholds must be 1-10")

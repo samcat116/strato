@@ -638,8 +638,9 @@ struct FloatingIPController: RouteCollection {
             return try FloatingIPResponse(from: floatingIP, loadBalancer: loaded)
         }
 
-        guard let network = try await LogicalNetwork.find(
-            loadBalancer.$logicalNetwork.id, on: req.db)
+        guard
+            let network = try await LogicalNetwork.find(
+                loadBalancer.$logicalNetwork.id, on: req.db)
         else {
             throw Abort(.conflict, reason: "Load balancer's network no longer exists")
         }

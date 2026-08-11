@@ -6,7 +6,8 @@ struct CreateLoadBalancerListener: AsyncMigration {
             .id()
             .field(
                 "load_balancer_id", .uuid, .required,
-                .references(LoadBalancer.schema, "id", onDelete: .cascade))
+                .references(LoadBalancer.schema, "id", onDelete: .cascade)
+            )
             .field("port", .int, .required)
             .field("backend_port", .int, .required)
             .field("created_at", .datetime)
