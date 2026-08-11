@@ -76,8 +76,8 @@ final class StoragePool: Model, @unchecked Sendable {
 extension StoragePool: Content {}
 
 extension StoragePool {
-    /// The pool new volumes are placed in when no pool is specified. Created
-    /// by `CreateStoragePool`, so it exists on every migrated database.
+    /// The pool new volumes are placed in when no pool is specified. The
+    /// current-schema baseline creates it for every fresh database.
     static func defaultPool(on db: Database) async throws -> StoragePool {
         guard
             let pool = try await StoragePool.query(on: db)

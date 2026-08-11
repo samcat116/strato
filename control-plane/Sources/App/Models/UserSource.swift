@@ -5,8 +5,7 @@ import Foundation
 /// admin created (or who self-registered) and is managed in Strato directly,
 /// while `.scim` and `.oidc` users are provisioned/owned by an external IdP.
 ///
-/// Persisted as the raw string in `users.source`. Backfilled for pre-existing
-/// rows from `scim_provisioned` / `oidc_provider_id` by `AddSourceToUser`.
+/// Persisted as the raw string in `users.source`.
 enum UserSource: String, Codable, Sendable, CaseIterable {
     /// Created in Strato — self-registered via passkey or added by an admin.
     case local

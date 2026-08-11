@@ -41,10 +41,12 @@ final class WebhookDeliveryService: Sendable {
     /// the final attempt lands roughly two hours after the first.
     static let maxAttempts = 8
 
-    /// Due rows fetched per pass; anything beyond rolls to the next pass.
-    static let batchSize = 50
-
-    /// Concurrent POSTs per pass. Bounded fan-out keeps a few slow or
+    /// Rows claimed and concurrently POSTed per pass. A pass claims no more
+    /// work than it can start immediately, so every row remains inside its
+    /// claim lease even when one subscription owns the whole batch. Anything
+    /// beyond this capacity rolls to the next pass.
+    ///
+    /// Bounded fan-out keeps a few slow or
     /// timing-out endpoints from head-of-line-blocking deliveries to healthy
     /// endpoints behind them in the batch (PR #668 review).
     static let maxConcurrentDeliveries = 8
@@ -142,29 +144,15 @@ final class WebhookDeliveryService: Sendable {
         do {
             let due = try await claimDueDeliveries(on: db)
 
-            // Bounded fan-out across subscriptions, with one serial lane per
-            // subscription. Several due deliveries for one endpoint must not
-            // race their shared failure streak. Only immutable IDs cross into
-            // child tasks; each attempt reloads its own Fluent models.
-            let batches = Self.subscriptionBatches(from: due)
+            // `claimDueDeliveries` returns at most the number of attempts this
+            // pass can start immediately. Only immutable IDs cross into child
+            // tasks; each attempt reloads its own Fluent models. Subscription
+            // streak updates are atomic SQL operations, so sibling attempts
+            // need not queue behind one another in process memory.
             await withTaskGroup(of: Void.self) { group in
-                var remaining = batches.makeIterator()
-                var inFlight = 0
-                while inFlight < Self.maxConcurrentDeliveries, let batch = remaining.next() {
+                for delivery in due {
                     group.addTask {
-                        for deliveryID in batch.deliveryIDs {
-                            await self.attempt(deliveryID: deliveryID, on: db)
-                        }
-                    }
-                    inFlight += 1
-                }
-                while await group.next() != nil {
-                    if let batch = remaining.next() {
-                        group.addTask {
-                            for deliveryID in batch.deliveryIDs {
-                                await self.attempt(deliveryID: deliveryID, on: db)
-                            }
-                        }
+                        await self.attempt(deliveryID: delivery.id, on: db)
                     }
                 }
             }
@@ -185,32 +173,6 @@ final class WebhookDeliveryService: Sendable {
     /// overwrites the lease (backoff, dead, or succeeded).
     private struct ClaimedDelivery: Decodable, Sendable {
         let id: UUID
-        let subscriptionID: UUID
-        let dueAt: Date
-
-        enum CodingKeys: String, CodingKey {
-            case id
-            case subscriptionID = "subscription_id"
-            case dueAt = "due_at"
-        }
-    }
-
-    private struct SubscriptionBatch: Sendable {
-        var deliveryIDs: [UUID]
-    }
-
-    private static func subscriptionBatches(from deliveries: [ClaimedDelivery]) -> [SubscriptionBatch] {
-        var indices: [UUID: Int] = [:]
-        var batches: [SubscriptionBatch] = []
-        for delivery in deliveries.sorted(by: { $0.dueAt < $1.dueAt }) {
-            if let index = indices[delivery.subscriptionID] {
-                batches[index].deliveryIDs.append(delivery.id)
-            } else {
-                indices[delivery.subscriptionID] = batches.count
-                batches.append(SubscriptionBatch(deliveryIDs: [delivery.id]))
-            }
-        }
-        return batches
     }
 
     private func claimDueDeliveries(on db: Database) async throws -> [ClaimedDelivery] {
@@ -218,12 +180,12 @@ final class WebhookDeliveryService: Sendable {
         return try await sql.raw(
             """
             WITH due AS MATERIALIZED (
-                SELECT id, subscription_id, next_attempt_at AS due_at
+                SELECT id
                 FROM webhook_deliveries
                 WHERE status = \(bind: WebhookDeliveryStatus.pending.rawValue)
                   AND next_attempt_at <= now()
                 ORDER BY next_attempt_at
-                LIMIT \(bind: Self.batchSize)
+                LIMIT \(bind: Self.maxConcurrentDeliveries)
                 FOR UPDATE SKIP LOCKED
             )
             UPDATE webhook_deliveries AS delivery
@@ -231,7 +193,7 @@ final class WebhookDeliveryService: Sendable {
                 updated_at = now()
             FROM due
             WHERE delivery.id = due.id
-            RETURNING delivery.id, due.subscription_id, due.due_at
+            RETURNING delivery.id
             """
         ).all(decoding: ClaimedDelivery.self)
     }

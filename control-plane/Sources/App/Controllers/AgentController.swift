@@ -834,7 +834,7 @@ struct AgentController: RouteCollection {
 
         // Never delete a site's designated network controller while the site
         // still has other members: the controller reference deliberately has
-        // no FK (see CreateSite), so the site would keep pointing at a
+        // no FK, so the site would keep pointing at a
         // vanished agent, no member could ever match it, and reconciliation of
         // the site's networks would silently stop. The site's *last* member is
         // the exception — since the first node to join a site is designated

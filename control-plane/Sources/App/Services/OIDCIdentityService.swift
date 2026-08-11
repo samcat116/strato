@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import StratoShared
 import Vapor
 
 /// Maps a validated OIDC identity onto Strato's user/group/role model.
@@ -28,13 +29,13 @@ struct OIDCIdentityService {
             throw Abort(.badRequest, reason: "Invalid ID token format")
         }
         let payloadData = try OIDCValidation.decodeBase64URLSafe(String(parts[1]))
-        guard let payload = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any] else {
+        guard let payload = try? JSONDecoder().decode(JSONValue.self, from: payloadData).objectValue else {
             throw Abort(.badRequest, reason: "Invalid ID token payload")
         }
         switch payload[claim] {
-        case let values as [Any]:
-            return values.compactMap { $0 as? String }
-        case let value as String:
+        case .some(.array(let values)):
+            return values.compactMap(\.stringValue)
+        case .some(.string(let value)):
             return [value]
         default:
             return []

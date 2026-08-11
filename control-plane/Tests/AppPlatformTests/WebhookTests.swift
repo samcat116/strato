@@ -879,6 +879,47 @@ struct WebhookDeliverySweepTests {
         await origin.shutdown()
     }
 
+    @Test("A pass claims only the deliveries it can start inside the lease")
+    func claimDoesNotOutrunFanOutCapacity() async throws {
+        let origin = try await HookOrigin.start()
+        do {
+            try await withTestApp { app in
+                let fixture = try await makeFixture(app)
+                let subscription = try await makeSubscription(
+                    app, fixture: fixture, url: "http://127.0.0.1:\(origin.port)/hook")
+                let deliveryCount = WebhookDeliveryService.maxConcurrentDeliveries + 1
+                for index in 0..<deliveryCount {
+                    let delivery = WebhookDelivery(
+                        subscriptionID: subscription.id!, eventID: UUID(),
+                        eventType: .webhookTest, payload: "{\"index\":\(index)}")
+                    delivery.nextAttemptAt = Date().addingTimeInterval(-1)
+                    try await delivery.save(on: app.db)
+                }
+
+                await app.webhookDelivery.sweepOnce(acquiringLock: false)
+
+                let afterFirstPass = try await WebhookDelivery.query(on: app.db).all()
+                #expect(
+                    origin.captured.withLockedValue { $0.count }
+                        == WebhookDeliveryService.maxConcurrentDeliveries)
+                #expect(
+                    afterFirstPass.filter { $0.statusValue == .succeeded }.count
+                        == WebhookDeliveryService.maxConcurrentDeliveries)
+                let unclaimed = try #require(afterFirstPass.first { $0.statusValue == .pending })
+                #expect(unclaimed.attempts == 0)
+                #expect(unclaimed.nextAttemptAt <= Date())
+
+                await app.webhookDelivery.sweepOnce(acquiringLock: false)
+                let afterSecondPass = try await WebhookDelivery.query(on: app.db).all()
+                #expect(afterSecondPass.allSatisfy { $0.statusValue == .succeeded })
+            }
+        } catch {
+            await origin.shutdown()
+            throw error
+        }
+        await origin.shutdown()
+    }
+
     @Test("Pending deliveries of a deactivated subscription are parked dead")
     func inactiveSubscriptionParksDeliveries() async throws {
         try await withTestApp { app in

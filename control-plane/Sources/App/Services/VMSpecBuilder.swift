@@ -291,8 +291,8 @@ struct VMSpecBuilder {
                 throw Abort(.internalServerError, reason: "Attached volume is missing its managed identity")
             }
             // An attached row without a legal device name cannot exist: the API
-            // validates one on the way in, and `NormalizeVolumeAttachments`
-            // added a `vm_id IS NULL OR device_name IS NOT NULL` check plus the
+            // validates one on the way in, and the schema has a
+            // `vm_id IS NULL OR device_name IS NOT NULL` check plus the
             // `(vm_id, device_name)` unique index. Skipped rather than given a
             // synthesized `disk<n>` if one somehow does — that fallback could
             // collide with an explicit name on the same VM, and a duplicate id

@@ -632,59 +632,6 @@ final class SecurityGroupControllerTests {
         }
     }
 
-    // MARK: - Seed migration
-
-    @Test("SeedDefaultSecurityGroups backfills groups, the migration rule, and NIC memberships")
-    func seedMigration() async throws {
-        try await withSecurityGroupTestApp { app, _, org, project, _ in
-            let builder = TestDataBuilder(db: app.db)
-            // A pre-security-group world: a project with a workload NIC and a
-            // project with none. (Builder-created projects bypass the API, so
-            // neither has a default group yet.)
-            let emptyProject = try await builder.createProject(
-                name: "Empty Project", description: "p", organization: org)
-            let (_, nic) = try await self.createVMWithNIC(
-                app: app, org: org, project: project, protocolVersion: nil)
-
-            try await SeedDefaultSecurityGroups().prepare(on: app.db)
-
-            // The workload project: AWS rules + the deletable allow-all
-            // migration rule (both families), and the NIC joined.
-            let seeded = try await SecurityGroup.query(on: app.db)
-                .filter(\.$project.$id == project.id!)
-                .filter(\.$isDefault == true)
-                .with(\.$rules)
-                .first()
-            #expect(seeded != nil)
-            #expect(seeded!.rules.count == 6)
-            let migrationRules = seeded!.rules.filter {
-                $0.ruleDescription == SeedDefaultSecurityGroups.migrationRuleDescription
-            }
-            #expect(migrationRules.count == 2)
-            #expect(migrationRules.allSatisfy { $0.direction == .ingress && $0.remoteCIDR == nil })
-            let joined = try await VMInterfaceSecurityGroup.query(on: app.db)
-                .filter(\.$interface.$id == nic.id!)
-                .all()
-            #expect(joined.map { $0.$securityGroup.id } == [seeded!.id!])
-
-            // The workload-less project: pure AWS posture, no migration rule.
-            let emptySeeded = try await SecurityGroup.query(on: app.db)
-                .filter(\.$project.$id == emptyProject.id!)
-                .filter(\.$isDefault == true)
-                .with(\.$rules)
-                .first()
-            #expect(emptySeeded != nil)
-            #expect(emptySeeded!.rules.count == 4)
-
-            // Idempotent: a re-run adds nothing.
-            try await SeedDefaultSecurityGroups().prepare(on: app.db)
-            let total = try await SecurityGroup.query(on: app.db)
-                .filter(\.$project.$id == project.id!)
-                .count()
-            #expect(total == 1)
-        }
-    }
-
     // MARK: - Authorization (deny direction)
 
     @Test("A user from another organization is denied on every endpoint and sees no foreign groups")
@@ -1355,36 +1302,6 @@ final class SecurityGroupControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
-        }
-    }
-
-    @Test("CreateSandboxInterfaceSecurityGroups backfills pre-existing sandbox NICs")
-    func sandboxMembershipBackfill() async throws {
-        try await withSecurityGroupTestApp { app, _, org, project, _ in
-            // A sandbox NIC written the way the pre-STR-34 create path did:
-            // no memberships at all.
-            let (_, nic) = try await self.createSandboxWithNIC(app: app, org: org, project: project)
-            #expect(
-                try await SandboxInterfaceSecurityGroup.query(on: app.db)
-                    .filter(\.$interface.$id == nic.requireID())
-                    .count() == 0)
-
-            let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: project.id!, on: app.db)
-            let sql = try #require(app.db as? any SQLDatabase)
-            try await CreateSandboxInterfaceSecurityGroups.backfillDefaultGroups(on: sql)
-
-            let joined = try await SandboxInterfaceSecurityGroup.query(on: app.db)
-                .filter(\.$interface.$id == nic.requireID())
-                .all()
-            #expect(joined.map { $0.$securityGroup.id } == [try defaultGroup.requireID()])
-
-            // Idempotent, and it never displaces a NIC's existing groups.
-            try await CreateSandboxInterfaceSecurityGroups.backfillDefaultGroups(on: sql)
-            #expect(
-                try await SandboxInterfaceSecurityGroup.query(on: app.db)
-                    .filter(\.$interface.$id == nic.requireID())
-                    .count() == 1)
         }
     }
 

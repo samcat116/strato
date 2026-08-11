@@ -42,6 +42,9 @@ public struct OVNChassisConfig: Sendable, Equatable {
 /// The Linux network service owns actually running the commands; keeping the
 /// decisions here makes them unit-testable on any platform.
 public enum OVNChassisBootstrap {
+    private struct Route: Decodable {
+        let prefsrc: String?
+    }
 
     public static let defaultRemote = "unix:/var/run/ovn/ovnsb_db.sock"
     public static let defaultEncapType = "geneve"
@@ -193,8 +196,8 @@ public enum OVNChassisBootstrap {
     /// a sensible single-NIC default for the tunnel endpoint.
     public static func parseRouteSourceIP(_ json: String) -> String? {
         guard let data = json.data(using: .utf8),
-            let routes = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-            let source = routes.first?["prefsrc"] as? String,
+            let routes = try? JSONDecoder().decode([Route].self, from: data),
+            let source = routes.first?.prefsrc,
             !source.isEmpty
         else {
             return nil

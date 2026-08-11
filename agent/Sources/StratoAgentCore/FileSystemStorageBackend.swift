@@ -352,6 +352,8 @@ public actor FileSystemStorageBackend: StorageBackend {
         throw StorageBackendError.volumeNotFound(directory)
     }
 
+    // Foundation defines file attributes as heterogeneous dictionaries;
+    // keeping its exact API type avoids inventing an incomplete wrapper.
     private static func sameFile(
         _ lhs: [FileAttributeKey: Any], _ rhs: [FileAttributeKey: Any]
     ) -> Bool {

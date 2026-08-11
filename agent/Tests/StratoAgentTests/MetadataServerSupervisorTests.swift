@@ -236,11 +236,12 @@ struct MetadataServerProcessLifecycleTests {
         MetadataSnapshot(networkId: UUID(), origin: .live, instances: [])
     }
 
-    @Test("Termination waits behind an in-flight snapshot write and rejects later pushes")
-    func terminationIsSerializedWithWrites() async throws {
+    @Test("Termination signals a child blocked in a snapshot write before closing the pipe")
+    func terminationInterruptsBlockedWrites() async throws {
         let writeStarted = Mutex(false)
         let writeCount = Mutex(0)
-        let terminationCount = Mutex(0)
+        let processTerminationCount = Mutex(0)
+        let inputCloseCount = Mutex(0)
         let allowWriteToFinish = DispatchSemaphore(value: 0)
         defer { allowWriteToFinish.signal() }
 
@@ -251,7 +252,8 @@ struct MetadataServerProcessLifecycleTests {
                 allowWriteToFinish.wait()
                 writeCount.withLock { $0 += 1 }
             },
-            terminate: { terminationCount.withLock { $0 += 1 } }
+            terminateProcess: { processTerminationCount.withLock { $0 += 1 } },
+            closeInput: { inputCloseCount.withLock { $0 += 1 } }
         )
         let handle = MetadataServerProcessHandle(
             io: io, networkId: UUID(), logger: Logger(label: "test"))
@@ -260,20 +262,22 @@ struct MetadataServerProcessLifecycleTests {
         while !writeStarted.withLock({ $0 }) { await Task.yield() }
 
         handle.terminate()
-        #expect(terminationCount.withLock { $0 } == 0)
+        #expect(processTerminationCount.withLock { $0 } == 1)
+        #expect(inputCloseCount.withLock { $0 } == 0)
         #expect(!handle.isRunning)
         #expect(throws: (any Error).self) { try handle.push(Self.snapshot()) }
 
         allowWriteToFinish.signal()
-        for _ in 0..<100 where terminationCount.withLock({ $0 }) == 0 {
+        for _ in 0..<100 where inputCloseCount.withLock({ $0 }) == 0 {
             try await Task.sleep(for: .milliseconds(10))
         }
 
         #expect(writeCount.withLock { $0 } == 1)
-        #expect(terminationCount.withLock { $0 } == 1)
+        #expect(inputCloseCount.withLock { $0 } == 1)
 
         handle.terminate()
-        #expect(terminationCount.withLock { $0 } == 1)
+        #expect(processTerminationCount.withLock { $0 } == 1)
+        #expect(inputCloseCount.withLock { $0 } == 1)
     }
 }
 

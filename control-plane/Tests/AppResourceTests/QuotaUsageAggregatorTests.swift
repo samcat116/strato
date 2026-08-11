@@ -103,7 +103,8 @@ struct QuotaUsageAggregatorTests {
             storageBytes: vms.reduce(Int64(0)) { $0 + $1.disk } + snapshotBytes,
             vmCount: vms.count,
             sandboxCount: sandboxes.count,
-            volumeCount: 0
+            volumeCount: 0,
+            networkCount: 0
         )
     }
 
@@ -181,6 +182,36 @@ struct QuotaUsageAggregatorTests {
             let measured = try await QuotaUsageAggregator.measure(quota: prodQuota, on: app.db)
             #expect(measured.vmCount == 1)
             #expect(measured.sandboxCount == 1)
+        }
+    }
+
+    @Test("Networks are counted project-wide and excluded from environment quotas")
+    func networksAreProjectWide() async throws {
+        try await withTestApp { app in
+            let fixture = try await seed(on: app.db)
+            let builder = TestDataBuilder(db: app.db)
+            _ = try await builder.createNetwork(
+                name: "team-a", project: fixture.teamAProject,
+                subnet: "10.210.0.0/24", gateway: "10.210.0.1")
+            _ = try await builder.createNetwork(
+                name: "team-b", project: fixture.teamAProject,
+                subnet: "10.211.0.0/24", gateway: "10.211.0.1")
+            _ = try await builder.createNetwork(
+                name: "marketing", project: fixture.marketingProject,
+                subnet: "10.212.0.0/24", gateway: "10.212.0.1")
+
+            let folderQuota = try await builder.createResourceQuota(
+                name: "all-environments", ou: fixture.engineering)
+            let folderUsage = try await QuotaUsageAggregator.measure(quota: folderQuota, on: app.db)
+            #expect(folderUsage.networkCount == 2)
+            #expect(folderUsage.asQuotaUsage.networks == 2)
+
+            let environmentQuota = try await builder.createResourceQuota(
+                name: "production", organization: fixture.organization, environment: "production")
+            let environmentUsage = try await QuotaUsageAggregator.measure(
+                quota: environmentQuota, on: app.db)
+            #expect(environmentUsage.networkCount == 0)
+            #expect(environmentUsage.asQuotaUsage.networks == 0)
         }
     }
 

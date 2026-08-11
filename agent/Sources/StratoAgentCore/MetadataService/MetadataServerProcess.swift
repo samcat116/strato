@@ -80,7 +80,8 @@ public struct MetadataServerProcessSpawner: MetadataServerSpawning {
 struct MetadataServerProcessIO: Sendable {
     let isRunning: @Sendable () -> Bool
     let write: @Sendable (Data) throws -> Void
-    let terminate: @Sendable () -> Void
+    let terminateProcess: @Sendable () -> Void
+    let closeInput: @Sendable () -> Void
 
     private final class LiveResourceBox: Sendable {
         let process: Mutex<Process>
@@ -105,11 +106,13 @@ struct MetadataServerProcessIO: Sendable {
                     try input.write(contentsOf: data)
                 }
             },
-            terminate: {
-                resources.input.withLock { try? $0.close() }
+            terminateProcess: {
                 resources.process.withLock { process in
                     if process.isRunning { process.terminate() }
                 }
+            },
+            closeInput: {
+                resources.input.withLock { try? $0.close() }
             }
         )
     }
@@ -189,9 +192,12 @@ final class MetadataServerProcessHandle: MetadataServerHandle, Sendable {
         }
         guard shouldTerminate else { return }
 
-        // This work is queued behind any write already in progress. Closing
-        // stdin is the graceful exit; terminate covers a child wedged elsewhere.
-        queue.async { self.io.terminate() }
+        // Process termination must not queue behind a pipe write: a child that
+        // stopped reading can block that write forever. SIGTERM closes the
+        // child's read side and releases the writer. FileHandle closure remains
+        // queued after the write so those operations never overlap.
+        io.terminateProcess()
+        queue.async { self.io.closeInput() }
     }
 
     private func drain() {

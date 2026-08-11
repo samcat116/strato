@@ -172,8 +172,7 @@ extension Site {
     }
 
     /// Creates the organization's default site. Called when an org is created
-    /// (API and bootstrap); pre-existing orgs are covered by the
-    /// `BackfillDefaultSites` migration. Org-scoped and controller-less: the
+    /// (API and bootstrap). Org-scoped and controller-less: the
     /// operator designates a network controller once nodes are enrolled.
     @discardableResult
     static func createDefault(

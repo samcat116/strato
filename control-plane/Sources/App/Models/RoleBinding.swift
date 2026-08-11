@@ -17,6 +17,7 @@ import Vapor
 /// receive IDs or immutable snapshots and reload their own instance.
 final class RoleBinding: Model, @unchecked Sendable {
     static let schema = "role_bindings"
+    static let conditionConstraintName = "ck_role_bindings_condition_unsupported"
 
     @ID(key: .id)
     var id: UUID?
@@ -45,7 +46,7 @@ final class RoleBinding: Model, @unchecked Sendable {
     /// into the Cedar `when` clause, so `EntitySliceLoader` skips a conditioned
     /// binding entirely (fail-closed — it grants nothing, and looks live while
     /// doing so). A `CHECK (condition IS NULL)` constraint enforces that at the
-    /// write boundary (`RejectConditionedRoleBindings`, STR-108) and no
+    /// write boundary (`conditionConstraintName`, STR-108) and no
     /// initializer here can set one; the column stays so implementing them
     /// needs no schema change.
     @OptionalField(key: "condition")

@@ -477,6 +477,14 @@ struct DelegatedIdentityClientTests {
         #expect(
             report.identities[0].privateKeyDERByteCount
                 == DelegatedIdentityProbe.derByteCount(pem: svid.privateKey))
+
+        let json = try DelegatedIdentityProbe.formatJSON(report)
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        let identities = try #require(payload["identities"] as? [[String: Any]])
+        #expect(payload["succeeded"] as? Bool == true)
+        #expect(payload["detail"] == nil)
+        #expect(identities.first?["spiffeID"] as? String == svid.spiffeID.uri)
+        #expect(identities.first?["privateKeyDERByteCount"] as? Int == report.identities[0].privateKeyDERByteCount)
     }
 
     @Test("Zero identities with no error reports NO ENTRY MATCHED, not success")

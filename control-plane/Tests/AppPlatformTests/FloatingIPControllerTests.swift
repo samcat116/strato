@@ -201,40 +201,6 @@ final class FloatingIPControllerTests {
         }
     }
 
-    @Test("Reverting the owner-scoped name index names the duplicates it can't collapse")
-    func poolNameScopeRevertReportsDuplicates() async throws {
-        try await withFloatingIPTestApp { app, _, org, _, token in
-            let builder = TestDataBuilder(db: app.db)
-            let otherOrg = try await builder.createOrganization(name: "FIP Revert Org")
-            for owner in [org.id!, otherOrg.id!] {
-                try await FloatingIPPool(
-                    name: "public", cidr: "203.0.113.0/29", organizationScope: .organization(owner)
-                ).save(on: app.db)
-            }
-
-            // The revert restores a global unique index, which the two rows
-            // above make impossible — it has to say which name is the problem
-            // rather than let Postgres fail on an arbitrary row.
-            let thrown = await #expect(throws: ScopeFloatingIPPoolNamesToOwners.DuplicatePoolNames.self) {
-                try await ScopeFloatingIPPoolNamesToOwners().revert(on: app.db)
-            }
-            #expect(thrown?.names == ["public"])
-
-            // And it left the schema alone: the scoped index still rejects a
-            // same-owner duplicate.
-            var status: HTTPStatus = .internalServerError
-            try await app.test(.POST, "/api/floating-ip-pools") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode([
-                    "name": "public", "cidr": "198.51.100.0/29", "organizationId": org.id!.uuidString,
-                ])
-            } afterResponse: { res in
-                status = res.status
-            }
-            #expect(status == .conflict)
-        }
-    }
-
     @Test("A gateway update matching an allocated address is rejected")
     func gatewayCollisionGuard() async throws {
         try await withFloatingIPTestApp { app, _, org, project, token in
