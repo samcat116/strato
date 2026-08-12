@@ -1,0 +1,20 @@
+control-plane/Sources/App/Services/AgentService.swift
+  s_c00c4227b18597::t_54420d57e6917d 1092
+  s_c00c4227b18597::t_ac8dbbe5a4a0d1 1079-1080
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "066ac83849a1a68aa1ebc38c65333ce9bdf419af",
+  "prompts": {},
+  "sessions": {
+    "s_c00c4227b18597": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff2e1-98b7-7353-ad7c-717f9036181a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
