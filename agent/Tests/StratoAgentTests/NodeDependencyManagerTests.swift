@@ -345,41 +345,44 @@ struct InitialNodeDependencyModuleTests {
     }
 
     @Test("Externally supervised Workload API does not require a local SPIRE installation")
-    func externalWorkloadAPIState() async {
+    func externalWorkloadAPIState() async throws {
         let externalIdentity = SPIRENodeDependencyModule(
             systemd: FakeSystemd(defaultObservation: .missing("spire-agent.service")),
             source: .workloadAPI,
             version: { nil },
             svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
+        let manager = try NodeDependencyManager(
+            modules: [externalIdentity], logger: Logger(label: "test"))
 
-        let observation = await externalIdentity.inspect()
+        let observation = try #require(await manager.refresh().first)
         #expect(observation.supervisorState == .notApplicable)
         #expect(observation.installedVersion == nil)
         #expect(observation.compatibility == .compatible)
         #expect(observation.functionalState == .healthy)
         #expect(observation.reason == nil)
+        #expect(observation.permitsDependentWork)
     }
 
-    @Test("Externally launched SPIRE remains healthy when its systemd unit is inactive")
-    func externallyLaunchedSPIREState() async throws {
+    @Test("A disabled SPIRE unit remains systemd-owned when it becomes inactive")
+    func disabledSPIREUnitRemainsSystemdOwned() async throws {
         let inactive = SystemdUnitObservation(
             name: "spire-agent.service", loadState: "loaded", activeState: "inactive",
             subState: "dead", unitFileState: "disabled")
-        let externalIdentity = SPIRENodeDependencyModule(
+        let cachedIdentity = SPIRENodeDependencyModule(
             systemd: FakeSystemd(defaultObservation: inactive),
             source: .workloadAPI,
             version: { "1.12.4" },
             svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
         let manager = try NodeDependencyManager(
-            modules: [externalIdentity], logger: Logger(label: "test"))
+            modules: [cachedIdentity], logger: Logger(label: "test"))
 
         let observation = try #require(await manager.refresh().first)
         #expect(observation.ownership == .observeOnly)
         #expect(observation.supervisorState == .inactive)
         #expect(observation.compatibility == .compatible)
-        #expect(observation.functionalState == .healthy)
-        #expect(observation.reason == nil)
-        #expect(observation.permitsDependentWork)
+        #expect(observation.functionalState == .unhealthy)
+        #expect(observation.reason?.code == .inactiveUnit)
+        #expect(!observation.permitsDependentWork)
     }
 
     @Test("Systemd-managed SPIRE requires both its unit and Workload API")

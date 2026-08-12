@@ -83,21 +83,16 @@ public struct SPIRENodeDependencyModule: NodeDependencyModule {
         async let identity = svid()
         let (supervisor, installed, identityHealth) = await (unit, installedVersion, identity)
 
-        // A confirmed absent or disabled unit does not own SPIRE's lifecycle
-        // (for example, the documented Docker/--no-systemd flow). In that mode
-        // a usable Workload API SVID is authoritative; keep a disabled unit's
-        // state as supervisor metadata. An inspection failure must not select
-        // this path because SVIDManager may still hold a cached SVID after a
-        // systemd-owned agent stops.
-        let externallySupervised =
-            supervisor.loadState == "not-found"
-            || (supervisor.loadState == "loaded" && supervisor.unitFileState == "disabled")
-        if externallySupervised,
+        // A confirmed absent unit does not own SPIRE's lifecycle (for example,
+        // the documented Docker/--no-systemd flow). In that mode a usable
+        // Workload API SVID is authoritative. A disabled unit or an inspection
+        // failure must not select this path because SVIDManager may still hold
+        // a cached SVID after a systemd-owned agent stops.
+        if supervisor.loadState == "not-found",
             case .ready = identityHealth
         {
             return identityInspection(
-                supervisorState: supervisor.loadState == "not-found"
-                    ? .notApplicable : supervisor.supervisorState,
+                supervisorState: .notApplicable,
                 installedVersion: installed,
                 identityHealth: identityHealth)
         }
