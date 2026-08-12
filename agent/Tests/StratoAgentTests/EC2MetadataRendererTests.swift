@@ -58,6 +58,28 @@ struct EC2MetadataRendererTests {
         }
     }
 
+    @Test("the Firecracker limit accepts worst-case maximum user data")
+    func maximumUserDataFitsFirecrackerPayloadLimit() throws {
+        let header = "#cloud-config\n"
+        let userData =
+            header
+            + String(
+                repeating: "\0",
+                count: CloudInitUserDataFormat.maxBytes - header.utf8.count)
+        let metadata = InstanceMetadata(
+            instanceId: Self.vmID,
+            projectId: Self.projectID,
+            userData: userData,
+            serviceEnabled: true)
+
+        let payload = try JSONEncoder().encode(
+            EC2MetadataRenderer.mmdsDocument(for: metadata))
+
+        #expect(userData.utf8.count == CloudInitUserDataFormat.maxBytes)
+        #expect(payload.count > 51_200)
+        #expect(payload.count <= FirecrackerMMDSInterfacePlan.payloadLimitBytes)
+    }
+
     @Test("the root advertises exactly the servable EC2 categories")
     func rootListingGolden() {
         #expect(

@@ -175,8 +175,13 @@ actor FirecrackerService: HypervisorService {
                 "Firecracker requires direct kernel boot - no kernel artifact or kernel path available")
         }
 
-        // Create Firecracker VM
-        let manager = try await client.createVM(vmId: vmId)
+        // MMDS carries the complete cloud-init document. Firecracker's 50 KiB
+        // default API limit is smaller than Strato's accepted user data before
+        // the surrounding EC2 tree is added, so raise this VMM's finite limit
+        // before any API request can seed or later refresh the snapshot.
+        let manager = try await client.createVM(
+            vmId: vmId,
+            httpAPIMaxPayloadSize: FirecrackerMMDSInterfacePlan.payloadLimitBytes)
 
         do {
             // Configure machine
@@ -541,7 +546,8 @@ actor FirecrackerService: HypervisorService {
         logger.info(
             "Replacing Firecracker VMM to reconfigure MMDS interfaces",
             metadata: ["vmId": .string(vmId)])
-        if vmManagers[vmId] != nil {
+        if let manager = vmManagers[vmId] {
+            try await quiesceForReplacement(vmId: vmId, manager: manager, client: client)
             try await client.destroyVM(vmId: vmId)
             vmManagers.removeValue(forKey: vmId)
             vmSpecs.removeValue(forKey: vmId)
@@ -554,6 +560,68 @@ actor FirecrackerService: HypervisorService {
         try await createVM(
             vmId: vmId, spec: spec, imageInfo: imageInfo,
             networkAttachments: networkAttachments, metadata: metadata)
+    }
+
+    /// Asks the guest to flush and shut down, then proves its VMM exited before
+    /// the replacement is allowed to reopen the same managed disk. A paused
+    /// guest must briefly resume to handle Ctrl+Alt+Del; if shutdown fails, put
+    /// it back in its original paused state rather than leaving an unrelated
+    /// policy edit with a power-state side effect.
+    private func quiesceForReplacement(
+        vmId: String, manager: FirecrackerManager, client: FirecrackerClient
+    ) async throws {
+        let initialState: InstanceState
+        do {
+            initialState = try await manager.getInstanceInfo().state
+        } catch {
+            // A retry may arrive after the guest completed shutdown but before
+            // the previous attempt removed the client's process record.
+            if try await client.waitForVMExit(vmId: vmId, timeout: .milliseconds(0)) {
+                return
+            }
+            throw error
+        }
+
+        guard initialState != .notStarted else { return }
+        let restorePauseOnFailure = initialState == .paused
+
+        do {
+            if restorePauseOnFailure {
+                try await manager.resume()
+            }
+            try await manager.sendCtrlAltDel()
+            guard
+                try await client.waitForVMExit(
+                    vmId: vmId, timeout: .seconds(Self.gracefulReplacementShutdownSeconds))
+            else {
+                throw HypervisorServiceError.timeout(
+                    "waiting \(Self.gracefulReplacementShutdownSeconds)s for Firecracker guest \(vmId) "
+                        + "to shut down before MMDS reconfiguration")
+            }
+            logger.info(
+                "Firecracker guest shut down cleanly before VMM replacement",
+                metadata: ["vmId": .string(vmId)])
+        } catch {
+            if (try? await client.waitForVMExit(vmId: vmId, timeout: .milliseconds(0))) == true {
+                logger.info(
+                    "Firecracker VMM exited while quiescing for replacement",
+                    metadata: ["vmId": .string(vmId)])
+                return
+            }
+            if restorePauseOnFailure {
+                do {
+                    try await manager.pause()
+                } catch {
+                    logger.error(
+                        "Could not restore paused state after Firecracker shutdown failed",
+                        metadata: [
+                            "vmId": .string(vmId),
+                            "error": .string(error.localizedDescription),
+                        ])
+                }
+            }
+            throw error
+        }
     }
 
     /// Removes a process spawned by `createVM` before its manager became
@@ -582,6 +650,11 @@ actor FirecrackerService: HypervisorService {
         encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(document)
     }
+
+    /// Same guest-shutdown envelope as the QEMU/libvirt backend. Unlike VM
+    /// deletion, MMDS policy reconciliation does not escalate to forced power
+    /// loss: a timeout leaves the old VMM and its disk intact for a later retry.
+    private static let gracefulReplacementShutdownSeconds = 60
 
     /// Firecracker exposes the guest serial console on the firecracker process's
     /// stdio, not a Unix socket, so socket-based console access is not available yet.

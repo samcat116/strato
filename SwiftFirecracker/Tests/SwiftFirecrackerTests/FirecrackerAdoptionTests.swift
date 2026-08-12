@@ -95,6 +95,24 @@ struct FirecrackerAdoptionTests {
         let (_, info) = try await client.adoptVM(vmId: vmId)
         #expect(info.state == .paused)
     }
+
+    @Test("exit confirmation fails closed without a tracked process identity")
+    func untrackedAdoptionCannotClaimExit() async throws {
+        let dir = try makeSocketDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let vmId = "untracked"
+        let socketPath = FirecrackerClient.socketPath(socketDirectory: dir, vmId: vmId)
+
+        let server = try FakeFirecrackerAPIServer(socketPath: socketPath, state: "Running")
+        server.start()
+        defer { server.stop() }
+
+        let client = makeClient(socketDirectory: dir)
+        _ = try await client.adoptVM(vmId: vmId)
+
+        let confirmed = try await client.waitForVMExit(vmId: vmId, timeout: .milliseconds(0))
+        #expect(!confirmed)
+    }
 }
 
 /// Minimal stand-in for Firecracker's HTTP-over-Unix-socket API. Serves a fixed
