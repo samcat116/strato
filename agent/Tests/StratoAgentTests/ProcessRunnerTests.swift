@@ -3,8 +3,16 @@ import Testing
 
 @testable import StratoAgentCore
 
-@Suite("Process Runner Tests")
+@Suite("Process Runner Tests", .serialized)
 struct ProcessRunnerTests {
+
+    private let commandDescriptorStressIterations = 1_200
+    // Linux corelibs-foundation needs substantially longer to reap each
+    // timed-out child. Fifty iterations still exceed the old two-FD leak's
+    // allowance without making this suite take several minutes.
+    private let timeoutDescriptorStressIterations = 50
+    private let descriptorSampleInterval = 100
+    private let descriptorAllowance = 64
 
     @Test("Captures exit status, stdout, and stderr")
     func capturesOutputAndStatus() async throws {
@@ -74,5 +82,81 @@ struct ProcessRunnerTests {
                 timeout: .seconds(5),
                 maxOutputBytes: 8)
         }
+    }
+
+    @Test("Repeated successful commands release their file descriptors")
+    func successfulCommandsReleaseFileDescriptors() async throws {
+        let baseline = try openFileDescriptorCount()
+
+        for iteration in 0..<commandDescriptorStressIterations {
+            let result = try await ProcessRunner.run(
+                executableURL: URL(fileURLWithPath: "/bin/sh"),
+                arguments: ["-c", "printf ok"]
+            )
+            #expect(result.terminationStatus == 0)
+            try requireOpenFileDescriptorsRemainBounded(
+                after: iteration, from: baseline)
+        }
+
+        try requireOpenFileDescriptorsRemainBounded(from: baseline)
+    }
+
+    @Test("Repeated failed commands release their file descriptors")
+    func failedCommandsReleaseFileDescriptors() async throws {
+        let baseline = try openFileDescriptorCount()
+
+        for iteration in 0..<commandDescriptorStressIterations {
+            let result = try await ProcessRunner.run(
+                executableURL: URL(fileURLWithPath: "/bin/sh"),
+                arguments: ["-c", "exit 1"]
+            )
+            #expect(result.terminationStatus == 1)
+            try requireOpenFileDescriptorsRemainBounded(
+                after: iteration, from: baseline)
+        }
+
+        try requireOpenFileDescriptorsRemainBounded(from: baseline)
+    }
+
+    @Test("Repeated timed-out commands release their file descriptors")
+    func timedOutCommandsReleaseFileDescriptors() async throws {
+        let baseline = try openFileDescriptorCount()
+
+        for iteration in 0..<timeoutDescriptorStressIterations {
+            await #expect(throws: ProcessTimedOutError.self) {
+                try await ProcessRunner.run(
+                    executableURL: URL(fileURLWithPath: "/bin/sh"),
+                    arguments: ["-c", "exec >/dev/null 2>&1; exec sleep 60"],
+                    timeout: .milliseconds(5)
+                )
+            }
+            try requireOpenFileDescriptorsRemainBounded(
+                after: iteration, from: baseline)
+        }
+
+        try requireOpenFileDescriptorsRemainBounded(from: baseline)
+    }
+
+    private func requireOpenFileDescriptorsRemainBounded(
+        after iteration: Int? = nil,
+        from baseline: Int
+    ) throws {
+        if let iteration, !(iteration + 1).isMultiple(of: descriptorSampleInterval) {
+            return
+        }
+        let observed = try openFileDescriptorCount()
+        try #require(
+            observed <= baseline + descriptorAllowance,
+            "open file descriptors grew from \(baseline) to \(observed)"
+        )
+    }
+
+    private func openFileDescriptorCount() throws -> Int {
+        #if os(Linux)
+        let descriptorDirectory = "/proc/self/fd"
+        #else
+        let descriptorDirectory = "/dev/fd"
+        #endif
+        return try FileManager.default.contentsOfDirectory(atPath: descriptorDirectory).count
     }
 }
