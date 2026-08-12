@@ -1,0 +1,20 @@
+[Unit]
+Description=Strato Guest Agent
+Documentation=https://github.com/samcat116/strato/blob/main/sandbox-guest/README.md#vm-guest-agent-str-77
+
+[Service]
+Type=simple
+# The host control protocol can execute commands in the guest. Running as root
+# is therefore an explicit part of opting in, not an incidental default.
+User=root
+ExecStart=/usr/local/bin/strato-guest-agent
+Restart=on-failure
+RestartSec=5
+# Exec sessions remain in this unit's cgroup. Stop them with the daemon so a
+# service stop or operator-triggered upgrade cannot leave host-started work
+# running without its supervising connection.
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

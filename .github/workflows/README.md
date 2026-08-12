@@ -94,7 +94,8 @@ Triggered when a new tag is pushed (e.g., `v1.0.0`):
 - Creates GitHub release with changelog
 - Builds and pushes Docker images to GHCR
 - Builds Swift binaries for Linux and macOS
-- Uploads release assets
+- Uploads release assets, including the per-architecture VM guest agent and its
+  checksum manifest
 
 ### Helm Chart Tests (`helm-test.yml`)
 Tests Helm charts for correctness and security:
