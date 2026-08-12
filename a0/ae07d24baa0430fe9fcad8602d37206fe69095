@@ -1,0 +1,36 @@
+.dockerignore
+  s_77754cacf0b7e7::t_50b46e5e27ab47 1
+.github/workflows/build.yaml
+  s_77754cacf0b7e7::t_cab67a060ac315 169-172,178-179
+  s_77754cacf0b7e7::t_50b46e5e27ab47 49,130-134,168
+  s_0c6effbba5e0dd::t_fc04bd7ba6c25c 180
+deploy/compose/tests/docker-source-context-test.sh
+  s_77754cacf0b7e7::t_50b46e5e27ab47 28-29,33,39,42,44,47,49-51,54-57,59,61-68,72,86
+  s_77754cacf0b7e7::t_8d3d49ce76a3fb 1-17,19,30-31,40-41,43,45-46,69-71,73-85
+  s_77754cacf0b7e7::t_4de2f3b1d749be 32,34-38
+  s_77754cacf0b7e7::t_37446b682d06cc 18,20-27,48,52-53,58,60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a0ae07d24baa0430fe9fcad8602d37206fe69095",
+  "prompts": {},
+  "sessions": {
+    "s_0c6effbba5e0dd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff36d-4725-7652-93e2-5776d532b9fc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_77754cacf0b7e7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff36d-cb9d-7362-bb4b-113b9d74fd6b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
