@@ -261,6 +261,45 @@ struct NodeDependencyManagerTests {
         #expect(observation.supervisorState == .unknown)
     }
 
+    @Test(
+        "Definitive systemd load failures are categorical",
+        arguments: ["masked", "bad-setting", "error"])
+    func definitiveSystemdLoadFailure(_ loadState: String) {
+        let observation = SystemdUnitObservation(
+            name: "spire-agent.service", loadState: loadState, activeState: "inactive",
+            subState: "dead", unitFileState: "masked")
+
+        #expect(observation.supervisorState == .failed)
+    }
+
+    @Test(
+        "Inconclusive systemd load states remain unknown",
+        arguments: ["unknown", "stub", "merged"])
+    func inconclusiveSystemdLoadState(_ loadState: String) {
+        let observation = SystemdUnitObservation(
+            name: "spire-agent.service", loadState: loadState, activeState: "inactive",
+            subState: "dead", unitFileState: "unknown")
+
+        #expect(observation.supervisorState == .unknown)
+    }
+
+    @Test("Systemd discovery preserves a masked unit")
+    func systemdDiscoveryPreservesMaskedUnit() async {
+        let executor = SystemctlOutputExecutor(outputs: [
+            "virtqemud.socket":
+                "LoadState=masked\nActiveState=inactive\nSubState=dead\nUnitFileState=masked\n",
+            "libvirtd.socket": "LoadState=not-found\nActiveState=inactive\n",
+        ])
+        let adapter = SystemdHostAdapter(executor: executor)
+
+        let observation = await adapter.discoverFirst(
+            units: ["virtqemud.socket", "libvirtd.socket"])
+
+        #expect(observation.name == "virtqemud.socket")
+        #expect(observation.loadState == "masked")
+        #expect(observation.supervisorState == .failed)
+    }
+
     private func module(
         _ id: NodeDependencyID,
         dependencies: [NodeDependencyID] = [],
@@ -408,6 +447,43 @@ struct InitialNodeDependencyModuleTests {
         let observation = try #require(await manager.refresh().first)
         #expect(observation.functionalState == .unhealthy)
         #expect(!observation.permitsDependentWork)
+    }
+
+    @Test("Masked systemd units gate SPIRE identity and libvirt placement immediately")
+    func maskedSystemdUnitsGateDependentWork() async throws {
+        let maskedSPIRE = SystemdUnitObservation(
+            name: "spire-agent.service", loadState: "masked", activeState: "inactive",
+            subState: "dead", unitFileState: "masked")
+        let identity = SPIRENodeDependencyModule(
+            systemd: FakeSystemd(defaultObservation: maskedSPIRE),
+            version: { "1.12.4" },
+            svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
+        let identityManager = try NodeDependencyManager(
+            modules: [identity], logger: Logger(label: "test"))
+
+        let identityObservation = try #require(await identityManager.refresh().first)
+        #expect(identityObservation.supervisorState == .failed)
+        #expect(identityObservation.functionalState == .unhealthy)
+        #expect(identityObservation.reason?.code == .failedUnit)
+        #expect(!identityObservation.permitsDependentWork)
+
+        let systemd = SystemdHostAdapter(
+            executor: SystemctlOutputExecutor(outputs: [
+                "virtqemud.socket":
+                    "LoadState=masked\nActiveState=inactive\nSubState=dead\nUnitFileState=masked\n",
+                "libvirtd.socket": "LoadState=not-found\nActiveState=inactive\n",
+            ]))
+        let libvirt = LibvirtNodeDependencyModule(
+            systemd: systemd,
+            probe: { .reachable(.init(major: 11, minor: 5, patch: 0)) })
+        let libvirtManager = try NodeDependencyManager(
+            modules: [libvirt], logger: Logger(label: "test"))
+
+        let libvirtObservation = try #require(await libvirtManager.refresh().first)
+        #expect(libvirtObservation.supervisorState == .failed)
+        #expect(libvirtObservation.functionalState == .unhealthy)
+        #expect(libvirtObservation.reason?.code == .failedUnit)
+        #expect(!libvirtObservation.permitsDependentWork)
     }
 
     @Test("File-based SPIFFE does not require a local SPIRE service or binary")

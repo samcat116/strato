@@ -71,6 +71,9 @@ the local unit is confirmed absent or disabled; a disabled unit remains visible
 as supervisor metadata without withdrawing workload identity. A failed systemd
 inspection does not prove external ownership. An enabled inactive or failed
 unit remains a functional failure even while the agent holds a cached SVID.
+Definitive load failures such as a masked unit, an invalid setting, or a unit
+load error are categorical. A failed or malformed systemd inspection remains
+unknown rather than being treated as missing or failed.
 Libvirt discovers `virtqemud.socket` or `libvirtd.socket` and reuses the bounded
 daemon-version probe, including the 11.5.0 compatibility floor. A reachable
 externally supervised daemon remains usable, but a known non-active local unit
