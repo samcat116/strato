@@ -45,6 +45,25 @@ struct CurrentSchemaBaselineTests {
         try await app.shutdownForTesting()
     }
 
+    @Test("The guest-agent upgrade leaves a fresh schema unchanged")
+    func guestAgentUpgradeIsIdempotentOnFreshSchema() async throws {
+        let app = try await Application.makeForBareDatabaseTesting()
+        do {
+            try await CurrentSchemaBaseline().prepare(on: app.db)
+            let catalogBeforeUpgrade = try await catalogMD5(on: app.db)
+
+            let migration = AddGuestAgentEnabledToVM()
+            try await migration.prepare(on: app.db)
+            try await migration.prepare(on: app.db)
+
+            #expect(try await catalogMD5(on: app.db) == catalogBeforeUpgrade)
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
     @Test("An existing schema is rejected without changing its data")
     func existingDatabaseRequiresExplicitRebuild() async throws {
         let app = try await Application.makeForBareDatabaseTesting()
