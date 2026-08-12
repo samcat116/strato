@@ -486,15 +486,25 @@ struct ReconciliationTests {
         #expect(starting.items.first?.steps == [.reconfigureNetworks, .boot])
     }
 
-    @Test("Firecracker does not plan post-create network reconciliation")
-    func firecrackerNetworkChangesAreNotPlanned() {
+    @Test("Firecracker recreates its VMM when the MMDS NIC policy changes")
+    func firecrackerMetadataNetworkChangesRecreateVMM() {
         let vmId = UUID()
+        let interfaceId = UUID()
+        let networkId = UUID()
+        let current = NetworkSpec(
+            interfaceId: interfaceId, deviceName: "net0", orderIndex: 0,
+            network: "management", networkId: networkId,
+            macAddress: "52:54:00:00:00:01", metadataEnabled: true)
+        let target = NetworkSpec(
+            interfaceId: interfaceId, deviceName: "net0", orderIndex: 0,
+            network: "management", networkId: networkId,
+            macAddress: "52:54:00:00:00:01", metadataEnabled: false)
         let desired = DesiredVMState(
             vmId: vmId,
             hypervisorType: .firecracker,
             spec: VMSpec(
                 cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil),
-                networks: [NetworkSpec(network: "new", networkId: UUID())]),
+                networks: [target]),
             desiredStatus: .running,
             generation: 2)
         let plan = Reconciler.plan(
@@ -502,8 +512,63 @@ struct ReconciliationTests {
             present: [vmId.uuidString: .managed(.running)],
             lastApplied: [vmId.uuidString: 1],
             appliedEdges: [vmId.uuidString: AppliedEdgeNonces()],
-            presentNetworks: [vmId.uuidString: []])
+            presentNetworks: [vmId.uuidString: [current]])
         #expect(plan.items.count == 1)
+        #expect(plan.items.first?.steps == [.reconfigureNetworks, .boot])
+    }
+
+    @Test("Firecracker restores paused state after MMDS NIC reconfiguration")
+    func firecrackerMetadataNetworkChangeRestoresPausedState() {
+        let vmId = UUID()
+        let interfaceId = UUID()
+        let networkId = UUID()
+        func network(metadataEnabled: Bool) -> NetworkSpec {
+            NetworkSpec(
+                interfaceId: interfaceId, deviceName: "net0", orderIndex: 0,
+                network: "management", networkId: networkId,
+                metadataEnabled: metadataEnabled)
+        }
+        let current = network(metadataEnabled: false)
+        let target = network(metadataEnabled: true)
+        let desired = DesiredVMState(
+            vmId: vmId, hypervisorType: .firecracker,
+            spec: VMSpec(
+                cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil),
+                networks: [target]),
+            desiredStatus: .paused, generation: 2)
+
+        let plan = Reconciler.plan(
+            desired: [desired],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 1],
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()],
+            presentNetworks: [vmId.uuidString: [current]])
+
+        #expect(plan.items.first?.steps == [.reconfigureNetworks, .boot, .pause])
+    }
+
+    @Test("Firecracker ignores unsupported post-create NIC edits when MMDS policy is unchanged")
+    func firecrackerNonMetadataNetworkChangesAreNotPlanned() {
+        let vmId = UUID()
+        let current = NetworkSpec(
+            network: "old", networkId: UUID(), metadataEnabled: false)
+        let desired = DesiredVMState(
+            vmId: vmId, hypervisorType: .firecracker,
+            spec: VMSpec(
+                cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil),
+                networks: [
+                    NetworkSpec(
+                        network: "new", networkId: UUID(), metadataEnabled: false)
+                ]),
+            desiredStatus: .running, generation: 2)
+
+        let plan = Reconciler.plan(
+            desired: [desired],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 1],
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()],
+            presentNetworks: [vmId.uuidString: [current]])
+
         #expect(plan.items.first?.steps.isEmpty == true)
     }
 

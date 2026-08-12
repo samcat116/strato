@@ -1254,9 +1254,17 @@ Firecracker VMs use the same `MetadataStore` and EC2 renderer, but a different
 transport (STR-67). `FirecrackerService.createVM` opts each
 `metadataEnabled` NIC into MMDS by its Firecracker interface id (`eth0`,
 `eth1`, ...), configures **MMDS v2**, and pushes the nested `/latest`
-document before the VM boots. MMDS terminates inside Firecracker, so this path
-does not need an OVN localport, network namespace, host listener, or any other
-host networking. A NIC not named in the MMDS configuration cannot reach it.
+document from the generation-guarded store before the VM boots. MMDS terminates
+inside Firecracker, so this path does not need an OVN localport, network
+namespace, host listener, or any other host networking. A NIC not named in the
+MMDS configuration cannot reach it.
+
+The interface allow-list is Firecracker pre-boot configuration. Editing a
+Firecracker VM's per-NIC `metadataEnabled` policy therefore replaces the VMM
+process against the same managed disks and TAPs, installs the new allow-list,
+and restores the desired running/paused/shutdown state. The operation interrupts
+a running guest; it does not recreate its storage or network identity. This is
+the enforcement path that prevents a disabled NIC from retaining MMDS access.
 
 Unlike the OVN listener below, MMDS is **not a read-through view** of
 `MetadataStore`. It is a per-VMM snapshot replaced with `PUT /mmds`. After
@@ -1270,12 +1278,12 @@ from the durable metadata store immediately, then normal syncs remain the retry
 mechanism.
 
 That copy boundary is an intentional semantic difference: metadata mutations
-become visible to a Firecracker guest **no sooner than the next agent sync**, and
-the guest reads the last successful snapshot between syncs. Freshness is thus
-bounded by desired-state sync cadence rather than request time. This applies to
-Firecracker **VMs only**. Sandboxes are not cloud-init consumers and keep their
-separate `SandboxConfigDrive` guest contract; the sandbox runtime never
-configures MMDS.
+become visible to a Firecracker guest **no sooner than the agent applies the
+desired-state sync**, and the guest reads the last successful snapshot between
+syncs. Freshness is thus bounded by desired-state sync cadence rather than
+request time. This applies to Firecracker **VMs only**. Sandboxes are not
+cloud-init consumers and keep their separate `SandboxConfigDrive` guest
+contract; the sandbox runtime never configures MMDS.
 
 ### Instance metadata server (the guest-facing listener)
 

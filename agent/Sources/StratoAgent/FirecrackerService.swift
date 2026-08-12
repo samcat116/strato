@@ -15,6 +15,9 @@ actor FirecrackerService: HypervisorService {
     private let vmStoragePath: String
     private let firecrackerBinaryPath: String
     private let socketDirectory: String
+    /// Reads the generation-guarded metadata record at the instant MMDS is
+    /// seeded. Nil in standalone tests, where createVM's argument is used.
+    private let metadataProvider: (@Sendable (UUID) async -> InstanceMetadata?)?
 
     // HypervisorService protocol requirement
     public let hypervisorType: HypervisorType = .firecracker
@@ -34,7 +37,8 @@ actor FirecrackerService: HypervisorService {
         vmStoragePath: String,
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
         socketDirectory: String = "/tmp/firecracker",
-        firecrackerClient: FirecrackerClient? = nil
+        firecrackerClient: FirecrackerClient? = nil,
+        metadataProvider: (@Sendable (UUID) async -> InstanceMetadata?)? = nil
     ) {
         self.logger = logger
         self.storage = storage
@@ -42,6 +46,7 @@ actor FirecrackerService: HypervisorService {
         self.vmStoragePath = vmStoragePath
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.socketDirectory = socketDirectory
+        self.metadataProvider = metadataProvider
         // A shared client (created by the Agent) lets VMs and sandboxes drive
         // Firecracker through one process registry and socket directory; when
         // absent (e.g. tests) it is created lazily on first use.
@@ -216,7 +221,17 @@ actor FirecrackerService: HypervisorService {
         if !mmdsInterfaces.isEmpty {
             try await manager.configureMMDS(
                 MMDSConfig(version: .v2, networkInterfaces: mmdsInterfaces))
-            let payload = try Self.mmdsPayload(for: metadata)
+            // The desired item that scheduled this create can be an older
+            // replay while MetadataStore already holds a newer generation.
+            // Read through its guard at the last possible moment instead of
+            // installing the replay's copy into the new VMM.
+            let guardedMetadata: InstanceMetadata?
+            if let metadataProvider, let id = UUID(uuidString: vmId) {
+                guardedMetadata = await metadataProvider(id)
+            } else {
+                guardedMetadata = metadata
+            }
+            let payload = try Self.mmdsPayload(for: guardedMetadata)
             try await manager.setMMDSData(rawJSON: payload)
             mmdsPayloads[vmId] = payload
         }
@@ -501,6 +516,41 @@ actor FirecrackerService: HypervisorService {
         logger.info(
             "Refreshed Firecracker MMDS snapshot",
             metadata: ["vmId": .string(vmId), "bytes": .stringConvertible(payload.count)])
+    }
+
+    /// Replaces only the Firecracker process. Managed disks and host-side TAPs
+    /// remain in place; the new process is configured from the desired spec and
+    /// receives the new MMDS interface allow-list before it is booted.
+    func reconfigureMetadataInterfaces(
+        vmId: String, spec: VMSpec, imageInfo: ImageInfo?,
+        networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
+    ) async throws {
+        guard vmManagers[vmId] != nil, let client = firecrackerClient else {
+            throw HypervisorServiceError.vmNotFound(vmId)
+        }
+
+        logger.info(
+            "Replacing Firecracker VMM to reconfigure MMDS interfaces",
+            metadata: ["vmId": .string(vmId)])
+        try await client.destroyVM(vmId: vmId)
+        vmManagers.removeValue(forKey: vmId)
+        vmSpecs.removeValue(forKey: vmId)
+        mmdsPayloads.removeValue(forKey: vmId)
+
+        do {
+            try await createVM(
+                vmId: vmId, spec: spec, imageInfo: imageInfo,
+                networkAttachments: networkAttachments, metadata: metadata)
+        } catch {
+            // A configure call may fail after the new process was spawned but
+            // before createVM published its manager. Remove that partial VMM so
+            // the next level-triggered retry can create the same id again.
+            try? await client.destroyVM(vmId: vmId)
+            vmManagers.removeValue(forKey: vmId)
+            vmSpecs.removeValue(forKey: vmId)
+            mmdsPayloads.removeValue(forKey: vmId)
+            throw error
+        }
     }
 
     private static func mmdsPayload(for metadata: InstanceMetadata?) throws -> Data {

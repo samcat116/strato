@@ -744,7 +744,11 @@ actor Agent {
                 vmStoragePath: vmStoragePath,
                 firecrackerBinaryPath: firecrackerBinaryPath,
                 socketDirectory: firecrackerSocketDir,
-                firecrackerClient: firecrackerClient
+                firecrackerClient: firecrackerClient,
+                metadataProvider: { [metadataStore, metadataServiceEnabled] vmId in
+                    guard metadataServiceEnabled else { return nil }
+                    return await metadataStore.metadata(for: vmId)
+                }
             )
 
             // The sandbox runtime (issue #421) shares that client. It lights up only
@@ -4875,6 +4879,7 @@ extension Agent: ReconcileActuator {
             throw HypervisorServiceError.hypervisorNotInstalled(desired.hypervisorType.rawValue)
         }
         let realizedSpec = try await specWithRealizedVolumePaths(desired.spec, vmId: item.id)
+        let creationMetadata = await metadataForHypervisorCreate(desired)
 
         let currentEntry = managedVMs[item.id] ?? orphanedVMs[item.id]
         let currentReservation =
@@ -4918,7 +4923,7 @@ extension Agent: ReconcileActuator {
         do {
             attachments = try await networkOrchestrator.prepareAttachments(
                 vmId: item.id, networks: realizedSpec.networks,
-                metadataDenied: desired.metadata.map { !$0.isServiceEnabled } ?? false)
+                metadataDenied: creationMetadata.map { !$0.isServiceEnabled } ?? false)
         } catch {
             vsockCIDs.rollBack(lease)
             throw error
@@ -4927,8 +4932,7 @@ extension Agent: ReconcileActuator {
             try await service.createVM(
                 vmId: item.id, spec: realizedSpec, imageInfo: desired.imageInfo,
                 networkAttachments: attachments,
-                metadata: desired.hypervisorType == .firecracker && !metadataServiceEnabled
-                    ? nil : desired.metadata,
+                metadata: creationMetadata,
                 vsockCID: lease.cid)
         } catch {
             await networkOrchestrator.teardownAttachments(
@@ -4962,6 +4966,17 @@ extension Agent: ReconcileActuator {
         await sendVMLog(
             vmId: item.id, level: .info, eventType: .statusChange,
             message: "VM created by reconciliation", operation: "create")
+    }
+
+    /// Firecracker seeds MMDS from the same generation-guarded record used by
+    /// refreshes. Other backends keep the desired entry's value because their
+    /// create-time bootstrap contract is independent of MMDS.
+    private func metadataForHypervisorCreate(
+        _ desired: DesiredVMState
+    ) async -> InstanceMetadata? {
+        guard desired.hypervisorType == .firecracker else { return desired.metadata }
+        guard metadataServiceEnabled else { return nil }
+        return await metadataStore.metadata(for: desired.vmId)
     }
 
     /// Applies a running VM's new vCPU/memory sizing (issue #568) and records
@@ -5019,6 +5034,11 @@ extension Agent: ReconcileActuator {
         }
         guard let entry = managedVMs[item.id] else {
             throw HypervisorServiceError.vmNotFound(item.id)
+        }
+        if entry.hypervisorType == .firecracker {
+            try await reconcileFirecrackerMetadataInterfaces(
+                item: item, desired: desired, entry: entry)
+            return
         }
         guard entry.hypervisorType == .qemu else {
             throw HypervisorServiceError.notSupported(
@@ -5081,6 +5101,41 @@ extension Agent: ReconcileActuator {
         await sendVMLog(
             vmId: item.id, level: .info, eventType: .operation,
             message: "VM network interfaces reconciled", operation: "network-hotplug")
+    }
+
+    /// Firecracker's MMDS allow-list is immutable after boot. Rebuild only the
+    /// VMM process against the existing disks and TAPs, then let the remaining
+    /// reconcile steps boot (and optionally pause) the replacement.
+    private func reconcileFirecrackerMetadataInterfaces(
+        item: ReconcileWorkItem, desired: DesiredVMState, entry: VMManifestEntry
+    ) async throws {
+        let service = try reconcileService(for: item.id)
+        let targetSpec = entry.spec.withNetworks(desired.spec.networks)
+        let realizedSpec = try await specWithRealizedVolumePaths(targetSpec, vmId: item.id)
+        let metadata = await metadataForHypervisorCreate(desired)
+
+        // These TAPs already exist. Reassert each attachment individually so a
+        // failure does not run create-time rollback and tear down the live set;
+        // the VMM is replaced only after every attachment resolved.
+        var attachments: [ResolvedNetworkAttachment] = []
+        attachments.reserveCapacity(realizedSpec.networks.count)
+        for (index, network) in realizedSpec.networks.enumerated() {
+            attachments.append(
+                try await networkOrchestrator.prepareAttachment(
+                    vmId: item.id, spec: network, fallbackIndex: index,
+                    metadataDenied: metadata.map { !$0.isServiceEnabled } ?? false))
+        }
+
+        try await service.reconfigureMetadataInterfaces(
+            vmId: item.id, spec: realizedSpec, imageInfo: desired.imageInfo,
+            networkAttachments: attachments, metadata: metadata)
+
+        managedVMs[item.id] = entry.with(spec: realizedSpec)
+        persistManifest()
+        await sendVMLog(
+            vmId: item.id, level: .info, eventType: .operation,
+            message: "Firecracker VM recreated to apply metadata interface policy",
+            operation: "metadata-network-reconfigure")
     }
 
     /// Re-adopts an orphan that is being deleted, classifying a failure by

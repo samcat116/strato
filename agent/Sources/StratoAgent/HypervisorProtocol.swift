@@ -99,6 +99,19 @@ public protocol HypervisorService: Actor, Sendable {
     /// store, never retain the previous document.
     func refreshInstanceMetadata(vmId: String, metadata: InstanceMetadata?) async throws
 
+    /// Rebuilds the backend process so its immutable per-interface metadata
+    /// policy matches `networkAttachments`, leaving the VM created but not
+    /// booted. The caller restores the desired power state in later reconcile
+    /// steps.
+    ///
+    /// Firecracker implements this because its MMDS interface allow-list can
+    /// only be configured before boot. Other backends reject the operation;
+    /// their metadata transport is not configured through this seam.
+    func reconfigureMetadataInterfaces(
+        vmId: String, spec: VMSpec, imageInfo: ImageInfo?,
+        networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
+    ) async throws
+
     /// Makes whatever stored configuration this backend holds for a *stopped*
     /// VM able to satisfy `spec`, before the boot that will read it (STR-187).
     ///
@@ -357,6 +370,14 @@ public protocol HypervisorService: Actor, Sendable {
 
 public extension HypervisorService {
     func refreshInstanceMetadata(vmId: String, metadata: InstanceMetadata?) async throws {}
+
+    func reconfigureMetadataInterfaces(
+        vmId: String, spec: VMSpec, imageInfo: ImageInfo?,
+        networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
+    ) async throws {
+        throw HypervisorServiceError.notSupported(
+            "\(hypervisorType.displayName) does not require metadata-interface reconfiguration")
+    }
 
     func attachNetworkInterface(
         vmId: String, spec: NetworkSpec, attachment: ResolvedNetworkAttachment

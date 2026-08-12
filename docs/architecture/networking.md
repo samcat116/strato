@@ -207,9 +207,11 @@ was actually built for, so turning a resolver on re-realizes exactly the
 namespaces that need it rather than all of them or none.
 
 For QEMU on OVN, the localport is the *transport* half of the IMDS story;
-Firecracker uses its VMM-local MMDS transport instead. The *payload* half
-is the per-VM metadata document itself: the control plane builds it (the
-factory extension in `InstanceMetadataFactory.swift`) and
+Firecracker uses its VMM-local MMDS transport instead. Because Firecracker's
+per-NIC MMDS allow-list is pre-boot configuration, changing that policy
+replaces the VMM process and restores the VM's desired power state. The
+*payload* half is the per-VM metadata document itself: the control plane builds
+it (the factory extension in `InstanceMetadataFactory.swift`) and
 `DesiredStateAssembler` attaches it to each VM's
 `DesiredVMState.metadata` (wire v26, STR-48/51;
 `shared/Sources/StratoShared/InstanceMetadata.swift`). The agent keeps it in
