@@ -12,7 +12,8 @@ HANDOFF=/handoff
 DATA_DIR=/var/lib/spire/agent
 RUN_DIR=/run/spire/agent
 SOCKET_DIR=/run/spire/agent/sockets
-ADMIN_SOCKET=/var/run/spire/admin.sock
+ADMIN_SOCKET_DIR=/var/run/spire
+ADMIN_SOCKET="$ADMIN_SOCKET_DIR/admin.sock"
 CONF="$RUN_DIR/agent.conf"
 
 log() { echo "==> $*"; }
@@ -28,17 +29,18 @@ JOIN_TOKEN="$(cat "$HANDOFF/cp-agent-token")"
 GUEST_IDENTITY_CONFIG=""
 case "${ENABLE_GUEST_IDENTITY:-false}" in
   true|1)
-    # Keep this root-only socket in the spire-agent container's filesystem. The
-    # Compose file shares only SOCKET_DIR with Envoy; do not add ADMIN_SOCKET to
-    # that volume or any other container.
-    mkdir -p "$(dirname "$ADMIN_SOCKET")"
-    chown root:root "$(dirname "$ADMIN_SOCKET")"
-    chmod 0700 "$(dirname "$ADMIN_SOCKET")"
+    # A dedicated named volume exposes this directory only to spire-agent and
+    # the registered control-plane delegate. The setgid bit makes SPIRE's 0770
+    # socket inherit the delegate's fixed gid while keeping the directory
+    # root-owned and closed to every other container user.
+    mkdir -p "$ADMIN_SOCKET_DIR"
+    chown root:"${GUEST_IDENTITY_DELEGATE_GID:-999}" "$ADMIN_SOCKET_DIR"
+    chmod 2750 "$ADMIN_SOCKET_DIR"
     GUEST_IDENTITY_CONFIG="$(cat <<EOF
     # SPIRE refuses an admin socket in or below the Workload API socket
     # directory. /run/spire/agent/sockets/admin.sock is therefore invalid.
     admin_socket_path = "$ADMIN_SOCKET"
-    authorized_delegates = ["spiffe://${TRUST_DOMAIN}/control-plane"]
+    authorized_delegates = ["spiffe://${TRUST_DOMAIN}/control-plane/guest-identity-delegate"]
 EOF
 )"
     ;;

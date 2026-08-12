@@ -275,6 +275,12 @@ spec:
             - name: SPIFFE_ENDPOINT_SOCKET
               value: "unix://{{ .Values.spire.controlPlane.workloadApi.socketPath }}"
             {{- end }}
+            {{- if .Values.spire.agent.guestIdentity.enabled }}
+            # SPIRE attests this exact k8s workload as
+            # spiffe://<td>/control-plane/admin before authorizing delegation.
+            - name: SPIRE_ADMIN_ENDPOINT_SOCKET
+              value: "/var/run/spire/admin.sock"
+            {{- end }}
             {{- if .Values.spire.controlPlane.jwtSvidAuth.enabled }}
             # JWT-SVIDs as programmatic credentials (issue #495): registered
             # service accounts and workloads authenticate to the HTTP API with
@@ -431,7 +437,8 @@ spec:
           {{- end }}
           {{- $spireBundle := and .Values.spire.enabled .Values.spire.notifier.k8sbundle.enabled }}
           {{- $workloadApi := and .Values.spire.enabled .Values.spire.controlPlane.workloadApi.enabled }}
-          {{- if or .Values.strato.database.tlsCACert $spireBundle $workloadApi }}
+          {{- $guestIdentity := and .Values.spire.enabled .Values.spire.agent.guestIdentity.enabled }}
+          {{- if or .Values.strato.database.tlsCACert $spireBundle $workloadApi $guestIdentity }}
           volumeMounts:
             {{- if .Values.strato.database.tlsCACert }}
             - name: db-tls-ca
@@ -450,10 +457,17 @@ spec:
               mountPath: {{ dir .Values.spire.controlPlane.workloadApi.socketPath }}
               readOnly: true
             {{- end }}
+            {{- if $guestIdentity }}
+            # Dedicated node-local admin socket for this registered delegate;
+            # never mounted into Envoy or any guest workload.
+            - name: spire-agent-admin-socket-dir
+              mountPath: /var/run/spire
+              readOnly: true
+            {{- end }}
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-      {{- if or (and .Values.spire.enabled .Values.spire.envoy.enabled) .Values.strato.database.tlsCACert $spireBundle $workloadApi }}
+      {{- if or (and .Values.spire.enabled .Values.spire.envoy.enabled) .Values.strato.database.tlsCACert $spireBundle $workloadApi $guestIdentity }}
       volumes:
         {{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
         - name: envoy-config
@@ -466,6 +480,12 @@ spec:
         - name: spire-agent-socket
           hostPath:
             path: {{ .Values.spire.envoy.spireAgentSocketDir }}
+            type: DirectoryOrCreate
+        {{- end }}
+        {{- if $guestIdentity }}
+        - name: spire-agent-admin-socket-dir
+          hostPath:
+            path: {{ .Values.spire.agent.guestIdentity.socketHostPath }}
             type: DirectoryOrCreate
         {{- end }}
         {{- if $spireBundle }}

@@ -385,8 +385,12 @@ Why that is nonetheless acceptable here:
   `MintX509SVID` route — which buys nothing against a threat model in which the
   host can read guest RAM anyway.
 - **Socket hygiene**: `/var/run/spire/admin.sock`, root-owned, in a 0700
-  directory, never bind-mounted into a container and never reachable from a
-  Firecracker jail (`SandboxJailPlan` must not gain a path to it).
+  directory on installed hypervisor hosts, never reachable from a guest
+  container or Firecracker jail (`SandboxJailPlan` must not gain a path to it).
+  Containerized control-plane deployments use a separate root-owned, setgid
+  directory shared only between their SPIRE agent and the explicitly
+  registered delegate; the Workload API volume and guest workloads never see
+  it.
 - **Off by default.** The admin socket and `authorized_delegates` ship behind an
   explicit installer opt-in. This stands on its own merits and no longer mirrors
   anything at the VM layer: #789 originally specified "opt-in per VM, default

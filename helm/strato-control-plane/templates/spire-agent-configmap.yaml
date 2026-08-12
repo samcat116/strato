@@ -17,8 +17,9 @@ data:
         socket_path = "/var/run/spire/sockets/workload.sock"
         {{- if .Values.spire.agent.guestIdentity.enabled }}
         # Keep this above /var/run/spire/sockets: SPIRE refuses an admin socket
-        # in or below the Workload API socket directory. The parent directory
-        # is a private 0700 emptyDir; never mount it into another container.
+        # in or below the Workload API socket directory. Its dedicated
+        # node-local directory is mounted only into SPIRE and the authorized
+        # control-plane workload.
         admin_socket_path = "/var/run/spire/admin.sock"
         # The control-plane process's workload SVID, not its k8s_psat node ID.
         authorized_delegates = ["spiffe://{{ .Values.spire.trustDomain }}/control-plane/admin"]

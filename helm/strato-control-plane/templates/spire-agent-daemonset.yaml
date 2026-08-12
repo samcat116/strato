@@ -36,11 +36,10 @@ spec:
             - -c
             - |
               {{- if .Values.spire.agent.guestIdentity.enabled }}
-              # Private runtime directory for the admin socket. Only this init
-              # container and spire-agent mount it; the Workload API remains on
-              # its separate hostPath below.
-              chown 0:0 /var/run/spire
-              chmod 0700 /var/run/spire
+              # Root owns the dedicated hostPath. The setgid bit makes SPIRE's
+              # 0770 admin socket inherit the registered delegate's group.
+              chown 0:{{ .Values.spire.agent.guestIdentity.delegateGID }} /var/run/spire
+              chmod 2750 /var/run/spire
               {{- end }}
               until nc -w 1 -z {{ include "strato-control-plane.fullname" . }}-spire-server.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.spire.service.grpcPort }}; do
                 echo "Waiting for SPIRE Server..."
@@ -48,7 +47,7 @@ spec:
               done
           {{- if .Values.spire.agent.guestIdentity.enabled }}
           volumeMounts:
-            - name: spire-agent-private-runtime
+            - name: spire-agent-admin-socket-dir
               mountPath: /var/run/spire
           {{- end }}
       containers:
@@ -102,9 +101,9 @@ spec:
               mountPath: /etc/spire/agent
               readOnly: true
             {{- if .Values.spire.agent.guestIdentity.enabled }}
-            # Holds /var/run/spire/admin.sock and is not mounted by any other
-            # running container in this pod.
-            - name: spire-agent-private-runtime
+            # Dedicated node-local directory shared only with the registered
+            # control-plane delegate on this node.
+            - name: spire-agent-admin-socket-dir
               mountPath: /var/run/spire
             {{- end }}
             - name: spire-agent-socket-dir
@@ -121,8 +120,10 @@ spec:
           configMap:
             name: {{ include "strato-control-plane.fullname" . }}-spire-agent
         {{- if .Values.spire.agent.guestIdentity.enabled }}
-        - name: spire-agent-private-runtime
-          emptyDir: {}
+        - name: spire-agent-admin-socket-dir
+          hostPath:
+            path: {{ .Values.spire.agent.guestIdentity.socketHostPath }}
+            type: DirectoryOrCreate
         {{- end }}
         {{- if .Values.spire.notifier.k8sbundle.enabled }}
         # Published by the server's k8sbundle notifier; the bundle.crt key
