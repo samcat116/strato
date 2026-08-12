@@ -198,7 +198,9 @@ struct GrantPlatformAdminCommand: AsyncCommand {
             // the command does, so a scripted promotion without --claim simply
             // prints nothing.
             if let claimToken {
-                console.print(UserController.claimURL(for: claimToken))
+                console.print(
+                    UserController.claimURL(
+                        for: claimToken, configuration: app.controlPlaneConfiguration))
             }
             return
         }
@@ -214,7 +216,10 @@ struct GrantPlatformAdminCommand: AsyncCommand {
         console.print(
             "  Passkey claim link — single use, valid until \(Self.expiryFormatter.string(from: claimExpiresAt)):")
         console.print()
-        console.print("    \(UserController.claimURL(for: claimToken))")
+        let claimURL = UserController.claimURL(
+            for: claimToken,
+            configuration: app.controlPlaneConfiguration)
+        console.print("    \(claimURL)")
         console.print()
         console.warning("The link's origin comes from WEBAUTHN_RELYING_PARTY_ORIGIN and must match")
         console.warning("the URL you browse to, or the passkey ceremony will fail.")

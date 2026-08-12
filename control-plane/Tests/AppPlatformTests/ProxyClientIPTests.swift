@@ -67,6 +67,18 @@ struct ProxyClientIPTests {
         #expect(resolved == "203.0.113.9")
     }
 
+    @Test("RATE_LIMIT_TRUST_FORWARDED_FOR=0 disables forwarding trust")
+    func upstreamFalsyValueDisablesForwardingTrust() async throws {
+        let configuration = try await ControlPlaneConfiguration.load(
+            environmentVariables: ["RATE_LIMIT_TRUST_FORWARDED_FOR": "0"],
+            for: .testing)
+        let config = ProxyTrustConfig.fromConfiguration(configuration)
+
+        let resolved = config.clientIP(
+            headers: headers("1.2.3.4, 198.51.100.7"), remoteAddress: peer)
+        #expect(resolved == "203.0.113.9")
+    }
+
     @Test("Whitespace and empty entries in the chain are tolerated")
     func toleratesMessyChains() {
         let config = ProxyTrustConfig(trustForwardedFor: true, trustedProxyHops: 1)
@@ -81,10 +93,14 @@ struct ProxyClientIPTests {
         #expect(config.clientIP(headers: headers(nil), remoteAddress: nil) == nil)
     }
 
-    /// The hop count is floored at 1 — a `0` would index off the right end of
-    /// the chain.
-    @Test("Hop count is floored at one")
-    func hopCountFloor() {
-        #expect(ProxyTrustConfig.fromEnvironment().trustedProxyHops >= 1)
+    /// A zero hop count would index off the right end of the chain, so startup
+    /// rejects it instead of silently changing the operator's value.
+    @Test("Zero trusted proxy hops is rejected")
+    func zeroTrustedProxyHopsRejected() async {
+        await #expect(throws: ControlPlaneConfigurationError.self) {
+            _ = try await ControlPlaneConfiguration.load(
+                environmentVariables: ["RATE_LIMIT_TRUSTED_PROXY_HOPS": "0"],
+                for: .testing)
+        }
     }
 }

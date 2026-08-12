@@ -519,7 +519,10 @@ struct FloatingIPController: RouteCollection {
         // Refuse *unplaced* VMs outright: an attach accepted now has no
         // realizing agent to carry the NAT rule, and the API would report an
         // attached address nothing backs.
-        _ = try await Self.requireNATRealizingAgent(for: vm, on: req.db)
+        _ = try await Self.requireNATRealizingAgent(
+            for: vm,
+            offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+            on: req.db)
         // One floating IP per NIC: two rules would fight over the NIC's
         // outbound SNAT. This read is the friendly-error fast path; the
         // partial unique index on interface_id is the authority — two
@@ -659,7 +662,10 @@ struct FloatingIPController: RouteCollection {
             throw Abort(.conflict, reason: "Load balancer's network site no longer exists")
         }
         if let refusal = SiteNetworkAuthority.refusal(
-            try await SiteNetworkAuthority.resolve(forSite: site, on: req.db),
+            try await SiteNetworkAuthority.resolve(
+                forSite: site,
+                offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+                on: req.db),
             consequence: "nothing would realize the load balancer's external address")
         {
             throw refusal
@@ -761,7 +767,11 @@ struct FloatingIPController: RouteCollection {
     ///   *no* agent the network state);
     /// - the site's controller is offline past the grace window, or came back
     ///   unable to author topology (issue #833).
-    static func requireNATRealizingAgent(for vm: VM, on db: Database) async throws -> Agent {
+    static func requireNATRealizingAgent(
+        for vm: VM,
+        offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
+        on db: Database
+    ) async throws -> Agent {
         guard let hypervisorId = vm.hypervisorId,
             let agentUUID = UUID(uuidString: hypervisorId),
             let agent = try await Agent.find(agentUUID, on: db)
@@ -770,7 +780,8 @@ struct FloatingIPController: RouteCollection {
                 .conflict,
                 reason: "VM is not placed on an agent yet; attach the floating IP after it is scheduled")
         }
-        let authority = try await SiteNetworkAuthority.resolve(forAgent: agent, on: db)
+        let authority = try await SiteNetworkAuthority.resolve(
+            forAgent: agent, offlineGrace: offlineGrace, on: db)
         if let refusal = SiteNetworkAuthority.refusal(
             authority, host: agent, consequence: "nothing would realize the NAT rule")
         {

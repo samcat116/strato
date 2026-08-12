@@ -354,7 +354,10 @@ struct VMController: RouteCollection {
 
         // Batched for the same reason the authorization decision is: a
         // per-row realizer walk would be three queries per VM.
-        let enforcement = try await SecurityGroupService.enforcementByVM(allVMs, on: req.db)
+        let enforcement = try await SecurityGroupService.enforcementByVM(
+            allVMs,
+            offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+            on: req.db)
 
         let visible = allVMs.filter { vm in
             vm.id.map { readable.contains(IAMNode(type: .virtualMachine, id: $0)) } ?? false
@@ -408,7 +411,10 @@ struct VMController: RouteCollection {
         }
 
         let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
-        let enforcement = try await SecurityGroupService.enforcement(for: vm, on: req.db)
+        let enforcement = try await SecurityGroupService.enforcement(
+            for: vm,
+            offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+            on: req.db)
         return VMDetailResponse(
             from: vm,
             securityGroupsEnforced: enforcement,
@@ -1085,6 +1091,7 @@ struct VMController: RouteCollection {
                         vmID: vmID,
                         organizationID: rootOrganizationID,
                         createdBy: userID,
+                        configuration: req.controlPlaneConfiguration,
                         on: db
                     )
 
@@ -1610,7 +1617,11 @@ struct VMController: RouteCollection {
         let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
         let enforcement =
             resolvingEnforcement
-            ? try await SecurityGroupService.enforcement(for: vm, on: req.db) : nil
+            ? try await SecurityGroupService.enforcement(
+                for: vm,
+                offlineGrace: req.controlPlaneConfiguration.double(
+                    .siteControllerOfflineGraceSeconds),
+                on: req.db) : nil
         return VMDetailResponse(
             from: vm,
             securityGroupsEnforced: enforcement,
@@ -1808,7 +1819,10 @@ struct VMController: RouteCollection {
             try await interface.$securityGroupMemberships.load(on: req.db)
         }
         let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
-        let enforcement = try await SecurityGroupService.enforcement(for: vm, on: req.db)
+        let enforcement = try await SecurityGroupService.enforcement(
+            for: vm,
+            offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+            on: req.db)
         return VMDetailResponse(
             from: vm,
             securityGroupsEnforced: enforcement,
@@ -1840,7 +1854,10 @@ struct VMController: RouteCollection {
             let agent = try await Agent.find(agentUUID, on: req.db),
             agent.supportsInterVMNetworking
         {
-            let authority = try await SiteNetworkAuthority.resolve(forAgent: agent, on: req.db)
+            let authority = try await SiteNetworkAuthority.resolve(
+                forAgent: agent,
+                offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+                on: req.db)
             if let refusal = SiteNetworkAuthority.refusal(
                 authority, host: agent,
                 consequence: "this VM's network cannot be realized and it would never boot")

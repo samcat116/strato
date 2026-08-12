@@ -101,23 +101,22 @@ struct AuditConfig: Sendable {
     /// backend turns a batch into a single multi-row insert.
     var maxBatchSize: Int
 
-    static func fromEnvironment(_ environment: Environment) -> AuditConfig {
+    static func fromConfiguration(_ configuration: ControlPlaneConfiguration) -> AuditConfig {
         let backends =
-            Environment.get("AUDIT_BACKENDS")?
+            configuration.string(.auditBackends)?
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
             .filter { !$0.isEmpty } ?? ["database"]
         return AuditConfig(
-            enabled: Environment.get("AUDIT_ENABLED").flatMap(Bool.init) ?? true,
+            enabled: configuration.bool(.auditEnabled)!,
             backendNames: backends,
-            includeReads: Environment.get("AUDIT_INCLUDE_READS").flatMap(Bool.init) ?? false,
-            webhookURL: Environment.get("AUDIT_WEBHOOK_URL"),
-            lokiEndpoint: Environment.get("LOKI_ENDPOINT"),
-            retentionDays: Environment.get("AUDIT_RETENTION_DAYS").flatMap(Int.init),
-            synchronousWrites: Environment.get("AUDIT_SYNCHRONOUS").flatMap(Bool.init)
-                ?? (environment == .testing),
-            maxQueueDepth: Environment.get("AUDIT_MAX_QUEUE_DEPTH").flatMap(Int.init) ?? 2048,
-            maxBatchSize: Environment.get("AUDIT_MAX_BATCH_SIZE").flatMap(Int.init) ?? 128
+            includeReads: configuration.bool(.auditIncludeReads)!,
+            webhookURL: configuration.string(.auditWebhookURL),
+            lokiEndpoint: configuration.string(.lokiEndpoint),
+            retentionDays: configuration.int(.auditRetentionDays),
+            synchronousWrites: configuration.bool(.auditSynchronous)!,
+            maxQueueDepth: configuration.int(.auditMaxQueueDepth)!,
+            maxBatchSize: configuration.int(.auditMaxBatchSize)!
         )
     }
 }
@@ -714,7 +713,7 @@ extension Application {
     var audit: AuditService {
         get {
             lazyService(AuditServiceKey.self) {
-                AuditService(app: self, config: .fromEnvironment(environment))
+                AuditService(app: self, config: .fromConfiguration(controlPlaneConfiguration))
             }
         }
         set {

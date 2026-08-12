@@ -8,12 +8,12 @@ import StratoShared
 actor LokiService {
     private let app: Application
     /// Loki push/query endpoint, or `nil` when `LOKI_ENDPOINT` is unset (Loki not deployed).
-    private let lokiEndpoint: String?
+    let lokiEndpoint: String?
     private let httpClient: HTTPClient
 
     init(app: Application) {
         self.app = app
-        self.lokiEndpoint = Environment.get("LOKI_ENDPOINT")
+        self.lokiEndpoint = app.controlPlaneConfiguration.string(.lokiEndpoint)
         self.httpClient = app.http.client.shared
     }
 
@@ -289,7 +289,7 @@ extension Application {
 
     /// Check if Loki is enabled (endpoint configured)
     var lokiEnabled: Bool {
-        Environment.get("LOKI_ENDPOINT") != nil
+        lokiService.lokiEndpoint != nil
     }
 }
 

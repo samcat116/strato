@@ -93,7 +93,10 @@ final class GuardedHTTPClient: Sendable {
             validator
             ?? { url in
                 try await SSRFGuard.validate(
-                    url: url, environment: app.environment, on: app.threadPool)
+                    url: url,
+                    configuration: app.controlPlaneConfiguration,
+                    environment: app.environment,
+                    on: app.threadPool)
             }
     }
 

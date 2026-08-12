@@ -349,31 +349,6 @@ struct OrgSPIREClientRegistryTests {
         }
     }
 
-    // MARK: - Legacy-enrollment flag parsing
-
-    @Test(
-        "SPIRE_LEGACY_ENROLLMENTS disabling spellings are matched explicitly",
-        arguments: [
-            ("false", false), ("FALSE", false), (" false ", false),
-            ("0", false), ("no", false), ("off", false),
-            ("true", true), ("1", true), ("yes", true), ("banana", true),
-        ])
-    func legacyFlagParsing(raw: String, expected: Bool) {
-        // The default is "allowed", so the *disabling* spellings are the ones
-        // that must be enumerated — treating "anything that isn't true" as
-        // allowed would make `SPIRE_LEGACY_ENROLLMENTS=0` mean the opposite of
-        // what an operator writing it intends.
-        #expect(OrgSPIREClientRegistry.legacyEnrollmentsAllowed(rawValue: raw) == expected)
-    }
-
-    @Test("Legacy enrollments are allowed when the variable is unset or empty")
-    func legacyFlagDefaultsAllowed() {
-        // Switching per-org trust domains on must not brick enrollment for
-        // every organization the reconciler has yet to reach.
-        #expect(OrgSPIREClientRegistry.legacyEnrollmentsAllowed(rawValue: nil))
-        #expect(OrgSPIREClientRegistry.legacyEnrollmentsAllowed(rawValue: ""))
-    }
-
     // MARK: - PEM splitting
 
     @Test("A concatenated PEM bundle splits into one string per certificate")

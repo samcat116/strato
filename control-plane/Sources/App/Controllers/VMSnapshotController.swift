@@ -88,7 +88,9 @@ extension VMController {
             projectID: vm.$project.id,
             environment: vm.environment,
             agentId: agentId,
-            expiresAt: try SnapshotRetention.expiry(requested: request.ttlSeconds),
+            expiresAt: try SnapshotRetention.expiry(
+                requested: request.ttlSeconds,
+                defaultTTLSeconds: req.controlPlaneConfiguration.int(.snapshotDefaultTTLSeconds)),
             createdByID: userID)
         // Admission estimate: the machine state is bounded by the memory the
         // guest was granted. Replaced by the agent's actual figure once its

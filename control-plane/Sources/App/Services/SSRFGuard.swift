@@ -52,11 +52,14 @@ enum SSRFGuard {
     /// deprecated alias so existing deployments keep working, but it reads as
     /// image-scoped and isn't: an operator enabling it for an internal mirror
     /// would have no hint they also opened the OIDC path.
-    static func allowsPrivateHosts(for environment: Environment) -> Bool {
+    static func allowsPrivateHosts(
+        configuration: ControlPlaneConfiguration,
+        environment: Environment
+    ) -> Bool {
         let override =
-            Environment.get("OUTBOUND_FETCH_ALLOW_PRIVATE_HOSTS")
-            ?? Environment.get("IMAGE_FETCH_ALLOW_PRIVATE_HOSTS")
-        if let override = override.flatMap(Bool.init) {
+            configuration.bool(.outboundFetchAllowPrivateHosts)
+            ?? configuration.bool(.imageFetchAllowPrivateHosts)
+        if let override {
             return override
         }
         return environment == .testing || environment == .development
@@ -84,6 +87,31 @@ enum SSRFGuard {
     /// server's threads.
     @discardableResult
     static func validate(url: URL, environment: Environment, on threadPool: NIOThreadPool) async throws -> [String] {
+        try await validate(
+            url: url,
+            allowsPrivateHosts: environment == .testing || environment == .development,
+            on: threadPool)
+    }
+
+    @discardableResult
+    static func validate(
+        url: URL,
+        configuration: ControlPlaneConfiguration,
+        environment: Environment,
+        on threadPool: NIOThreadPool
+    ) async throws -> [String] {
+        try await validate(
+            url: url,
+            allowsPrivateHosts: allowsPrivateHosts(
+                configuration: configuration, environment: environment),
+            on: threadPool)
+    }
+
+    private static func validate(
+        url: URL,
+        allowsPrivateHosts: Bool,
+        on threadPool: NIOThreadPool
+    ) async throws -> [String] {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
             throw BlockedHostError(reason: "Source URL must use http or https")
         }
@@ -94,7 +122,7 @@ enum SSRFGuard {
             throw BlockedHostError(reason: "Source URL must not embed credentials")
         }
 
-        if allowsPrivateHosts(for: environment) {
+        if allowsPrivateHosts {
             return []
         }
 

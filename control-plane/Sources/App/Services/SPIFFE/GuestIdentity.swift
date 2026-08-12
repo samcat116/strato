@@ -81,10 +81,13 @@ enum GuestIdentity {
     /// operator's back.
     static func trustDomain(
         forOrganization organizationID: UUID?,
+        configuration: ControlPlaneConfiguration,
         on db: any Database
     ) async throws -> String {
-        let platform = PlatformTrustDomain.current
-        guard OrgTrustDomainsFeature.isEnabled, let organizationID else { return platform }
+        let platform = configuration.string(.spireTrustDomain)!
+        guard configuration.bool(.spireOrgTrustDomainsEnabled) == true, let organizationID else {
+            return platform
+        }
 
         guard
             let row = try await OrgTrustDomain.query(on: db)
@@ -116,11 +119,34 @@ enum GuestIdentity {
         vmID: UUID,
         organizationID: UUID?,
         createdBy: UUID?,
+        configuration: ControlPlaneConfiguration,
         on db: any Database
     ) async throws -> WorkloadRegistration {
-        let trustDomain = try await trustDomain(forOrganization: organizationID, on: db)
+        let trustDomain = try await trustDomain(
+            forOrganization: organizationID, configuration: configuration, on: db)
         let registration = WorkloadRegistration(
             spiffeID: spiffeID(forVM: vmID, trustDomain: trustDomain),
+            kind: .workload,
+            organizationID: organizationID,
+            createdBy: createdBy,
+            vmID: vmID
+        )
+        try await registration.save(on: db)
+        return registration
+    }
+
+    /// Convenience for focused tests whose subject is registration rather than
+    /// control-plane configuration. Production supplies the immutable startup
+    /// snapshot through the overload above.
+    @discardableResult
+    static func register(
+        vmID: UUID,
+        organizationID: UUID?,
+        createdBy: UUID?,
+        on db: any Database
+    ) async throws -> WorkloadRegistration {
+        let registration = WorkloadRegistration(
+            spiffeID: spiffeID(forVM: vmID, trustDomain: PlatformTrustDomain.current),
             kind: .workload,
             organizationID: organizationID,
             createdBy: createdBy,

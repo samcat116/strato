@@ -97,6 +97,7 @@ extension AgentArtifactResolver {
                 targetVersion: version,
                 operatingSystem: operatingSystem,
                 architecture: architecture,
+                baseURL: app.controlPlaneConfiguration.string(.agentUpdateArtifactBaseURL),
                 client: app.client,
                 logger: app.logger)
         }
@@ -157,10 +158,6 @@ extension Application {
 enum AgentUpdateArtifacts {
     static let defaultBaseURL = "https://github.com/samcat116/strato/releases/download"
 
-    static var baseURL: String {
-        Environment.get("AGENT_UPDATE_ARTIFACT_BASE_URL") ?? defaultBaseURL
-    }
-
     static let defaultTarballMember = "strato-agent"
 
     /// The release tag a version travels under. Tags are v-prefixed
@@ -183,7 +180,7 @@ enum AgentUpdateArtifacts {
     }
 
     private static func trimmedBase(_ baseURL: String?) -> String {
-        let base = baseURL ?? Self.baseURL
+        let base = baseURL ?? defaultBaseURL
         return base.hasSuffix("/") ? String(base.dropLast()) : base
     }
 
@@ -302,10 +299,11 @@ enum AgentUpdateArtifacts {
         targetVersion: String,
         operatingSystem: OperatingSystem,
         architecture: CPUArchitecture,
+        baseURL: String? = nil,
         client: any Client,
         logger: Logger
     ) async throws -> ResolvedAgentArtifact {
-        guard let manifestURL = manifestURL(targetVersion: targetVersion) else {
+        guard let manifestURL = manifestURL(targetVersion: targetVersion, baseURL: baseURL) else {
             throw Abort(
                 .badRequest,
                 reason:
@@ -357,7 +355,7 @@ enum AgentUpdateArtifacts {
         guard
             let assetURL = assetURL(
                 targetVersion: targetVersion, operatingSystem: operatingSystem,
-                architecture: architecture)
+                architecture: architecture, baseURL: baseURL)
         else {
             // Unreachable: manifestURL above already gated on hasReleaseAssets.
             throw Abort(.badRequest, reason: "Target version '\(targetVersion)' has no release assets")

@@ -268,9 +268,10 @@ struct HealthControllerTests {
     /// Resolved config for a deployment whose session store either shares the
     /// coordination endpoint (`sessionHost` nil) or has its own.
     private static func storeConfiguration(sessionHost: String?) -> ValkeyStoreConfiguration {
-        var env = ["VALKEY_HOST": "coordination"]
-        if let sessionHost { env["SESSION_VALKEY_HOST"] = sessionHost }
-        return ValkeyStoreConfiguration.resolve { env[$0] }!
+        let coordination = ValkeyConfiguration(hostname: "coordination")
+        let session = sessionHost.map { ValkeyConfiguration(hostname: $0) } ?? coordination
+        return ValkeyStoreConfiguration(
+            coordination: coordination, session: session, warnings: [])
     }
 
     @Test("A reachable session store is reported up and keeps readiness at 200")

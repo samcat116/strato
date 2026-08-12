@@ -261,7 +261,9 @@ struct WebhookSubscriptionController: RouteCollection {
         }
         do {
             try await SSRFGuard.validate(
-                url: url, environment: req.application.environment,
+                url: url,
+                configuration: req.controlPlaneConfiguration,
+                environment: req.application.environment,
                 on: req.application.threadPool)
         } catch let error as SSRFGuard.BlockedHostError {
             throw Abort(.badRequest, reason: error.reason)

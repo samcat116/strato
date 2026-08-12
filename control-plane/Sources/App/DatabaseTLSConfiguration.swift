@@ -25,14 +25,13 @@ enum DatabaseTLSMode: String, Sendable {
     ///
     /// Throws ``DatabaseTLSConfigurationError/invalidMode`` on an unrecognized
     /// `DATABASE_TLS` value rather than silently downgrading to plaintext.
-    static func fromEnvironment(for environment: Environment) throws -> DatabaseTLSMode {
-        try resolve(Environment.get("DATABASE_TLS"), for: environment)
+    static func fromConfiguration(_ configuration: ControlPlaneConfiguration) throws -> DatabaseTLSMode {
+        try resolve(configuration.string(.databaseTLS), for: .production)
     }
 
     /// Resolve a raw `DATABASE_TLS` value, defaulting by environment when nil.
-    /// Split out from ``fromEnvironment(for:)`` so tests can exercise the logic
-    /// without mutating the process environment (setenv racing getenv from
-    /// another thread is undefined behavior under parallel test execution).
+    /// Split out from ``fromConfiguration(_:)`` so tests can exercise the mode
+    /// mapping directly.
     static func resolve(_ raw: String?, for environment: Environment) throws -> DatabaseTLSMode {
         guard let raw else {
             // Encrypt by default; only local development opts into plaintext.
@@ -64,17 +63,17 @@ enum DatabaseTLSConfigurationError: Error, CustomStringConvertible {
 /// server certificate). When no CA path is given, the system default trust
 /// store is used, which is correct for a database presenting a publicly-rooted
 /// or otherwise system-trusted certificate.
-func makeDatabaseTLS(for environment: Environment, logger: Logger) throws
+func makeDatabaseTLS(configuration: ControlPlaneConfiguration, logger: Logger) throws
     -> PostgresConnection.Configuration.TLS
 {
-    let mode = try DatabaseTLSMode.fromEnvironment(for: environment)
+    let mode = try DatabaseTLSMode.fromConfiguration(configuration)
     switch mode {
     case .disable:
         logger.warning("Database TLS is disabled; connection credentials and data are sent in plain text")
         return .disable
     case .prefer, .require:
         var tlsConfiguration = TLSConfiguration.makeClientConfiguration()
-        if let caPath = Environment.get("DATABASE_TLS_CA_CERT_PATH"), !caPath.isEmpty {
+        if let caPath = configuration.string(.databaseTLSCACertPath), !caPath.isEmpty {
             do {
                 tlsConfiguration.trustRoots = .certificates(try NIOSSLCertificate.fromPEMFile(caPath))
             } catch {

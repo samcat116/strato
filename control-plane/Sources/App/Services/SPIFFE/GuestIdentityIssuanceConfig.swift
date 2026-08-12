@@ -15,13 +15,11 @@ struct GuestIdentityIssuanceConfig: Sendable, Equatable {
     static let disabled = GuestIdentityIssuanceConfig(
         allowedAudiences: [], defaultTTLSeconds: 300, maximumTTLSeconds: 3600)
 
-    static func fromEnvironment() throws -> Self {
+    static func fromConfiguration(_ configuration: ControlPlaneConfiguration) throws -> Self {
         try GuestIdentityIssuanceConfig(
-            allowedAudiences: audiences(rawValue: Environment.get("GUEST_IDENTITY_AUDIENCES")),
-            defaultTTLSeconds: ttlSeconds(
-                rawValue: Environment.get("GUEST_IDENTITY_JWT_TTL"), fallback: 300),
-            maximumTTLSeconds: ttlSeconds(
-                rawValue: Environment.get("GUEST_IDENTITY_JWT_MAX_TTL"), fallback: 3600)
+            allowedAudiences: audiences(rawValue: configuration.string(.guestIdentityAudiences)),
+            defaultTTLSeconds: configuration.int(.guestIdentityJWTTTL)!,
+            maximumTTLSeconds: configuration.int(.guestIdentityJWTMaxTTL)!
         )
     }
 
@@ -72,8 +70,8 @@ extension Application {
         set { setStorageValue(GuestIdentityIssuanceConfigKey.self, to: newValue) }
     }
 
-    func configureGuestIdentityIssuance() throws {
-        guestIdentityIssuanceConfig = try .fromEnvironment()
+    func configureGuestIdentityIssuance(configuration: ControlPlaneConfiguration) throws {
+        guestIdentityIssuanceConfig = try .fromConfiguration(configuration)
     }
 }
 

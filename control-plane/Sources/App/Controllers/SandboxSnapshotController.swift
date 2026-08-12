@@ -83,7 +83,9 @@ extension SandboxController {
             environment: sandbox.environment,
             agentId: agentId,
             captureMode: stopAfterSnapshot ? .stop : .resume,
-            expiresAt: try SnapshotRetention.expiry(requested: request.ttlSeconds),
+            expiresAt: try SnapshotRetention.expiry(
+                requested: request.ttlSeconds,
+                defaultTTLSeconds: req.controlPlaneConfiguration.int(.snapshotDefaultTTLSeconds)),
             createdByID: userID)
         // Admission estimate: the memory file dominates and is bounded by
         // guest RAM. Replaced by the agent's actual sizes once its observed

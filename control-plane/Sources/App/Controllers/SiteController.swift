@@ -417,7 +417,9 @@ struct SiteController: RouteCollection {
         await SiteNetworkAuthority.designateIfUnset(
             agent: agent, siteID: targetSiteId, on: req.db, logger: req.logger)
         await req.application.agentService.syncDesiredStateToFleet()
-        return try AgentResponse(from: agent)
+        return try AgentResponse(
+            from: agent,
+            targetVersion: AgentVersionTarget.version(configuration: req.controlPlaneConfiguration))
     }
 
 }
