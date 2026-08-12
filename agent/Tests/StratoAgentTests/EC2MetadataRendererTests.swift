@@ -80,6 +80,68 @@ struct EC2MetadataRendererTests {
         #expect(payload.count <= FirecrackerMMDSInterfacePlan.payloadLimitBytes)
     }
 
+    @Test("the Firecracker limit accepts the complete maximum mutable metadata document")
+    func maximumAggregateMetadataFitsFirecrackerPayloadLimit() throws {
+        let validKeyPrefix =
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
+        let maximumKey =
+            validKeyPrefix
+            + String(
+                repeating: "😀",
+                count: 4_096 - validKeyPrefix.unicodeScalars.count)
+        let keys = Array(repeating: maximumKey, count: 64)
+
+        let maximumTagValue = String(repeating: "\u{0001}", count: 4_096)
+        let tags = Dictionary(
+            uniqueKeysWithValues: (0..<64).map { index in
+                let prefix = "tag-\(index)-"
+                return (
+                    prefix + String(repeating: "x", count: 128 - prefix.count),
+                    maximumTagValue
+                )
+            })
+
+        let header = "#cloud-config\n"
+        let userData =
+            header
+            + String(
+                repeating: "\0",
+                count: CloudInitUserDataFormat.maxBytes - header.utf8.count)
+        let nics = (0..<8).map { index in
+            MetadataNIC(
+                deviceName: "net\(index)",
+                macAddress: String(format: "52:54:00:00:00:%02x", index),
+                networkId: UUID(), networkName: String(repeating: "n", count: 128),
+                ipAddress: "10.0.\(index).2", prefixLength: 24, gateway: "10.0.\(index).1",
+                ipv6Address: "fd00::\(index + 1)", ipv6PrefixLength: 64,
+                gateway6: "fd00::1", mtu: 65_535, metadataEnabled: true)
+        }
+        let metadata = InstanceMetadata(
+            instanceId: Self.vmID,
+            hostname: String(repeating: "h", count: 63),
+            projectId: Self.projectID,
+            region: String(repeating: "r", count: 128),
+            availabilityZone: String(repeating: "z", count: 128),
+            nics: nics,
+            sshAuthorizedKeys: keys,
+            userData: userData,
+            tags: tags,
+            serviceEnabled: true)
+
+        let payload = try JSONEncoder().encode(
+            EC2MetadataRenderer.mmdsDocument(
+                for: metadata, options: .init(disclosePlacement: true)))
+
+        #expect(maximumKey.unicodeScalars.count == 4_096)
+        #expect(keys.count == 64)
+        #expect(tags.count == 64)
+        #expect(tags.allSatisfy { $0.key.unicodeScalars.count == 128 })
+        #expect(tags.allSatisfy { $0.value.unicodeScalars.count == 4_096 })
+        #expect(userData.utf8.count == CloudInitUserDataFormat.maxBytes)
+        #expect(payload.count > 1024 * 1024)
+        #expect(payload.count <= FirecrackerMMDSInterfacePlan.payloadLimitBytes)
+    }
+
     @Test("the root advertises exactly the servable EC2 categories")
     func rootListingGolden() {
         #expect(

@@ -910,6 +910,26 @@ struct VMController: RouteCollection {
                             (interface, network, try network.requireID(), resolvedRequestedGroupsByIndex[index]))
                     }
 
+                    // Firecracker has no NoCloud disk or another user-data
+                    // injection path: cloud-init reads the EC2 document from
+                    // MMDS. Accepting the payload while either policy layer
+                    // makes MMDS unreachable would return 202 for data the
+                    // guest can never retrieve.
+                    if vm.hypervisorType == .firecracker, vm.userData != nil {
+                        guard vm.metadataEnabled else {
+                            throw Abort(
+                                .badRequest,
+                                reason:
+                                    "'userData' for firecracker VMs requires 'metadataEnabled' to be true")
+                        }
+                        guard resolvedInterfaces.contains(where: { $0.network.metadataEnabled }) else {
+                            throw Abort(
+                                .badRequest,
+                                reason: "'userData' for firecracker VMs requires at least one selected network "
+                                    + "with metadata enabled")
+                        }
+                    }
+
                     // An IMDS seed carries no real user data of its own. At
                     // least one selected network must publish the metadata
                     // localport/listener or the seedfrom hand-off can never

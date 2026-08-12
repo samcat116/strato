@@ -5397,7 +5397,7 @@ export interface components {
             /** @description Interfaces to create in stable slot order. Do not combine this with `networkId`, `networkName`, or scalar `securityGroupIds`. Creation requires either this array or the legacy scalar network form. */
             networkInterfaces?: components["schemas"]["CreateVMNetworkInterfaceRequest"][];
             sshPublicKey?: string;
-            /** @description cloud-init user data. */
+            /** @description cloud-init user data. Firecracker delivers this through MMDS and requires the VM metadata service plus at least one selected network that publishes metadata. */
             userData?: string;
             hypervisorType?: components["schemas"]["HypervisorType"];
             /**

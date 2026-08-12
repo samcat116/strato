@@ -9096,7 +9096,10 @@ components:
           type: string
         userData:
           type: string
-          description: cloud-init user data.
+          description: >-
+            cloud-init user data. Firecracker delivers this through MMDS and
+            requires the VM metadata service plus at least one selected network
+            that publishes metadata.
         hypervisorType:
           $ref: "#/components/schemas/HypervisorType"
         secureBoot:
