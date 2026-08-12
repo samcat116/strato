@@ -24,6 +24,7 @@ import {
   VMVolumesCard,
   VMNetworkCard,
   VMSnapshotsCard,
+  VMMetadataCard,
   VMIdentityCard,
 } from "@/components/vms";
 import { useVM, useInvalidateVMs } from "@/lib/hooks";
@@ -353,6 +354,7 @@ export default function VMDetailPage() {
           </Card>
 
           <VMIdentityCard vm={vm} />
+          <VMMetadataCard vm={vm} onUpdated={invalidateVMs} />
 
           {/* Attached volumes */}
           <VMVolumesCard vm={vm} />

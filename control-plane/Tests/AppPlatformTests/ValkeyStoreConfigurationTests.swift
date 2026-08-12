@@ -165,7 +165,7 @@ struct ValkeyClientRegistryTests {
 
     private func registry(coordination: ValkeyClient, session: ValkeyClient) -> ValkeyClients {
         let endpoint = ValkeyConfiguration(hostname: "valkey")
-        ValkeyClients(
+        return ValkeyClients(
             coordination: coordination,
             session: session,
             configuration: ValkeyStoreConfiguration(

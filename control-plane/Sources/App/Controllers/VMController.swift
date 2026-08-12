@@ -22,6 +22,46 @@ struct CreateVMNetworkInterfaceRequest: Content {
     }
 }
 
+/// The mutable portion of a VM's guest-visible instance metadata (STR-66).
+///
+/// Omission leaves a field alone; an empty map/list clears it. Explicit JSON
+/// `null` also decodes as omission, so callers that want to revoke every tag or
+/// key must send `{}` or `[]` respectively.
+struct PatchVMMetadataRequest: Content, ValidatedRequestBody {
+    static let maxTags = 64
+    static let maxAuthorizedKeys = 64
+
+    var tags: [String: String]?
+    var sshAuthorizedKeys: [String]?
+
+    mutating func validate() throws {
+        try Validate.stringMap(
+            tags, "tags", maxEntries: Self.maxTags,
+            maxKeyLength: Validate.nameLength, maxValueLength: Validate.textLength)
+        if let tags {
+            for (key, value) in tags {
+                guard !key.isEmpty else {
+                    throw Abort(.badRequest, reason: "Keys in 'tags' must not be empty")
+                }
+                guard !key.contains("\n"), !key.contains("\r") else {
+                    throw Abort(.badRequest, reason: "Keys in 'tags' must be one line")
+                }
+                guard !key.contains("\0"), !value.contains("\0") else {
+                    throw Abort(.badRequest, reason: "Keys and values in 'tags' must not contain NUL characters")
+                }
+            }
+        }
+
+        try Validate.stringList(
+            sshAuthorizedKeys, "sshAuthorizedKeys", maxEntries: Self.maxAuthorizedKeys)
+        if let requested = sshAuthorizedKeys {
+            sshAuthorizedKeys = try requested.compactMap {
+                try Validate.sshPublicKey($0, "sshAuthorizedKeys")
+            }
+        }
+    }
+}
+
 struct VMController: RouteCollection {
     struct VMProjectGrantResponse: Content {
         let grant: ProjectMemberController.ProjectWorkloadGrantResponse?
@@ -81,6 +121,7 @@ struct VMController: RouteCollection {
             vm.get(use: show)
             vm.get("project-grant", use: projectGrant)
             vm.put(use: update)
+            vm.patch(use: patchMetadata)
             vm.delete(use: delete)
             vm.post("start", use: start)
             vm.post("stop", use: stop)
@@ -749,7 +790,7 @@ struct VMController: RouteCollection {
         // Guest login: authorize the caller-provided SSH public key via
         // cloud-init. Already trimmed, bounded and parsed by
         // `CreateVMRequest.validate()`; empty input arrived here as nil.
-        vm.sshPublicKey = createRequest.sshPublicKey
+        vm.setSSHAuthorizedKeys(createRequest.sshPublicKey.map { [$0] } ?? [])
 
         // Guest provisioning: caller-supplied cloud-init user data, stored
         // verbatim (leading bytes are the format header cloud-init dispatches
@@ -1445,6 +1486,55 @@ struct VMController: RouteCollection {
             placedAgentId: existingVM.hypervisorId,
             app: req.application)
         return try await Self.acceptedResponse(for: existingVM, accepted, on: req)
+    }
+
+    /// Replaces the guest-visible tags and authorized-key list without
+    /// recreating or rebooting the VM (STR-66).
+    ///
+    /// The payload and generation advance in one row-locking transaction. A
+    /// newer generation is what prevents a delayed sync from putting an older
+    /// metadata document back after a rotation; the placed agent is then rung
+    /// through the replica-aware desired-state doorbell so the new document
+    /// lands promptly rather than waiting for its periodic fetch.
+    func patchMetadata(req: Request) async throws -> Response {
+        _ = try req.requireActingUser("Mutating VM instance metadata")
+        let existingVM = try await fetchVMWithAction(req: req, action: "vm:update")
+        let patch = try req.content.decodeValidated(PatchVMMetadataRequest.self)
+        let vmID = try existingVM.requireID()
+
+        let (updatedVM, changed) = try await req.db.transaction { db -> (VM, Bool) in
+            guard try await existingVM.lockAndRefresh(on: db),
+                let committed = try await VM.find(vmID, on: db)
+            else {
+                throw Abort(.notFound, reason: "VM no longer exists")
+            }
+
+            let nextTags = patch.tags ?? committed.tags
+            let nextAuthorizedKeys = patch.sshAuthorizedKeys ?? committed.effectiveSSHAuthorizedKeys
+            let changed =
+                nextTags != committed.tags
+                || nextAuthorizedKeys != committed.effectiveSSHAuthorizedKeys
+            guard changed else { return (committed, false) }
+
+            committed.tags = nextTags
+            committed.setSSHAuthorizedKeys(nextAuthorizedKeys)
+            let expectedGeneration = committed.generation
+            guard
+                case .applied = try await committed.advanceDesiredStateGeneration(
+                    expectedGeneration: expectedGeneration, on: db)
+            else {
+                throw Abort(
+                    .internalServerError,
+                    reason: "Failed to advance the locked VM generation")
+            }
+            try await committed.save(on: db)
+            return (committed, true)
+        }
+
+        if changed, let placedAgentId = updatedVM.hypervisorId {
+            await req.application.agentService.syncDesiredState(agentId: placedAgentId)
+        }
+        return try await Self.detailResponse(for: updatedVM, on: req)
     }
 
     private static func runningVCPUShrinkAbort(from current: Int, to requested: Int) -> Abort {
