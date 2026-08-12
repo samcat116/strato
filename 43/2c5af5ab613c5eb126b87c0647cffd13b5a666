@@ -1,0 +1,49 @@
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_21a889dc5d67dd::t_b73c8a76faa38f 559-562
+  s_21a889dc5d67dd::t_5435cf5eeda97a 489-490,492-501,507,515,517-522,524-526,528-531,533-558,563-571
+  s_21a889dc5d67dd::t_f0f76e42b71e35 523,527,532
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_21a889dc5d67dd::t_6aa31daec25a5a 1849-1850,1873-1874,1888-1900
+  s_21a889dc5d67dd::t_a8192ea4944086 1823,1825-1840,1847-1848,1851-1858,1871-1872,1875-1877
+  s_21a889dc5d67dd::t_2dd9f52e807320 236-237
+  s_21a889dc5d67dd::t_6ad36fd50d24e9 1901-1902
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_21a889dc5d67dd::t_30057e5d2beff5 18-20,40-41,49,224-234
+  s_21a889dc5d67dd::t_0eb5732eb57999 521-555
+docs/architecture/agent.md
+  s_21a889dc5d67dd::t_898c50fc22f7cb 1257-1267,1281-1286
+docs/architecture/networking.md
+  s_21a889dc5d67dd::t_898c50fc22f7cb 210-212
+  s_21a889dc5d67dd::t_6aa31daec25a5a 213-214
+agent/Sources/StratoAgent/Agent.swift
+  s_21a889dc5d67dd::t_1b81bc5b6c2fe6 4882,4926,4935,4971-4981,5038-5042,5106-5138
+  s_21a889dc5d67dd::t_30057e5d2beff5 747-751
+  s_21a889dc5d67dd::t_3b7c6b35e5bf2a 5139-5140
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_21a889dc5d67dd::t_0eb5732eb57999 102-114,374-380
+  s_665a3d8fa75374::t_5cb79f442c17a0 381
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "432c5af5ab613c5eb126b87c0647cffd13b5a666",
+  "prompts": {},
+  "sessions": {
+    "s_21a889dc5d67dd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff338-9c88-74a0-ba59-110daead872d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_665a3d8fa75374": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff2ea-f8b5-75c1-b293-61394c829bf5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
