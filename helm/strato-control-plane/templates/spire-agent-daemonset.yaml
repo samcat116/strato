@@ -35,10 +35,22 @@ spec:
             - sh
             - -c
             - |
+              {{- if .Values.spire.agent.guestIdentity.enabled }}
+              # Private runtime directory for the admin socket. Only this init
+              # container and spire-agent mount it; the Workload API remains on
+              # its separate hostPath below.
+              chown 0:0 /var/run/spire
+              chmod 0700 /var/run/spire
+              {{- end }}
               until nc -w 1 -z {{ include "strato-control-plane.fullname" . }}-spire-server.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.spire.service.grpcPort }}; do
                 echo "Waiting for SPIRE Server..."
                 sleep 2
               done
+          {{- if .Values.spire.agent.guestIdentity.enabled }}
+          volumeMounts:
+            - name: spire-agent-private-runtime
+              mountPath: /var/run/spire
+          {{- end }}
       containers:
         - name: spire-agent
           image: "ghcr.io/spiffe/spire-agent:{{ .Values.spire.image.tag }}"
@@ -89,6 +101,12 @@ spec:
             - name: config
               mountPath: /etc/spire/agent
               readOnly: true
+            {{- if .Values.spire.agent.guestIdentity.enabled }}
+            # Holds /var/run/spire/admin.sock and is not mounted by any other
+            # running container in this pod.
+            - name: spire-agent-private-runtime
+              mountPath: /var/run/spire
+            {{- end }}
             - name: spire-agent-socket-dir
               mountPath: /var/run/spire/sockets
             - name: spire-token
@@ -102,6 +120,10 @@ spec:
         - name: config
           configMap:
             name: {{ include "strato-control-plane.fullname" . }}-spire-agent
+        {{- if .Values.spire.agent.guestIdentity.enabled }}
+        - name: spire-agent-private-runtime
+          emptyDir: {}
+        {{- end }}
         {{- if .Values.spire.notifier.k8sbundle.enabled }}
         # Published by the server's k8sbundle notifier; the bundle.crt key
         # appears once the server CA activates. The wait-for-spire-server

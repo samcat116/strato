@@ -753,6 +753,13 @@ spire:
   # Logging level
   logLevel: "INFO"
 
+  agent:
+    guestIdentity:
+      # Exposes the Delegated Identity API only inside the spire-agent pod and
+      # authorizes the chart's control-plane workload. Enrolled hypervisor
+      # nodes remain off unless installed with --enable-guest-identity.
+      enabled: false
+
   # CA certificate TTL
   caTTL: "168h"  # 7 days
 

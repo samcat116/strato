@@ -206,6 +206,10 @@ services:
     image: strato-spire-helper:local
     command: ["bash", "/spiffe/agent-cp-entrypoint.sh"]
     pid: host
+    environment:
+      # Default-off trust grant for the embedded control-plane SPIRE agent.
+      # Its admin socket remains private to this container.
+      ENABLE_GUEST_IDENTITY: ${ENABLE_GUEST_IDENTITY:-false}
     volumes:
       - ./spiffe:/spiffe:ro
       - spire_handoff:/handoff:ro
