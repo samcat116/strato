@@ -1808,7 +1808,7 @@ public actor Reconciler {
             to: &plan.items, desired: desired, present: present, lastApplied: lastApplied,
             sizing: presentSizing, appliedEdges: appliedEdges)
         addNetworkChanges(
-            to: &plan.items, desired: desired, present: present,
+            to: &plan.items, desired: desired, present: present, lastApplied: lastApplied,
             presentNetworks: presentNetworks, appliedEdges: appliedEdges)
         return plan
     }
@@ -1817,11 +1817,16 @@ public actor Reconciler {
         to items: inout [ReconcileWorkItem],
         desired: [DesiredVMState],
         present: [String: VMPresence],
+        lastApplied: [String: Int64],
         presentNetworks: [String: [NetworkSpec]],
         appliedEdges: [String: AppliedEdgeNonces]
     ) {
         for entry in desired where !entry.wantsAbsent {
             let id = entry.vmId.uuidString
+            // Same staleness rule as the core diff and resize pass: equal
+            // generations may correct drift, but an older replay must never
+            // restore an obsolete NIC or MMDS policy.
+            if let applied = lastApplied[id], entry.generation < applied { continue }
             guard case .managed? = present[id], let observed = presentNetworks[id] else { continue }
 
             let needsReconfiguration: Bool
