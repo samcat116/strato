@@ -448,24 +448,24 @@ struct AgentWebSocketController: RouteCollection {
 
             case .guestExecStarted:
                 let message = try envelope.decode(as: GuestExecStartedMessage.self)
-                req.sandboxExecSessionManager.handleStarted(
+                req.guestExecSessionManager.handleStarted(
                     sessionId: message.sessionId, fromAgentKey: agentKey)
 
             case .guestExecOutput:
                 let message = try envelope.decode(as: GuestExecOutputMessage.self)
                 if let data = message.rawData {
-                    req.sandboxExecSessionManager.handleOutput(
+                    req.guestExecSessionManager.handleOutput(
                         sessionId: message.sessionId, fromAgentKey: agentKey, data: data)
                 }
 
             case .guestExecExit:
                 let message = try envelope.decode(as: GuestExecExitMessage.self)
-                req.sandboxExecSessionManager.handleExit(
+                req.guestExecSessionManager.handleExit(
                     sessionId: message.sessionId, fromAgentKey: agentKey, exitCode: message.exitCode)
 
             case .guestExecClosed:
                 let message = try envelope.decode(as: GuestExecClosedMessage.self)
-                req.sandboxExecSessionManager.handleClosed(
+                req.guestExecSessionManager.handleClosed(
                     sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
 
             case .sandboxLog:
@@ -616,7 +616,7 @@ struct AgentWebSocketController: RouteCollection {
                 // instead of leaving frozen terminals behind.
                 req.application.consoleSessionManager.closeAllSessions(
                     forAgent: agentKey, reason: "agent disconnected")
-                req.application.sandboxExecSessionManager.closeAllSessions(
+                req.application.guestExecSessionManager.closeAllSessions(
                     forAgent: agentKey, reason: "agent disconnected")
 
                 // Mark agent as offline asynchronously

@@ -872,19 +872,8 @@ struct SandboxController: RouteCollection {
     func exec(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Mutating a sandbox")
 
-        struct ExecRequest: Content {
-            let command: [String]
-            let env: [String: String]?
-            let workingDir: String?
-            let tty: Bool?
-            let rows: Int?
-            let cols: Int?
-        }
-
-        let execRequest = try req.content.decode(ExecRequest.self)
-        guard !execRequest.command.isEmpty else {
-            throw Abort(.badRequest, reason: "'command' must be a non-empty array of strings")
-        }
+        let execRequest = try req.content.decode(GuestExecRequest.self)
+        try execRequest.validate()
 
         let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:exec")
         let sandboxID = try sandbox.requireID()
@@ -916,8 +905,9 @@ struct SandboxController: RouteCollection {
             )
         }
 
-        let session = req.sandboxExecSessionManager.createPendingSession(
-            sandboxId: sandboxID.uuidString,
+        let session = req.guestExecSessionManager.createPendingSession(
+            resourceKind: .sandbox,
+            resourceId: sandboxID.uuidString,
             agentKey: agent.identity.key,
             userId: try user.requireID().uuidString,
             command: execRequest.command,
@@ -928,15 +918,9 @@ struct SandboxController: RouteCollection {
             cols: execRequest.cols
         )
 
-        struct ExecSessionResponse: Content {
-            let sessionId: String
-            let websocketPath: String
-            let expiresAt: Date
-        }
-
         let response = Response(status: .created)
         try response.content.encode(
-            ExecSessionResponse(
+            GuestExecSessionResponse(
                 sessionId: session.sessionId,
                 websocketPath: "/api/sandboxes/\(sandboxID.uuidString)/exec/\(session.sessionId)/attach",
                 expiresAt: session.expiresAt

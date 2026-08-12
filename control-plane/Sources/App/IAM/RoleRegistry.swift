@@ -343,8 +343,9 @@ enum IAMRoleRegistry {
     /// restriction is enforced against the act instead of the HTTP verb:
     /// `sandbox:exec` (the exec-attach WebSocket is a GET), `vm:viewConsole`
     /// (an editor action the console upgrade also reaches by GET), and
-    /// `vm:exec`/`vm:runCommand` (no routes yet). All three are the defect
-    /// STR-115 exists to close, not collateral.
+    /// `vm:exec` (the VM exec-attach WebSocket is likewise a GET).
+    /// `vm:runCommand` has no route yet but stays excluded for its future
+    /// surface. These are the defect STR-115 exists to close, not collateral.
     static let readActions: Set<String> =
         allActions.filter { $0.hasSuffix(":read") || $0.hasSuffix(":list") }
         .union(["image:download", "iam:readPolicy"])

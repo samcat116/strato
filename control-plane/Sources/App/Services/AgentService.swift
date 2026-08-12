@@ -622,7 +622,7 @@ actor AgentService {
         // and exec sessions must be torn down here for the graceful-unregister
         // path.
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
-        app.sandboxExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
+        app.guestExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
         presenceRefreshedAt.removeValue(forKey: agentKey)
         await app.coordination.clearAgentPresence(agentKey: agentKey)
 
@@ -662,7 +662,7 @@ actor AgentService {
         // Same reasoning as `unregisterAgent`: the socket-close handler will
         // not run its cleanup once the connection entry is gone.
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
-        app.sandboxExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
+        app.guestExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
         // Drop the cluster-visible claim that this agent is alive, so the
         // stale-agent sweep stops skipping it. This used to fall out of
         // clearing the socket-route key, which shared a write with presence;
