@@ -1,0 +1,85 @@
+control-plane/Sources/App/configure.swift
+  s_1172e76878c7d0::t_01ae8717f3630e 420-423
+.dockerignore
+  s_1172e76878c7d0::t_dec1a81427ef61 1
+.github/workflows/build.yaml
+  s_1172e76878c7d0::t_210a70e48e0b16 49,130-134,168-172,178-180
+agent/Sources/StratoAgent/Agent.swift
+  s_1172e76878c7d0::t_8824b96c6f8f97 4957-4959,4991-5008,5011-5013
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_1172e76878c7d0::t_5f437efa532f0d 106-112,212-216
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_1172e76878c7d0::t_445213c86ca89d 1535-1537
+agent/Sources/StratoAgentCore/DomainRedefinition.swift
+  s_1172e76878c7d0::t_71b038960f6bd1 21-23,69-70
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_1172e76878c7d0::t_a5223510beece2 23-24,232-235,1103-1106,1859-1864,1866-1873,1875-1878,1893-1894,1896-1903,1911-1918,1923
+agent/Tests/StratoAgentTests/MetadataStoreTests.swift
+  s_1172e76878c7d0::t_228347c36b370f 136,139-142
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_1172e76878c7d0::t_cd1d3de0f368ca 1064-1114
+control-plane/Sources/App/Controllers/VMController.swift
+  s_1172e76878c7d0::t_842a8a35b63528 25-64,124,793,1357-1359,1370,1374,1396-1398,1402-1404,1496-1544
+control-plane/Sources/App/Migrations/AddMutableMetadataToVM.swift
+  s_1172e76878c7d0::t_c5a9bc7cea80fd 1-50
+control-plane/Sources/App/Models/vm.swift
+  s_1172e76878c7d0::t_2a4d2bfdedd827 224-229,280-282,286-292,377,402,411-424,708-711,804-805
+control-plane/Sources/App/Services/InstanceMetadataFactory.swift
+  s_1172e76878c7d0::t_62547e43732382 27-31,78,80-82,85
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_1172e76878c7d0::t_312be9654eac43 256
+control-plane/Sources/App/openapi.yaml
+  s_1172e76878c7d0::t_4f43afb440c72f 408-437,9226-9255,9353-9362
+control-plane/Tests/AppPlatformTests/AddMutableMetadataToVMTests.swift
+  s_1172e76878c7d0::t_708508cebb00b1 1-56
+control-plane/Tests/AppPlatformTests/VMMutableMetadataTests.swift
+  s_1172e76878c7d0::t_703cc7364458ef 1-233
+control-plane/Tests/AppPlatformTests/ValkeyStoreConfigurationTests.swift
+  s_1172e76878c7d0::t_b6f843ff80baa9 168
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  s_1172e76878c7d0::t_9ab8a4e67d1cd4 11-14,74,130-131,139-143,154-156
+control-plane/web/src/app/(dashboard)/vms/detail/page.tsx
+  s_1172e76878c7d0::t_d82f0dbe05fdba 27,357
+control-plane/web/src/components/vms/index.ts
+  s_1172e76878c7d0::t_044032517b14a9 9
+control-plane/web/src/components/vms/vm-metadata-card.tsx
+  s_1172e76878c7d0::t_595ca22ec8e495 1-326
+control-plane/web/src/lib/api/vms.ts
+  s_1172e76878c7d0::t_373a544f765a32 8,45-48
+control-plane/web/src/types/api.ts
+  s_1172e76878c7d0::t_7f2a893cd03294 234-237,1226-1231
+control-plane/web/src/types/openapi.ts
+  s_1172e76878c7d0::t_c395133cb87378 156-160,5461-5469,5513-5518,9974-10004
+deploy/compose/tests/docker-source-context-test.sh
+  s_1172e76878c7d0::t_8de0a716020d8d 1-86
+deploy/compose/vcpu-shrink-test.sh
+  s_1172e76878c7d0::t_7528b636d2b717 2,7-8,131-135,137,182-188,203
+docs/architecture/agent.md
+  s_1172e76878c7d0::t_1f9bce7a2ac932 716-720,733-737,761-765
+docs/architecture/control-plane.md
+  s_1172e76878c7d0::t_5e8a7edff2462a 239-245,272-277
+docs/architecture/networking.md
+  s_1172e76878c7d0::t_58a075a0129d21 217-230
+docs/deployment/agents.md
+  s_1172e76878c7d0::t_ab36806a066899 527-529
+docs/development/e2e-testing.md
+  s_1172e76878c7d0::t_3fba76c4ccbefd 137-144
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_1172e76878c7d0::t_4c6123558a7041 928-931
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "325f389ab75266fed4d534dd4e3cafc297297761",
+  "prompts": {},
+  "sessions": {
+    "s_1172e76878c7d0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff36c-4b71-7032-8ce3-ff4893a71166",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
