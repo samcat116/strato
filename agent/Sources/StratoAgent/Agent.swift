@@ -3764,10 +3764,44 @@ extension Agent: ReconcileActuator {
             return .created
         }
 
+        // Builds before STR-67 persisted the network policy but never sent
+        // Firecracker's pre-boot `/mmds/config`. A spec diff cannot identify
+        // those VMMs, and the API cannot repair the allow-list after boot, so
+        // replace the process once while its manifest is still orphaned. If
+        // replacement fails, the next sync can adopt/recreate from that same
+        // durable entry instead of mistaking a partial upgrade for convergence.
+        if entry.hypervisorType == .firecracker,
+            entry.firecrackerMMDSPolicyApplied != true
+        {
+            guard let desired = item.desired else {
+                throw HypervisorServiceError.invalidConfiguration(
+                    "Firecracker adoption for \(item.id) has no desired VM state")
+            }
+            if !FirecrackerMMDSInterfacePlan.interfaceIDs(for: desired.spec.networks).isEmpty {
+                let realizedSpec = try await replaceFirecrackerMMDSPolicy(
+                    item: item, desired: desired, entry: entry, service: service)
+                managedVMs[item.id] = entry.with(spec: realizedSpec)
+                    .applyingFirecrackerMMDSPolicy()
+                orphanedVMs.removeValue(forKey: item.id)
+                persistManifest()
+                await sendVMLog(
+                    vmId: item.id, level: .info, eventType: .operation,
+                    message: "Firecracker VM recreated after upgrade to enable MMDS",
+                    operation: "metadata-upgrade")
+                // The replacement is configured but not started. Returning
+                // `.created` makes adoptAndReplan restore desired power state.
+                return .created
+            }
+        }
+
         // `with(spec:)`, not a fresh entry: re-adoption rewrites what the VM is
         // running, never the vsock CID it holds (STR-72) nor the record of what
         // has been applied to it (STR-151).
-        managedVMs[item.id] = entry.with(spec: spec)
+        var adoptedEntry = entry.with(spec: spec)
+        if entry.hypervisorType == .firecracker {
+            adoptedEntry = adoptedEntry.applyingFirecrackerMMDSPolicy()
+        }
+        managedVMs[item.id] = adoptedEntry
         orphanedVMs.removeValue(forKey: item.id)
         persistManifest()
 
@@ -4960,7 +4994,8 @@ extension Agent: ReconcileActuator {
             realizedMemoryReservationBytes: desired.hypervisorType == .qemu
                 ? desiredReservation.memoryBytes : nil,
             vsockCID: lease.cid,
-            appliedEdges: appliedEdges)
+            appliedEdges: appliedEdges,
+            firecrackerMMDSPolicyApplied: desired.hypervisorType == .firecracker ? true : nil)
         orphanedVMs.removeValue(forKey: item.id)
         persistManifest()
         await sendVMLog(
@@ -5110,6 +5145,25 @@ extension Agent: ReconcileActuator {
         item: ReconcileWorkItem, desired: DesiredVMState, entry: VMManifestEntry
     ) async throws {
         let service = try reconcileService(for: item.id)
+        let realizedSpec = try await replaceFirecrackerMMDSPolicy(
+            item: item, desired: desired, entry: entry, service: service)
+
+        managedVMs[item.id] = entry.with(spec: realizedSpec)
+            .applyingFirecrackerMMDSPolicy()
+        persistManifest()
+        await sendVMLog(
+            vmId: item.id, level: .info, eventType: .operation,
+            message: "Firecracker VM recreated to apply metadata interface policy",
+            operation: "metadata-network-reconfigure")
+    }
+
+    /// Creates a stopped replacement VMM with the desired pre-boot MMDS
+    /// allow-list. Manifest ownership stays with the caller so adoption can
+    /// retain its orphan record until the replacement succeeds.
+    private func replaceFirecrackerMMDSPolicy(
+        item: ReconcileWorkItem, desired: DesiredVMState, entry: VMManifestEntry,
+        service: any HypervisorService
+    ) async throws -> VMSpec {
         let targetSpec = entry.spec.withNetworks(desired.spec.networks)
         let realizedSpec = try await specWithRealizedVolumePaths(targetSpec, vmId: item.id)
         let metadata = await metadataForHypervisorCreate(desired)
@@ -5129,13 +5183,7 @@ extension Agent: ReconcileActuator {
         try await service.reconfigureMetadataInterfaces(
             vmId: item.id, spec: realizedSpec, imageInfo: desired.imageInfo,
             networkAttachments: attachments, metadata: metadata)
-
-        managedVMs[item.id] = entry.with(spec: realizedSpec)
-        persistManifest()
-        await sendVMLog(
-            vmId: item.id, level: .info, eventType: .operation,
-            message: "Firecracker VM recreated to apply metadata interface policy",
-            operation: "metadata-network-reconfigure")
+        return realizedSpec
     }
 
     /// Re-adopts an orphan that is being deleted, classifying a failure by

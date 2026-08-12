@@ -178,67 +178,76 @@ actor FirecrackerService: HypervisorService {
         // Create Firecracker VM
         let manager = try await client.createVM(vmId: vmId)
 
-        // Configure machine
-        let machineConfig = MachineConfig(
-            vcpuCount: spec.cpus,
-            memSizeMib: Int(spec.memoryBytes / (1024 * 1024))
-        )
-        try await manager.configureMachine(machineConfig)
-
-        // Configure boot source (qualified: StratoShared also declares a BootSource)
-        let bootSource = SwiftFirecracker.BootSource(
-            kernelImagePath: kernelPath,
-            initrdPath: initramfsPath,
-            bootArgs: cmdline ?? "console=ttyS0 reboot=k panic=1 pci=off"
-        )
-        try await manager.configureBootSource(bootSource)
-
-        let drive = Drive.rootDrive(
-            id: rootDrive.id,
-            path: rootDrive.path,
-            readOnly: rootDrive.readOnly
-        )
-        try await manager.configureDrive(drive)
-
-        // Configure networking: one interface per resolved attachment (validated
-        // above to be .tap)
-        for (index, nic) in networkAttachments.enumerated() {
-            guard case .tap(let tapName) = nic.attachment else { continue }
-            let networkInterface = NetworkInterface.tap(
-                id: "eth\(index)",
-                tapName: tapName,
-                macAddress: nic.macAddress ?? ""
+        do {
+            // Configure machine
+            let machineConfig = MachineConfig(
+                vcpuCount: spec.cpus,
+                memSizeMib: Int(spec.memoryBytes / (1024 * 1024))
             )
-            try await manager.configureNetwork(networkInterface)
-        }
+            try await manager.configureMachine(machineConfig)
 
-        // MMDS configuration is pre-boot state. Each Firecracker NIC must be
-        // opted in explicitly; a VM may therefore expose metadata through one
-        // interface while keeping another unable to reach the service. Seed
-        // the EC2-shaped snapshot before `bootVM` starts the guest so cloud-init
-        // cannot race the agent's first desired-state refresh.
-        let mmdsInterfaces = FirecrackerMMDSInterfacePlan.interfaceIDs(for: networkAttachments)
-        if !mmdsInterfaces.isEmpty {
-            try await manager.configureMMDS(
-                MMDSConfig(version: .v2, networkInterfaces: mmdsInterfaces))
-            // The desired item that scheduled this create can be an older
-            // replay while MetadataStore already holds a newer generation.
-            // Read through its guard at the last possible moment instead of
-            // installing the replay's copy into the new VMM.
-            let guardedMetadata: InstanceMetadata?
-            if let metadataProvider, let id = UUID(uuidString: vmId) {
-                guardedMetadata = await metadataProvider(id)
-            } else {
-                guardedMetadata = metadata
+            // Configure boot source (qualified: StratoShared also declares a BootSource)
+            let bootSource = SwiftFirecracker.BootSource(
+                kernelImagePath: kernelPath,
+                initrdPath: initramfsPath,
+                bootArgs: cmdline ?? "console=ttyS0 reboot=k panic=1 pci=off"
+            )
+            try await manager.configureBootSource(bootSource)
+
+            let drive = Drive.rootDrive(
+                id: rootDrive.id,
+                path: rootDrive.path,
+                readOnly: rootDrive.readOnly
+            )
+            try await manager.configureDrive(drive)
+
+            // Configure networking: one interface per resolved attachment (validated
+            // above to be .tap)
+            for (index, nic) in networkAttachments.enumerated() {
+                guard case .tap(let tapName) = nic.attachment else { continue }
+                let networkInterface = NetworkInterface.tap(
+                    id: "eth\(index)",
+                    tapName: tapName,
+                    macAddress: nic.macAddress ?? ""
+                )
+                try await manager.configureNetwork(networkInterface)
             }
-            let payload = try Self.mmdsPayload(for: guardedMetadata)
-            try await manager.setMMDSData(rawJSON: payload)
-            mmdsPayloads[vmId] = payload
-        }
 
-        // Store references
-        vmManagers[vmId] = manager
-        vmSpecs[vmId] = spec
+            // MMDS configuration is pre-boot state. Each Firecracker NIC must be
+            // opted in explicitly; a VM may therefore expose metadata through one
+            // interface while keeping another unable to reach the service. Seed
+            // the EC2-shaped snapshot before `bootVM` starts the guest so cloud-init
+            // cannot race the agent's first desired-state refresh.
+            let mmdsInterfaces = FirecrackerMMDSInterfacePlan.interfaceIDs(for: networkAttachments)
+            if !mmdsInterfaces.isEmpty {
+                try await manager.configureMMDS(
+                    MMDSConfig(version: .v2, networkInterfaces: mmdsInterfaces))
+                // The desired item that scheduled this create can be an older
+                // replay while MetadataStore already holds a newer generation.
+                // Read through its guard at the last possible moment instead of
+                // installing the replay's copy into the new VMM.
+                let guardedMetadata: InstanceMetadata?
+                if let metadataProvider, let id = UUID(uuidString: vmId) {
+                    guardedMetadata = await metadataProvider(id)
+                } else {
+                    guardedMetadata = metadata
+                }
+                let payload = try Self.mmdsPayload(for: guardedMetadata)
+                try await manager.setMMDSData(rawJSON: payload)
+                mmdsPayloads[vmId] = payload
+            }
+
+            // Publish the manager only after every pre-boot API call succeeds.
+            vmManagers[vmId] = manager
+            vmSpecs[vmId] = spec
+        } catch {
+            // `FirecrackerClient.createVM` has already spawned and registered
+            // the process. No caller can clean it up through this service yet,
+            // because the manager is intentionally unpublished until the full
+            // configuration succeeds.
+            await discardPartialVMM(vmId: vmId, client: client)
+            throw error
+        }
 
         logger.info("Firecracker VM created successfully", metadata: ["vmId": .string(vmId)])
     }
@@ -525,32 +534,46 @@ actor FirecrackerService: HypervisorService {
         vmId: String, spec: VMSpec, imageInfo: ImageInfo?,
         networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
     ) async throws {
-        guard vmManagers[vmId] != nil, let client = firecrackerClient else {
+        guard let client = firecrackerClient else {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
 
         logger.info(
             "Replacing Firecracker VMM to reconfigure MMDS interfaces",
             metadata: ["vmId": .string(vmId)])
-        try await client.destroyVM(vmId: vmId)
-        vmManagers.removeValue(forKey: vmId)
-        vmSpecs.removeValue(forKey: vmId)
-        mmdsPayloads.removeValue(forKey: vmId)
-
-        do {
-            try await createVM(
-                vmId: vmId, spec: spec, imageInfo: imageInfo,
-                networkAttachments: networkAttachments, metadata: metadata)
-        } catch {
-            // A configure call may fail after the new process was spawned but
-            // before createVM published its manager. Remove that partial VMM so
-            // the next level-triggered retry can create the same id again.
-            try? await client.destroyVM(vmId: vmId)
+        if vmManagers[vmId] != nil {
+            try await client.destroyVM(vmId: vmId)
             vmManagers.removeValue(forKey: vmId)
             vmSpecs.removeValue(forKey: vmId)
             mmdsPayloads.removeValue(forKey: vmId)
-            throw error
         }
+
+        // A failed replacement has already removed the old manager. Its next
+        // level-triggered retry must start here rather than failing vmNotFound.
+        // createVM owns cleanup for any new process that fails configuration.
+        try await createVM(
+            vmId: vmId, spec: spec, imageInfo: imageInfo,
+            networkAttachments: networkAttachments, metadata: metadata)
+    }
+
+    /// Removes a process spawned by `createVM` before its manager became
+    /// visible to the rest of the service. Preserve the configuration error as
+    /// the operation's result, but log a cleanup failure loudly: in that case
+    /// the client's process registry deliberately prevents a duplicate spawn.
+    private func discardPartialVMM(vmId: String, client: FirecrackerClient) async {
+        do {
+            try await client.destroyVM(vmId: vmId)
+        } catch {
+            logger.error(
+                "Failed to discard partially configured Firecracker VMM",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+        vmManagers.removeValue(forKey: vmId)
+        vmSpecs.removeValue(forKey: vmId)
+        mmdsPayloads.removeValue(forKey: vmId)
     }
 
     private static func mmdsPayload(for metadata: InstanceMetadata?) throws -> Data {

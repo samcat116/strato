@@ -61,7 +61,10 @@ struct VMManifestStoreTests {
                 hypervisorType: .qemu,
                 spec: makeSpec(cpus: 2),
                 realizedMemoryReservationBytes: 8_589_934_592),
-            "vm-b": VMManifestEntry(hypervisorType: .firecracker, spec: makeSpec(cpus: 4, memoryBytes: 1_073_741_824)),
+            "vm-b": VMManifestEntry(
+                hypervisorType: .firecracker,
+                spec: makeSpec(cpus: 4, memoryBytes: 1_073_741_824),
+                firecrackerMMDSPolicyApplied: true),
         ])
 
         let loaded = store.load().loadedEntries
@@ -72,6 +75,35 @@ struct VMManifestStoreTests {
         #expect(loaded["vm-b"]?.hypervisorType == .firecracker)
         #expect(loaded["vm-b"]?.spec.cpus == 4)
         #expect(loaded["vm-b"]?.spec.memoryBytes == 1_073_741_824)
+        #expect(loaded["vm-b"]?.firecrackerMMDSPolicyApplied == true)
+    }
+
+    @Test("A legacy Firecracker entry decodes without an MMDS policy marker")
+    func entryWithoutFirecrackerMMDSPolicyDecodes() throws {
+        let encoded = try JSONEncoder().encode(
+            VMManifestEntry(
+                hypervisorType: .firecracker, spec: makeSpec(),
+                firecrackerMMDSPolicyApplied: true))
+        var object = try #require(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object.removeValue(forKey: "firecrackerMMDSPolicyApplied")
+
+        let legacy = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(VMManifestEntry.self, from: legacy)
+
+        #expect(decoded.hypervisorType == .firecracker)
+        #expect(decoded.firecrackerMMDSPolicyApplied == nil)
+    }
+
+    @Test("Re-specing a Firecracker entry keeps its MMDS policy marker")
+    func withSpecKeepsFirecrackerMMDSPolicy() {
+        let entry = VMManifestEntry(
+            hypervisorType: .firecracker, spec: makeSpec(cpus: 2),
+            firecrackerMMDSPolicyApplied: true)
+
+        let resized = entry.with(spec: makeSpec(cpus: 8))
+
+        #expect(resized.firecrackerMMDSPolicyApplied == true)
     }
 
     @Test("Disk reservations survive the manifest round-trip")

@@ -58,13 +58,23 @@ public struct VMManifestEntry: Codable, Sendable {
     /// so a manifest-less re-registration cannot replay a VM's whole reboot
     /// history. See `AppliedEdgeNonces`.
     public var appliedEdges: AppliedEdgeNonces?
+    /// Whether this agent has applied Firecracker's pre-boot MMDS interface
+    /// allow-list to the VMM represented by this entry.
+    ///
+    /// Nil identifies manifests written before STR-67. That distinction is
+    /// required during adoption: the surviving process has the same network
+    /// spec as desired state, but no `/mmds/config`, and Firecracker exposes no
+    /// post-boot repair path. The agent recreates that VMM once, then records
+    /// true. Non-Firecracker VMs and sandboxes leave this nil.
+    public private(set) var firecrackerMMDSPolicyApplied: Bool?
 
     public init(
         hypervisorType: HypervisorType,
         spec: VMSpec,
         realizedMemoryReservationBytes: Int64? = nil,
         vsockCID: UInt32? = nil,
-        appliedEdges: AppliedEdgeNonces? = nil
+        appliedEdges: AppliedEdgeNonces? = nil,
+        firecrackerMMDSPolicyApplied: Bool? = nil
     ) {
         self.kind = .vm
         self.hypervisorType = hypervisorType
@@ -73,6 +83,7 @@ public struct VMManifestEntry: Codable, Sendable {
         self.sandboxSpec = nil
         self.vsockCID = vsockCID
         self.appliedEdges = appliedEdges
+        self.firecrackerMMDSPolicyApplied = firecrackerMMDSPolicyApplied
     }
 
     /// A sandbox entry. Sandboxes boot through Firecracker only, so the
@@ -86,6 +97,7 @@ public struct VMManifestEntry: Codable, Sendable {
         self.sandboxSpec = sandboxSpec
         self.vsockCID = nil
         self.appliedEdges = appliedEdges
+        self.firecrackerMMDSPolicyApplied = nil
     }
 
     /// The same workload with a new spec — a resize, or a volume attached or
@@ -105,6 +117,14 @@ public struct VMManifestEntry: Codable, Sendable {
     public func with(spec newSpec: VMSpec) -> VMManifestEntry {
         var copy = self
         copy.spec = newSpec
+        return copy
+    }
+
+    /// Records that the current Firecracker process was created with the MMDS
+    /// policy represented by `spec.networks`.
+    public func applyingFirecrackerMMDSPolicy() -> VMManifestEntry {
+        var copy = self
+        copy.firecrackerMMDSPolicyApplied = true
         return copy
     }
 
