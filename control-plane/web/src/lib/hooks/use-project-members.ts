@@ -11,10 +11,44 @@ export function useProjectMembers(projectId: string) {
   });
 }
 
+/**
+ * One lightweight, non-polling inventory request for project IAM management.
+ * VM mutation invalidation still refreshes it because its key starts with
+ * `vms`, alongside the ordinary VM queries.
+ */
+export function useProjectVMPrincipals(projectId: string) {
+  return useQuery({
+    queryKey: ["vms", "project-principals", projectId],
+    queryFn: () => projectMembersApi.listVMPrincipals(projectId),
+    enabled: !!projectId,
+  });
+}
+
+/** The one project binding held by a VM's instance identity. */
+export function useVMProjectGrant(vmId: string, enabled = true) {
+  return useQuery({
+    queryKey: ["vm-project-grant", vmId],
+    queryFn: () => projectMembersApi.getVMProjectGrant(vmId),
+    select: (response) => response.grant,
+    enabled: enabled && !!vmId,
+  });
+}
+
 function useInvalidateMembers(projectId: string) {
   const queryClient = useQueryClient();
   return () =>
     queryClient.invalidateQueries({ queryKey: ["project-members", projectId] });
+}
+
+function useInvalidateWorkloadGrants(projectId: string) {
+  const queryClient = useQueryClient();
+  return () =>
+    Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ["project-members", projectId],
+      }),
+      queryClient.invalidateQueries({ queryKey: ["vm-project-grant"] }),
+    ]);
 }
 
 export function useGrantProjectMember(projectId: string) {
@@ -57,6 +91,29 @@ export function useRevokeProjectGroup(projectId: string) {
   return useMutation({
     mutationFn: (groupId: string) =>
       projectMembersApi.revokeGroup(projectId, groupId),
+    onSuccess: invalidate,
+  });
+}
+
+export function useSetProjectWorkloadRole(projectId: string) {
+  const invalidate = useInvalidateWorkloadGrants(projectId);
+  return useMutation({
+    mutationFn: ({
+      registrationId,
+      role,
+    }: {
+      registrationId: string;
+      role: ProjectRole;
+    }) => projectMembersApi.grantWorkload(projectId, registrationId, role),
+    onSuccess: invalidate,
+  });
+}
+
+export function useRevokeProjectWorkload(projectId: string) {
+  const invalidate = useInvalidateWorkloadGrants(projectId);
+  return useMutation({
+    mutationFn: (registrationId: string) =>
+      projectMembersApi.revokeWorkload(projectId, registrationId),
     onSuccess: invalidate,
   });
 }

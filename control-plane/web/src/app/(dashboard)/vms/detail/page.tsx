@@ -24,6 +24,7 @@ import {
   VMVolumesCard,
   VMNetworkCard,
   VMSnapshotsCard,
+  VMIdentityCard,
 } from "@/components/vms";
 import { useVM, useInvalidateVMs } from "@/lib/hooks";
 import { ConvergenceFailureAlert } from "@/components/workloads/convergence-failure-alert";
@@ -350,6 +351,8 @@ export default function VMDetailPage() {
               </div>
             </CardContent>
           </Card>
+
+          <VMIdentityCard vm={vm} />
 
           {/* Attached volumes */}
           <VMVolumesCard vm={vm} />

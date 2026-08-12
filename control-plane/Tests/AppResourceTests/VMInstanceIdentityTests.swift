@@ -82,6 +82,12 @@ final class VMInstanceIdentityTests {
         let id: UUID?
         let name: String
         let spiffeId: String?
+        let instanceIdentityPrincipalId: UUID?
+        let instanceIdentityStatus: InstanceIdentityStatus?
+    }
+
+    private struct RoleBody: Content {
+        let role: String
     }
 
     private func createVM(
@@ -147,6 +153,7 @@ final class VMInstanceIdentityTests {
                 .filter(\.$principalID == registrationID)
                 .count()
             #expect(bindings == 0)
+            #expect(created.instanceIdentityStatus == .enabled)
         }
     }
 
@@ -159,9 +166,13 @@ final class VMInstanceIdentityTests {
             let vmID = try #require(created.id)
             let expected = try #require(
                 try await self.registration(forVM: vmID, on: app.db)?.spiffeID)
+            let expectedPrincipalID = try #require(
+                try await self.registration(forVM: vmID, on: app.db)?.id)
 
             // The `202` a create answers with.
             #expect(created.spiffeId == expected)
+            #expect(created.instanceIdentityPrincipalId == expectedPrincipalID)
+            #expect(created.instanceIdentityStatus == .enabled)
 
             try await app.test(.GET, "/api/vms/\(vmID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -169,6 +180,8 @@ final class VMInstanceIdentityTests {
                 #expect(res.status == .ok)
                 let detail = try res.content.decode(VMBody.self)
                 #expect(detail.spiffeId == expected)
+                #expect(detail.instanceIdentityPrincipalId == expectedPrincipalID)
+                #expect(detail.instanceIdentityStatus == .enabled)
             }
 
             try await app.test(.GET, "/api/vms/\(vmID)/status") { req in
@@ -177,6 +190,8 @@ final class VMInstanceIdentityTests {
                 #expect(res.status == .ok)
                 let status = try res.content.decode(VMBody.self)
                 #expect(status.spiffeId == expected)
+                #expect(status.instanceIdentityPrincipalId == expectedPrincipalID)
+                #expect(status.instanceIdentityStatus == .enabled)
             }
 
             // The list is the one surface that could have gone N+1; it resolves
@@ -188,6 +203,144 @@ final class VMInstanceIdentityTests {
                 let listed = try res.content.decode(PagedBody.self)
                 let mine = try #require(listed.items.first { $0.id == vmID })
                 #expect(mine.spiffeId == expected)
+                #expect(mine.instanceIdentityPrincipalId == expectedPrincipalID)
+                #expect(mine.instanceIdentityStatus == .enabled)
+            }
+        }
+    }
+
+    @Test("Project IAM lists its complete lightweight VM principal inventory")
+    func projectVMPrincipalsAreScopedAndLightweight() async throws {
+        try await withIdentityTestApp { app, user, org, project, token in
+            let otherProject = try await TestDataBuilder(db: app.db).createProject(
+                name: "Other Identity Project", description: "not requested", organization: org)
+            let expected = try await self.createVM(
+                app, project: project, user: user, token: token, name: "requested-project-vm",
+                suffix: "requested-project")
+            _ = try await self.createVM(
+                app, project: otherProject, user: user, token: token, name: "other-project-vm",
+                suffix: "other-project")
+
+            try await app.test(
+                .GET, "/api/projects/\(try project.requireID())/vm-principals"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let listed = try res.content.decode(
+                    [ProjectMemberController.ProjectVMPrincipalResponse].self)
+                let principal = try #require(listed.first)
+                #expect(listed.count == 1)
+                #expect(principal.id == expected.id)
+                #expect(principal.name == expected.name)
+                #expect(principal.spiffeId == expected.spiffeId)
+                #expect(
+                    principal.instanceIdentityPrincipalId
+                        == expected.instanceIdentityPrincipalId)
+                #expect(principal.instanceIdentityStatus == .enabled)
+            }
+        }
+    }
+
+    @Test("A VM's project role is assignable and listed with its identity")
+    func projectRoleIsAssignableAndListed() async throws {
+        try await withIdentityTestApp { app, user, org, project, token in
+            let created = try await self.createVM(
+                app, project: project, user: user, token: token, name: "role-bearing-vm",
+                suffix: "role")
+            let vmID = try #require(created.id)
+            let principalID = try #require(created.instanceIdentityPrincipalId)
+            let projectID = try project.requireID()
+            let roleID = IAMRole.viewer.seededID
+
+            try await app.test(
+                .PUT, "/api/projects/\(projectID)/workload-grants/\(principalID)"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(RoleBody(role: roleID.uuidString))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            try await app.test(.GET, "/api/projects/\(projectID)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let members = try res.content.decode(
+                    ProjectMemberController.ProjectMembersResponse.self)
+                let grant = try #require(
+                    members.workloads.first { $0.registrationId == principalID })
+                #expect(grant.vmId == vmID)
+                #expect(grant.displayName == created.name)
+                #expect(grant.spiffeId == created.spiffeId)
+                #expect(grant.role == roleID)
+                #expect(grant.roleDisplayName == IAMRole.viewer.rawValue)
+            }
+        }
+    }
+
+    @Test("A VM reader can fetch only that VM identity's project grant")
+    func vmReaderCanFetchTheVMProjectGrant() async throws {
+        try await withIdentityTestApp { app, user, _, project, token in
+            let created = try await self.createVM(
+                app, project: project, user: user, token: token, name: "directly-readable-vm",
+                suffix: "direct-reader")
+            let vmID = try #require(created.id)
+            let principalID = try #require(created.instanceIdentityPrincipalId)
+            let projectID = try project.requireID()
+
+            let reader = try await TestDataBuilder(db: app.db).createUser(
+                username: "directvmreader",
+                email: "directvmreader@example.com",
+                displayName: "Direct VM Reader",
+                isSystemAdmin: false)
+            let readerID = try reader.requireID()
+            let readerToken = try await reader.generateAPIKey(on: app.db)
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: readerID,
+                role: .viewer,
+                nodeType: .virtualMachine,
+                nodeID: vmID,
+                createdBy: user.id,
+                on: app.db)
+
+            // A direct VM grant is deliberately not project membership.
+            try await app.test(.GET, "/api/projects/\(projectID)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: readerToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+
+            try await app.test(.GET, "/api/vms/\(vmID)/project-grant") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: readerToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let response = try res.content.decode(VMController.VMProjectGrantResponse.self)
+                #expect(response.grant == nil)
+            }
+
+            try await RoleBindingService.grant(
+                principalType: .workload,
+                principalID: principalID,
+                role: .viewer,
+                nodeType: .project,
+                nodeID: projectID,
+                createdBy: user.id,
+                on: app.db)
+
+            try await app.test(.GET, "/api/vms/\(vmID)/project-grant") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: readerToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let response = try res.content.decode(VMController.VMProjectGrantResponse.self)
+                let grant = try #require(response.grant)
+                #expect(grant.registrationId == principalID)
+                #expect(grant.vmId == vmID)
+                #expect(grant.displayName == created.name)
+                #expect(grant.spiffeId == created.spiffeId)
+                #expect(grant.role == IAMRole.viewer.seededID)
+                #expect(grant.roleDisplayName == IAMRole.viewer.rawValue)
             }
         }
     }
@@ -414,7 +567,7 @@ final class VMInstanceIdentityTests {
 
     @Test("Revoking a VM's registration leaves the VM running with no identity")
     func revocationLeavesTheVMWithoutAnIdentity() async throws {
-        try await withIdentityTestApp { app, user, org, project, _ in
+        try await withIdentityTestApp { app, user, org, project, token in
             let admin = try await TestDataBuilder(db: app.db).createUser(
                 username: "identityadmin", email: "identityadmin@example.com",
                 displayName: "Identity Admin", isSystemAdmin: true)
@@ -437,6 +590,16 @@ final class VMInstanceIdentityTests {
             #expect(try await VM.find(vmID, on: app.db) != nil)
             #expect(try await self.registration(forVM: vmID, on: app.db) == nil)
             #expect(try await GuestIdentity.spiffeID(forVM: vmID, on: app.db) == nil)
+
+            try await app.test(.GET, "/api/vms/\(vmID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let detail = try res.content.decode(VMBody.self)
+                #expect(detail.spiffeId == nil)
+                #expect(detail.instanceIdentityPrincipalId == nil)
+                #expect(detail.instanceIdentityStatus == .revoked)
+            }
         }
     }
 }

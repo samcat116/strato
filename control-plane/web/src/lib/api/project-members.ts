@@ -1,11 +1,27 @@
-// Project-level role grant endpoints (users and groups)
+// Project-level role grant endpoints (users, groups, and workloads)
 
 import { api } from "./client";
-import type { GrantWriteResponse, ProjectMembers, ProjectRole } from "@/types/api";
+import type {
+  GrantWriteResponse,
+  ProjectMembers,
+  ProjectRole,
+  ProjectVMPrincipal,
+  VMProjectGrantResponse,
+} from "@/types/api";
 
 export const projectMembersApi = {
   list(projectId: string): Promise<ProjectMembers> {
     return api.get<ProjectMembers>(`/api/projects/${projectId}/members`);
+  },
+
+  listVMPrincipals(projectId: string): Promise<ProjectVMPrincipal[]> {
+    return api.get<ProjectVMPrincipal[]>(
+      `/api/projects/${projectId}/vm-principals`
+    );
+  },
+
+  getVMProjectGrant(vmId: string): Promise<VMProjectGrantResponse> {
+    return api.get<VMProjectGrantResponse>(`/api/vms/${vmId}/project-grant`);
   },
 
   grant(
@@ -38,5 +54,22 @@ export const projectMembersApi = {
 
   revokeGroup(projectId: string, groupId: string): Promise<void> {
     return api.delete(`/api/projects/${projectId}/groups/${groupId}`);
+  },
+
+  grantWorkload(
+    projectId: string,
+    registrationId: string,
+    role: ProjectRole
+  ): Promise<GrantWriteResponse> {
+    return api.put(
+      `/api/projects/${projectId}/workload-grants/${registrationId}`,
+      { role }
+    );
+  },
+
+  revokeWorkload(projectId: string, registrationId: string): Promise<void> {
+    return api.delete(
+      `/api/projects/${projectId}/workload-grants/${registrationId}`
+    );
   },
 };

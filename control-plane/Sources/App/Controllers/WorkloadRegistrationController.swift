@@ -32,7 +32,8 @@ struct WorkloadRegistrationController: RouteCollection {
     }
 
     struct SetWorkloadGrantRequest: Content {
-        /// A seeded role name: viewer, operator, editor, or admin.
+        /// A canonical role UUID. Seeded role names remain accepted for API
+        /// compatibility with the original workload-grant surface.
         let role: String
     }
 
@@ -171,7 +172,7 @@ struct WorkloadRegistrationController: RouteCollection {
     // MARK: - Project grants
 
     /// PUT /api/projects/:projectID/workload-grants/:registrationID — grant a
-    /// registered workload a seeded role on the project, replacing any
+    /// registered workload a bindable role on the project, replacing any
     /// existing one. Same gate and ceiling report as every other grant.
     func setGrant(req: Request) async throws -> Response {
         let (project, registration) = try await loadGrantTarget(req)
@@ -180,9 +181,18 @@ struct WorkloadRegistrationController: RouteCollection {
         try await req.authorize("iam:setPolicy", on: IAMNode(type: .project, id: projectID))
 
         let body = try req.content.decode(SetWorkloadGrantRequest.self)
-        guard let role = IAMRole(rawValue: body.role) else {
-            throw Abort(.badRequest, reason: "Invalid role; must be one of: viewer, operator, editor, admin")
+        let roleID: UUID
+        if let id = UUID(uuidString: body.role) {
+            roleID = id
+        } else if let seeded = IAMRole(rawValue: body.role) {
+            roleID = seeded.seededID
+        } else {
+            throw Abort(
+                .badRequest,
+                reason: "Invalid role; use a role id returned by /api/iam/roles/bindable")
         }
+        let node = IAMNode(type: .project, id: projectID)
+        let role = try await MemberRoleResolver.resolve(roleID, scopeNode: node, on: req.db)
 
         // Keep grants within the registration's organization, the same rule
         // group grants follow.
@@ -195,29 +205,15 @@ struct WorkloadRegistrationController: RouteCollection {
         let proposed = ProposedBinding(
             principalType: .workload,
             principalID: registrationID,
-            role: role,
-            node: IAMNode(type: .project, id: projectID)
+            roleActions: role.actions,
+            roleLabel: role.displayName,
+            node: node
         )
 
         let actorID = req.auth.get(User.self)?.id
-        try await req.db.transaction { db in
-            try await RoleBindingService.revoke(
-                principalType: .workload,
-                principalID: registrationID,
-                nodeType: .project,
-                nodeID: projectID,
-                on: db
-            )
-            try await RoleBindingService.grant(
-                principalType: .workload,
-                principalID: registrationID,
-                role: role,
-                nodeType: .project,
-                nodeID: projectID,
-                createdBy: actorID,
-                on: db
-            )
-        }
+        try await RoleBindingService.setExclusiveGrant(
+            principalType: .workload, principalID: registrationID,
+            roleID: role.id, node: node, createdBy: actorID, on: req.db)
         return try await GuardrailWriteReport.report(for: proposed, req: req)
             .encodeResponse(status: .ok, for: req)
     }

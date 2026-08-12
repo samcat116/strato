@@ -156,6 +156,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vms/{vmID}/project-grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get the project role held by a VM's instance identity
+         * @description Returns only this VM principal's active role binding on its project. Requires `vm:read` on the VM, matching the VM detail endpoint; it does not require access to or load the project's complete member inventory.
+         */
+        get: operations["getVMProjectGrant"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vms/{vmID}/start": {
         parameters: {
             query?: never;
@@ -3160,6 +3183,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectID}/vm-principals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a project's VM instance-identity principals
+         * @description Returns every VM the caller can read in the project, with only the fields needed to manage its instance-identity role. This is a single unpaged lightweight inventory operation; it does not hydrate VM interfaces or security-group enforcement.
+         */
+        get: operations["listProjectVMPrincipals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{projectID}/members/{userID}": {
         parameters: {
             query?: never;
@@ -5493,6 +5539,12 @@ export interface components {
             securityGroupsEnforced?: boolean;
             /** @description The VM's SPIFFE instance identity — `spiffe://<trust-domain>/vm/<vm-id>`, the lookup key its workload registration is filed under. A name, never an authorization: what the identity may do comes from role bindings against that principal, and a registration with none authorizes nothing. Absent means either an older control plane that does not report the field, or a registration an administrator revoked — never that the VM is exempt. */
             spiffeId?: string;
+            /**
+             * Format: uuid
+             * @description The workload-registration row id and IAM principal id for this instance identity. Use it as the subject of a project workload grant. Absent together with `spiffeId` after identity revocation.
+             */
+            instanceIdentityPrincipalId?: string;
+            instanceIdentityStatus?: components["schemas"]["InstanceIdentityStatus"];
             conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
@@ -7339,10 +7391,11 @@ export interface components {
             /** @enum {string} */
             type: "organization" | "organizational_unit" | "project";
         };
-        /** @description A project's user role grants and group role grants. */
+        /** @description A project's direct user, group, and workload role grants. */
         ProjectMembers: {
             users: components["schemas"]["ProjectMember"][];
             groups: components["schemas"]["ProjectGroupGrant"][];
+            workloads: components["schemas"]["ProjectWorkloadGrant"][];
         };
         ProjectMember: {
             /** Format: uuid */
@@ -7377,6 +7430,46 @@ export interface components {
             grantedAt?: string;
             /** @description The group belongs to another organization — a cross-org grant, which UIs should render prominently. */
             external: boolean;
+        };
+        ProjectWorkloadGrant: {
+            /**
+             * Format: uuid
+             * @description The workload registration id and IAM principal id.
+             */
+            registrationId: string;
+            spiffeId: string;
+            /**
+             * Format: uuid
+             * @description Present when this principal is a VM's instance identity.
+             */
+            vmId?: string;
+            displayName: string;
+            /**
+             * Format: uuid
+             * @description The role's canonical `iam_roles` id.
+             */
+            role: string;
+            roleDisplayName: string;
+            /** Format: date-time */
+            grantedAt?: string;
+        };
+        /** @description The active project binding held by this VM's instance identity. The `grant` field is absent when the identity has no project role. */
+        VMProjectGrantResponse: {
+            grant?: components["schemas"]["ProjectWorkloadGrant"];
+        };
+        /**
+         * @description Whether the VM's workload registration exists. Older control planes omit this field; clients must treat absence as unknown, never revoked.
+         * @enum {string}
+         */
+        InstanceIdentityStatus: "enabled" | "revoked";
+        ProjectVMPrincipal: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            spiffeId?: string;
+            /** Format: uuid */
+            instanceIdentityPrincipalId?: string;
+            instanceIdentityStatus: components["schemas"]["InstanceIdentityStatus"];
         };
         /**
          * Format: uuid
@@ -7428,6 +7521,10 @@ export interface components {
         };
         SetSeededRoleRequest: {
             role: components["schemas"]["SeededRoleName"];
+        };
+        SetWorkloadRoleRequest: {
+            /** @description The canonical id of a role returned by `GET /api/iam/roles/bindable` for the project. Seeded role names remain accepted for compatibility with older clients. */
+            role: string;
         };
         /** @description One workload-registry row: a SPIFFE identity and the principal it names. The SPIFFE ID is a lookup key only — nothing is ever parsed out of an SVID. */
         WorkloadRegistration: {
@@ -9853,6 +9950,33 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    getVMProjectGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The VM's project grant, if one exists. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VMProjectGrantResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     startVM: {
@@ -14834,6 +14958,33 @@ export interface operations {
             409: components["responses"]["Conflict"];
         };
     };
+    listProjectVMPrincipals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's readable VM principals. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectVMPrincipal"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     revokeProjectMember: {
         parameters: {
             query?: never;
@@ -16262,7 +16413,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SetSeededRoleRequest"];
+                "application/json": components["schemas"]["SetWorkloadRoleRequest"];
             };
         };
         responses: {

@@ -151,11 +151,15 @@ export { usePermissions } from "./use-permissions";
 export { useCurrentOrgAccess } from "./use-current-org-access";
 export {
   useProjectMembers,
+  useProjectVMPrincipals,
+  useVMProjectGrant,
   useGrantProjectMember,
   useUpdateProjectMemberRole,
   useRevokeProjectMember,
   useGrantProjectGroup,
   useRevokeProjectGroup,
+  useSetProjectWorkloadRole,
+  useRevokeProjectWorkload,
   projectMemberErrorMessage,
 } from "./use-project-members";
 export { useNetworks, useInvalidateNetworks } from "./use-networks";
