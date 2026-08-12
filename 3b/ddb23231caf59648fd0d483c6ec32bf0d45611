@@ -1,0 +1,47 @@
+shared/Sources/StratoShared/HypervisorTypes.swift
+  s_d67c324c6e1ac6::t_e941b5d2092f7e 71-76,91,100
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_d67c324c6e1ac6::t_e941b5d2092f7e 17-19,29,31,61
+control-plane/Tests/AppResourceTests/GuestExecAttachIntegrationTests.swift
+  s_d67c324c6e1ac6::t_e941b5d2092f7e 91,471-472
+agent/Sources/StratoAgent/Agent.swift
+  s_d67c324c6e1ac6::t_e941b5d2092f7e 3445-3447
+docs/architecture/agent.md
+  s_d67c324c6e1ac6::t_e83a428c4ebdf4 1066-1069
+control-plane/Sources/App/Models/Agent.swift
+  s_d67c324c6e1ac6::t_e941b5d2092f7e 510-519
+control-plane/Sources/App/Controllers/VMController.swift
+  s_d67c324c6e1ac6::t_e941b5d2092f7e 1773-1778,1789-1800
+  s_7051b6d9c6ec87::t_e03e0b63cdd1b4 1801
+control-plane/Tests/AppResourceTests/GuestExecTests.swift
+  s_d67c324c6e1ac6::t_bd7a3479ada986 59-61,66,78-86,259,272-311,318-319
+  s_d67c324c6e1ac6::t_e0db272f644c05 67,328
+docs/architecture/sandboxes.md
+  s_d67c324c6e1ac6::t_e83a428c4ebdf4 459-464
+control-plane/Sources/App/openapi.yaml
+  s_d67c324c6e1ac6::t_e83a428c4ebdf4 116-118
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "3bddb23231caf59648fd0d483c6ec32bf0d45611",
+  "prompts": {},
+  "sessions": {
+    "s_7051b6d9c6ec87": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff36d-7a5d-75f2-b785-93842a4bc0e2",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_d67c324c6e1ac6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff5f4-f585-7181-8147-316937d752f7",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
