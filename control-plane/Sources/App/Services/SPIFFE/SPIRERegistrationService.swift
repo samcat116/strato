@@ -363,19 +363,21 @@ public struct SPIRERegistrationConfig: Sendable {
     /// `SPIRE_SERVER_API_ADDRESS`). Throws when configured but invalid —
     /// starting up with silently-broken provisioning would surface as
     /// confusing 502s later.
-    public static func fromEnvironment() throws -> SPIRERegistrationConfig? {
-        guard Environment.get("SPIRE_ENABLED")?.lowercased() == "true" else { return nil }
-        guard let apiAddressString = Environment.get("SPIRE_SERVER_API_ADDRESS"), !apiAddressString.isEmpty
+    static func fromConfiguration(
+        _ configuration: ControlPlaneConfiguration
+    ) throws -> SPIRERegistrationConfig? {
+        guard configuration.bool(.spireEnabled) == true else { return nil }
+        guard let apiAddressString = configuration.string(.spireServerAPIAddress), !apiAddressString.isEmpty
         else { return nil }
 
         let apiAddress = try SPIREServerAPIAddress(parsing: apiAddressString)
-        let trustDomain = Environment.get("SPIRE_TRUST_DOMAIN") ?? "strato.local"
+        let trustDomain = configuration.string(.spireTrustDomain)!
 
         // SPIFFE Workload API socket of a local SPIRE agent, enabling the
         // mTLS admin path. Standard SPIFFE env var; both `unix:///path` and
         // bare `/path` forms are accepted.
         var workloadSocketPath: String?
-        if let raw = Environment.get("SPIFFE_ENDPOINT_SOCKET"), !raw.isEmpty {
+        if let raw = configuration.string(.spiffeEndpointSocket), !raw.isEmpty {
             let path = raw.hasPrefix("unix://") ? String(raw.dropFirst("unix://".count)) : raw
             guard path.hasPrefix("/") else {
                 throw SPIRERegistrationError.invalidConfiguration(
@@ -388,15 +390,15 @@ public struct SPIRERegistrationConfig: Sendable {
         // externally visible control-plane host with SPIRE's conventional
         // node-API port, which matches the single-host compose deployment.
         let publicAddress: String
-        if let configured = Environment.get("SPIRE_SERVER_PUBLIC_ADDRESS"), !configured.isEmpty {
+        if let configured = configuration.string(.spireServerPublicAddress), !configured.isEmpty {
             publicAddress = configured
-        } else if let external = Environment.get("EXTERNAL_HOSTNAME") {
+        } else if let external = configuration.string(.externalHostname) {
             publicAddress = "\(AgentController.sanitizedHost(external).split(separator: ":").first ?? "localhost"):8085"
         } else {
             publicAddress = "localhost:8085"
         }
 
-        let selectorsString = Environment.get("SPIRE_AGENT_SELECTORS") ?? "unix:uid:0"
+        let selectorsString = configuration.string(.spireAgentSelectors)!
         var selectors: [SPIRESelector] = []
         for part in selectorsString.split(separator: ",") {
             let trimmed = part.trimmingCharacters(in: .whitespaces)
@@ -416,7 +418,7 @@ public struct SPIRERegistrationConfig: Sendable {
             workloadAPISocketPath: workloadSocketPath,
             serverPublicAddress: publicAddress,
             agentSelectors: selectors,
-            svidTTLSeconds: Int(Environment.get("SPIRE_SVID_TTL") ?? "3600") ?? 3600
+            svidTTLSeconds: configuration.int(.spireSVIDTTL)!
         )
     }
 }
@@ -455,8 +457,8 @@ extension Application {
     /// is set, so token-auth deployments and mTLS deployments that provision
     /// SPIRE out of band keep working unchanged.
     public func configureSPIRERegistration() throws {
-        guard let config = try SPIRERegistrationConfig.fromEnvironment() else {
-            if Environment.get("SPIRE_ENABLED")?.lowercased() == "true" {
+        guard let config = try SPIRERegistrationConfig.fromConfiguration(controlPlaneConfiguration) else {
+            if controlPlaneConfiguration.bool(.spireEnabled) == true {
                 logger.notice(
                     "SPIRE is enabled but SPIRE_SERVER_API_ADDRESS is not set; registration tokens will not include SPIRE join tokens"
                 )

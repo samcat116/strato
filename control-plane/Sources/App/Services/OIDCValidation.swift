@@ -326,8 +326,8 @@ struct OIDCValidation {
 
     /// Hosts allowed for OIDC discovery/JWKS fetches, from
     /// `OIDC_DISCOVERY_ALLOWED_HOSTS` (comma/semicolon separated) or `defaultAllowedHosts`.
-    static func allowedHosts() -> Set<String> {
-        if let hostsString = Environment.get("OIDC_DISCOVERY_ALLOWED_HOSTS") {
+    static func allowedHosts(configuration: ControlPlaneConfiguration) -> Set<String> {
+        if let hostsString = configuration.string(.oidcDiscoveryAllowedHosts) {
             return Set(parseAllowList(hostsString))
         }
         return defaultAllowedHosts
@@ -335,8 +335,8 @@ struct OIDCValidation {
 
     /// Domain suffixes allowed for OIDC discovery/JWKS fetches, from
     /// `OIDC_DISCOVERY_ALLOWED_SUFFIXES` (comma/semicolon separated) or `defaultAllowedDomainSuffixes`.
-    static func allowedDomainSuffixes() -> [String] {
-        if let suffixesString = Environment.get("OIDC_DISCOVERY_ALLOWED_SUFFIXES") {
+    static func allowedDomainSuffixes(configuration: ControlPlaneConfiguration) -> [String] {
+        if let suffixesString = configuration.string(.oidcDiscoveryAllowedSuffixes) {
             return parseAllowList(suffixesString)
         }
         return defaultAllowedDomainSuffixes
@@ -388,7 +388,10 @@ struct OIDCValidation {
     /// `www.googleapis.com`, not `accounts.google.com` — would fail every login
     /// until an operator hand-edited the environment.
     static func validateAllowedFetchURL(
-        _ url: String, label: String, perProviderHosts: Set<String> = []
+        _ url: String,
+        label: String,
+        perProviderHosts: Set<String> = [],
+        configuration: ControlPlaneConfiguration
     ) throws {
         guard let parsedURL = URL(string: url),
             let host = parsedURL.host,
@@ -399,8 +402,10 @@ struct OIDCValidation {
 
         let lowercasedHost = host.lowercased()
         let isHostAllowed =
-            allowedHosts().contains { $0.lowercased() == lowercasedHost }
-            || allowedDomainSuffixes().contains { hostMatchesSuffix(host, suffix: $0) }
+            allowedHosts(configuration: configuration).contains { $0.lowercased() == lowercasedHost }
+            || allowedDomainSuffixes(configuration: configuration).contains {
+                hostMatchesSuffix(host, suffix: $0)
+            }
             || perProviderHosts.contains { $0.lowercased() == lowercasedHost }
         guard isHostAllowed else {
             throw Abort(

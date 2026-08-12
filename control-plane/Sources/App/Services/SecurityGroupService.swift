@@ -303,20 +303,29 @@ enum SecurityGroupService {
         case realizers([Agent])
     }
 
-    static func realization(for vm: VM, on db: Database) async throws -> Realization {
-        try await realization(forHypervisorId: vm.hypervisorId, on: db)
+    static func realization(
+        for vm: VM,
+        offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
+        on db: Database
+    ) async throws -> Realization {
+        try await realization(
+            forHypervisorId: vm.hypervisorId, offlineGrace: offlineGrace, on: db)
     }
 
     /// The placement-keyed half. Named by the hypervisor id rather than the
     /// workload because that is all the answer ever depended on — which is what
     /// lets sandboxes reuse it (STR-102) without a second copy of the
     /// unplaced/authority reasoning below.
-    static func realization(forHypervisorId hypervisorId: String?, on db: Database) async throws -> Realization {
+    static func realization(
+        forHypervisorId hypervisorId: String?,
+        offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
+        on db: Database
+    ) async throws -> Realization {
         guard let hypervisorId,
             let agentUUID = UUID(uuidString: hypervisorId),
             let host = try await Agent.find(agentUUID, on: db)
         else { return .unplaced }
-        return try await realization(host: host, on: db)
+        return try await realization(host: host, offlineGrace: offlineGrace, on: db)
     }
 
     /// The host-keyed half, so the batch path can resolve once per distinct
@@ -324,8 +333,15 @@ enum SecurityGroupService {
     ///
     /// Resolving through `SiteNetworkAuthority` rather than reading the site's
     /// controller column keeps this in step with assembly.
-    static func realization(host: Agent, on db: Database) async throws -> Realization {
-        realization(host: host, authority: try await SiteNetworkAuthority.resolve(forAgent: host, on: db))
+    static func realization(
+        host: Agent,
+        offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
+        on db: Database
+    ) async throws -> Realization {
+        realization(
+            host: host,
+            authority: try await SiteNetworkAuthority.resolve(
+                forAgent: host, offlineGrace: offlineGrace, on: db))
     }
 
     /// The pure half, given an already-resolved authority. Split out so the
@@ -349,8 +365,12 @@ enum SecurityGroupService {
     /// Whether one VM's security groups are enforced, or nil when it is
     /// unplaced (unknown — not "unenforced"). An unauthored site is `false`:
     /// the groups are attached and nothing will ever write their ACLs.
-    static func enforcement(for vm: VM, on db: Database) async throws -> Bool? {
-        enforcement(of: try await realization(for: vm, on: db))
+    static func enforcement(
+        for vm: VM,
+        offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
+        on db: Database
+    ) async throws -> Bool? {
+        enforcement(of: try await realization(for: vm, offlineGrace: offlineGrace, on: db))
     }
 
     /// The sandbox twin (STR-102). `sandbox.$networkInterfaces` must be
@@ -391,7 +411,11 @@ enum SecurityGroupService {
     /// restart. That is a worse lie than this one, in the direction that
     /// matters more. Closing it properly means recovering the attachment at
     /// adoption first; see `docs/architecture/sandboxes.md`.
-    static func sandboxEnforcement(for sandbox: Sandbox, on db: Database) async throws -> Bool? {
+    static func sandboxEnforcement(
+        for sandbox: Sandbox,
+        offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
+        on db: Database
+    ) async throws -> Bool? {
         // No interface, nothing to filter. Nil is "unknown", not "unenforced" —
         // the same distinction an unplaced VM gets.
         guard let interfaces = sandbox.$networkInterfaces.value, !interfaces.isEmpty else { return nil }
@@ -400,7 +424,7 @@ enum SecurityGroupService {
             let host = try await Agent.find(hostID, on: db)
         else { return nil }
         guard host.sandboxNetworkingCapable else { return false }
-        return enforcement(of: try await realization(host: host, on: db))
+        return enforcement(of: try await realization(host: host, offlineGrace: offlineGrace, on: db))
     }
 
     /// Whether each sandbox's security groups are enforced, keyed by sandbox
@@ -413,7 +437,11 @@ enum SecurityGroupService {
     /// The list endpoint needs this now that the verdict reads the database.
     /// Before STR-103 it short-circuited on a fleet-wide constant and cost no
     /// query at all, which is why the list path could afford it per row.
-    static func enforcementBySandbox(_ sandboxes: [Sandbox], on db: Database) async throws -> [UUID: Bool] {
+    static func enforcementBySandbox(
+        _ sandboxes: [Sandbox],
+        offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
+        on db: Database
+    ) async throws -> [UUID: Bool] {
         let hostIDsBySandbox: [UUID: UUID] = sandboxes.reduce(into: [:]) { map, sandbox in
             guard let sandboxID = sandbox.id,
                 let interfaces = sandbox.$networkInterfaces.value, !interfaces.isEmpty,
@@ -425,7 +453,7 @@ enum SecurityGroupService {
         guard !hostIDsBySandbox.isEmpty else { return [:] }
 
         let enforcedByHost = try await enforcementByHost(
-            ids: Set(hostIDsBySandbox.values), on: db,
+            ids: Set(hostIDsBySandbox.values), offlineGrace: offlineGrace, on: db,
             // A host that cannot realize a sandbox NIC has no port to filter,
             // whatever its site authority says — see `sandboxEnforcement`.
             override: { $0.sandboxNetworkingCapable ? nil : false })
@@ -455,7 +483,11 @@ enum SecurityGroupService {
     /// more tightly than VMs cluster onto hosts, so without the site memo every
     /// peer in a site refetches the same two rows: a page spanning 50 hosts
     /// across 3 sites costs ~6 queries instead of ~100.
-    static func enforcementByVM(_ vms: [VM], on db: Database) async throws -> [UUID: Bool] {
+    static func enforcementByVM(
+        _ vms: [VM],
+        offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
+        on db: Database
+    ) async throws -> [UUID: Bool] {
         let hostIDsByVM: [UUID: UUID] = vms.reduce(into: [:]) { map, vm in
             guard let vmID = vm.id,
                 let hypervisorId = vm.hypervisorId,
@@ -465,7 +497,8 @@ enum SecurityGroupService {
         }
         guard !hostIDsByVM.isEmpty else { return [:] }
 
-        let enforcedByHost = try await enforcementByHost(ids: Set(hostIDsByVM.values), on: db)
+        let enforcedByHost = try await enforcementByHost(
+            ids: Set(hostIDsByVM.values), offlineGrace: offlineGrace, on: db)
 
         var result: [UUID: Bool] = [:]
         for (vmID, hostID) in hostIDsByVM {
@@ -488,7 +521,10 @@ enum SecurityGroupService {
     /// Hosts absent from the result are hosts whose row was not found; their
     /// workloads read as unplaced.
     private static func enforcementByHost(
-        ids: Set<UUID>, on db: Database, override: (Agent) -> Bool? = { _ in nil }
+        ids: Set<UUID>,
+        offlineGrace: TimeInterval,
+        on db: Database,
+        override: (Agent) -> Bool? = { _ in nil }
     ) async throws -> [UUID: Bool] {
         let hosts = try await Agent.query(on: db)
             .filter(\.$id ~~ Array(ids))
@@ -506,7 +542,8 @@ enum SecurityGroupService {
             if let cached = authorityBySite[siteID] {
                 authority = cached
             } else {
-                authority = try await SiteNetworkAuthority.resolve(forAgent: host, on: db)
+                authority = try await SiteNetworkAuthority.resolve(
+                    forAgent: host, offlineGrace: offlineGrace, on: db)
                 authorityBySite[siteID] = authority
             }
             enforcedByHost[hostID] = enforcement(of: realization(host: host, authority: authority))

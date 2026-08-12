@@ -198,7 +198,14 @@ extension Application {
     /// Settable so tests can inject one; the setter takes the same lock the
     /// lazy initializer does, so an injection cannot race a first read.
     var guardrailAnalyzer: any GuardrailAnalyzer {
-        get { lazyService(GuardrailAnalyzerKey.self) { Self.resolveGuardrailAnalyzer(logger: logger) } }
+        get {
+            lazyService(GuardrailAnalyzerKey.self) {
+                Self.resolveGuardrailAnalyzer(
+                    configuredPath: controlPlaneConfiguration.string(.iamSymCCSolverPath),
+                    searchPath: ProcessInfo.processInfo.environment["PATH"],
+                    logger: logger)
+            }
+        }
         set {
             let lock = locks.lock(for: GuardrailAnalyzerKey.self)
             lock.lock()
@@ -214,14 +221,17 @@ extension Application {
     /// that has quietly lost its solver is handing out grants nobody can
     /// explain, and the operator needs to find that out from the logs rather
     /// than from a support ticket.
-    static func resolveGuardrailAnalyzer(logger: Logger) -> any GuardrailAnalyzer {
-        let environment = ProcessInfo.processInfo.environment
+    static func resolveGuardrailAnalyzer(
+        configuredPath: String?,
+        searchPath: String?,
+        logger: Logger
+    ) -> any GuardrailAnalyzer {
         var candidates: [String] = []
-        if let configured = environment["IAM_SYMCC_SOLVER_PATH"], !configured.isEmpty {
+        if let configured = configuredPath, !configured.isEmpty {
             candidates.append(configured)
         }
-        let searchPath = environment["PATH"] ?? "/usr/local/bin:/usr/bin:/bin"
-        candidates += searchPath.split(separator: ":").map { "\($0)/cvc5" }
+        let executableSearchPath = searchPath ?? "/usr/local/bin:/usr/bin:/bin"
+        candidates += executableSearchPath.split(separator: ":").map { "\($0)/cvc5" }
 
         for candidate in candidates where FileManager.default.isExecutableFile(atPath: candidate) {
             logger.info(
@@ -230,7 +240,7 @@ extension Application {
         }
 
         let reason =
-            environment["IAM_SYMCC_SOLVER_PATH"].map {
+            configuredPath.map {
                 "IAM_SYMCC_SOLVER_PATH='\($0)' is not an executable file"
             } ?? "no cvc5 found via IAM_SYMCC_SOLVER_PATH or PATH"
         logger.error(

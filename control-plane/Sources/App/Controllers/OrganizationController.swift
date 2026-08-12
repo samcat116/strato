@@ -144,7 +144,10 @@ struct OrganizationController: RouteCollection {
             // reconciler (issue #614) provisions its SPIRE instance from. Off
             // by default: with the feature flag down no row is written and only
             // the platform trust domain exists.
-            try await OrgTrustDomainProvisioning.claim(organizationID: organization.id!, on: db)
+            try await OrgTrustDomainProvisioning.claim(
+                organizationID: organization.id!,
+                configuration: req.controlPlaneConfiguration,
+                on: db)
         }
 
         // Set as current organization if user doesn't have one

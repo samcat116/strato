@@ -6,7 +6,7 @@ import Vapor
 /// rest of the API. Repeated *failed* authentications additionally trigger an
 /// exponential lockout on top of the fixed window.
 ///
-/// All values are read from the environment in ``fromEnvironment(for:)`` so an
+/// All values come from the immutable startup configuration snapshot so an
 /// operator can tighten or relax limits without a rebuild.
 struct RateLimitConfig: Sendable {
     var enabled: Bool
@@ -42,25 +42,21 @@ struct RateLimitConfig: Sendable {
     var trustForwardedFor: Bool { proxyTrust.trustForwardedFor }
     var trustedProxyHops: Int { proxyTrust.trustedProxyHops }
 
-    static func fromEnvironment(for environment: Environment) -> RateLimitConfig {
-        func int(_ name: String, _ fallback: Int) -> Int {
-            Environment.get(name).flatMap(Int.init) ?? fallback
-        }
+    static func fromConfiguration(_ configuration: ControlPlaneConfiguration) -> RateLimitConfig {
         return RateLimitConfig(
             // On by default outside tests; the suite fires many requests from one
             // client and would otherwise trip the limiter. Opt in with
             // RATE_LIMIT_ENABLED=true, opt out with =false.
-            enabled: Environment.get("RATE_LIMIT_ENABLED").flatMap(Bool.init)
-                ?? (environment != .testing),
-            authLimit: int("RATE_LIMIT_AUTH_MAX", 10),
-            authWindow: int("RATE_LIMIT_AUTH_WINDOW", 60),
-            apiLimit: int("RATE_LIMIT_API_MAX", 300),
-            apiWindow: int("RATE_LIMIT_API_WINDOW", 60),
-            failureThreshold: int("RATE_LIMIT_FAILURE_THRESHOLD", 5),
-            failureBaseDelay: int("RATE_LIMIT_FAILURE_BASE_DELAY", 2),
-            failureMaxDelay: int("RATE_LIMIT_FAILURE_MAX_DELAY", 300),
-            failureWindow: int("RATE_LIMIT_FAILURE_WINDOW", 900),
-            proxyTrust: .fromEnvironment()
+            enabled: configuration.bool(.rateLimitEnabled)!,
+            authLimit: configuration.int(.rateLimitAuthMax)!,
+            authWindow: configuration.int(.rateLimitAuthWindow)!,
+            apiLimit: configuration.int(.rateLimitAPIMax)!,
+            apiWindow: configuration.int(.rateLimitAPIWindow)!,
+            failureThreshold: configuration.int(.rateLimitFailureThreshold)!,
+            failureBaseDelay: configuration.int(.rateLimitFailureBaseDelay)!,
+            failureMaxDelay: configuration.int(.rateLimitFailureMaxDelay)!,
+            failureWindow: configuration.int(.rateLimitFailureWindow)!,
+            proxyTrust: .fromConfiguration(configuration)
         )
     }
 }

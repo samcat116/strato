@@ -65,19 +65,18 @@ public struct SPIREIssuanceMetricsConfig: Sendable, Equatable {
     /// configured (`SPIRE_METRICS_PROMETHEUS_URL` unset/empty). A window of
     /// zero or less falls back to 24h so a misconfiguration cannot produce a
     /// nonsensical `increase()` range.
-    public static func fromEnvironment() -> SPIREIssuanceMetricsConfig? {
-        guard let baseURL = Environment.get("SPIRE_METRICS_PROMETHEUS_URL"),
+    static func fromConfiguration(
+        _ configuration: ControlPlaneConfiguration
+    ) -> SPIREIssuanceMetricsConfig? {
+        guard let baseURL = configuration.string(.spireMetricsPrometheusURL),
             !baseURL.trimmingCharacters(in: .whitespaces).isEmpty
         else { return nil }
 
-        let window = Environment.get("SPIRE_ISSUANCE_WINDOW_HOURS").flatMap(Int.init)
         return SPIREIssuanceMetricsConfig(
             prometheusBaseURL: baseURL.trimmingCharacters(in: .whitespaces),
-            x509SVIDMetric: Environment.get("SPIRE_METRICS_X509_SVID_METRIC")
-                ?? "spire_server_server_ca_sign_x509_svid",
-            jwtSVIDMetric: Environment.get("SPIRE_METRICS_JWT_SVID_METRIC")
-                ?? "spire_server_server_ca_sign_jwt_svid",
-            windowHours: (window ?? 24) > 0 ? (window ?? 24) : 24
+            x509SVIDMetric: configuration.string(.spireMetricsX509SVIDMetric)!,
+            jwtSVIDMetric: configuration.string(.spireMetricsJWTSVIDMetric)!,
+            windowHours: configuration.int(.spireIssuanceWindowHours)!
         )
     }
 }
@@ -253,7 +252,7 @@ extension Application {
     /// unless `SPIRE_METRICS_PROMETHEUS_URL` is set, so deployments without a
     /// Prometheus scraping SPIRE keep working with the panel simply unavailable.
     public func configureSPIREIssuanceMetrics() {
-        guard let config = SPIREIssuanceMetricsConfig.fromEnvironment() else { return }
+        guard let config = SPIREIssuanceMetricsConfig.fromConfiguration(controlPlaneConfiguration) else { return }
         spireIssuanceMetrics = PrometheusIssuanceMetricsProvider(config: config, logger: logger)
         // Sanitized so basic-auth credentials or tokens in the URL never land in logs.
         let sanitizedURL = PrometheusIssuanceMetricsProvider.sanitizedBaseURL(config.prometheusBaseURL)

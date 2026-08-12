@@ -30,9 +30,9 @@ extension Application {
         // backends, and `LoggingSystem` keeps the handler the test harness set.
         guard environment != .testing else { return }
 
-        let metricsEnabled = Environment.get("OTEL_METRICS_ENABLED").flatMap(Bool.init) ?? true
-        let logsEnabled = Environment.get("OTEL_LOGS_ENABLED").flatMap(Bool.init) ?? true
-        let tracesEnabled = Environment.get("OTEL_TRACES_ENABLED").flatMap(Bool.init) ?? true
+        let metricsEnabled = controlPlaneConfiguration.bool(.otelMetricsEnabled)!
+        let logsEnabled = controlPlaneConfiguration.bool(.otelLogsEnabled)!
+        let tracesEnabled = controlPlaneConfiguration.bool(.otelTracesEnabled)!
 
         // Only bootstrap OpenTelemetry if at least one feature is enabled
         guard metricsEnabled || logsEnabled || tracesEnabled else {
@@ -41,7 +41,7 @@ extension Application {
         }
 
         var otelConfig = OTel.Configuration.default
-        otelConfig.serviceName = Environment.get("OTEL_SERVICE_NAME") ?? "strato-control-plane"
+        otelConfig.serviceName = controlPlaneConfiguration.string(.otelServiceName)!
 
         // Widen the RED duration histogram past 10s. The OTel default top bucket
         // is 10_000ms, so `histogram_quantile` clamps to 10 whenever the quantile
@@ -60,11 +60,13 @@ extension Application {
         // `service.instance.id` uses the coordination replica ID so a metric
         // series or a trace can be tied back to the exact process that emitted
         // it in a multi-replica deployment.
-        otelConfig.resourceAttributes["service.version"] = BuildInfo.version
+        otelConfig.resourceAttributes["service.version"] = BuildInfo.version(
+            configuration: controlPlaneConfiguration)
         otelConfig.resourceAttributes["service.instance.id"] = replicaID
         otelConfig.resourceAttributes["deployment.environment.name"] = environment.name
-        if BuildInfo.gitSHA != "unknown" {
-            otelConfig.resourceAttributes["vcs.revision"] = BuildInfo.gitSHA
+        let gitSHA = BuildInfo.gitSHA(configuration: controlPlaneConfiguration)
+        if gitSHA != "unknown" {
+            otelConfig.resourceAttributes["vcs.revision"] = gitSHA
         }
 
         // Enable all three pillars of observability

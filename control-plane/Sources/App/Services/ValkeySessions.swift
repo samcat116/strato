@@ -105,21 +105,8 @@ extension ValkeySessionDriver {
     /// would expire sessions mid-use and read as random logouts.
     static let minimumTTL = 60
 
-    static func ttlFromEnvironment(logger: Logger) -> Int {
-        guard let raw = Environment.get("SESSION_TTL_SECONDS") else {
-            return defaultTTL
-        }
-        guard let seconds = Int(raw), seconds >= minimumTTL else {
-            logger.warning(
-                "Ignoring invalid SESSION_TTL_SECONDS, using the default",
-                metadata: [
-                    "value": .string(raw),
-                    "minimum": .stringConvertible(minimumTTL),
-                    "default": .stringConvertible(defaultTTL),
-                ])
-            return defaultTTL
-        }
-        return seconds
+    static func ttlFromConfiguration(_ configuration: ControlPlaneConfiguration) -> Int {
+        configuration.int(.sessionTTLSeconds)!
     }
 }
 
@@ -181,7 +168,7 @@ extension Application.Sessions.Provider {
             $0.sessions.use { app in
                 ValkeySessionDriver(
                     store: store,
-                    ttl: ValkeySessionDriver.ttlFromEnvironment(logger: app.logger)
+                    ttl: ValkeySessionDriver.ttlFromConfiguration(app.controlPlaneConfiguration)
                 )
             }
         }

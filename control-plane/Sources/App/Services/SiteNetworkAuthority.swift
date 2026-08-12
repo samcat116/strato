@@ -86,20 +86,27 @@ enum SiteNetworkAuthority {
     /// existing 202-and-converge behavior instead of becoming a wall of 409s.
     /// A capability regression gets no grace at all — it is a durable property
     /// of the agent's current registration, not a transient.
-    static let controllerOfflineGrace: TimeInterval =
-        Environment.get("SITE_CONTROLLER_OFFLINE_GRACE_SECONDS").flatMap(TimeInterval.init) ?? 300
+    static let controllerOfflineGrace: TimeInterval = 300
 
-    static func resolve(forAgent agent: Agent, on db: any Database) async throws -> Authority {
+    static func resolve(
+        forAgent agent: Agent,
+        offlineGrace: TimeInterval = controllerOfflineGrace,
+        on db: any Database
+    ) async throws -> Authority {
         let siteID = agent.$site.id
         guard let site = try await Site.find(siteID, on: db) else {
             throw Abort(.internalServerError, reason: "Agent references missing site \(siteID)")
         }
-        return try await resolve(forSite: site, on: db)
+        return try await resolve(forSite: site, offlineGrace: offlineGrace, on: db)
     }
 
     /// The authority for a site as such, for callers with no host agent in
     /// hand (pinning a network to a site).
-    static func resolve(forSite site: Site, on db: any Database) async throws -> Authority {
+    static func resolve(
+        forSite site: Site,
+        offlineGrace: TimeInterval = controllerOfflineGrace,
+        on db: any Database
+    ) async throws -> Authority {
         guard let controllerID = site.$networkControllerAgent.id,
             let controller = try await Agent.find(controllerID, on: db)
         else {
@@ -107,7 +114,7 @@ enum SiteNetworkAuthority {
             // column carries no FK, and "points at nobody" is `.unassigned`.
             return .unassigned(site)
         }
-        guard let fault = controllerFault(controller) else {
+        guard let fault = controllerFault(controller, offlineGrace: offlineGrace) else {
             return .controller(controller)
         }
         return .controllerUnavailable(site: site, controller: controller, fault: fault)
@@ -121,11 +128,15 @@ enum SiteNetworkAuthority {
     /// Liveness is judged on heartbeat age rather than the `status` column —
     /// a row the stale sweep hasn't reached yet still reads `.online`, and this
     /// threshold is in any case stricter than `statusBasedOnHeartbeat`.
-    static func controllerFault(_ controller: Agent, now: Date = Date()) -> ControllerFault? {
+    static func controllerFault(
+        _ controller: Agent,
+        now: Date = Date(),
+        offlineGrace: TimeInterval = controllerOfflineGrace
+    ) -> ControllerFault? {
         if let capability = capabilityFault(controller) { return capability }
         guard let lastHeartbeat = controller.lastHeartbeat else { return .offline(staleFor: nil) }
         let staleFor = now.timeIntervalSince(lastHeartbeat)
-        guard staleFor > controllerOfflineGrace else { return nil }
+        guard staleFor > offlineGrace else { return nil }
         return .offline(staleFor: staleFor)
     }
 

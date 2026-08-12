@@ -54,7 +54,7 @@ struct SandboxController: RouteCollection {
     static func acceptedResponse(
         for sandbox: Sandbox, _ accepted: ResourceMutation.Accepted, on req: Request
     ) async throws -> Response {
-        return try AcceptedMutation(await detailResponse(for: sandbox, on: req.db), accepted).acceptedResponse()
+        return try AcceptedMutation(await detailResponse(for: sandbox, on: req), accepted).acceptedResponse()
     }
 
     // `beginOperation` and `completeOperation` — the sandbox-flavored front of
@@ -109,7 +109,10 @@ struct SandboxController: RouteCollection {
         // Batched, like the VM list: since STR-103 the enforcement verdict reads
         // the host row (it needs the sandbox-networking capability), so a
         // per-row call would be one query per sandbox plus a site lookup each.
-        let enforcedBySandbox = try await SecurityGroupService.enforcementBySandbox(visible, on: req.db)
+        let enforcedBySandbox = try await SecurityGroupService.enforcementBySandbox(
+            visible,
+            offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+            on: req.db)
         return visible.map { sandbox in
             SandboxDetailResponse(
                 from: sandbox,
@@ -145,19 +148,22 @@ struct SandboxController: RouteCollection {
     /// enforcement verdict resolved. Single-sandbox only — the list path uses
     /// `enforcementBySandbox`, which memoizes the host and site lookups this
     /// makes per call.
-    private static func detailResponse(for sandbox: Sandbox, on db: Database) async throws
+    private static func detailResponse(for sandbox: Sandbox, on req: Request) async throws
         -> SandboxDetailResponse
     {
-        try await loadNICDetail(sandbox, on: db)
+        try await loadNICDetail(sandbox, on: req.db)
         return SandboxDetailResponse(
             from: sandbox,
-            securityGroupsEnforced: try await SecurityGroupService.sandboxEnforcement(for: sandbox, on: db))
+            securityGroupsEnforced: try await SecurityGroupService.sandboxEnforcement(
+                for: sandbox,
+                offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+                on: req.db))
     }
 
     func show(req: Request) async throws -> SandboxDetailResponse {
         _ = try req.requireActingPrincipal()
         let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:read")
-        return try await Self.detailResponse(for: sandbox, on: req.db)
+        return try await Self.detailResponse(for: sandbox, on: req)
     }
 
     func status(req: Request) async throws -> SandboxDetailResponse {
@@ -167,7 +173,7 @@ struct SandboxController: RouteCollection {
         // The database row *is* the observed state: the owning agent's
         // periodic observed-state reports keep it fresh, so no agent
         // round-trip happens here (replica-independent, like VMs).
-        return try await Self.detailResponse(for: sandbox, on: req.db)
+        return try await Self.detailResponse(for: sandbox, on: req)
     }
 
     func listOperations(req: Request) async throws -> [OperationResponse] {
@@ -778,7 +784,7 @@ struct SandboxController: RouteCollection {
         }
 
         try await sandbox.save(on: req.db)
-        return try await Self.detailResponse(for: sandbox, on: req.db)
+        return try await Self.detailResponse(for: sandbox, on: req)
     }
 
     // MARK: - Lifecycle

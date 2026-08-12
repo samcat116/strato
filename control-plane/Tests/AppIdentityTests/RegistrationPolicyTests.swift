@@ -39,20 +39,34 @@ final class RegistrationPolicyTests: BaseTestCase {
 
     // MARK: - Setting parsing
 
-    @Test("the setting is open unless explicitly switched off")
-    func testParse() {
-        #expect(RegistrationPolicy.parse(nil) == true)
-        #expect(RegistrationPolicy.parse("") == true)
-        #expect(RegistrationPolicy.parse("true") == true)
-        #expect(RegistrationPolicy.parse("1") == true)
-        // Not just Swift's Bool.init spelling: an operator writing 0/no/off
-        // means to close registration, and defaulting those open would be the
-        // worst possible reading.
-        #expect(RegistrationPolicy.parse("false") == false)
-        #expect(RegistrationPolicy.parse("FALSE") == false)
-        #expect(RegistrationPolicy.parse(" off ") == false)
-        #expect(RegistrationPolicy.parse("0") == false)
-        #expect(RegistrationPolicy.parse("no") == false)
+    @Test(
+        "the setting uses Swift Configuration's Boolean grammar",
+        arguments: [
+            ("true", true), ("TRUE", true), ("yes", true), ("1", true),
+            ("false", false), ("FALSE", false), ("no", false), ("0", false),
+        ])
+    func testBooleanGrammar(raw: String, expected: Bool) async throws {
+        let configuration = try await ControlPlaneConfiguration.load(
+            environmentVariables: [RegistrationPolicy.environmentKey: raw], for: .testing)
+        #expect(
+            RegistrationPolicy.fromConfiguration(configuration).selfRegistrationEnabled == expected)
+    }
+
+    @Test(
+        "unsupported Boolean spellings fail configuration",
+        arguments: ["", "off", "on", " true ", "banana"])
+    func testUnsupportedBooleanSpelling(raw: String) async {
+        await #expect(throws: ControlPlaneConfigurationError.self) {
+            _ = try await ControlPlaneConfiguration.load(
+                environmentVariables: [RegistrationPolicy.environmentKey: raw], for: .testing)
+        }
+    }
+
+    @Test("the setting defaults open when absent")
+    func testDefault() async throws {
+        let configuration = try await ControlPlaneConfiguration.load(
+            environmentVariables: [:], for: .testing)
+        #expect(RegistrationPolicy.fromConfiguration(configuration).selfRegistrationEnabled)
     }
 
     // MARK: - The public endpoint

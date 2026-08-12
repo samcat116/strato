@@ -286,7 +286,7 @@ struct UserController: RouteCollection {
         return AdminCreateUserResponse(
             user: user.asPublic(),
             claimToken: rawToken,
-            claimUrl: Self.claimURL(for: rawToken),
+            claimUrl: Self.claimURL(for: rawToken, configuration: req.controlPlaneConfiguration),
             claimExpiresAt: claim.expiresAt
         )
     }
@@ -795,7 +795,7 @@ struct UserController: RouteCollection {
             // so the failed resolution (nil) can only occur for stale sessions.
             let postLogoutRedirectURI =
                 (try? OIDCValidation.resolveBaseURL(
-                    configured: Environment.get("BASE_URL"),
+                    configured: req.controlPlaneConfiguration.string(.baseURL),
                     environment: req.application.environment
                 )).map { "\($0)/login" }
             sloUrl = provider.getEndSessionURL(
@@ -1117,8 +1117,8 @@ extension UserController {
     /// mirrors the WebAuthn relying-party origin (which must match the browser
     /// URL), so the `/claim` page and the passkey ceremony share an origin. The
     /// frontend may still rebuild the link from `window.location.origin`.
-    static func claimURL(for token: String) -> String {
-        let base = (Environment.get("WEBAUTHN_RELYING_PARTY_ORIGIN") ?? "http://localhost:8080")
+    static func claimURL(for token: String, configuration: ControlPlaneConfiguration) -> String {
+        let base = configuration.string(.webauthnRelyingPartyOrigin)!
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         return "\(base)/claim?token=\(token)"
     }
