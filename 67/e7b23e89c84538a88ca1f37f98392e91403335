@@ -1,0 +1,42 @@
+agent/Tests/StratoAgentTests/EC2MetadataRendererTests.swift
+  s_21a889dc5d67dd::t_f0068bb8711cdd 83-99,102-144
+  s_21a889dc5d67dd::t_7522fe9f7d98bc 100-101
+control-plane/web/src/types/api.ts
+  s_21a889dc5d67dd::t_f0068bb8711cdd 1180
+  s_21a889dc5d67dd::t_79cf7b1c8f3b43 1181
+control-plane/Tests/AppPlatformTests/VMNetworkSelectionTests.swift
+  s_21a889dc5d67dd::t_f0068bb8711cdd 52-66,448,470-516,518
+  s_d67c324c6e1ac6::t_c04fe19b0e4f40 517,519
+agent/Sources/StratoAgentCore/MetadataService/FirecrackerMMDSInterfacePlan.swift
+  s_21a889dc5d67dd::t_f0068bb8711cdd 11-19
+control-plane/Sources/App/Controllers/VMController.swift
+  s_21a889dc5d67dd::t_f0068bb8711cdd 913-932
+control-plane/web/src/types/openapi.ts
+  s_21a889dc5d67dd::t_dc05b944cf5a37 5400
+control-plane/Sources/App/openapi.yaml
+  s_21a889dc5d67dd::t_f0068bb8711cdd 9099-9102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "67e7b23e89c84538a88ca1f37f98392e91403335",
+  "prompts": {},
+  "sessions": {
+    "s_21a889dc5d67dd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff338-9c88-74a0-ba59-110daead872d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_d67c324c6e1ac6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff5f4-f585-7181-8147-316937d752f7",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
