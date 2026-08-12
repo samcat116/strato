@@ -48,7 +48,7 @@ struct SSFStreamController: RouteCollection {
             .filter(\.$organization.$id == organizationID)
             .sort(\.$createdAt)
             .all()
-        return streams.map(response(for:))
+        return streams.map { response(for: $0, on: req) }
     }
 
     func create(req: Request) async throws -> Response {
@@ -59,7 +59,8 @@ struct SSFStreamController: RouteCollection {
         }
 
         let request = try req.content.decode(CreateSSFStreamRequest.self)
-        try SSFValidation.validateTransmitterURL(request.transmitterURL)
+        try SSFValidation.validateTransmitterURL(
+            request.transmitterURL, configuration: req.controlPlaneConfiguration)
 
         let stream = SSFStream(
             organizationID: organizationID,
@@ -75,7 +76,7 @@ struct SSFStreamController: RouteCollection {
         )
         try await stream.save(on: req.db)
 
-        let body = response(for: stream)
+        let body = response(for: stream, on: req)
         let response = Response(status: .created)
         try response.content.encode(body)
         return response
@@ -85,7 +86,7 @@ struct SSFStreamController: RouteCollection {
         let stream = try await requireStream(req)
         try await OrganizationAccessService.requireMember(
             organizationID: stream.$organization.id, on: req)
-        return response(for: stream)
+        return response(for: stream, on: req)
     }
 
     func update(req: Request) async throws -> SSFStreamResponse {
@@ -111,7 +112,7 @@ struct SSFStreamController: RouteCollection {
 
         // The receiver caches transmitter metadata and verification settings.
         await req.application.ssf.invalidateReceiver(for: try stream.requireID())
-        return response(for: stream)
+        return response(for: stream, on: req)
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
@@ -136,7 +137,7 @@ struct SSFStreamController: RouteCollection {
         }
 
         let pushToken = try await req.application.ssf.registerStream(stream, on: req.db)
-        return RegisterSSFStreamResponse(stream: response(for: stream), pushToken: pushToken)
+        return RegisterSSFStreamResponse(stream: response(for: stream, on: req), pushToken: pushToken)
     }
 
     func verify(req: Request) async throws -> HTTPStatus {
@@ -254,10 +255,13 @@ struct SSFStreamController: RouteCollection {
         return stream
     }
 
-    private func response(for stream: SSFStream) -> SSFStreamResponse {
+    private func response(for stream: SSFStream, on req: Request) -> SSFStreamResponse {
         let pushEndpoint =
             stream.deliveryMethodValue == .push
-            ? stream.id.flatMap(SSFService.pushEndpointURL(for:)) : nil
+            ? stream.id.flatMap {
+                SSFService.pushEndpointURL(
+                    for: $0, configuration: req.controlPlaneConfiguration)
+            } : nil
         return SSFStreamResponse(from: stream, pushEndpoint: pushEndpoint)
     }
 }

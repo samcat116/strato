@@ -41,9 +41,9 @@ struct SecretsEncryptionService: @unchecked Sendable {
     /// empty variable yields the pass-through service; a present but malformed
     /// key throws, because a typo must fail startup loudly rather than silently
     /// downgrade to plaintext storage.
-    static func fromEnvironment() throws -> SecretsEncryptionService {
+    static func fromConfiguration(_ configuration: ControlPlaneConfiguration) throws -> SecretsEncryptionService {
         guard
-            let raw = Environment.get("STRATO_SECRET_ENCRYPTION_KEY")?
+            let raw = configuration.string(.stratoSecretEncryptionKey)?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
             !raw.isEmpty
         else {

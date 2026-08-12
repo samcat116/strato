@@ -31,15 +31,12 @@ struct IAMDecisionLogConfig: Sendable {
     /// multi-row insert.
     var maxBatchSize: Int
 
-    static func fromEnvironment(_ environment: Environment) -> IAMDecisionLogConfig {
+    static func fromConfiguration(_ configuration: ControlPlaneConfiguration) -> IAMDecisionLogConfig {
         IAMDecisionLogConfig(
-            recordDecisions: Environment.get("IAM_DECISION_LOG_ENABLED").flatMap(Bool.init)
-                ?? (environment != .testing),
-            retentionDays: Environment.get("IAM_DECISION_LOG_RETENTION_DAYS").flatMap(Int.init) ?? 30,
-            maxQueueDepth: Environment.get("IAM_DECISION_LOG_MAX_QUEUE_DEPTH")
-                .flatMap(Int.init) ?? 2048,
-            maxBatchSize: Environment.get("IAM_DECISION_LOG_MAX_BATCH_SIZE")
-                .flatMap(Int.init) ?? 128
+            recordDecisions: configuration.bool(.iamDecisionLogEnabled)!,
+            retentionDays: configuration.int(.iamDecisionLogRetentionDays)!,
+            maxQueueDepth: configuration.int(.iamDecisionLogMaxQueueDepth)!,
+            maxBatchSize: configuration.int(.iamDecisionLogMaxBatchSize)!
         )
     }
 }
@@ -258,7 +255,7 @@ final class IAMDecisionRecorder: Sendable {
                     "ceiling": .stringConvertible(IAMDecisionQueue.maxSupportedBatchSize),
                 ])
         }
-        if Environment.get("IAM_DECISION_LOG_MAX_CONCURRENCY") != nil {
+        if app.controlPlaneConfiguration.isConfigured("IAM_DECISION_LOG_MAX_CONCURRENCY") {
             app.logger.warning(
                 """
                 IAM_DECISION_LOG_MAX_CONCURRENCY is no longer read; decision rows are written by a \
@@ -515,7 +512,7 @@ extension Application {
     /// Decision-log configuration. Settable so tests can enable recording
     /// (off by default under `.testing`) before the recorder is first built.
     var iamDecisionLogConfig: IAMDecisionLogConfig {
-        get { storage[IAMDecisionLogConfigKey.self] ?? .fromEnvironment(environment) }
+        get { storage[IAMDecisionLogConfigKey.self] ?? .fromConfiguration(controlPlaneConfiguration) }
         set { setStorageValue(IAMDecisionLogConfigKey.self, to: newValue) }
     }
 

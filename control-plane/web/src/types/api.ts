@@ -151,6 +151,7 @@ export interface CreateVMNetworkInterfaceRequest {
   mtu?: number;
 }
 
+export type InstanceIdentityStatus = "enabled" | "revoked";
 export type MetadataSource = "iso" | "imds";
 
 export interface VM {
@@ -199,6 +200,14 @@ export interface VM {
    * administrator revoked the registration — not that the VM has no identity.
    */
   spiffeId?: string;
+  /** Workload-registration row id and IAM principal id for this identity. */
+  instanceIdentityPrincipalId?: string;
+  /**
+   * Explicit registration state. `undefined` means the control plane predates
+   * this field, so clients must render an unknown state rather than infer
+   * revocation from other missing identity fields.
+   */
+  instanceIdentityStatus?: InstanceIdentityStatus;
   /**
    * Graphics console (backend issue #566): whether the guest has a display
    * device whose framebuffer the Display tab can attach to. Fixed at creation
@@ -334,9 +343,34 @@ export interface ProjectGroupGrant {
   external: boolean;
 }
 
+export interface ProjectWorkloadGrant {
+  /** Workload-registration row id and IAM principal id. */
+  registrationId: string;
+  spiffeId: string;
+  /** Present when this principal is a VM's instance identity. */
+  vmId?: string;
+  displayName: string;
+  role: string;
+  roleDisplayName: string;
+  grantedAt?: string;
+}
+
+export interface VMProjectGrantResponse {
+  grant?: ProjectWorkloadGrant;
+}
+
+export interface ProjectVMPrincipal {
+  id: string;
+  name: string;
+  spiffeId?: string;
+  instanceIdentityPrincipalId?: string;
+  instanceIdentityStatus: InstanceIdentityStatus;
+}
+
 export interface ProjectMembers {
   users: ProjectMember[];
   groups: ProjectGroupGrant[];
+  workloads: ProjectWorkloadGrant[];
 }
 
 // Batch canonical action check ("can I?")

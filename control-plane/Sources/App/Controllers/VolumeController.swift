@@ -879,7 +879,9 @@ struct VolumeController: RouteCollection {
             environment: volume.environment,
             size: volume.size,
             agentId: agentId,
-            expiresAt: try SnapshotRetention.expiry(requested: request.ttlSeconds),
+            expiresAt: try SnapshotRetention.expiry(
+                requested: request.ttlSeconds,
+                defaultTTLSeconds: req.controlPlaneConfiguration.int(.snapshotDefaultTTLSeconds)),
             createdByID: userID
         )
         snapshot.extendConvergenceDeadline(

@@ -63,6 +63,10 @@ struct PatchVMMetadataRequest: Content, ValidatedRequestBody {
 }
 
 struct VMController: RouteCollection {
+    struct VMProjectGrantResponse: Content {
+        let grant: ProjectMemberController.ProjectWorkloadGrantResponse?
+    }
+
     /// Validates caller-supplied cloud-init user data: bounded in size and
     /// starting with a header cloud-init actually dispatches on — a payload
     /// without one (say, a script missing its shebang) would be silently
@@ -115,6 +119,7 @@ struct VMController: RouteCollection {
         vms.post(use: create)
         vms.group(":vmID") { vm in
             vm.get(use: show)
+            vm.get("project-grant", use: projectGrant)
             vm.put(use: update)
             vm.patch(use: patchMetadata)
             vm.delete(use: delete)
@@ -390,7 +395,10 @@ struct VMController: RouteCollection {
 
         // Batched for the same reason the authorization decision is: a
         // per-row realizer walk would be three queries per VM.
-        let enforcement = try await SecurityGroupService.enforcementByVM(allVMs, on: req.db)
+        let enforcement = try await SecurityGroupService.enforcementByVM(
+            allVMs,
+            offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+            on: req.db)
 
         let visible = allVMs.filter { vm in
             vm.id.map { readable.contains(IAMNode(type: .virtualMachine, id: $0)) } ?? false
@@ -404,13 +412,17 @@ struct VMController: RouteCollection {
         // also the one worth not widening with rows whose identity is about to
         // be discarded — and resolving an identity for a VM the caller may not
         // read is work with no reader.
-        let spiffeIDs = try await GuestIdentity.spiffeIDs(
+        let identities = try await GuestIdentity.registrations(
             forVMs: visible.compactMap(\.id), on: req.db)
 
         return visible.compactMap { vm in
             guard let id = vm.id else { return nil }
             return VMDetailResponse(
-                from: vm, securityGroupsEnforced: enforcement[id], spiffeId: spiffeIDs[id])
+                from: vm,
+                securityGroupsEnforced: enforcement[id],
+                spiffeId: identities[id]?.spiffeID,
+                instanceIdentityPrincipalId: identities[id]?.principalID,
+                instanceIdentityStatus: identities[id] == nil ? .revoked : .enabled)
         }
     }
 
@@ -439,10 +451,49 @@ struct VMController: RouteCollection {
             try await interface.$securityGroupMemberships.load(on: req.db)
         }
 
-        return try await VMDetailResponse(
+        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
+        let enforcement = try await SecurityGroupService.enforcement(
+            for: vm,
+            offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+            on: req.db)
+        return VMDetailResponse(
             from: vm,
-            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db),
-            spiffeId: GuestIdentity.spiffeID(forVM: vm.requireID(), on: req.db))
+            securityGroupsEnforced: enforcement,
+            spiffeId: identity?.spiffeID,
+            instanceIdentityPrincipalId: identity?.principalID,
+            instanceIdentityStatus: identity == nil ? .revoked : .enabled)
+    }
+
+    /// The one project role held by this VM's instance identity. This follows
+    /// the VM detail authorization boundary instead of requiring visibility
+    /// into the project's complete member inventory.
+    func projectGrant(req: Request) async throws -> VMProjectGrantResponse {
+        let vm = try await fetchVMWithAction(req: req, action: "vm:read")
+        let vmID = try vm.requireID()
+        guard let identity = try await GuestIdentity.registration(forVM: vmID, on: req.db) else {
+            return VMProjectGrantResponse(grant: nil)
+        }
+
+        let bindings = try await RoleBindingService.activeBindings(
+            principalType: .workload,
+            principalID: identity.principalID,
+            nodeType: .project,
+            nodeID: vm.$project.id,
+            on: req.db)
+        guard let binding = bindings.first else {
+            return VMProjectGrantResponse(grant: nil)
+        }
+
+        let displayNames = try await RoleDisplayNames.forRoleIDs([binding.roleID], on: req.db)
+        return VMProjectGrantResponse(
+            grant: ProjectMemberController.ProjectWorkloadGrantResponse(
+                registrationId: identity.principalID,
+                spiffeId: identity.spiffeID,
+                vmId: vmID,
+                displayName: vm.name,
+                role: binding.roleID,
+                roleDisplayName: displayNames.displayName(forRoleID: binding.roleID),
+                grantedAt: binding.createdAt))
     }
 
     func create(req: Request) async throws -> Response {
@@ -1081,6 +1132,7 @@ struct VMController: RouteCollection {
                         vmID: vmID,
                         organizationID: rootOrganizationID,
                         createdBy: userID,
+                        configuration: req.controlPlaneConfiguration,
                         on: db
                     )
 
@@ -1652,16 +1704,25 @@ struct VMController: RouteCollection {
         for vm: VM, on req: Request, resolvingEnforcement: Bool = true
     ) async throws -> VMDetailResponse {
         try await loadInterfaces(for: vm, on: req.db)
-        return try await VMDetailResponse(
+        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
+        let enforcement =
+            resolvingEnforcement
+            ? try await SecurityGroupService.enforcement(
+                for: vm,
+                offlineGrace: req.controlPlaneConfiguration.double(
+                    .siteControllerOfflineGraceSeconds),
+                on: req.db) : nil
+        return VMDetailResponse(
             from: vm,
-            securityGroupsEnforced: resolvingEnforcement
-                ? SecurityGroupService.enforcement(for: vm, on: req.db) : nil,
+            securityGroupsEnforced: enforcement,
             // Deliberately not behind `resolvingEnforcement`: that flag exists
             // because the enforcement walk costs its own queries and answers
             // nothing for a VM being torn down. This is one indexed point
             // lookup, and a client polling a delete still wants to know which
             // identity is going away.
-            spiffeId: GuestIdentity.spiffeID(forVM: vm.requireID(), on: req.db))
+            spiffeId: identity?.spiffeID,
+            instanceIdentityPrincipalId: identity?.principalID,
+            instanceIdentityStatus: identity == nil ? .revoked : .enabled)
     }
 
     /// The `202` body every accepted VM lifecycle mutation answers with
@@ -1847,10 +1908,17 @@ struct VMController: RouteCollection {
             try await interface.$observedAddresses.load(on: req.db)
             try await interface.$securityGroupMemberships.load(on: req.db)
         }
-        return try await VMDetailResponse(
+        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
+        let enforcement = try await SecurityGroupService.enforcement(
+            for: vm,
+            offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+            on: req.db)
+        return VMDetailResponse(
             from: vm,
-            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db),
-            spiffeId: GuestIdentity.spiffeID(forVM: vm.requireID(), on: req.db))
+            securityGroupsEnforced: enforcement,
+            spiffeId: identity?.spiffeID,
+            instanceIdentityPrincipalId: identity?.principalID,
+            instanceIdentityStatus: identity == nil ? .revoked : .enabled)
     }
 
     func start(req: Request) async throws -> Response {
@@ -1876,7 +1944,10 @@ struct VMController: RouteCollection {
             let agent = try await Agent.find(agentUUID, on: req.db),
             agent.supportsInterVMNetworking
         {
-            let authority = try await SiteNetworkAuthority.resolve(forAgent: agent, on: req.db)
+            let authority = try await SiteNetworkAuthority.resolve(
+                forAgent: agent,
+                offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+                on: req.db)
             if let refusal = SiteNetworkAuthority.refusal(
                 authority, host: agent,
                 consequence: "this VM's network cannot be realized and it would never boot")

@@ -1,15 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, Users, UsersRound } from "lucide-react";
+import { Plus, Server, Users, UsersRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useProjectMembers, usePermissions } from "@/lib/hooks";
+import {
+  useProjectMembers,
+  usePermissions,
+  useProjectVMPrincipals,
+} from "@/lib/hooks";
 import { MembersTable } from "./members-table";
 import { GroupGrantsTable } from "./group-grants-table";
 import { AddMemberDialog } from "./add-member-dialog";
 import { AddGroupDialog } from "./add-group-dialog";
+import { VMGrantsTable } from "./vm-grants-table";
 
 interface ProjectMembersSectionProps {
   projectId: string;
@@ -21,6 +26,8 @@ export function ProjectMembersSection({
   organizationId,
 }: ProjectMembersSectionProps) {
   const { data, isLoading } = useProjectMembers(projectId);
+  const { data: vms = [], isLoading: vmsLoading } =
+    useProjectVMPrincipals(projectId);
   const { permissions } = usePermissions([
     {
       key: "set_policy",
@@ -35,6 +42,7 @@ export function ProjectMembersSection({
 
   const users = data?.users ?? [];
   const groups = data?.groups ?? [];
+  const workloads = data?.workloads ?? [];
 
   return (
     <Card className="bg-card border-border">
@@ -59,6 +67,10 @@ export function ProjectMembersSection({
               <TabsTrigger value="groups" className="data-[state=active]:bg-muted">
                 <UsersRound className="h-4 w-4 mr-2" />
                 Groups ({groups.length})
+              </TabsTrigger>
+              <TabsTrigger value="vms" className="data-[state=active]:bg-muted">
+                <Server className="h-4 w-4 mr-2" />
+                VMs ({vms.length})
               </TabsTrigger>
             </TabsList>
           </div>
@@ -101,6 +113,19 @@ export function ProjectMembersSection({
               projectId={projectId}
               grants={groups}
               isLoading={isLoading}
+              canManage={canManage}
+            />
+          </TabsContent>
+
+          <TabsContent value="vms">
+            <p className="mb-3 text-sm text-muted-foreground">
+              A role granted here is usable by anything running inside that VM.
+            </p>
+            <VMGrantsTable
+              projectId={projectId}
+              vms={vms}
+              grants={workloads.filter((grant) => grant.vmId != null)}
+              isLoading={isLoading || vmsLoading}
               canManage={canManage}
             />
           </TabsContent>

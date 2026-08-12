@@ -223,7 +223,7 @@ extension Application {
     /// The audience defaults to the control plane's own SPIFFE ID, which is
     /// what a workload naturally names when minting a token for us.
     func configureJWTSVIDAuthentication() {
-        guard Environment.get("SPIFFE_JWT_SVID_AUTH_ENABLED")?.lowercased() == "true" else { return }
+        guard controlPlaneConfiguration.bool(.spiffeJWTSVIDAuthEnabled) == true else { return }
 
         guard let registration = spireRegistrationService else {
             logger.warning(
@@ -236,10 +236,10 @@ extension Application {
         }
 
         let audience =
-            Environment.get("SPIFFE_JWT_AUDIENCE")
+            controlPlaneConfiguration.string(.spiffeJWTAudience)
             ?? "spiffe://\(registration.trustDomain)/control-plane"
         let refreshInterval =
-            Environment.get("SPIFFE_JWT_BUNDLE_REFRESH_INTERVAL").flatMap(TimeInterval.init) ?? 300
+            controlPlaneConfiguration.double(.spiffeJWTBundleRefreshInterval)
 
         jwtSVIDAuthorityStore = JWTSVIDAuthorityStore(
             source: SPIREServerJWTAuthoritySource(registration: registration),

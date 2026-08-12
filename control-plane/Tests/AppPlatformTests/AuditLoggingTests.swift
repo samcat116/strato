@@ -294,9 +294,9 @@ final class AuditLoggingTests {
     // MARK: - Retention
 
     /// Build an audit service with an explicit retention window, bypassing
-    /// the environment the rest of the config came from.
+    /// the startup-resolved configuration the rest of the config came from.
     private func auditService(on app: Application, retentionDays: Int?) -> AuditService {
-        var config = AuditConfig.fromEnvironment(app.environment)
+        var config = AuditConfig.fromConfiguration(app.controlPlaneConfiguration)
         config.retentionDays = retentionDays
         return AuditService(app: app, config: config)
     }
@@ -392,7 +392,7 @@ final class AuditLoggingTests {
     private func backgroundAuditService(
         on app: Application, backends: [any AuditBackend], maxQueueDepth: Int = 2048
     ) -> AuditService {
-        var config = AuditConfig.fromEnvironment(app.environment)
+        var config = AuditConfig.fromConfiguration(app.controlPlaneConfiguration)
         config.synchronousWrites = false
         config.maxQueueDepth = maxQueueDepth
         return AuditService(app: app, config: config, backends: backends)

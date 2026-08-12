@@ -4,7 +4,17 @@ import NIOSSL
 import Vapor
 import Valkey
 
-public func configure(_ app: Application) async throws {
+public func configure(
+    _ app: Application,
+    environmentVariables: [String: String] = ProcessInfo.processInfo.environment
+) async throws {
+    // Resolve every operator setting before constructing any service. A value
+    // that is present but malformed must stop startup rather than being treated
+    // as absent and replaced by a default at its eventual call site.
+    app.controlPlaneConfiguration = try await .load(
+        environmentVariables: environmentVariables,
+        for: app.environment)
+
     // Capture this process's identity once, before anything else, so the boot log
     // and the /health endpoints can report exactly who is answering. Two control
     // planes on the same port will report different instanceIds — the tell we
@@ -15,8 +25,8 @@ public func configure(_ app: Application) async throws {
         "Control plane booting",
         metadata: [
             "instanceId": .string(identity.instanceId.uuidString),
-            "version": .string(BuildInfo.version),
-            "gitSHA": .string(BuildInfo.gitSHA),
+            "version": .string(BuildInfo.version(configuration: app.controlPlaneConfiguration)),
+            "gitSHA": .string(BuildInfo.gitSHA(configuration: app.controlPlaneConfiguration)),
             "environment": .string(identity.environment),
         ])
 
@@ -36,7 +46,7 @@ public func configure(_ app: Application) async throws {
     // How far to trust `X-Forwarded-For`, shared by rate limiting, audit
     // `sourceIP`, and API-key `lastUsedIP` so one request resolves to one
     // address everywhere. Set before any middleware that reads it.
-    app.proxyTrust = .fromEnvironment()
+    app.proxyTrust = .fromConfiguration(app.controlPlaneConfiguration)
 
     // The shared HTTP client is for OPERATOR-CONFIGURED destinations only —
     // Loki, the audit/SSF forwarders, the SPIRE issuance-metrics endpoint, and
@@ -80,8 +90,7 @@ public func configure(_ app: Application) async throws {
     // duration). Registered first so it's the outermost middleware and times the
     // full request. Default on outside production; override with REQUEST_LOGGING.
     let requestLoggingEnabled =
-        Environment.get("REQUEST_LOGGING").flatMap(Bool.init)
-        ?? (app.environment != .production)
+        app.controlPlaneConfiguration.bool(.requestLogging)!
     if requestLoggingEnabled {
         app.middleware.use(RequestLoggingMiddleware())
         app.logger.info("Request logging enabled")
@@ -108,7 +117,7 @@ public func configure(_ app: Application) async throws {
     // that terminate TLS set HTTP_TLS_ENABLED=true (the Helm chart derives it from
     // the resolved browser-facing origin). Governs both HSTS and the Secure cookie
     // flag below.
-    let servedOverTLS = Environment.get("HTTP_TLS_ENABLED").flatMap(Bool.init) ?? false
+    let servedOverTLS = app.controlPlaneConfiguration.bool(.httpTLSEnabled)!
     // Insert at the front so it wraps Vapor's default ErrorMiddleware (which is
     // registered ahead of any `.use`-appended middleware). Otherwise the 4xx/5xx
     // responses ErrorMiddleware synthesizes from thrown errors would flow back out
@@ -153,7 +162,7 @@ public func configure(_ app: Application) async throws {
         app.coordination = CoordinationService(store: InMemoryCoordinationStore(), logger: app.logger)
         app.sessions.use(.fluent)
     } else {
-        guard let valkeyConfig = ValkeyStoreConfiguration.fromEnvironment() else {
+        guard let valkeyConfig = ValkeyStoreConfiguration.fromConfiguration(app.controlPlaneConfiguration) else {
             let error = ValkeyConfigurationError.notConfigured
             app.logger.critical("\(error.description)")
             throw error
@@ -184,7 +193,7 @@ public func configure(_ app: Application) async throws {
     // silently downgrade to plaintext storage — while an absent key runs
     // pass-through with a warning so existing deployments keep working until
     // the operator sets one.
-    let secretsEncryption = try SecretsEncryptionService.fromEnvironment()
+    let secretsEncryption = try SecretsEncryptionService.fromConfiguration(app.controlPlaneConfiguration)
     app.secretsEncryption = secretsEncryption
     if !secretsEncryption.isEnabled {
         app.logger.warning(
@@ -250,7 +259,7 @@ public func configure(_ app: Application) async throws {
     // the resolved user, and before authorization/controllers so throttled
     // requests are rejected before doing real work. Uses Valkey when configured
     // (shared across replicas), else a process-local counter. See issue #60.
-    let rateLimitConfig = RateLimitConfig.fromEnvironment(for: app.environment)
+    let rateLimitConfig = RateLimitConfig.fromConfiguration(app.controlPlaneConfiguration)
     let rateLimitFallbackStore = InMemoryRateLimitStore()
     let valkeyRateLimitStore =
         app.valkeyEnabled ? ValkeyRateLimitStore(client: app.coordinationValkey) : nil
@@ -304,9 +313,9 @@ public func configure(_ app: Application) async throws {
     app.middleware.use(UserSecurityMiddleware())
 
     // Configure WebAuthn
-    let relyingPartyID = Environment.get("WEBAUTHN_RELYING_PARTY_ID") ?? "localhost"
-    let relyingPartyName = Environment.get("WEBAUTHN_RELYING_PARTY_NAME") ?? "Strato"
-    let relyingPartyOrigin = Environment.get("WEBAUTHN_RELYING_PARTY_ORIGIN") ?? "http://localhost:8080"
+    let relyingPartyID = app.controlPlaneConfiguration.string(.webauthnRelyingPartyID)!
+    let relyingPartyName = app.controlPlaneConfiguration.string(.webauthnRelyingPartyName)!
+    let relyingPartyOrigin = app.controlPlaneConfiguration.string(.webauthnRelyingPartyOrigin)!
 
     app.configureWebAuthn(
         relyingPartyID: relyingPartyID,
@@ -316,7 +325,7 @@ public func configure(_ app: Application) async throws {
 
     // Whether visitors may create their own accounts. Read once at boot: the
     // login page asks for the effective answer over /api/public/registration.
-    app.registrationPolicy = .fromEnvironment()
+    app.registrationPolicy = .fromConfiguration(app.controlPlaneConfiguration)
     if !app.registrationPolicy.selfRegistrationEnabled {
         app.logger.info(
             "Self-registration is disabled; only the first (bootstrap) account may be self-created",
@@ -342,22 +351,22 @@ public func configure(_ app: Application) async throws {
         // TLS mode is configurable via DATABASE_TLS (disable|prefer|require) and
         // defaults to `require` outside development, so credentials and data are
         // encrypted whenever Postgres is remote. See issue #56.
-        let databaseTLS = try makeDatabaseTLS(for: app.environment, logger: app.logger)
-        let statementTimeout = try DatabaseStatementTimeout.fromEnvironment()
-        let migrationStatementTimeout = try DatabaseStatementTimeout.migrationFromEnvironment(
-            defaultingTo: statementTimeout
-        )
+        let databaseTLS = try makeDatabaseTLS(
+            configuration: app.controlPlaneConfiguration, logger: app.logger)
+        let statementTimeout = try DatabaseStatementTimeout(
+            milliseconds: app.controlPlaneConfiguration.int(.databaseStatementTimeoutMS)!)
+        let migrationStatementTimeout = try DatabaseStatementTimeout(
+            milliseconds: app.controlPlaneConfiguration.int(.databaseMigrationStatementTimeoutMS)!)
         databaseStatementTimeouts = .init(
             normal: statementTimeout,
             migration: migrationStatementTimeout
         )
         let databaseConfiguration = SQLPostgresConfiguration(
-            hostname: Environment.get("DATABASE_HOST") ?? "localhost",
-            port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:))
-                ?? SQLPostgresConfiguration.ianaPortNumber,
-            username: Environment.get("DATABASE_USERNAME") ?? "vapor_username",
-            password: Environment.get("DATABASE_PASSWORD") ?? "vapor_password",
-            database: Environment.get("DATABASE_NAME") ?? "vapor_database",
+            hostname: app.controlPlaneConfiguration.string(.databaseHost)!,
+            port: app.controlPlaneConfiguration.int(.databasePort)!,
+            username: app.controlPlaneConfiguration.string(.databaseUsername)!,
+            password: app.controlPlaneConfiguration.string(.databasePassword)!,
+            database: app.controlPlaneConfiguration.string(.databaseName)!,
             tls: databaseTLS
         )
         app.logger.info(
@@ -413,7 +422,7 @@ public func configure(_ app: Application) async throws {
     // crash mid-migration leaves a half-state no later boot can get past.
     // `SchemaMigrator` serializes the phase on a Postgres advisory lock and
     // commits each migration with its log row.
-    var schemaMigrationOptions = SchemaMigrator.Options.fromEnvironment()
+    var schemaMigrationOptions = SchemaMigrator.Options.fromConfiguration(app.controlPlaneConfiguration)
     schemaMigrationOptions.statementTimeouts = databaseStatementTimeouts
     try await SchemaMigrator.run(on: app, options: schemaMigrationOptions)
 
@@ -472,15 +481,13 @@ public func configure(_ app: Application) async throws {
     // so the first login begin doesn't pay the generate-and-store round trip.
     _ = try await DecoyKeyService.getKey(from: app)
 
-    // Configure scheduler service
-    // Default strategy can be configured via environment variable
-    let schedulingStrategy =
-        Environment.get("SCHEDULING_STRATEGY")
-        .flatMap { SchedulingStrategy(rawValue: $0) } ?? .leastLoaded
+    // Configure the scheduler service from the startup-resolved strategy.
+    let schedulingStrategy = SchedulingStrategy(
+        rawValue: app.controlPlaneConfiguration.string(.schedulingStrategy)!)!
     app.useScheduler(SchedulerService(logger: app.logger, defaultStrategy: schedulingStrategy))
     app.logger.info("Scheduler service initialized with strategy: \(schedulingStrategy.rawValue)")
 
-    // Configure SPIFFE/SPIRE authentication (if enabled via environment)
+    // Configure SPIFFE/SPIRE authentication when enabled in startup configuration.
     try await app.configureSPIRE()
 
     // Configure SPIRE join-token provisioning for the agent registration flow
@@ -489,7 +496,7 @@ public func configure(_ app: Application) async throws {
 
     // Guest JWT-SVID issuance is default-off until an operator supplies an
     // explicit audience allowlist.
-    try app.configureGuestIdentityIssuance()
+    try app.configureGuestIdentityIssuance(configuration: app.controlPlaneConfiguration)
 
     // Configure SVID issuance telemetry for the Workload Identity view
     // (requires SPIRE_METRICS_PROMETHEUS_URL; otherwise the panel stays empty)
@@ -515,7 +522,7 @@ public func configure(_ app: Application) async throws {
     // the config once here rather than re-reading the environment on every
     // access. Tests override the stored value after `configure` to opt into
     // recording.
-    app.iamDecisionLogConfig = .fromEnvironment(app.environment)
+    app.iamDecisionLogConfig = .fromConfiguration(app.controlPlaneConfiguration)
     app.lifecycle.use(IAMDecisionLogLifecycleHandler())
 
     // SSF poll delivery (issue #38): periodically drain poll-delivery streams

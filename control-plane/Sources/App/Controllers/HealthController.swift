@@ -34,7 +34,8 @@ struct HealthController: RouteCollection {
             checks: [
                 HealthCheck(name: "application", status: "up")
             ],
-            identity: ServiceIdentity(req.instanceIdentity)
+            identity: ServiceIdentity(
+                req.instanceIdentity, configuration: req.controlPlaneConfiguration)
         )
     }
 
@@ -76,7 +77,8 @@ struct HealthController: RouteCollection {
                 status: HealthResponse.draining,
                 timestamp: Date(),
                 checks: [HealthCheck(name: "drain", status: "draining")],
-                identity: ServiceIdentity(req.instanceIdentity)
+                identity: ServiceIdentity(
+                    req.instanceIdentity, configuration: req.controlPlaneConfiguration)
             )
             return try await response.encodeResponse(status: .serviceUnavailable, for: req)
         }
@@ -166,7 +168,8 @@ struct HealthController: RouteCollection {
             status: status,
             timestamp: Date(),
             checks: checks,
-            identity: ServiceIdentity(req.instanceIdentity)
+            identity: ServiceIdentity(
+                req.instanceIdentity, configuration: req.controlPlaneConfiguration)
         )
         // Degraded still serves traffic: pulling every replica out of rotation
         // because the coordination store blipped would be a worse outage than
@@ -209,11 +212,11 @@ struct ServiceIdentity: Content {
     let gitSHA: String
     let environment: String
 
-    init(_ identity: InstanceIdentity) {
+    init(_ identity: InstanceIdentity, configuration: ControlPlaneConfiguration) {
         self.instanceId = identity.instanceId.uuidString
         self.startedAt = identity.startedAt
-        self.version = BuildInfo.version
-        self.gitSHA = BuildInfo.gitSHA
+        self.version = BuildInfo.version(configuration: configuration)
+        self.gitSHA = BuildInfo.gitSHA(configuration: configuration)
         self.environment = identity.environment
     }
 }

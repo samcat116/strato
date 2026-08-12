@@ -37,8 +37,8 @@ struct OrgSPIREClientRegistry: Sendable {
         platform: SPIRERegistrationService,
         platformConfig: SPIRERegistrationConfig,
         logger: Logger,
-        orgTrustDomainsEnabled: Bool = OrgTrustDomainsFeature.isEnabled,
-        legacyEnrollmentsAllowed: Bool = OrgSPIREClientRegistry.legacyEnrollmentsAllowedFromEnvironment
+        orgTrustDomainsEnabled: Bool = false,
+        legacyEnrollmentsAllowed: Bool = true
     ) {
         self.platform = platform
         self.platformConfig = platformConfig
@@ -58,7 +58,11 @@ struct OrgSPIREClientRegistry: Sendable {
     static func fromApplication(_ app: Application) -> OrgSPIREClientRegistry? {
         guard let platform = app.spireRegistrationService else { return nil }
         return OrgSPIREClientRegistry(
-            platform: platform, platformConfig: platform.registrationConfig, logger: app.logger)
+            platform: platform,
+            platformConfig: platform.registrationConfig,
+            logger: app.logger,
+            orgTrustDomainsEnabled: app.controlPlaneConfiguration.bool(.spireOrgTrustDomainsEnabled)!,
+            legacyEnrollmentsAllowed: app.controlPlaneConfiguration.bool(.spireLegacyEnrollments)!)
     }
 
     /// The platform trust domain, taken from the service that actually
@@ -187,26 +191,6 @@ struct OrgSPIREClientRegistry: Sendable {
     /// Operators flip it off once every organization is provisioned, which is
     /// what makes "no new platform-domain agents" enforceable (phase 7).
     ///
-    static var legacyEnrollmentsAllowedFromEnvironment: Bool {
-        legacyEnrollmentsAllowed(rawValue: Environment.get("SPIRE_LEGACY_ENROLLMENTS"))
-    }
-
-    /// The parsing behind `legacyEnrollmentsAllowedFromEnvironment`, as a pure
-    /// function so it can be exercised without `setenv` — which is
-    /// process-global and races the other suites swift-testing runs
-    /// concurrently.
-    ///
-    /// Because the default is "allowed", the *disabling* spellings are matched
-    /// explicitly rather than by "anything that isn't `true`". The other way
-    /// round, `SPIRE_LEGACY_ENROLLMENTS=0` would read as allowed — the opposite
-    /// of what an operator writing it means.
-    static func legacyEnrollmentsAllowed(rawValue: String?) -> Bool {
-        guard let raw = rawValue?.trimmingCharacters(in: .whitespaces).lowercased(), !raw.isEmpty else {
-            return true
-        }
-        return !["false", "0", "no", "off"].contains(raw)
-    }
-
     /// The control plane's own identity. It lives in the platform trust domain
     /// no matter which domain the agent is issued in, so an org-domain agent
     /// cannot derive it from its own trust domain and has to be told.

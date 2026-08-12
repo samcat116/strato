@@ -451,6 +451,28 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/project-grant:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    get:
+      operationId: getVMProjectGrant
+      summary: Get the project role held by a VM's instance identity
+      description: >-
+        Returns only this VM principal's active role binding on its project.
+        Requires `vm:read` on the VM, matching the VM detail endpoint; it does
+        not require access to or load the project's complete member inventory.
+      tags: [Virtual Machines]
+      responses:
+        "200":
+          description: The VM's project grant, if one exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VMProjectGrantResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/vms/{vmID}/start:
     parameters:
       - $ref: "#/components/parameters/VMID"
@@ -4432,6 +4454,31 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/projects/{projectID}/vm-principals:
+    parameters:
+      - $ref: "#/components/parameters/ProjectID"
+    get:
+      operationId: listProjectVMPrincipals
+      summary: List a project's VM instance-identity principals
+      description: >-
+        Returns every VM the caller can read in the project, with only the
+        fields needed to manage its instance-identity role. This is a single
+        unpaged lightweight inventory operation; it does not hydrate VM
+        interfaces or security-group enforcement.
+      tags: [Projects]
+      responses:
+        "200":
+          description: The project's readable VM principals.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectVMPrincipal"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/projects/{projectID}/members/{userID}:
     parameters:
       - $ref: "#/components/parameters/ProjectID"
@@ -5698,7 +5745,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SetSeededRoleRequest"
+              $ref: "#/components/schemas/SetWorkloadRoleRequest"
       responses:
         "200":
           description: The role was granted.
@@ -9382,6 +9429,15 @@ components:
             means either an older control plane that does not report the field,
             or a registration an administrator revoked — never that the VM is
             exempt.
+        instanceIdentityPrincipalId:
+          type: string
+          format: uuid
+          description: >-
+            The workload-registration row id and IAM principal id for this
+            instance identity. Use it as the subject of a project workload
+            grant. Absent together with `spiffeId` after identity revocation.
+        instanceIdentityStatus:
+          $ref: "#/components/schemas/InstanceIdentityStatus"
         conditions:
           $ref: "#/components/schemas/ResourceConditions"
         createdAt:
@@ -12955,8 +13011,8 @@ components:
 
     ProjectMembers:
       type: object
-      description: A project's user role grants and group role grants.
-      required: [users, groups]
+      description: A project's direct user, group, and workload role grants.
+      required: [users, groups, workloads]
       properties:
         users:
           type: array
@@ -12966,6 +13022,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ProjectGroupGrant"
+        workloads:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectWorkloadGrant"
 
     ProjectMember:
       type: object
@@ -13020,6 +13080,66 @@ components:
           description: >-
             The group belongs to another organization — a cross-org grant,
             which UIs should render prominently.
+
+    ProjectWorkloadGrant:
+      type: object
+      required:
+        [registrationId, spiffeId, displayName, role, roleDisplayName]
+      properties:
+        registrationId:
+          type: string
+          format: uuid
+          description: The workload registration id and IAM principal id.
+        spiffeId:
+          type: string
+        vmId:
+          type: string
+          format: uuid
+          description: Present when this principal is a VM's instance identity.
+        displayName:
+          type: string
+        role:
+          type: string
+          format: uuid
+          description: The role's canonical `iam_roles` id.
+        roleDisplayName:
+          type: string
+        grantedAt:
+          type: string
+          format: date-time
+
+    VMProjectGrantResponse:
+      type: object
+      description: >-
+        The active project binding held by this VM's instance identity. The
+        `grant` field is absent when the identity has no project role.
+      properties:
+        grant:
+          $ref: "#/components/schemas/ProjectWorkloadGrant"
+
+    InstanceIdentityStatus:
+      type: string
+      enum: [enabled, revoked]
+      description: >-
+        Whether the VM's workload registration exists. Older control planes
+        omit this field; clients must treat absence as unknown, never revoked.
+
+    ProjectVMPrincipal:
+      type: object
+      required: [id, name, instanceIdentityStatus]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        spiffeId:
+          type: string
+        instanceIdentityPrincipalId:
+          type: string
+          format: uuid
+        instanceIdentityStatus:
+          $ref: "#/components/schemas/InstanceIdentityStatus"
 
     ProjectMemberRoleInput:
       type: string
@@ -13118,6 +13238,17 @@ components:
       properties:
         role:
           $ref: "#/components/schemas/SeededRoleName"
+
+    SetWorkloadRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          type: string
+          description: >-
+            The canonical id of a role returned by
+            `GET /api/iam/roles/bindable` for the project. Seeded role names
+            remain accepted for compatibility with older clients.
 
     WorkloadRegistration:
       type: object
