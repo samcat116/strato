@@ -524,7 +524,9 @@ VM's spec — being what libvirt starts when the VM boots:
   and a config-only write would leave the live domain at its old count while the
   API claimed convergence. Stop the VM, resize it, and start it again. A memory
   resize on a VM with no memory headroom remains config-only and lands when the
-  VM is next started.
+  VM is next started. While stopped, a vCPU shrink converges only after the
+  persistent libvirt definition has changed, so the following start uses the
+  requested count.
 
 Two host packages change what a node can be asked to run rather than how it
 runs: `ovmf` (the signed EDK2 firmware Secure Boot needs) and `swtpm` (which

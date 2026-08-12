@@ -134,11 +134,14 @@ running, so start them explicitly with `POST /api/vms/{id}/start`.
 
 ### Live vCPU shrink contract
 
-`deploy/compose/vcpu-shrink-test.sh` exercises STR-241 on the libvirt agent
-host. It starts a 2-vCPU VM, checks that API convergence agrees with
-`virsh vcpucount --live`, proves a running 2→1 request is rejected without
-changing either result, then stops, resizes, and starts the VM and checks both
-surfaces again at 1 vCPU:
+`deploy/compose/vcpu-shrink-test.sh` exercises STR-241 and STR-248 on the
+libvirt agent host. It starts a 2-vCPU VM, checks that API convergence agrees
+with `virsh vcpucount --live`, proves a running 2→1 request is rejected without
+changing either result, then stops and resizes the VM. Before restarting, it
+waits for the resize generation and verifies `virsh vcpucount --config` reports
+one persistent vCPU. It then starts the VM and checks the live and API surfaces
+again at one vCPU. The Ubuntu boot volume is 10 GiB so a normal cloud image has
+usable boot capacity:
 
 ```bash
 sudo deploy/compose/vcpu-shrink-test.sh \
