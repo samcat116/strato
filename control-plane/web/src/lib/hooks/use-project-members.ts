@@ -24,10 +24,31 @@ export function useProjectVMPrincipals(projectId: string) {
   });
 }
 
+/** The one project binding held by a VM's instance identity. */
+export function useVMProjectGrant(vmId: string, enabled = true) {
+  return useQuery({
+    queryKey: ["vm-project-grant", vmId],
+    queryFn: () => projectMembersApi.getVMProjectGrant(vmId),
+    select: (response) => response.grant,
+    enabled: enabled && !!vmId,
+  });
+}
+
 function useInvalidateMembers(projectId: string) {
   const queryClient = useQueryClient();
   return () =>
     queryClient.invalidateQueries({ queryKey: ["project-members", projectId] });
+}
+
+function useInvalidateWorkloadGrants(projectId: string) {
+  const queryClient = useQueryClient();
+  return () =>
+    Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ["project-members", projectId],
+      }),
+      queryClient.invalidateQueries({ queryKey: ["vm-project-grant"] }),
+    ]);
 }
 
 export function useGrantProjectMember(projectId: string) {
@@ -75,7 +96,7 @@ export function useRevokeProjectGroup(projectId: string) {
 }
 
 export function useSetProjectWorkloadRole(projectId: string) {
-  const invalidate = useInvalidateMembers(projectId);
+  const invalidate = useInvalidateWorkloadGrants(projectId);
   return useMutation({
     mutationFn: ({
       registrationId,
@@ -89,7 +110,7 @@ export function useSetProjectWorkloadRole(projectId: string) {
 }
 
 export function useRevokeProjectWorkload(projectId: string) {
-  const invalidate = useInvalidateMembers(projectId);
+  const invalidate = useInvalidateWorkloadGrants(projectId);
   return useMutation({
     mutationFn: (registrationId: string) =>
       projectMembersApi.revokeWorkload(projectId, registrationId),

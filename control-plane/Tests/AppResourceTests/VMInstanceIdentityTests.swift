@@ -279,6 +279,72 @@ final class VMInstanceIdentityTests {
         }
     }
 
+    @Test("A VM reader can fetch only that VM identity's project grant")
+    func vmReaderCanFetchTheVMProjectGrant() async throws {
+        try await withIdentityTestApp { app, user, _, project, token in
+            let created = try await self.createVM(
+                app, project: project, user: user, token: token, name: "directly-readable-vm",
+                suffix: "direct-reader")
+            let vmID = try #require(created.id)
+            let principalID = try #require(created.instanceIdentityPrincipalId)
+            let projectID = try project.requireID()
+
+            let reader = try await TestDataBuilder(db: app.db).createUser(
+                username: "directvmreader",
+                email: "directvmreader@example.com",
+                displayName: "Direct VM Reader",
+                isSystemAdmin: false)
+            let readerID = try reader.requireID()
+            let readerToken = try await reader.generateAPIKey(on: app.db)
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: readerID,
+                role: .viewer,
+                nodeType: .virtualMachine,
+                nodeID: vmID,
+                createdBy: user.id,
+                on: app.db)
+
+            // A direct VM grant is deliberately not project membership.
+            try await app.test(.GET, "/api/projects/\(projectID)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: readerToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+
+            try await app.test(.GET, "/api/vms/\(vmID)/project-grant") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: readerToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let response = try res.content.decode(VMController.VMProjectGrantResponse.self)
+                #expect(response.grant == nil)
+            }
+
+            try await RoleBindingService.grant(
+                principalType: .workload,
+                principalID: principalID,
+                role: .viewer,
+                nodeType: .project,
+                nodeID: projectID,
+                createdBy: user.id,
+                on: app.db)
+
+            try await app.test(.GET, "/api/vms/\(vmID)/project-grant") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: readerToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let response = try res.content.decode(VMController.VMProjectGrantResponse.self)
+                let grant = try #require(response.grant)
+                #expect(grant.registrationId == principalID)
+                #expect(grant.vmId == vmID)
+                #expect(grant.displayName == created.name)
+                #expect(grant.spiffeId == created.spiffeId)
+                #expect(grant.role == IAMRole.viewer.seededID)
+                #expect(grant.roleDisplayName == IAMRole.viewer.rawValue)
+            }
+        }
+    }
+
     @Test("The registry shows the VM's current name, not the one it had at create")
     func registryLabelTracksRenames() async throws {
         try await withIdentityTestApp { app, user, org, project, token in

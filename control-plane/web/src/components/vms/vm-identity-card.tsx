@@ -1,6 +1,5 @@
 "use client";
 
-import { useMemo } from "react";
 import {
   CircleHelp,
   Fingerprint,
@@ -24,9 +23,9 @@ import {
   projectMemberErrorMessage,
   useBindableRoles,
   usePermissions,
-  useProjectMembers,
   useRevokeProjectWorkload,
   useSetProjectWorkloadRole,
+  useVMProjectGrant,
 } from "@/lib/hooks";
 import { warnAboutGrantCeilings } from "@/lib/grant-ceilings";
 import type { VM } from "@/types/api";
@@ -38,8 +37,11 @@ interface VMIdentityCardProps {
 
 export function VMIdentityCard({ vm }: VMIdentityCardProps) {
   const projectId = vm.projectId ?? "";
-  const { data: members, isLoading: membersLoading } =
-    useProjectMembers(projectId);
+  const {
+    data: grant,
+    isLoading: grantLoading,
+    isError: grantUnavailable,
+  } = useVMProjectGrant(vm.id, !!vm.instanceIdentityPrincipalId);
   const { data: roles = [], isLoading: rolesLoading } = useBindableRoles(
     "project",
     projectId
@@ -57,15 +59,6 @@ export function VMIdentityCard({ vm }: VMIdentityCardProps) {
   );
   const setRole = useSetProjectWorkloadRole(projectId);
   const revoke = useRevokeProjectWorkload(projectId);
-
-  const grant = useMemo(
-    () =>
-      members?.workloads?.find(
-        (candidate) =>
-          candidate.registrationId === vm.instanceIdentityPrincipalId
-      ),
-    [members?.workloads, vm.instanceIdentityPrincipalId]
-  );
   const isPending = setRole.isPending || revoke.isPending;
   const canManage = permissions.set_policy && !!vm.instanceIdentityPrincipalId;
 
@@ -182,12 +175,16 @@ export function VMIdentityCard({ vm }: VMIdentityCardProps) {
                   <Select
                     value={grant?.role}
                     onValueChange={handleRoleChange}
-                    disabled={isPending || rolesLoading || membersLoading}
+                    disabled={
+                      isPending || rolesLoading || grantLoading || grantUnavailable
+                    }
                   >
                     <SelectTrigger className="bg-background border-border text-foreground">
                       <SelectValue
                         placeholder={
-                          membersLoading
+                          grantUnavailable
+                            ? "Role unavailable"
+                            : grantLoading
                             ? "Loading access..."
                             : grant?.roleDisplayName ?? "No role assigned"
                         }
@@ -201,6 +198,14 @@ export function VMIdentityCard({ vm }: VMIdentityCardProps) {
                       ))}
                     </SelectContent>
                   </Select>
+                ) : grantUnavailable ? (
+                  <p className="text-sm font-medium text-muted-foreground">
+                    Role unavailable
+                  </p>
+                ) : grantLoading ? (
+                  <p className="text-sm font-medium text-muted-foreground">
+                    Loading access...
+                  </p>
                 ) : grant ? (
                   <Badge variant="secondary">{grant.roleDisplayName}</Badge>
                 ) : (

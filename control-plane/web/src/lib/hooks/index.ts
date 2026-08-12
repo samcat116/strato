@@ -152,6 +152,7 @@ export { useCurrentOrgAccess } from "./use-current-org-access";
 export {
   useProjectMembers,
   useProjectVMPrincipals,
+  useVMProjectGrant,
   useGrantProjectMember,
   useUpdateProjectMemberRole,
   useRevokeProjectMember,

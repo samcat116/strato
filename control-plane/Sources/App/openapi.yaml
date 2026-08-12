@@ -421,6 +421,28 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/project-grant:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    get:
+      operationId: getVMProjectGrant
+      summary: Get the project role held by a VM's instance identity
+      description: >-
+        Returns only this VM principal's active role binding on its project.
+        Requires `vm:read` on the VM, matching the VM detail endpoint; it does
+        not require access to or load the project's complete member inventory.
+      tags: [Virtual Machines]
+      responses:
+        "200":
+          description: The VM's project grant, if one exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VMProjectGrantResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/vms/{vmID}/start:
     parameters:
       - $ref: "#/components/parameters/VMID"
@@ -13015,6 +13037,15 @@ components:
         grantedAt:
           type: string
           format: date-time
+
+    VMProjectGrantResponse:
+      type: object
+      description: >-
+        The active project binding held by this VM's instance identity. The
+        `grant` field is absent when the identity has no project role.
+      properties:
+        grant:
+          $ref: "#/components/schemas/ProjectWorkloadGrant"
 
     InstanceIdentityStatus:
       type: string

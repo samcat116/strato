@@ -156,6 +156,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vms/{vmID}/project-grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get the project role held by a VM's instance identity
+         * @description Returns only this VM principal's active role binding on its project. Requires `vm:read` on the VM, matching the VM detail endpoint; it does not require access to or load the project's complete member inventory.
+         */
+        get: operations["getVMProjectGrant"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vms/{vmID}/start": {
         parameters: {
             query?: never;
@@ -7430,6 +7453,10 @@ export interface components {
             /** Format: date-time */
             grantedAt?: string;
         };
+        /** @description The active project binding held by this VM's instance identity. The `grant` field is absent when the identity has no project role. */
+        VMProjectGrantResponse: {
+            grant?: components["schemas"]["ProjectWorkloadGrant"];
+        };
         /**
          * @description Whether the VM's workload registration exists. Older control planes omit this field; clients must treat absence as unknown, never revoked.
          * @enum {string}
@@ -9923,6 +9950,33 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    getVMProjectGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The VM's project grant, if one exists. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VMProjectGrantResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     startVM: {

@@ -6,6 +6,7 @@ import type {
   ProjectMembers,
   ProjectRole,
   ProjectVMPrincipal,
+  VMProjectGrantResponse,
 } from "@/types/api";
 
 export const projectMembersApi = {
@@ -17,6 +18,10 @@ export const projectMembersApi = {
     return api.get<ProjectVMPrincipal[]>(
       `/api/projects/${projectId}/vm-principals`
     );
+  },
+
+  getVMProjectGrant(vmId: string): Promise<VMProjectGrantResponse> {
+    return api.get<VMProjectGrantResponse>(`/api/vms/${vmId}/project-grant`);
   },
 
   grant(

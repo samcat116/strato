@@ -351,6 +351,10 @@ export interface ProjectWorkloadGrant {
   grantedAt?: string;
 }
 
+export interface VMProjectGrantResponse {
+  grant?: ProjectWorkloadGrant;
+}
+
 export interface ProjectVMPrincipal {
   id: string;
   name: string;
