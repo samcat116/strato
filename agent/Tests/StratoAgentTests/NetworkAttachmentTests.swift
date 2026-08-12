@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 import Testing
 
 @testable import StratoAgentCore
@@ -63,6 +64,28 @@ struct NetworkAttachmentTests {
         #expect(subnet6CIDR(ip6Address: "fd12::1", prefixLength: nil) == nil)
         #expect(subnet6CIDR(ip6Address: "not-an-ip", prefixLength: 64) == nil)
         #expect(subnet6CIDR(ip6Address: "fd12::1", prefixLength: 129) == nil)
+    }
+
+    @Test("Firecracker MMDS opts in only individually enabled NICs")
+    func firecrackerMMDSInterfacePlan() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "private", attachment: .tap(interface: "tap0"), metadataEnabled: false),
+            ResolvedNetworkAttachment(
+                network: "service", attachment: .tap(interface: "tap1"), metadataEnabled: true),
+            ResolvedNetworkAttachment(
+                network: "legacy", attachment: .tap(interface: "tap2"), metadataEnabled: false),
+            ResolvedNetworkAttachment(
+                network: "management", attachment: .tap(interface: "tap3"), metadataEnabled: true),
+        ]
+        #expect(FirecrackerMMDSInterfacePlan.interfaceIDs(for: attachments) == ["eth1", "eth3"])
+
+        let networks = [
+            NetworkSpec(network: "private", networkId: UUID(), metadataEnabled: false),
+            NetworkSpec(network: "unknown", networkId: UUID(), metadataEnabled: nil),
+            NetworkSpec(network: "service", networkId: UUID(), metadataEnabled: true),
+        ]
+        #expect(FirecrackerMMDSInterfacePlan.interfaceIDs(for: networks) == ["eth2"])
     }
 
 }

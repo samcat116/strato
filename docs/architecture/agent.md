@@ -1248,6 +1248,35 @@ would be wrong:
 A nil `metadata` on a desired entry is authoritative and withdraws what we
 serve for that VM.
 
+### Firecracker MMDS (a refreshed snapshot)
+
+Firecracker VMs use the same `MetadataStore` and EC2 renderer, but a different
+transport (STR-67). `FirecrackerService.createVM` opts each
+`metadataEnabled` NIC into MMDS by its Firecracker interface id (`eth0`,
+`eth1`, ...), configures **MMDS v2**, and pushes the nested `/latest`
+document before the VM boots. MMDS terminates inside Firecracker, so this path
+does not need an OVN localport, network namespace, host listener, or any other
+host networking. A NIC not named in the MMDS configuration cannot reach it.
+
+Unlike the OVN listener below, MMDS is **not a read-through view** of
+`MetadataStore`. It is a per-VMM snapshot replaced with `PUT /mmds`. After
+each desired-state sync records metadata, the agent re-renders the store's
+generation-guarded value and replaces each managed Firecracker VM's MMDS
+snapshot; equal-generation metadata-only edits therefore propagate, and a nil,
+withdrawn, disabled, or agent-globally-disabled document replaces the old
+snapshot with an empty object. The service caches the last successfully pushed
+bytes only to avoid an identical PUT. Re-adoption performs the same refresh
+from the durable metadata store immediately, then normal syncs remain the retry
+mechanism.
+
+That copy boundary is an intentional semantic difference: metadata mutations
+become visible to a Firecracker guest **no sooner than the next agent sync**, and
+the guest reads the last successful snapshot between syncs. Freshness is thus
+bounded by desired-state sync cadence rather than request time. This applies to
+Firecracker **VMs only**. Sandboxes are not cloud-init consumers and keep their
+separate `SandboxConfigDrive` guest contract; the sandbox runtime never
+configures MMDS.
+
 ### Instance metadata server (the guest-facing listener)
 
 `StratoAgentCore/MetadataService/` is what guests actually talk to (STR-56):

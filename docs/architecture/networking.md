@@ -37,11 +37,13 @@ Most of the layered model below is implemented. What exists today:
   subnet by default, per-family NIC address rows, RA + DHCPv6 delivery.
 - **Instance metadata (IMDS)**: guests read their own metadata over HTTP at
   `169.254.169.254` / `[fd00:ec2::254]` behind a mandatory IMDSv2-style token
-  handshake (STR-56). The document rides the sync (wire v26), the OVN
-  localport + per-chassis namespace carry it (wire v27), guests are told how
-  to reach the addresses (STR-53), and security groups can't take that
-  reachability away (STR-54) while an operator still can, one VM at a time
-  (`VM.metadataEnabled`, STR-185) — see §Instance metadata (IMDS).
+  handshake (STR-56). The document rides the sync (wire v26). QEMU guests use
+  the OVN localport + per-chassis namespace transport (wire v27); Firecracker
+  VMs use a v2 MMDS snapshot configured per opted-in NIC and refreshed by the
+  agent on each sync (STR-67). Guests are told how to reach the addresses
+  (STR-53), and security groups can't take that reachability away (STR-54)
+  while an operator still can, one VM at a time (`VM.metadataEnabled`,
+  STR-185) — see §Instance metadata (IMDS).
 
 What genuinely remains missing (details in §Known gaps):
 
@@ -204,7 +206,8 @@ was built for, so a re-indexed network re-realizes.
 was actually built for, so turning a resolver on re-realizes exactly the
 namespaces that need it rather than all of them or none.
 
-The localport is the *transport* half of the IMDS story. The *payload* half
+For QEMU on OVN, the localport is the *transport* half of the IMDS story;
+Firecracker uses its VMM-local MMDS transport instead. The *payload* half
 is the per-VM metadata document itself: the control plane builds it (the
 factory extension in `InstanceMetadataFactory.swift`) and
 `DesiredStateAssembler` attaches it to each VM's

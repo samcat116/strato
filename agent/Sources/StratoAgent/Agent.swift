@@ -2665,6 +2665,11 @@ extension Agent {
                 // `metadataNetworks` list, so there is no second derivation to
                 // drift.
                 await reconcileMetadataServers(networks: metadataNetworks)
+                // Firecracker has no listener reading `MetadataStore`: MMDS is
+                // a snapshot held by each VMM. Refresh managed microVMs from
+                // the generation-guarded store after `apply`, including
+                // equal-generation metadata-only edits and withdrawals.
+                await refreshFirecrackerMetadata(for: message.vms)
                 // Declarative agent self-update (issue #434), after the
                 // reconciler so freshly enqueued work items are visible to the
                 // precondition gate — the update only runs on a sync that
@@ -3761,6 +3766,14 @@ extension Agent: ReconcileActuator {
         managedVMs[item.id] = entry.with(spec: spec)
         orphanedVMs.removeValue(forKey: item.id)
         persistManifest()
+
+        // A surviving Firecracker process also kept its MMDS store, but an
+        // older process may have no data and the agent's durable metadata copy
+        // may be newer. Refresh immediately after adoption rather than waiting
+        // for another desired-state sync; failure is retried by that next sync.
+        if entry.hypervisorType == .firecracker {
+            await refreshFirecrackerMetadata(vmId: item.id, using: service)
+        }
 
         logger.info(
             "Orphaned VM re-adopted and managed again",
@@ -4913,7 +4926,9 @@ extension Agent: ReconcileActuator {
         do {
             try await service.createVM(
                 vmId: item.id, spec: realizedSpec, imageInfo: desired.imageInfo,
-                networkAttachments: attachments, metadata: desired.metadata,
+                networkAttachments: attachments,
+                metadata: desired.hypervisorType == .firecracker && !metadataServiceEnabled
+                    ? nil : desired.metadata,
                 vsockCID: lease.cid)
         } catch {
             await networkOrchestrator.teardownAttachments(
@@ -5876,6 +5891,39 @@ extension Agent: ReconcileActuator {
 // MARK: - Instance metadata service (STR-56)
 
 extension Agent {
+
+    /// Push the current generation-guarded metadata into each managed
+    /// Firecracker VMM named by this desired-state payload. VMs omitted from a
+    /// partial sync retain their last snapshot, matching `MetadataStore`'s
+    /// blast-radius contract; newly created VMs are seeded in `createVM` and
+    /// adopted VMs are refreshed by `adoptVM`.
+    private func refreshFirecrackerMetadata(for desired: [DesiredVMState]) async {
+        guard let service = hypervisorServices[.firecracker] else { return }
+        for vm in desired where vm.hypervisorType == .firecracker {
+            let vmId = vm.vmId.uuidString
+            guard managedVMs[vmId]?.hypervisorType == .firecracker else { continue }
+            await refreshFirecrackerMetadata(vmId: vmId, using: service)
+        }
+    }
+
+    private func refreshFirecrackerMetadata(
+        vmId: String, using service: any HypervisorService
+    ) async {
+        guard let id = UUID(uuidString: vmId) else { return }
+        let metadata = metadataServiceEnabled ? await metadataStore.metadata(for: id) : nil
+        do {
+            try await service.refreshInstanceMetadata(vmId: vmId, metadata: metadata)
+        } catch {
+            // A snapshot refresh is retried on every sync and must not prevent
+            // the VM lifecycle reconciler from making progress.
+            logger.warning(
+                "Unable to refresh Firecracker MMDS snapshot",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
 
     /// Bring up the guest-facing metadata service.
     ///

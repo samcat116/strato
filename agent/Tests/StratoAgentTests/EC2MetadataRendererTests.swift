@@ -51,6 +51,13 @@ struct EC2MetadataRendererTests {
         EC2MetadataRenderer.render(path, for: metadata)
     }
 
+    private static func value(at path: [String], in document: JSONValue) -> JSONValue? {
+        path.reduce(Optional(document)) { value, component in
+            guard let value, case .object(let object) = value else { return nil }
+            return object[component]
+        }
+    }
+
     @Test("the root advertises exactly the servable EC2 categories")
     func rootListingGolden() {
         #expect(
@@ -185,5 +192,62 @@ struct EC2MetadataRendererTests {
         #expect(EC2MetadataRenderer.render(.network, for: minimal) == nil)
         #expect(EC2MetadataRenderer.render(.publicKeys, for: minimal) == nil)
         #expect(EC2MetadataRenderer.render(.tags, for: minimal) == nil)
+    }
+
+    @Test("the Firecracker MMDS snapshot carries the same EC2 leaves")
+    func mmdsSnapshotParity() throws {
+        let document = EC2MetadataRenderer.mmdsDocument(for: Self.metadata)
+
+        #expect(
+            Self.value(at: ["latest", "meta-data", "instance-id"], in: document)
+                == .string(try #require(Self.render(.instanceID))))
+        #expect(
+            Self.value(
+                at: [
+                    "latest", "meta-data", "network", "interfaces", "macs",
+                    "52:54:00:12:34:56", "subnet-ipv4-cidr-block",
+                ],
+                in: document)
+                == .string("10.20.30.0/24"))
+        #expect(
+            Self.value(
+                at: ["latest", "meta-data", "public-keys", "0", "openssh-key"],
+                in: document)
+                == .string("ssh-ed25519 AAAA-primary operator@example"))
+        #expect(
+            Self.value(at: ["latest", "meta-data", "tags", "instance", "Role"], in: document)
+                == .string("frontend"))
+        #expect(
+            Self.value(
+                at: ["latest", "meta-data", "tags", "instance", "not/a/path"],
+                in: document) == nil)
+        #expect(
+            Self.value(at: ["latest", "meta-data", "placement"], in: document) == nil)
+        #expect(
+            Self.value(at: ["latest", "user-data"], in: document)
+                == .string(CloudInitProvisioner.userDataDocument(for: Self.metadata)))
+
+        let identity = try #require(
+            Self.value(
+                at: ["latest", "dynamic", "instance-identity", "document"],
+                in: document))
+        guard case .string(let identityJSON) = identity else {
+            Issue.record("MMDS identity document was not a string leaf")
+            return
+        }
+        let identityObject = try #require(
+            JSONSerialization.jsonObject(with: Data(identityJSON.utf8)) as? [String: String])
+        #expect(identityObject["instanceId"] == Self.vmID.uuidString)
+
+        // The store is JSON-encodable without an Any-typed translation layer.
+        let encoded = try JSONEncoder().encode(document)
+        #expect(try JSONDecoder().decode(JSONValue.self, from: encoded) == document)
+    }
+
+    @Test("disabled metadata replaces MMDS with an empty snapshot")
+    func disabledMMDSSnapshot() {
+        let disabled = InstanceMetadata(
+            instanceId: Self.vmID, projectId: Self.projectID, serviceEnabled: false)
+        #expect(EC2MetadataRenderer.mmdsDocument(for: disabled) == .object([:]))
     }
 }

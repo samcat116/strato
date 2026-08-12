@@ -91,6 +91,14 @@ public protocol HypervisorService: Actor, Sendable {
         metadata: InstanceMetadata?, vsockCID: UInt32?
     ) async throws
 
+    /// Replaces any backend-local metadata snapshot for a managed VM.
+    ///
+    /// Network-served backends read from `MetadataStore` directly and use the
+    /// default no-op. Firecracker overrides this because MMDS holds its own
+    /// copy inside the VMM process; nil means replace that copy with an empty
+    /// store, never retain the previous document.
+    func refreshInstanceMetadata(vmId: String, metadata: InstanceMetadata?) async throws
+
     /// Makes whatever stored configuration this backend holds for a *stopped*
     /// VM able to satisfy `spec`, before the boot that will read it (STR-187).
     ///
@@ -348,6 +356,8 @@ public protocol HypervisorService: Actor, Sendable {
 // MARK: - Default Implementations
 
 public extension HypervisorService {
+    func refreshInstanceMetadata(vmId: String, metadata: InstanceMetadata?) async throws {}
+
     func attachNetworkInterface(
         vmId: String, spec: NetworkSpec, attachment: ResolvedNetworkAttachment
     ) async throws {

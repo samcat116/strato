@@ -23,6 +23,9 @@ actor FirecrackerService: HypervisorService {
     private var firecrackerClient: FirecrackerClient?
     private var vmManagers: [String: FirecrackerManager] = [:]
     private var vmSpecs: [String: VMSpec] = [:]
+    /// Last successfully installed MMDS snapshot. Avoids rewriting the VMM's
+    /// store on every level-triggered sync when the document did not change.
+    private var mmdsPayloads: [String: Data] = [:]
 
     init(
         logger: Logger,
@@ -57,9 +60,6 @@ actor FirecrackerService: HypervisorService {
     func createVM(
         vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil,
         networkAttachments: [ResolvedNetworkAttachment] = [],
-        // Accepted and unused: Firecracker guests boot from a kernel + rootfs
-        // with no seed ISO to render a hostname into. Delivering it means
-        // reaching the guest through MMDS, which is the IMDS work (STR-52).
         metadata: InstanceMetadata? = nil,
         // Firecracker's guest CID is private to its own process and its host
         // transport is a UDS, so it never consumes this host-global lease.
@@ -207,6 +207,20 @@ actor FirecrackerService: HypervisorService {
             try await manager.configureNetwork(networkInterface)
         }
 
+        // MMDS configuration is pre-boot state. Each Firecracker NIC must be
+        // opted in explicitly; a VM may therefore expose metadata through one
+        // interface while keeping another unable to reach the service. Seed
+        // the EC2-shaped snapshot before `bootVM` starts the guest so cloud-init
+        // cannot race the agent's first desired-state refresh.
+        let mmdsInterfaces = FirecrackerMMDSInterfacePlan.interfaceIDs(for: networkAttachments)
+        if !mmdsInterfaces.isEmpty {
+            try await manager.configureMMDS(
+                MMDSConfig(version: .v2, networkInterfaces: mmdsInterfaces))
+            let payload = try Self.mmdsPayload(for: metadata)
+            try await manager.setMMDSData(rawJSON: payload)
+            mmdsPayloads[vmId] = payload
+        }
+
         // Store references
         vmManagers[vmId] = manager
         vmSpecs[vmId] = spec
@@ -290,6 +304,7 @@ actor FirecrackerService: HypervisorService {
         // Clean up local state
         vmManagers.removeValue(forKey: vmId)
         vmSpecs.removeValue(forKey: vmId)
+        mmdsPayloads.removeValue(forKey: vmId)
 
         // Remove the VM's directory, which holds the rootfs materialized at
         // create. Same rule as the QEMU driver: one recursive removal rather
@@ -462,6 +477,37 @@ actor FirecrackerService: HypervisorService {
         vmSpecs[vmId] = spec
 
         return Self.vmStatus(from: info.state)
+    }
+
+    /// Replaces the VMM-local MMDS snapshot for a managed VM. MMDS remains
+    /// configured only on the NICs selected before boot; this live PUT updates
+    /// the data behind those interfaces without rebuilding or restarting the
+    /// guest.
+    func refreshInstanceMetadata(vmId: String, metadata: InstanceMetadata?) async throws {
+        guard let manager = vmManagers[vmId] else {
+            throw HypervisorServiceError.vmNotFound(vmId)
+        }
+        guard
+            let spec = vmSpecs[vmId],
+            !FirecrackerMMDSInterfacePlan.interfaceIDs(for: spec.networks).isEmpty
+        else {
+            return
+        }
+
+        let payload = try Self.mmdsPayload(for: metadata)
+        guard mmdsPayloads[vmId] != payload else { return }
+        try await manager.setMMDSData(rawJSON: payload)
+        mmdsPayloads[vmId] = payload
+        logger.info(
+            "Refreshed Firecracker MMDS snapshot",
+            metadata: ["vmId": .string(vmId), "bytes": .stringConvertible(payload.count)])
+    }
+
+    private static func mmdsPayload(for metadata: InstanceMetadata?) throws -> Data {
+        let document = metadata.map { EC2MetadataRenderer.mmdsDocument(for: $0) } ?? .object([:])
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(document)
     }
 
     /// Firecracker exposes the guest serial console on the firecracker process's
