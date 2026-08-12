@@ -18,7 +18,7 @@
 //! sandbox identity + boot nonce so the host can confirm which generation it
 //! reached.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::mem;
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::io::AsRawFd;
@@ -29,8 +29,8 @@ use strato_sandbox_init::config::{
 };
 use strato_sandbox_init::logbuf::LogBuffer;
 use strato_sandbox_init::protocol::{
-    decode_base64, decode_request, encode_line, Request, Response, WorkloadState,
-    CONTROL_PROTOCOL_VERSION,
+    decode_base64, decode_request, encode_line, read_request_line, Request, Response,
+    WorkloadState, CONTROL_PROTOCOL_VERSION,
 };
 
 use super::exec::{self, ExecRequest};
@@ -159,7 +159,7 @@ fn handle_connection(conn: OwnedFd, state: &GuestState) -> std::io::Result<()> {
     let mut first = String::new();
     loop {
         first.clear();
-        if reader.read_line(&mut first)? == 0 {
+        if read_request_line(&mut reader, &mut first)? == 0 {
             return Ok(()); // closed without ever sending a request
         }
         if !first.trim().is_empty() {
@@ -195,15 +195,17 @@ fn handle_connection(conn: OwnedFd, state: &GuestState) -> std::io::Result<()> {
                     cols,
                 },
                 state,
+                current_nonce(state),
             );
             Ok(())
         }
         Ok(Request::StreamLogs { since_seq }) => {
-            logs::run_follow_stream(reader, writer, since_seq, &state.logs);
+            logs::run_follow_stream(reader, writer, since_seq, &state.logs, current_nonce(state));
             Ok(())
         }
         Ok(_) => {
             let resp = Response::Error {
+                nonce: current_nonce(state),
                 message: "stdin/stdin_eof/resize are only valid within an exec session".to_string(),
             };
             writer.write_all(encode_line(&resp).as_bytes())?;
@@ -211,6 +213,7 @@ fn handle_connection(conn: OwnedFd, state: &GuestState) -> std::io::Result<()> {
         }
         Err(e) => {
             let resp = Response::Error {
+                nonce: current_nonce(state),
                 message: format!("undecodable request: {e}"),
             };
             writer.write_all(encode_line(&resp).as_bytes())?;
@@ -222,7 +225,7 @@ fn handle_connection(conn: OwnedFd, state: &GuestState) -> std::io::Result<()> {
 /// v1-style request/response loop for control connections.
 fn serve_control(
     first: Request,
-    reader: BufReader<std::fs::File>,
+    mut reader: BufReader<std::fs::File>,
     mut writer: std::fs::File,
     state: &GuestState,
 ) -> std::io::Result<()> {
@@ -230,8 +233,11 @@ fn serve_control(
     writer.write_all(encode_line(&response).as_bytes())?;
     writer.flush()?;
 
-    for line in reader.lines() {
-        let line = line?;
+    let mut line = String::new();
+    loop {
+        if read_request_line(&mut reader, &mut line)? == 0 {
+            break;
+        }
         if line.trim().is_empty() {
             continue;
         }
@@ -244,10 +250,12 @@ fn serve_control(
                 | Request::Reidentify { .. }),
             ) => control_response(req, state),
             Ok(_) => Response::Error {
+                nonce: current_nonce(state),
                 message: "only ping/get_status/sync_clock/launch/reidentify are valid on a control connection"
                     .to_string(),
             },
             Err(e) => Response::Error {
+                nonce: current_nonce(state),
                 message: format!("undecodable request: {e}"),
             },
         };
@@ -261,8 +269,11 @@ fn control_response(request: Request, state: &GuestState) -> Response {
     match request {
         // Clock sync is stateless — no status lock needed.
         Request::SyncClock { unix_nanos } => match set_realtime_clock(unix_nanos) {
-            Ok(()) => Response::ClockSynced,
+            Ok(()) => Response::ClockSynced {
+                nonce: current_nonce(state),
+            },
             Err(e) => Response::Error {
+                nonce: current_nonce(state),
                 message: format!("clock_settime failed: {e}"),
             },
         },
@@ -330,6 +341,10 @@ fn control_response(request: Request, state: &GuestState) -> Response {
     }
 }
 
+fn current_nonce(state: &GuestState) -> String {
+    state.status.lock().expect("status poisoned").nonce.clone()
+}
+
 /// The `launch` request's payload, grouped so the handler takes one argument
 /// rather than eight.
 struct LaunchArgs {
@@ -365,6 +380,7 @@ fn handle_launch(state: &GuestState, args: LaunchArgs) -> Response {
         let mut s = state.status.lock().expect("status poisoned");
         if s.state != WorkloadState::Held {
             return Response::Error {
+                nonce: s.nonce.clone(),
                 message: format!(
                     "launch is only valid in the held state (state: {:?})",
                     s.state
@@ -407,6 +423,7 @@ fn handle_launch(state: &GuestState, args: LaunchArgs) -> Response {
             let mut s = state.status.lock().expect("status poisoned");
             s.state = WorkloadState::Held;
             return Response::Error {
+                nonce: s.nonce.clone(),
                 message: format!("configure launch network: {e}"),
             };
         }
@@ -420,6 +437,7 @@ fn handle_launch(state: &GuestState, args: LaunchArgs) -> Response {
             let mut s = state.status.lock().expect("status poisoned");
             s.state = WorkloadState::Held;
             return Response::Error {
+                nonce: s.nonce.clone(),
                 message: format!("resolve launch process: {e}"),
             };
         }
@@ -433,12 +451,17 @@ fn handle_launch(state: &GuestState, args: LaunchArgs) -> Response {
             let mut s = state.status.lock().expect("status poisoned");
             s.sandbox_id = sandbox_id;
             s.nonce = identity_nonce;
-            Response::Launched
+            Response::Launched {
+                nonce: s.nonce.clone(),
+            }
         }
         Err(message) => {
             let mut s = state.status.lock().expect("status poisoned");
             s.state = WorkloadState::Held;
-            Response::Error { message }
+            Response::Error {
+                nonce: s.nonce.clone(),
+                message,
+            }
         }
     }
 }
@@ -532,6 +555,7 @@ fn handle_reidentify(state: &GuestState, args: ReidentifyArgs) -> Response {
         let s = state.status.lock().expect("status poisoned");
         if s.sandbox_id != expected_sandbox_id || s.nonce != expected_nonce {
             return Response::Error {
+                nonce: s.nonce.clone(),
                 message: format!(
                     "source identity mismatch: expected {expected_sandbox_id}/{expected_nonce}, got {}/{}",
                     s.sandbox_id, s.nonce
@@ -544,23 +568,27 @@ fn handle_reidentify(state: &GuestState, args: ReidentifyArgs) -> Response {
         Ok(bytes) => bytes,
         Err(e) => {
             return Response::Error {
+                nonce: current_nonce(state),
                 message: format!("RNG reseed failed: {e}"),
             };
         }
     };
     if let Err(e) = crate::linux::net::set_hostname(&hostname) {
         return Response::Error {
+            nonce: current_nonce(state),
             message: format!("set hostname failed: {e}"),
         };
     }
     *state.hostname.lock().expect("hostname poisoned") = Some(hostname);
     if let Err(e) = reset_machine_id(&entropy_bytes) {
         return Response::Error {
+            nonce: current_nonce(state),
             message: format!("reset machine-id failed: {e}"),
         };
     }
     if let Err(e) = set_realtime_clock(unix_nanos) {
         return Response::Error {
+            nonce: current_nonce(state),
             message: format!("clock_settime failed: {e}"),
         };
     }
@@ -571,6 +599,7 @@ fn handle_reidentify(state: &GuestState, args: ReidentifyArgs) -> Response {
     if let Some(network) = network.as_deref() {
         if let Err(e) = apply_network(state, network) {
             return Response::Error {
+                nonce: current_nonce(state),
                 message: format!("reconfigure network failed: {e}"),
             };
         }
@@ -587,12 +616,15 @@ fn handle_reidentify(state: &GuestState, args: ReidentifyArgs) -> Response {
     let mut s = state.status.lock().expect("status poisoned");
     if s.sandbox_id != expected_sandbox_id || s.nonce != expected_nonce {
         return Response::Error {
+            nonce: s.nonce.clone(),
             message: "source identity changed while re-identifying".to_string(),
         };
     }
     s.sandbox_id = sandbox_id;
     s.nonce = identity_nonce;
-    Response::Reidentified
+    Response::Reidentified {
+        nonce: s.nonce.clone(),
+    }
 }
 
 fn reset_machine_id(entropy: &[u8]) -> Result<(), String> {

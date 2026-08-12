@@ -424,6 +424,27 @@ final class DesiredStateAssemblerTests {
         #expect(!metadata.nics.contains { $0.networkId == missingNetworkID })
     }
 
+    @Test("Only IMDS-backed VMs publish a NoCloud seed capability")
+    func noCloudSeedCapabilityFollowsMetadataSource() {
+        let seedToken = UUID(uuidString: "11111111-2222-4333-8444-555555555555")!
+        let vm = VM(
+            name: "imds-vm", description: "d", image: "img", projectID: UUID(),
+            environment: "production", cpu: 2, memory: 1 << 31, disk: 1 << 34,
+            metadataSource: .imds, metadataSeedToken: seedToken)
+        vm.id = UUID()
+
+        let imds = InstanceMetadata.build(
+            vm: vm, vmId: vm.id!, resolvedInterfaces: [], region: nil,
+            availabilityZone: nil, instanceSPIFFEID: nil)
+        #expect(imds.noCloudSeedToken == seedToken)
+
+        vm.metadataSource = .iso
+        let iso = InstanceMetadata.build(
+            vm: vm, vmId: vm.id!, resolvedInterfaces: [], region: nil,
+            availabilityZone: nil, instanceSPIFFEID: nil)
+        #expect(iso.noCloudSeedToken == nil)
+    }
+
     // MARK: - Shape
 
     /// The assembler runs for every agent on every sync, so a per-VM query

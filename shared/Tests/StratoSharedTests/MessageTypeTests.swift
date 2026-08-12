@@ -31,14 +31,6 @@ struct MessageTypeTests {
         case .guestExecExit: return "guest_exec_exit"
         case .guestExecClose: return "guest_exec_close"
         case .guestExecClosed: return "guest_exec_closed"
-        case .sandboxExecStart: return "sandbox_exec_start"
-        case .sandboxExecStarted: return "sandbox_exec_started"
-        case .sandboxExecInput: return "sandbox_exec_input"
-        case .sandboxExecOutput: return "sandbox_exec_output"
-        case .sandboxExecResize: return "sandbox_exec_resize"
-        case .sandboxExecExit: return "sandbox_exec_exit"
-        case .sandboxExecClose: return "sandbox_exec_close"
-        case .sandboxExecClosed: return "sandbox_exec_closed"
         case .sandboxLog: return "sandbox_log"
         }
     }
@@ -50,8 +42,6 @@ struct MessageTypeTests {
         .success, .error, .vmLog,
         .guestExecStart, .guestExecStarted, .guestExecInput, .guestExecOutput,
         .guestExecResize, .guestExecExit, .guestExecClose, .guestExecClosed,
-        .sandboxExecStart, .sandboxExecStarted, .sandboxExecInput, .sandboxExecOutput,
-        .sandboxExecResize, .sandboxExecExit, .sandboxExecClose, .sandboxExecClosed,
         .sandboxLog,
     ]
 
@@ -118,6 +108,11 @@ struct MessageTypeTests {
         // of the state (wire v34, ADR 0001 stage 9, STR-151). These three were
         // the last durable-resource RPCs on the wire.
         "vm_reboot", "vm_restore", "sandbox_restore",
+        // The v43 sandbox-only exec stream was replaced by generalized guest
+        // exec messages in v44 and its temporary aliases were removed in v47
+        // (STR-244).
+        "sandbox_exec_start", "sandbox_exec_started", "sandbox_exec_input", "sandbox_exec_output",
+        "sandbox_exec_resize", "sandbox_exec_exit", "sandbox_exec_close", "sandbox_exec_closed",
     ]
 
     @Test("retired wire strings stay retired", arguments: retiredWireStrings)

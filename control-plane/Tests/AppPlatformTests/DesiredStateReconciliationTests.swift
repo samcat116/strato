@@ -15,6 +15,22 @@ import AppTestSupport
 @Suite("Desired State Reconciliation Tests", .serialized)
 final class DesiredStateReconciliationTests {
 
+    private static func healthyOverlayObservation(at checkedAt: Date = Date())
+        -> NodeDependencyObservation
+    {
+        NodeDependencyObservation(
+            id: .ovnOvs,
+            role: .networking,
+            desiredState: .required,
+            ownership: .observeOnly,
+            supervisorState: .active,
+            compatibility: .compatible,
+            functionalState: .healthy,
+            checkedAt: checkedAt,
+            lastHealthyAt: checkedAt,
+            affectedCapabilities: [.overlayNetworking])
+    }
+
     /// A network in the VM's project for a NIC to reference, created on first
     /// use. Nothing provisions one with a project (issue #765), and these tests
     /// only need the NIC to point somewhere real.
@@ -29,8 +45,11 @@ final class DesiredStateReconciliationTests {
         {
             return existing
         }
+        let project = try #require(try await Project.find(projectID, on: app.db))
+        let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
         let network = LogicalNetwork(
-            name: name, subnet: "192.168.1.0/24", gateway: "192.168.1.1", projectID: projectID)
+            name: name, subnet: "192.168.1.0/24", gateway: "192.168.1.1", projectID: projectID,
+            siteID: siteID)
         try await network.save(on: app.db)
         return network
     }
@@ -82,7 +101,8 @@ final class DesiredStateReconciliationTests {
         app: Application,
         vm: VM,
         named agentName: String = "recon-agent",
-        protocolVersion: Int
+        protocolVersion: Int,
+        placeVM: Bool = true
     ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: agentName,
@@ -93,15 +113,43 @@ final class DesiredStateReconciliationTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
-            protocolVersion: protocolVersion
+            networkCapability: .overlay,
+            protocolVersion: protocolVersion,
+            dependencyObservations: [Self.healthyOverlayObservation()]
         )
+        let project = try #require(try await Project.find(vm.$project.id, on: app.db))
+        let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
         let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: agentName,
+            message, agentName: agentName, siteID: siteID,
             organizationScope: orgID.map { .organization($0) })
-        vm.hypervisorId = agentUUID.uuidString
-        try await vm.save(on: app.db)
+        let site = try #require(try await Site.find(siteID, on: app.db))
+        if site.$networkControllerAgent.id == nil {
+            site.$networkControllerAgent.id = agentUUID
+            try await site.save(on: app.db)
+        }
+        if placeVM {
+            vm.hypervisorId = agentUUID.uuidString
+            try await vm.save(on: app.db)
+        }
         return agentUUID.uuidString
+    }
+
+    private func attachBootVolume(app: Application, vm: VM, agentID: String) async throws {
+        let owner = try #require(try await User.query(on: app.db).sort(\.$createdAt).first())
+        let boot = Volume(
+            name: "\(vm.name)-boot", description: "", projectID: vm.$project.id,
+            environment: vm.environment, size: vm.disk, format: .qcow2,
+            volumeType: .boot, status: .attached, createdByID: try owner.requireID())
+        boot.$vm.id = try vm.requireID()
+        boot.deviceName = VolumeDeviceName.disk(0).rawValue
+        boot.bootOrder = 0
+        boot.generation = 1
+        boot.observedGeneration = 1
+        try await boot.save(on: app.db)
+        try await placeVolume(
+            boot, on: agentID, at: "/var/lib/strato/volumes/\(try boot.requireID())/volume.qcow2",
+            state: .healthy, using: app.db)
     }
 
     private func report(
@@ -255,6 +303,7 @@ final class DesiredStateReconciliationTests {
     func syncAssemblyFromDatabase() async throws {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
+            try await self.attachBootVolume(app: app, vm: vm, agentID: agentId)
 
             vm.setFixtureDesiredStatus(.running)
             try await vm.save(on: app.db)
@@ -269,7 +318,10 @@ final class DesiredStateReconciliationTests {
             #expect(entry.spec.cpus == vm.cpu)
 
             // VMs on other agents are not included.
-            let other = try await app.desiredStateAssembler.assemble(agentId: UUID().uuidString)
+            let otherAgentID = try await self.registerAgent(
+                app: app, vm: vm, named: "recon-idle-agent",
+                protocolVersion: WireProtocol.currentVersion, placeVM: false)
+            let other = try await app.desiredStateAssembler.assemble(agentId: otherAgentID)
             #expect(other.vms.isEmpty)
         }
     }
@@ -278,6 +330,9 @@ final class DesiredStateReconciliationTests {
     func syncAssemblyIncludesNetworks() async throws {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
+            try await self.attachBootVolume(app: app, vm: vm, agentID: agentId)
+            let project = try #require(try await Project.find(vm.$project.id, on: app.db))
+            let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
 
             // A project-scoped network the VM references via a NIC.
             let network = LogicalNetwork(
@@ -286,7 +341,8 @@ final class DesiredStateReconciliationTests {
                 gateway: "10.20.0.1",
                 projectID: vm.$project.id,
                 externalAccess: true,
-                generation: 3
+                generation: 3,
+                siteID: siteID
             )
             try await network.save(on: app.db)
             let nic = VMNetworkInterface(
@@ -318,10 +374,13 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, user, vm, _ in
             let agentId = try await self.registerAgent(
                 app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
+            try await self.attachBootVolume(app: app, vm: vm, agentID: agentId)
+            let project = try #require(try await Project.find(vm.$project.id, on: app.db))
+            let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
 
             let network = LogicalNetwork(
                 name: "fip-net", subnet: "10.30.0.0/24", gateway: "10.30.0.1",
-                projectID: vm.$project.id, externalAccess: true)
+                projectID: vm.$project.id, externalAccess: true, siteID: siteID)
             try await network.save(on: app.db)
             let networkID = try network.requireID()
             let net0 = VMNetworkInterface(
@@ -345,7 +404,8 @@ final class DesiredStateReconciliationTests {
                 address: "10.30.0.5", prefixLength: 24, gateway: "10.30.0.1"
             ).save(on: app.db)
 
-            let pool = FloatingIPPool(name: "edge", cidr: "203.0.113.0/24", gateway: "203.0.113.1")
+            let pool = FloatingIPPool(
+                name: "edge", cidr: "203.0.113.0/24", gateway: "203.0.113.1", siteID: siteID)
             try await pool.save(on: app.db)
             let attached = FloatingIP(
                 poolID: pool.id!, address: "203.0.113.10", projectID: vm.$project.id,
@@ -367,7 +427,10 @@ final class DesiredStateReconciliationTests {
             #expect(fips[0].nicIndex == 2)
 
             // Another agent's sync must not carry this VM's floating IP.
-            let other = try await app.desiredStateAssembler.assemble(agentId: UUID().uuidString)
+            let otherAgentID = try await self.registerAgent(
+                app: app, vm: vm, named: "recon-idle-fip-agent",
+                protocolVersion: WireProtocol.currentVersion, placeVM: false)
+            let other = try await app.desiredStateAssembler.assemble(agentId: otherAgentID)
             #expect(!other.networks.contains { ($0.floatingIPs ?? []).isEmpty == false })
         }
     }
@@ -404,7 +467,8 @@ final class DesiredStateReconciliationTests {
                 interfaceID: nicID, securityGroupID: try group.requireID())
             try await membership.save(on: app.db)
             let pool = FloatingIPPool(
-                name: "detach-pool", cidr: "203.0.113.0/24", gateway: "203.0.113.1")
+                name: "detach-pool", cidr: "203.0.113.0/24", gateway: "203.0.113.1",
+                siteID: network.$site.id)
             try await pool.save(on: app.db)
             let floatingIP = FloatingIP(
                 poolID: try pool.requireID(), address: "203.0.113.50",

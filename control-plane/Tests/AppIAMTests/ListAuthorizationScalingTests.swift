@@ -89,6 +89,7 @@ final class ListAuthorizationScalingTests {
             // Allocated addresses need a project and a creator to hang on.
             let project = try await builder.createProject(
                 name: "Pool Project", description: "d", organization: org)
+            let siteID = try await builder.placementSite(for: project).requireID()
 
             /// One /30 per pool, walked through 203.0.0.0/23 so no two pools
             /// overlap and every address stays a valid octet.
@@ -98,6 +99,7 @@ final class ListAuthorizationScalingTests {
                 let pool = FloatingIPPool(
                     name: "pool-\(String(format: "%03d", index))",
                     cidr: "\(prefix).\(base % 256)/30",
+                    siteID: siteID,
                     organizationScope: scope)
                 try await pool.save(on: app.db)
                 try await FloatingIP(

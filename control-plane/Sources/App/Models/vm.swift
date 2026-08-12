@@ -150,6 +150,24 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "metadata_enabled")
     var metadataEnabled: Bool
 
+    /// Where this VM reads first-boot guest configuration (STR-64). The
+    /// historical `.iso` shape carries the complete immutable NoCloud seed;
+    /// `.imds` keeps only pre-network bootstrap on that ISO and fetches the
+    /// remaining documents from the link-local metadata service.
+    ///
+    /// Fixed at create because the ISO is materialized with the domain. The
+    /// default stays `.iso` for this phase, and the migration gives every
+    /// existing row that explicit value so no VM changes bootstrap path during
+    /// an upgrade.
+    @Enum(key: "metadata_source")
+    var metadataSource: MetadataSource
+
+    /// Secret capability used only by an IMDS-backed NoCloud `seedfrom` URL.
+    /// It is stable for the VM's lifetime because the ISO is materialized once,
+    /// and it is not part of any public VM response.
+    @Field(key: "metadata_seed_token")
+    var metadataSeedToken: UUID
+
     // Observed guest-agent (qga) state (issue #563). Purely informational and
     // best-effort: nil until the agent's guest-info poll first sees a
     // responsive qga on this VM. `qgaAvailable` records the positive liveness
@@ -331,7 +349,9 @@ final class VM: Model, @unchecked Sendable {
         tpmEnabled: Bool = false,
         guestAgentEnabled: Bool = false,
         graphicsConsole: Bool = false,
-        metadataEnabled: Bool = true
+        metadataEnabled: Bool = true,
+        metadataSource: MetadataSource = .iso,
+        metadataSeedToken: UUID = UUID()
     ) {
         self.id = id
         self.name = name
@@ -361,6 +381,8 @@ final class VM: Model, @unchecked Sendable {
         self.guestAgentEnabled = guestAgentEnabled
         self.graphicsConsole = graphicsConsole
         self.metadataEnabled = metadataEnabled
+        self.metadataSource = metadataSource
+        self.metadataSeedToken = metadataSeedToken
     }
 }
 
@@ -650,6 +672,8 @@ struct VMDetailResponse: Content {
     /// it to be off, because that is what an operator set and what turning the
     /// network's switch back on would restore.
     let metadataEnabled: Bool
+    /// Guest-bootstrap source selected when the VM was created (STR-64).
+    let metadataSource: MetadataSource
     /// Observed guest-agent view (issue #563). `qgaAvailable` is nil until the
     /// agent's slow poll first sees a responsive qga; `observedHostname` is the
     /// guest OS's own hostname when it reported one.
@@ -741,6 +765,7 @@ struct VMDetailResponse: Content {
         self.guestAgentEnabled = vm.guestAgentEnabled
         self.graphicsConsole = vm.graphicsConsole
         self.metadataEnabled = vm.metadataEnabled
+        self.metadataSource = vm.metadataSource
         self.qgaAvailable = vm.qgaAvailable
         self.observedHostname = vm.observedHostname
         self.guestMemoryTotalBytes = vm.guestMemoryTotalBytes

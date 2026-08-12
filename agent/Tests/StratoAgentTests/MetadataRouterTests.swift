@@ -87,6 +87,31 @@ struct MetadataRouterTests {
 
     // MARK: - Documents
 
+    @Test("NoCloud seed capability routes only its three exact documents")
+    func noCloudSeedDocuments() {
+        let token = UUID(uuidString: "11111111-2222-4333-8444-555555555555")!
+        let root = MetadataRouter.noCloudSeedPath(for: token)
+
+        #expect(Self.route("GET", root + "meta-data") == .noCloudSeed(token: token, document: .noCloudMetaData))
+        #expect(Self.route("GET", root + "user-data") == .noCloudSeed(token: token, document: .userData))
+        #expect(Self.route("GET", root + "network-config") == .noCloudSeed(token: token, document: .networkConfig))
+        #expect(Self.route("GET", root + "vendor-data") == .noCloudSeed(token: token, document: nil))
+        #expect(Self.route("GET", root) == .noCloudSeed(token: token, document: nil))
+        #expect(Self.route("GET", "/latest/nocloud/not-a-token/user-data") == .unknownDocument)
+    }
+
+    @Test("NoCloud seed capability is always redacted from logs")
+    func noCloudSeedTargetRedaction() {
+        let token = "11111111-2222-4333-8444-555555555555"
+        #expect(
+            MetadataRouter.redactedTargetForLogging("/latest/nocloud/\(token)/user-data")
+                == "/latest/nocloud/[redacted]")
+        #expect(
+            MetadataRouter.redactedTargetForLogging("http://host/latest/nocloud/\(token)?bad")
+                == "http://host/latest/nocloud/[redacted]")
+        #expect(MetadataRouter.redactedTargetForLogging("/latest/user-data") == "/latest/user-data")
+    }
+
     @Test("Known document paths route, with or without a trailing slash")
     func documentPaths() {
         #expect(Self.route("GET", "/latest") == .document(.root))

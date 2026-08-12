@@ -62,6 +62,7 @@ struct VMCommand: AsyncParsableCommand {
                     table.addRow(["cpu", String(vm.cpu)])
                     table.addRow(["memory", vm.memoryFormatted])
                     table.addRow(["disk", vm.diskFormatted])
+                    table.addRow(["metadata source", vm.metadataSource?.value1.rawValue ?? "iso"])
                     table.addRow(["created", formatDate(vm.createdAt)])
                     return table
                 }
@@ -104,6 +105,9 @@ struct VMCommand: AsyncParsableCommand {
         @Option(name: .long, help: "Path to an SSH public key to authorize in the guest.")
         var sshKeyFile: String?
 
+        @Option(name: .long, help: "Guest bootstrap source: iso or imds (server default: iso).")
+        var metadataSource: String?
+
         @Flag(name: .long, help: "Return immediately instead of waiting for the operation.")
         var noWait = false
 
@@ -118,13 +122,28 @@ struct VMCommand: AsyncParsableCommand {
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                 }
 
+                let guestBootstrapSource: Components.Schemas.CreateVMRequest.MetadataSourcePayload?
+                if let metadataSource {
+                    guard
+                        let source = Components.Schemas.MetadataSource(
+                            rawValue: metadataSource.lowercased())
+                    else {
+                        throw CLIError.config(
+                            "Invalid --metadata-source value '\(metadataSource)'. Accepted values: iso, imds.")
+                    }
+                    guestBootstrapSource = .init(value1: source)
+                } else {
+                    guestBootstrapSource = nil
+                }
+
                 let accepted = try await client.createVM(
                     body: .json(
                         .init(
                             name: name, description: description, imageId: image,
                             projectId: try resolveProject(project, environment: env),
                             environment: environment, cpu: cpu, memory: memory, disk: disk,
-                            networkId: network, sshPublicKey: sshPublicKey))
+                            networkId: network, sshPublicKey: sshPublicKey,
+                            metadataSource: guestBootstrapSource))
                 ).accepted.body.json
                 try await handleMutation(
                     AcceptedMutation(id: accepted.mutationId), client: client, noWait: noWait,

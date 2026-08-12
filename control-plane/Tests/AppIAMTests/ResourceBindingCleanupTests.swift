@@ -565,6 +565,12 @@ struct ResourceBindingCleanupTests {
         let projectID = try project.requireID()
         let ownerID = try owner.requireID()
         let suffix = projectID.uuidString.prefix(8)
+        // This suite deletes the project or organization under test. Keep the
+        // required network/pool site outside that ownership tree because site
+        // deletion has its own guarded lifecycle and a RESTRICT owner FK.
+        let site = Site(name: "cleanup-site-\(suffix)")
+        try await site.save(on: db)
+        let siteID = try site.requireID()
 
         let image = Image(
             name: "image-\(suffix)", description: "", projectID: projectID,
@@ -572,7 +578,8 @@ struct ResourceBindingCleanupTests {
         try await image.save(on: db)
 
         let network = LogicalNetwork(
-            name: "default", subnet: "192.168.1.0/24", gateway: "192.168.1.1", projectID: projectID)
+            name: "default", subnet: "192.168.1.0/24", gateway: "192.168.1.1",
+            projectID: projectID, siteID: siteID)
         try await network.save(on: db)
 
         let securityGroup = SecurityGroup(projectID: projectID, name: "default")
@@ -580,7 +587,8 @@ struct ResourceBindingCleanupTests {
 
         // Pools are org-scoped, not project-scoped, so each project needs its
         // own only to keep the (pool, address) unique index happy.
-        let pool = FloatingIPPool(name: "pool-\(suffix)", cidr: "203.0.113.0/24")
+        let pool = FloatingIPPool(
+            name: "pool-\(suffix)", cidr: "203.0.113.0/24", siteID: siteID)
         try await pool.save(on: db)
         let floatingIP = FloatingIP(
             poolID: try pool.requireID(), address: "203.0.113.5", projectID: projectID)

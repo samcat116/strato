@@ -77,17 +77,6 @@ public enum MessageType: String, Codable, Sendable {
     case guestExecClose = "guest_exec_close"
     case guestExecClosed = "guest_exec_closed"
 
-    // Wire v43 legacy names, retained through v47 so agents can decode both
-    // sides of the STR-78 rename. Remove these aliases in wire v48; v47's
-    // dependency-health contract may follow v46 before fleet rollout.
-    case sandboxExecStart = "sandbox_exec_start"
-    case sandboxExecStarted = "sandbox_exec_started"
-    case sandboxExecInput = "sandbox_exec_input"
-    case sandboxExecOutput = "sandbox_exec_output"
-    case sandboxExecResize = "sandbox_exec_resize"
-    case sandboxExecExit = "sandbox_exec_exit"
-    case sandboxExecClose = "sandbox_exec_close"
-    case sandboxExecClosed = "sandbox_exec_closed"
     case sandboxLog = "sandbox_log"
 
     // No sandbox lifecycle frames remain either. `sandbox_restore` went with
@@ -199,6 +188,12 @@ public struct AgentRegisterMessage: WebSocketMessage {
     /// older agents decode fine; absent means not capable, which is the safe
     /// default in both directions of skew.
     public let resolverCapable: Bool?
+    /// Whether this host initialized the guest-facing instance metadata
+    /// service. This is independent of overlay networking: an OVN host may
+    /// disable the service in its agent configuration or lack a host tool the
+    /// listener supervisor needs. Optional so absence is fail-closed when a
+    /// registration predates the capability.
+    public let metadataServiceCapable: Bool?
     /// Periodic, feature-scoped software dependency health. This is also sent
     /// at registration so a newly connected agent is not placement-eligible in
     /// the window before its first heartbeat.
@@ -221,6 +216,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         operatingSystem: OperatingSystem? = nil,
         hostInfo: HostInfo? = nil,
         resolverCapable: Bool? = nil,
+        metadataServiceCapable: Bool? = nil,
         dependencyObservations: [NodeDependencyObservation] = []
     ) {
         self.requestId = requestId
@@ -239,6 +235,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.operatingSystem = operatingSystem
         self.hostInfo = hostInfo
         self.resolverCapable = resolverCapable
+        self.metadataServiceCapable = metadataServiceCapable
         self.dependencyObservations = dependencyObservations
     }
 

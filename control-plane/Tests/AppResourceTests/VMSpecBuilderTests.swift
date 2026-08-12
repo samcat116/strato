@@ -671,6 +671,20 @@ struct VMSpecBuilderTests {
         #expect(specWithVolumes.userData == payload)
     }
 
+    @Test("VMSpecBuilder carries the VM's guest-bootstrap source")
+    func testMetadataSourcePassthrough() throws {
+        let image = createTestImage()
+        let vm = createTestVM()
+        vm.metadataSource = .imds
+
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
+        #expect(spec.metadataSource == .imds)
+
+        let specWithVolumes = VMSpecBuilder.buildCanonicalVMSpec(
+            from: vm, image: image, volumes: [], networkInterfaces: [])
+        #expect(specWithVolumes.metadataSource == .imds)
+    }
+
     // MARK: - Machine profile (issue #565)
 
     @Test("VMSpecBuilder carries the VM's Secure Boot and TPM intent")

@@ -11,11 +11,12 @@ import Foundation
 /// one pinned date representation. The current encoder emits Foundation numeric
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
-    /// The only wire/schema version this build accepts. Version 47 adds the
-    /// dependency health contract (STR-237) to v46's authoritative native-OVN
-    /// load-balancer state and observations (STR-28), on top of v45's guest-agent
-    /// wire contract (STR-76/78/60).
-    public static let currentVersion = 47
+    /// The only wire/schema version this build accepts. Version 49 adds the
+    /// agent metadata-service capability used to place IMDS-backed VMs safely
+    /// (STR-64) to v48's guest-bootstrap source, v47's dependency health
+    /// contract (STR-237), and v46's authoritative native-OVN load-balancer
+    /// state and observations (STR-28).
+    public static let currentVersion = 49
 
     /// The JSON encoder for all wire messages. Dates are pinned explicitly to
     /// Foundation's `deferredToDate` numeric form.

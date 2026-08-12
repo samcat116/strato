@@ -50,7 +50,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 46). The required registration fields
+currently 49). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -61,20 +61,29 @@ refuse missing, older, and future versions before desired or observed state is
 exchanged. There is no rolling mixed-version window and no per-feature protocol
 gate.
 
-Wire v44 introduced `guest_exec_*` and kept the v43 `sandbox_exec_*`
-discriminators routable. Wire v46 retains that tolerance because it can follow
-v45 before a fleet rollout completes; the aliases are scheduled for removal in
-v47. An upgraded agent translates a legacy start to `resourceKind: sandbox`, and
-the control plane accepts legacy response names. This message-level tolerance
-does not weaken the exact registration handshake.
+Wire v44 generalized the interactive exec stream across VMs and sandboxes with
+`guest_exec_*` messages and a resource-kind discriminator on start.
 
-Wire v45 adds typed dependency observations to agent registration and heartbeats.
+Wire v45 adds QEMU guest-agent intent, fixed host-global vsock CIDs, and the
+per-hypervisor host capability used to keep those VMs off nodes without
+`/dev/vhost-vsock`.
+
+Wire v46 adds authoritative native-OVN load-balancer desired state, programming,
+and backend-health observations.
+
+Wire v47 adds typed dependency observations to agent registration and heartbeats.
 The control plane uses the latest received snapshot for feature-scoped placement
 gates without terminating workloads that are already running.
 
-Wire v46 adds QEMU guest-agent intent, fixed host-global vsock CIDs, and the
-per-hypervisor host capability used to keep those VMs off nodes without
-`/dev/vhost-vsock`.
+Wire v48 adds `VMSpec.metadataSource`, the create-time choice between the full
+NoCloud seed ISO and an IMDS `seedfrom` stub. IMDS-backed metadata also carries
+the optional per-VM NoCloud seed capability; old snapshots decode it as nil.
+Older persisted agent manifests decode a missing source as `iso`; a live
+control plane and agent still require the same v48 handshake.
+
+Wire v49 adds `AgentRegisterMessage.metadataServiceCapable`. The agent reports
+true only after it initializes the guest-facing listener supervisor; the
+control plane requires the explicit signal for IMDS-backed VM placement.
 
 Two consequences worth knowing:
 
@@ -84,13 +93,12 @@ Two consequences worth knowing:
   matching release, then restart it so it can register again.
 - **Capabilities still exist, and they are not versions.** A capability
   (`sandboxCapable`, `sandboxNetworkingCapable`, `tpmCapable`,
-  `resolverCapable`, or QEMU `supportsVsock`) is evidence that a *host* can
-  realize a feature — a runtime, a binary, a guest image — all installed
-  independently of the agent binary. Version says "the peer understands the
-  payload"; capability says "the host can act on it". The exact handshake
-  answers the first question;
-  capabilities keep answering the second per host, re-probed at every
-  registration.
+  `resolverCapable`, `metadataServiceCapable`, or QEMU `supportsVsock`) is
+  evidence that a *host* can realize a feature — a runtime, a binary, a guest
+  image — all installed independently of the agent binary. Version says "the
+  peer understands the payload"; capability says "the host can act on it". The
+  exact handshake answers the first question; capabilities keep answering the
+  second per host, re-probed at every registration.
 
 The current contract includes the per-instance metadata kill switch (STR-185):
 `InstanceMetadata.serviceEnabled` is EC2's `MetadataOptions.HttpEndpoint`,
@@ -138,7 +146,7 @@ v34 no `vm_reboot`, `vm_restore` or `sandbox_restore` either.
 
 | Message | Purpose |
 |---|---|
-| `agent_register` | Handshake: hostname, version, capabilities, resources, hypervisor support, architecture/OS, `sandboxCapable`, `sandboxNetworkingCapable`, protocol version |
+| `agent_register` | Handshake: hostname, version, capabilities, resources, hypervisor support, architecture/OS, `sandboxCapable`, `sandboxNetworkingCapable`, `metadataServiceCapable`, protocol version |
 | `agent_heartbeat` | Periodic resource usage and running VM IDs |
 | `agent_unregister` | Graceful disconnect with a reason |
 | `observed_state` | Level-triggered `ObservedStateReport`: VM/sandbox observed state, resources, agent-update status, optional per-VM `guestInfo` from qga (issue #563), and optional per-VM balloon `memoryStats` (issue #567, incl. `balloonActualBytes` at v19) |
@@ -414,9 +422,10 @@ The rest of the package is vocabulary used on both sides:
   CPU/memory/disk sizing, `BootSource` (`.disk(firmware:)` vs
   `.directKernel(kernel:initramfs:cmdline:)`), the `MachineProfile`
   (`secureBoot`/`tpm`; nil decodes to `.default`, both off), `VolumeSpec`, dual-stack
-  `NetworkSpec`, `ConsoleSpec`, SSH keys, and verbatim caller-supplied
-  cloud-init `userData` (tolerantly decoded to nil from older control
-  planes). `CloudInitUserDataFormat` (`CloudInitUserData.swift`) is the
+  `NetworkSpec`, `ConsoleSpec`, SSH keys, create-time `metadataSource`
+  (`iso`/`imds`, with missing durable manifests decoded as `iso`), and verbatim
+  caller-supplied cloud-init `userData` (tolerantly decoded to nil from older
+  control planes). `CloudInitUserDataFormat` (`CloudInitUserData.swift`) is the
   shared header-detection table: the control plane validates user data
   starts with a header cloud-init dispatches on, and the agent labels the
   payload's MIME part with the matching content type.
@@ -425,9 +434,12 @@ The rest of the package is vocabulary used on both sides:
   ids, hostname, environment, `region`/`availabilityZone` placement keys,
   `MetadataNIC` entries (device name, MAC, network, address + prefix per
   family, gateway, MTU, DNS), SSH keys, `userData`/`vendorData`, tags, and an
-  optional `IdentityPolicy`. Since STR-55 that policy carries the VM's SPIFFE
-  instance identity — `spiffe://<trust-domain>/vm/<vm-id>` — and nothing else:
-  no key, token, audiences, or TTL crosses the sync. STR-57 adds the
+  optional `IdentityPolicy`. STR-64 adds an optional `noCloudSeedToken`, a
+  credential used by the agent to authenticate only an IMDS-backed VM's
+  NoCloud bootstrap URL; it is not rendered as a document and must not be
+  logged. Since STR-55 the identity policy carries the VM's SPIFFE
+  instance identity — `spiffe://<trust-domain>/vm/<vm-id>` — and no identity
+  key, token, audiences, or TTL crosses the sync. STR-57 adds the
   placement-checked `POST /agent/vms/{vmID}/jwt-svid` control-plane endpoint,
   but the optional policy fields remain empty until the agent implements the
   guest-facing request path and token cache. It rides
