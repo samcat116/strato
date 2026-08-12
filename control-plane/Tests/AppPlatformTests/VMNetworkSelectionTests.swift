@@ -308,12 +308,23 @@ final class VMNetworkSelectionTests {
         }
     }
 
-    @Test("POST /api/vms rejects user data for firecracker VMs (400)")
-    func createFirecrackerWithUserDataRejected() async throws {
+    @Test("POST /api/vms persists user data for Firecracker MMDS delivery")
+    func createFirecrackerWithUserData() async throws {
         try await withApp { app, _, _, project, image, token in
-            // Cloud-init user data only reaches the guest on the QEMU
-            // disk-boot path; a firecracker create must fail loudly instead
-            // of accepting a payload the agent would silently ignore.
+            let imageID = try image.requireID()
+            let checksum = String(repeating: "c", count: 64)
+            try await ImageArtifact(
+                imageID: imageID, kind: .kernel, format: nil,
+                architecture: image.architecture, filename: "vmlinux", size: 1,
+                checksum: checksum, storagePath: "images/\(imageID)/kernel/vmlinux"
+            ).save(on: app.db)
+            try await ImageArtifact(
+                imageID: imageID, kind: .rootfs, format: .raw,
+                architecture: image.architecture, filename: "rootfs.raw", size: 1,
+                checksum: checksum, storagePath: "images/\(imageID)/rootfs/rootfs.raw"
+            ).save(on: app.db)
+
+            let userData = "#cloud-config\npackages: [nginx]\n"
             try await app.test(.POST, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -321,15 +332,15 @@ final class VMNetworkSelectionTests {
                         name: "fc-userdata-vm", imageId: image.id, projectId: project.id,
                         environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
                         networkId: nil, networkName: "default",
-                        userData: "#cloud-config\npackages: [nginx]\n",
+                        userData: userData,
                         hypervisorType: "firecracker"))
             } afterResponse: { res in
-                #expect(res.status == .badRequest)
-                #expect(res.body.string.contains("firecracker"))
+                #expect(res.status == .accepted)
             }
 
             let vm = try await VM.query(on: app.db).filter(\.$name == "fc-userdata-vm").first()
-            #expect(vm == nil)
+            #expect(vm?.hypervisorType == .firecracker)
+            #expect(vm?.userData == userData)
         }
     }
 

@@ -687,9 +687,6 @@ struct VMController: RouteCollection {
         // on, so no trimming).
         vm.userData = try Self.validatedUserData(createRequest.userData)
 
-        // User data is only delivered on the QEMU disk-boot path (the NoCloud
-        // seed ISO); Firecracker VMs have no injection path yet. Reject rather
-        // than return 202 and silently ignore the payload.
         // Secure Boot and a vTPM are firmware-boot features, and Firecracker
         // boots a kernel directly with no UEFI and no TPM device at all.
         // Rejecting is the only honest answer: accepting would return 202 for a
@@ -705,12 +702,6 @@ struct VMController: RouteCollection {
             throw Abort(
                 .badRequest,
                 reason: "'guestAgentEnabled' is not supported for firecracker VMs; use the qemu hypervisor")
-        }
-
-        if vm.userData != nil, vm.hypervisorType == .firecracker {
-            throw Abort(
-                .badRequest,
-                reason: "'userData' is not supported for firecracker VMs (cloud-init runs only on QEMU disk boot)")
         }
 
         // Firecracker emulates no display device at all — it boots a kernel
