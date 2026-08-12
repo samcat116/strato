@@ -1,0 +1,132 @@
+deploy/compose/tests/docker-source-context-test.sh
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 1-86
+control-plane/web/src/components/vms/vm-metadata-card.tsx
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 1-326
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 27,56-58,66,601-609,614-620,637-671
+  s_7051b6d9c6ec87::t_83da57afa6f373 672
+.github/workflows/release.yaml
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 795-796,832-833,842
+control-plane/Sources/App/Migrations/AddGuestAgentEnabledToVM.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 1-27
+.github/workflows/build.yaml
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 49,130-134,168-172,178-179
+  s_7051b6d9c6ec87::t_cb8fa0ed3d59ed 180
+control-plane/Tests/AppPlatformTests/AddMutableMetadataToVMTests.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 1-56
+control-plane/Tests/AppResourceTests/DesiredStatePollTests.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 4,39-44,56-59,111-156
+  s_7051b6d9c6ec87::t_fc78802670b25d 157-158
+sandbox-guest/strato-guest-agent.service
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 1-20
+agent/Sources/StratoAgentCore/DomainRedefinition.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 21-23,69-70
+control-plane/Tests/AppPlatformTests/ValkeyStoreConfigurationTests.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 168
+.github/workflows/README.md
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 97-98
+control-plane/Sources/App/Services/InstanceMetadataFactory.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 27-31,78,80-82,85
+sandbox-guest/init/src/guest_agent.rs
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 5-6
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 256
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 48-61
+  s_7051b6d9c6ec87::t_c9c3dc800e96bc 43-47
+.dockerignore
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 1
+docs/architecture/networking.md
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 217-230
+control-plane/web/src/lib/api/vms.ts
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 8,45-46
+  s_7051b6d9c6ec87::t_ad7759f9f89889 47-48
+agent/Package.resolved
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 9-10
+agent/Sources/StratoAgent/Agent.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 4957-4959,4991-5008,5011-5013
+control-plane/Tests/AppPlatformTests/VMMutableMetadataTests.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 1-233
+docs/architecture/storage.md
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 253-258
+docs/development/e2e-testing.md
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 137-144
+.github/workflows/sandbox-guest.yaml
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 3-6,47-55,98-103,108-109,112,114-128,137-140,155-160,203-294
+control-plane/web/src/components/vms/index.ts
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 9
+control-plane/web/src/types/api.ts
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 234-237,1226-1229
+  s_7051b6d9c6ec87::t_84d10c6b24f12f 1230-1231
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 1535-1537
+control-plane/web/src/types/openapi.ts
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 156-160,5461-5469,5513-5518,9974-10003
+  s_7051b6d9c6ec87::t_93d978f800d156 10004
+agent/Sources/StratoAgentCore/ProcessRunner.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 127-136,143-146,182-183,250-255,260,292
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 11-14,74,130-131,139-143,154-156
+sandbox-guest/build-guest-agent.sh
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 1-56
+deploy/compose/vcpu-shrink-test.sh
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 2,7-8,131-135,137,182-188,203
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 106-112,212-216
+control-plane/web/src/app/(dashboard)/vms/detail/page.tsx
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 27,357
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 1064-1114
+control-plane/Sources/App/Migrations/AddMutableMetadataToVM.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 1-50
+agent/Tests/StratoAgentTests/ProcessRunnerTests.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 6,9-18,88-228
+agent/Tests/StratoAgentTests/FileSystemStorageBackendTests.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 92-131,157-160,167,485-511,540-551
+  s_7051b6d9c6ec87::t_ac6a647e9ed51b 552
+control-plane/Tests/AppPlatformTests/AgentDependencyHealthTests.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 2,110-151
+  s_7051b6d9c6ec87::t_0eda2f424eb203 152-153
+docs/architecture/agent.md
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 716-720,733-737,761-765,1060,1065-1067
+docs/deployment/agents.md
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 527-529
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 928-931
+control-plane/Sources/App/Controllers/VMController.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 25-64,124,793,1357-1359,1370,1374,1396-1398,1402-1404,1496-1543
+  s_7051b6d9c6ec87::t_b0e91412e19ed7 1544
+control-plane/Sources/App/configure.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 415-423
+docs/architecture/control-plane.md
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 239-245,272-277
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 23-24,232-235,1103-1106,1859-1864,1866-1873,1875-1878,1893-1894,1896-1903,1911-1918,1923
+agent/Tests/StratoAgentTests/NodeDependencyManagerTests.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 627-724
+control-plane/Sources/App/Models/vm.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 224-229,280-282,286-292,377,402,411-424,708-711,804-805
+sandbox-guest/README.md
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 36-39,241-249,274-285
+  s_7051b6d9c6ec87::t_8942ffc2db5679 286
+agent/Tests/StratoAgentTests/MetadataStoreTests.swift
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 136,139-142
+control-plane/Sources/App/openapi.yaml
+  s_7051b6d9c6ec87::t_1466e6749c7fa8 408-437,9226-9255,9353-9362
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "cf6feaf04bfc51069697975c4621f3e73ef1dab6",
+  "prompts": {},
+  "sessions": {
+    "s_7051b6d9c6ec87": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff36d-7a5d-75f2-b785-93842a4bc0e2",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
