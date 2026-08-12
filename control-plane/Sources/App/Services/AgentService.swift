@@ -1076,6 +1076,8 @@ actor AgentService {
     /// (issue #833). Best effort: a failure here must not abort the sweep.
     private func warnIfSiteNetworkController(_ agent: Agent) async {
         guard let agentID = agent.id else { return }
+        let offlineGrace = app.controlPlaneConfiguration.double(
+            .siteControllerOfflineGraceSeconds)
         do {
             let controlled = try await Site.query(on: app.db)
                 .filter(\.$networkControllerAgent.$id == agentID)
@@ -1087,8 +1089,7 @@ actor AgentService {
                     metadata: [
                         "agentName": .string(agent.name),
                         "site": .string(site.name),
-                        "graceSeconds": .stringConvertible(
-                            Int(SiteNetworkAuthority.controllerOfflineGrace)),
+                        "graceSeconds": .stringConvertible(offlineGrace),
                     ])
             }
         } catch {
