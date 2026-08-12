@@ -306,6 +306,59 @@ struct InitialNodeDependencyModuleTests {
         #expect(observation.reason == nil)
     }
 
+    @Test("Externally launched SPIRE remains healthy when its systemd unit is inactive")
+    func externallyLaunchedSPIREState() async throws {
+        let inactive = SystemdUnitObservation(
+            name: "spire-agent.service", loadState: "loaded", activeState: "inactive",
+            subState: "dead", unitFileState: "disabled")
+        let externalIdentity = SPIRENodeDependencyModule(
+            systemd: FakeSystemd(defaultObservation: inactive),
+            source: .workloadAPI,
+            version: { "1.12.4" },
+            svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
+        let manager = try NodeDependencyManager(
+            modules: [externalIdentity], logger: Logger(label: "test"))
+
+        let observation = try #require(await manager.refresh().first)
+        #expect(observation.ownership == .observeOnly)
+        #expect(observation.supervisorState == .inactive)
+        #expect(observation.compatibility == .compatible)
+        #expect(observation.functionalState == .healthy)
+        #expect(observation.reason == nil)
+        #expect(observation.permitsDependentWork)
+    }
+
+    @Test("Systemd-managed SPIRE requires both its unit and Workload API")
+    func systemdManagedSPIREState() async throws {
+        let healthy = SPIRENodeDependencyModule(
+            systemd: FakeSystemd(defaultObservation: active),
+            version: { "1.12.4" },
+            svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
+        let healthyManager = try NodeDependencyManager(
+            modules: [healthy], logger: Logger(label: "test"))
+
+        let healthyObservation = try #require(await healthyManager.refresh().first)
+        #expect(healthyObservation.supervisorState == .active)
+        #expect(healthyObservation.functionalState == .healthy)
+        #expect(healthyObservation.permitsDependentWork)
+
+        let inactive = SystemdUnitObservation(
+            name: "spire-agent.service", loadState: "loaded", activeState: "inactive",
+            subState: "dead", unitFileState: "enabled")
+        let unavailable = SPIRENodeDependencyModule(
+            systemd: FakeSystemd(defaultObservation: inactive),
+            version: { "1.12.4" },
+            svid: { .unavailable("Workload API socket is unavailable") })
+        let unavailableManager = try NodeDependencyManager(
+            modules: [unavailable], logger: Logger(label: "test"))
+
+        let unavailableObservation = try #require(await unavailableManager.refresh().first)
+        #expect(unavailableObservation.supervisorState == .inactive)
+        #expect(unavailableObservation.functionalState == .unhealthy)
+        #expect(unavailableObservation.reason?.code == .inactiveUnit)
+        #expect(!unavailableObservation.permitsDependentWork)
+    }
+
     @Test("File-based SPIFFE does not require a local SPIRE service or binary")
     func fileSPIFFEState() async {
         let fileIdentity = SPIRENodeDependencyModule(

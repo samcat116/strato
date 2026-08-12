@@ -88,6 +88,24 @@ struct AgentDependencyHealthTests {
         #expect(agent.supportedHypervisors.contains(.qemu))
     }
 
+    @Test("Supervisor metadata does not override healthy external SPIRE")
+    func externallyManagedSPIREGating() {
+        let now = Date()
+        let spire = NodeDependencyObservation(
+            id: .spire,
+            role: .identity,
+            desiredState: .required,
+            ownership: .observeOnly,
+            supervisorState: .inactive,
+            compatibility: .compatible,
+            functionalState: .healthy,
+            checkedAt: now,
+            affectedCapabilities: [.workloadIdentity])
+        let agent = makeAgent(observations: [spire], receivedAt: now)
+
+        #expect(agent.dependencyAllows(.workloadIdentity, at: now))
+    }
+
     @Test("Re-registration clears availability only for removed dependencies")
     func removedDependencyMetrics() throws {
         let now = Date()

@@ -46,8 +46,10 @@ The control plane persists the latest snapshot. An observation older than 60
 seconds is not authoritative for new placement. Two consecutive functional
 failures are required to move from degraded to unhealthy, and recovery is
 confirmed before returning to healthy. Missing units or binaries, inactive or
-failed supervisors, and incompatible versions are categorical and gate
-immediately.
+failed supervisors, and incompatible versions are categorical when the module
+reports them as required for functional availability. Supervisor state remains
+diagnostic metadata when an external process passes the module's functional
+probe.
 
 Gating is feature-scoped:
 
@@ -64,6 +66,9 @@ It only changes admission of new work that needs the affected feature.
 
 The initial registry observes SPIRE, libvirt, and OVN/OVS. SPIRE combines its
 systemd unit with the current Workload API X.509 SVID and warns before expiry.
+A successful SVID fetch is authoritative when SPIRE runs outside systemd; the
+inactive unit remains visible as supervisor metadata without withdrawing
+workload identity.
 Libvirt discovers `virtqemud.socket` or `libvirtd.socket` and reuses the bounded
 daemon-version probe, including the 11.5.0 compatibility floor. OVN/OVS checks
 the package units and versions, OVN NB and local OVSDB reads, `br-int`, and the
