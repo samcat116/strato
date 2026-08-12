@@ -405,6 +405,36 @@ paths:
             with, its agent is too old to resize online, or the request would
             reduce a running VM's confirmed live vCPU count. Stop the VM before
             reducing vCPUs; otherwise restart it to raise its online-resize ceiling.
+    patch:
+      operationId: patchVMMetadata
+      summary: Update mutable instance metadata
+      description: >-
+        Replaces the VM's tags and/or SSH authorized-key list, advances its
+        desired-state generation in the same transaction, and nudges the placed
+        agent so the new metadata document is served promptly. The metadata
+        changes without rebooting the VM, but cloud-init does not re-read and
+        apply a rotated key inside an already-running guest. That requires a
+        reboot or an explicit `cloud-init clean` and re-run on an IMDS-backed
+        VM; an ISO-backed VM keeps its immutable seed payload. Live key
+        rotation is the guest agent's responsibility.
+      tags: [Virtual Machines]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchVMMetadataRequest"
+      responses:
+        "200":
+          description: The updated virtual machine.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VMDetail"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
     delete:
       operationId: deleteVM
       summary: Delete a virtual machine
@@ -9193,6 +9223,36 @@ components:
             refused with `409` when the VM sits on an agent too old to honour
             it, rather than reported as applied while the guest keeps reading
             its metadata.
+    PatchVMMetadataRequest:
+      type: object
+      description: >-
+        Mutable guest-visible metadata. Omitted properties are unchanged; `{}`
+        clears all tags and `[]` clears all authorized keys.
+      properties:
+        tags:
+          type: object
+          maxProperties: 64
+          additionalProperties:
+            type: string
+            maxLength: 4096
+          description: >-
+            Free-form operator tags published to the guest. Keys are non-empty,
+            single-line, and at most 128 characters. Tags are ordinary metadata
+            and are never authorization claims. The EC2-compatible renderer
+            exposes only keys that are safe as one EC2 tag path segment; other
+            keys remain in Strato's shared metadata document.
+        sshAuthorizedKeys:
+          type: array
+          maxItems: 64
+          items:
+            type: string
+            maxLength: 4096
+          description: >-
+            Complete replacement list for the guest's default user. Each item is
+            one validated OpenSSH authorized_keys entry. The IMDS document
+            changes immediately, but cloud-init does not apply the new list to a
+            guest that is already running without a reboot or an explicit clean
+            and re-run. An ISO-backed VM continues using its immutable seed.
     VMDetail:
       type: object
       required:
@@ -9290,6 +9350,16 @@ components:
           description: >-
             Where this VM reads its first-boot guest configuration. Fixed at
             creation; VMs created before STR-64 report `iso`.
+        tags:
+          type: object
+          additionalProperties:
+            type: string
+          description: Free-form operator tags published through instance metadata.
+        sshAuthorizedKeys:
+          type: array
+          items:
+            type: string
+          description: SSH authorized keys currently published through instance metadata.
         qgaAvailable:
           type: boolean
           description: >-

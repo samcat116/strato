@@ -417,6 +417,10 @@ public func configure(
     // query can select the required field.
     app.migrations.add(AddGuestAgentEnabledToVM())
 
+    // STR-66: mutable VM tags and plural authorized keys. Existing single-key
+    // rows are backfilled without changing what their guests receive.
+    app.migrations.add(AddMutableMetadataToVM())
+
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
     // that records it, so concurrent replica boots race the same migration and a
