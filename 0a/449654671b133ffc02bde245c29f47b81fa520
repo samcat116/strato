@@ -1,0 +1,31 @@
+agent/Tests/StratoAgentTests/FileSystemStorageBackendTests.swift
+  s_4a9839362dd3ee::t_50ffa7f722608a 92-96,112,459-460
+  s_4a9839362dd3ee::t_3c30373eb83980 97-101,105-111,113-120,154,461-471,473-475,477-483
+  s_4a9839362dd3ee::t_92d6b7928fb99f 102-104,123-124,155-157,164,472,476,519,522,524-525
+  s_4a9839362dd3ee::t_91cb8c14ac8f5f 121-122,125-131,484,515-518,520-521,523
+  s_4a9839362dd3ee::t_470b7de7c97c43 485
+  s_4a9839362dd3ee::t_df2e0e1f50cc83 526-527
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_4a9839362dd3ee::t_91cb8c14ac8f5f 521,527-528,533,535-539,556-587
+  s_4a9839362dd3ee::t_50ffa7f722608a 522-526
+  s_4a9839362dd3ee::t_92d6b7928fb99f 27,56-58,66,520,534
+  s_4a9839362dd3ee::t_d5cdfc9ad49c51 588
+docs/architecture/storage.md
+  s_4a9839362dd3ee::t_8961fe7f038b80 253-258
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0a449654671b133ffc02bde245c29f47b81fa520",
+  "prompts": {},
+  "sessions": {
+    "s_4a9839362dd3ee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff36d-a3e8-7553-aeb9-5c06e5482b10",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
