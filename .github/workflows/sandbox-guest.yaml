@@ -1,11 +1,9 @@
 name: Build Sandbox Guest Image
 
-# Builds the sandbox guest base image (issue #419) — a Firecracker kernel plus
-# the static init/guest-agent initramfs — for x86_64 and aarch64, and publishes
-# them as release assets with checksums and a machine-readable manifest, the
-# same way release.yaml publishes the agent tarballs. Runs on the same `v*` tag
-# push as the main release (attaching to that release), and on demand via
-# workflow_dispatch (artifacts only, no release upload).
+# Builds the sandbox guest base image (issue #419) and the VM guest-agent
+# package (STR-80) for x86_64 and aarch64. Tag builds publish both tarball sets,
+# their checksums, and machine-readable manifests alongside the main release;
+# workflow_dispatch retains them as CI artifacts instead.
 on:
   push:
     tags:
@@ -46,6 +44,15 @@ jobs:
         run: cargo test --locked
       - name: Clippy (Linux target)
         run: cargo clippy --locked --target x86_64-unknown-linux-musl --all-targets -- -D warnings
+      - name: Guest-agent release layout smoke test
+        working-directory: sandbox-guest
+        run: |
+          OUT="$RUNNER_TEMP/strato-guest-agent"
+          ./build-guest-agent.sh --arch x86_64 --out "$OUT"
+          test -x "$OUT/strato-guest-agent"
+          test -f "$OUT/strato-guest-agent.service"
+          test "$(find "$OUT" -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 2
+          grep -Fx 'ExecStart=/usr/local/bin/strato-guest-agent' "$OUT/strato-guest-agent.service"
 
   build:
     # Kernel builds are heavy; skip them on PRs (test-init gates those).
@@ -88,19 +95,37 @@ jobs:
             --out "$PWD/out" \
             --git-sha "${GITHUB_SHA}"
 
+      - name: Build VM guest agent (${{ matrix.arch }})
+        run: |
+          ./sandbox-guest/build-guest-agent.sh \
+            --arch "${{ matrix.arch }}" \
+            --out "$PWD/guest-agent-out"
+
       - name: Package artifacts
         id: package
         run: |
           ARCH="${{ matrix.arch }}"
-          ASSET="sandbox-guest-${ARCH}.tar.gz"
+          SANDBOX_ASSET="sandbox-guest-${ARCH}.tar.gz"
+          GUEST_AGENT_ASSET="strato-guest-agent-${ARCH}.tar.gz"
           # The tarball is exactly the on-disk guest image layout the agent
           # installs at sandbox_guest_image_path: kernel + initramfs + guest.json.
-          tar czf "${ASSET}" -C out \
+          tar czf "${SANDBOX_ASSET}" -C out \
             "vmlinux-${ARCH}" "initramfs-${ARCH}.cpio.gz" guest.json
-          sha256sum "${ASSET}" > "${ASSET}.sha256"
-          echo "asset=${ASSET}" >> "$GITHUB_OUTPUT"
-          # Surface the version (from guest.json) for the manifest job/log.
-          echo "version=$(grep -m1 '\"version\"' out/guest.json | cut -d'"' -f4)" >> "$GITHUB_OUTPUT"
+          sha256sum "${SANDBOX_ASSET}" > "${SANDBOX_ASSET}.sha256"
+
+          # The VM archive stays installation-policy neutral: its two root
+          # members are inputs to cloud-init (STR-86) or an explicit operator
+          # update, never an auto-updater hidden inside the tenant's OS.
+          tar czf "${GUEST_AGENT_ASSET}" -C guest-agent-out \
+            strato-guest-agent strato-guest-agent.service
+          sha256sum "${GUEST_AGENT_ASSET}" > "${GUEST_AGENT_ASSET}.sha256"
+
+          {
+            echo "sandbox_asset=${SANDBOX_ASSET}"
+            echo "guest_agent_asset=${GUEST_AGENT_ASSET}"
+            # Surface the version (from guest.json) for the manifest job/log.
+            echo "version=$(grep -m1 '\"version\"' out/guest.json | cut -d'"' -f4)"
+          } >> "$GITHUB_OUTPUT"
 
       # workflow_dispatch: keep the artifacts for inspection, no release.
       - name: Upload CI artifacts
@@ -109,8 +134,10 @@ jobs:
         with:
           name: sandbox-guest-${{ matrix.arch }}
           path: |
-            ${{ steps.package.outputs.asset }}
-            ${{ steps.package.outputs.asset }}.sha256
+            ${{ steps.package.outputs.sandbox_asset }}
+            ${{ steps.package.outputs.sandbox_asset }}.sha256
+            ${{ steps.package.outputs.guest_agent_asset }}
+            ${{ steps.package.outputs.guest_agent_asset }}.sha256
 
       # Tag push: attach to the release release.yaml cut for this tag. Wait for
       # it to exist (the two workflows race on the same tag), then upload.
@@ -125,8 +152,12 @@ jobs:
             if gh release view "$TAG" >/dev/null 2>&1; then break; fi
             echo "waiting for release $TAG to exist ($i/30)"; sleep 10
           done
-          ASSET="${{ steps.package.outputs.asset }}"
-          gh release upload "$TAG" "$ASSET" "$ASSET.sha256" --clobber
+          SANDBOX_ASSET="${{ steps.package.outputs.sandbox_asset }}"
+          GUEST_AGENT_ASSET="${{ steps.package.outputs.guest_agent_asset }}"
+          gh release upload "$TAG" \
+            "$SANDBOX_ASSET" "$SANDBOX_ASSET.sha256" \
+            "$GUEST_AGENT_ASSET" "$GUEST_AGENT_ASSET.sha256" \
+            --clobber
 
   # Machine-readable pointer to this release's guest images: version, git SHA,
   # and per-arch tarball URL/checksum/size. Mirrors publish-agent-manifest in
@@ -169,3 +200,95 @@ jobs:
             > sandbox-guest-manifest.json
           cat sandbox-guest-manifest.json
           gh release upload "$TAG" sandbox-guest-manifest.json --clobber
+
+  # The normal-VM guest daemon is a separate artifact from the Firecracker
+  # sandbox image. This manifest mirrors agent-manifest.json's release contract,
+  # but is only an installation/update input for explicit tenant-visible flows;
+  # publishing it does not opt a VM into updates.
+  publish-guest-agent-manifest:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    needs: build
+    env:
+      GUEST_AGENT_ASSET_PATTERN: '^strato-guest-agent-(x86_64|aarch64)\.tar\.gz$'
+    steps:
+      - name: Verify the asset pattern selects VM guest-agent tarballs only
+        run: |
+          # shellcheck disable=SC2016 # $ENV is jq syntax, not a shell expansion.
+          selected="$(jq -rn '
+            ["strato-guest-agent-x86_64.tar.gz",
+             "strato-guest-agent-aarch64.tar.gz",
+             "strato-guest-agent-riscv64.tar.gz",
+             "sandbox-guest-x86_64.tar.gz",
+             "strato-linux-x86_64.tar.gz",
+             "guest-agent-manifest.json"]
+            | map(select(test($ENV.GUEST_AGENT_ASSET_PATTERN))) | join(" ")')"
+          expected="strato-guest-agent-x86_64.tar.gz strato-guest-agent-aarch64.tar.gz"
+          [ "$selected" = "$expected" ] || {
+            echo "guest-agent asset pattern regressed: selected [$selected], want [$expected]" >&2
+            exit 1
+          }
+
+      - name: Build and upload guest-agent-manifest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="$GITHUB_REF_NAME"
+
+          # shellcheck disable=SC2016 # $ENV is gojq syntax, not a shell expansion.
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
+            --jq '.assets[]
+                  | select(.name | test($ENV.GUEST_AGENT_ASSET_PATTERN))
+                  | [.name, .browser_download_url, (.size | tostring)] | @tsv' \
+            | sort > assets.tsv
+
+          for arch in x86_64 aarch64; do
+            grep -q "^strato-guest-agent-${arch}\.tar\.gz" assets.tsv || {
+              echo "missing strato-guest-agent-${arch}.tar.gz on $TAG" >&2
+              exit 1
+            }
+          done
+          [ "$(wc -l < assets.tsv)" -eq 2 ] || {
+            echo "expected exactly two guest-agent assets on $TAG" >&2
+            cat assets.tsv >&2
+            exit 1
+          }
+
+          # A future matrix leg must widen the manifest pattern in the same
+          # change. Otherwise its uploaded tarball would exist but no installer
+          # could discover it through this manifest.
+          # shellcheck disable=SC2016 # $ENV is gojq syntax, not a shell expansion.
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
+            --jq '.assets[].name
+                  | select(startswith("strato-guest-agent-") and endswith(".tar.gz"))
+                  | select(test($ENV.GUEST_AGENT_ASSET_PATTERN) | not)' \
+            > unmatched.txt
+          if [ -s unmatched.txt ]; then
+            echo "guest-agent assets missing from the manifest: $(tr '\n' ' ' < unmatched.txt)" >&2
+            echo "update GUEST_AGENT_ASSET_PATTERN and its fixture to cover them" >&2
+            exit 1
+          fi
+
+          mkdir sidecars
+          gh release download "$TAG" \
+            --pattern 'strato-guest-agent-*.tar.gz.sha256' \
+            --dir sidecars
+
+          entries="[]"
+          while IFS=$'\t' read -r name url size; do
+            arch="${name#strato-guest-agent-}"; arch="${arch%.tar.gz}"
+            sha256="$(awk '{print $1}' "sidecars/${name}.sha256")"
+            [ -n "$sha256" ] || { echo "missing checksum sidecar for $name" >&2; exit 1; }
+            entries="$(jq --arg arch "$arch" --arg name "$name" --arg url "$url" \
+                          --arg sha "$sha256" --argjson size "$size" \
+              '. + [{arch: $arch, asset: $name, url: $url, sha256: $sha,
+                     size: $size, guestAgentBinaryPath: "strato-guest-agent",
+                     systemdUnitPath: "strato-guest-agent.service"}]' <<< "$entries")"
+          done < assets.tsv
+
+          jq -n --arg version "$TAG" --arg sha "$GITHUB_SHA" --argjson assets "$entries" \
+            '{schemaVersion: 1, version: $version, gitSHA: $sha, assets: $assets}' \
+            > guest-agent-manifest.json
+          cat guest-agent-manifest.json
+          gh release upload "$TAG" guest-agent-manifest.json --clobber

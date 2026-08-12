@@ -124,12 +124,26 @@ public enum ProcessRunner {
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
+        let stdoutHandle = stdoutPipe.fileHandleForReading
+        let stderrHandle = stderrPipe.fileHandleForReading
+        let stdoutWriter = stdoutPipe.fileHandleForWriting
+        let stderrWriter = stderrPipe.fileHandleForWriting
+        defer {
+            try? stdoutHandle.close()
+            try? stderrHandle.close()
+            try? stdoutWriter.close()
+            try? stderrWriter.close()
+        }
 
         let exited = exitSignal(for: process)
 
         // `run()` only spawns the child and returns; it does not block for the
         // subprocess lifetime, so calling it inline is fine.
         try process.run()
+        // The child inherited its own copies. This process only reads these
+        // pipes, so retaining its writers would delay EOF after the child exits.
+        try? stdoutWriter.close()
+        try? stderrWriter.close()
 
         // Watchdog on the pid rather than the `Process` (which is not
         // Sendable). It re-checks the exit latch before signalling so a child
@@ -165,8 +179,8 @@ public enum ProcessRunner {
         }
         let outputBudget = maxOutputBytes.map(OutputBudget.init(limit:))
         let pid = process.processIdentifier
-        let stdoutFD = stdoutPipe.fileHandleForReading.fileDescriptor
-        let stderrFD = stderrPipe.fileHandleForReading.fileDescriptor
+        let stdoutFD = stdoutHandle.fileDescriptor
+        let stderrFD = stderrHandle.fileDescriptor
         async let stdoutData = drain(
             fd: stdoutFD, deadline: drainDeadline, outputBudget: outputBudget, processID: pid)
         async let stderrData = drain(
@@ -233,10 +247,17 @@ public enum ProcessRunner {
 
         let stderrPipe = Pipe()
         process.standardError = stderrPipe
+        let stderrHandle = stderrPipe.fileHandleForReading
+        let stderrWriter = stderrPipe.fileHandleForWriting
+        defer {
+            try? stderrHandle.close()
+            try? stderrWriter.close()
+        }
 
         let exited = exitSignal(for: process)
 
         try process.run()
+        try? stderrWriter.close()
 
         // Enforce an output ceiling by polling the growing output file and
         // terminating the subprocess if it blows past the limit. The stream
@@ -268,7 +289,7 @@ public enum ProcessRunner {
             }
         }
 
-        let stderrFD = stderrPipe.fileHandleForReading.fileDescriptor
+        let stderrFD = stderrHandle.fileDescriptor
         async let stderrData = drain(fd: stderrFD)
 
         let err = await stderrData

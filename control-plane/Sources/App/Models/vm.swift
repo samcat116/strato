@@ -221,6 +221,12 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "environment")
     var environment: String
 
+    /// Free-form operator tags published to the guest through instance
+    /// metadata (STR-66). Ordinary metadata only: neither the control plane nor
+    /// the guest may treat a tag as an authorization claim.
+    @Field(key: "tags")
+    var tags: [String: String]
+
     // Optional reference to the Image used to create this VM (new image system)
     @OptionalParent(key: "image_id")
     var sourceImage: Image?
@@ -271,9 +277,18 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "cmdline")
     var cmdline: String?
 
-    // SSH public key authorized for the guest's default user via cloud-init.
+    // Legacy create-time SSH key. Kept during the plural authorized-key
+    // transition so an older control-plane replica can still read the first
+    // key written by STR-66. New assembly uses `effectiveSSHAuthorizedKeys`.
     @OptionalField(key: "ssh_public_key")
     var sshPublicKey: String?
+
+    /// The authoritative keys published in `InstanceMetadata` and carried in
+    /// `VMSpec` (STR-66). Empty is a real value: it revokes every key from the
+    /// metadata document, even though applying that revocation inside an
+    /// already-running guest remains cloud-init's responsibility.
+    @Field(key: "ssh_authorized_keys")
+    var sshAuthorizedKeys: [String]
 
     // Caller-supplied cloud-init user data (any format cloud-init dispatches
     // on: #cloud-config, #! scripts, #include, MIME multipart, ...), stored
@@ -359,6 +374,7 @@ final class VM: Model, @unchecked Sendable {
         self.image = image
         self.$project.id = projectID
         self.environment = environment
+        self.tags = [:]
         self.cpu = cpu
         self.maxCpu = maxCpu ?? cpu
         self.memory = memory
@@ -383,6 +399,7 @@ final class VM: Model, @unchecked Sendable {
         self.metadataEnabled = metadataEnabled
         self.metadataSource = metadataSource
         self.metadataSeedToken = metadataSeedToken
+        self.sshAuthorizedKeys = []
     }
 }
 
@@ -391,6 +408,20 @@ extension VM: Content {}
 // MARK: - Computed Properties
 
 extension VM {
+    /// Plural STR-66 storage, with a compatibility fallback for a row created
+    /// by an older replica before the backfill or during a rolling deployment.
+    var effectiveSSHAuthorizedKeys: [String] {
+        sshAuthorizedKeys.isEmpty ? sshPublicKey.map { [$0] } ?? [] : sshAuthorizedKeys
+    }
+
+    /// Writes both the authoritative plural field and the legacy first-key
+    /// projection. Keeping the latter in step makes a rollback lose at most the
+    /// additional keys rather than all SSH access.
+    func setSSHAuthorizedKeys(_ keys: [String]) {
+        sshAuthorizedKeys = keys
+        sshPublicKey = keys.first
+    }
+
     var isRunning: Bool {
         return status == .running
     }
@@ -674,6 +705,10 @@ struct VMDetailResponse: Content {
     let metadataEnabled: Bool
     /// Guest-bootstrap source selected when the VM was created (STR-64).
     let metadataSource: MetadataSource
+    /// Mutable, guest-visible instance metadata (STR-66). Tags are ordinary
+    /// operator annotations, never identity or authorization input.
+    let tags: [String: String]
+    let sshAuthorizedKeys: [String]
     /// Observed guest-agent view (issue #563). `qgaAvailable` is nil until the
     /// agent's slow poll first sees a responsive qga; `observedHostname` is the
     /// guest OS's own hostname when it reported one.
@@ -766,6 +801,8 @@ struct VMDetailResponse: Content {
         self.graphicsConsole = vm.graphicsConsole
         self.metadataEnabled = vm.metadataEnabled
         self.metadataSource = vm.metadataSource
+        self.tags = vm.tags
+        self.sshAuthorizedKeys = vm.effectiveSSHAuthorizedKeys
         self.qgaAvailable = vm.qgaAvailable
         self.observedHostname = vm.observedHostname
         self.guestMemoryTotalBytes = vm.guestMemoryTotalBytes

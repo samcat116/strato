@@ -1532,9 +1532,9 @@ actor LibvirtService: HypervisorService {
             }
             let layout = try DomainMemoryInventory.memoryLayout(
                 inDomainXML: try await domainXML(dom, vmId: vmId))
-            // The reconciler only plans a resize for a running VM, but nothing
-            // in the protocol says so, and `AFFECT_LIVE` against an inactive
-            // domain is `VIR_ERR_OPERATION_INVALID` — so the state decides.
+            // The reconciler also plans an offline vCPU shrink. State still
+            // decides the flags: `AFFECT_LIVE` against an inactive domain is
+            // `VIR_ERR_OPERATION_INVALID`.
             let live = LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId))
             let currentGuestMemory = layout.bootBytes + (layout.virtioMem?.requestedBytes ?? 0)
             let targetGuestMemory =

@@ -46,6 +46,7 @@ jobs:
       release_workflow: ${{ steps.filter.outputs.release_workflow }}
       ci_scripts: ${{ steps.filter.outputs.ci_scripts }}
       docker_web: ${{ steps.filter.outputs.docker_web }}
+      docker_source_context: ${{ steps.filter.outputs.docker_source_context }}
     steps:
       - uses: dorny/paths-filter@v3
         id: filter
@@ -126,6 +127,11 @@ jobs:
               - '.github/scripts/**'
             docker_web:
               - 'control-plane/web/Dockerfile'
+            # The root ignore file is the safety boundary for every source
+            # Docker build. Its behavioral test lives under compose_scripts,
+            # so changing either the rule or the test runs the shell job.
+            docker_source_context:
+              - '.dockerignore'
 
   swift-format:
     name: Swift Format Lint
@@ -159,14 +165,18 @@ jobs:
   install-script:
     name: Shell Scripts
     needs: changes
-    if: needs.changes.outputs.install_script == 'true' || needs.changes.outputs.compose_scripts == 'true' || needs.changes.outputs.workflow == 'true'
-    # These provision hypervisor hosts, edit /etc/libvirt/qemu.conf in place, and
-    # `rm -rf` VM state as root; their helpers are only reachable by running
-    # them, and nothing else in CI touches shell. Cheap enough to keep honest.
+    if: needs.changes.outputs.install_script == 'true' || needs.changes.outputs.compose_scripts == 'true' || needs.changes.outputs.docker_source_context == 'true' || needs.changes.outputs.workflow == 'true'
+    # These provision hypervisor hosts, edit /etc/libvirt/qemu.conf in place,
+    # `rm -rf` VM state as root, and define the source-image context boundary;
+    # their behavior is only reachable by running them. Cheap enough to keep
+    # honest.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Check syntax
         run: bash -n deploy/agent/install.sh deploy/compose/*.sh deploy/*/tests/*.sh

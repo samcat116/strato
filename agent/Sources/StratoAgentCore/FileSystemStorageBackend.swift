@@ -24,6 +24,7 @@ public actor FileSystemStorageBackend: StorageBackend {
     private let qemuImgPath: String
     private let imageSource: (any ImageSource)?
     private let runSubprocess: SubprocessRunner
+    private let enumerateVolumeStore: @Sendable (String) throws -> [String]
 
     /// Default storage path for volumes (platform-specific)
     public static var defaultStoragePath: String {
@@ -52,6 +53,9 @@ public actor FileSystemStorageBackend: StorageBackend {
         volumeStoragePath: String? = nil,
         qemuImgPath: String? = nil,
         imageSource: (any ImageSource)? = nil,
+        enumerateVolumeStore: @escaping @Sendable (String) throws -> [String] = {
+            try FileManager.default.contentsOfDirectory(atPath: $0)
+        },
         runSubprocess: @escaping SubprocessRunner = { try await ProcessRunner.run(executableURL: $0, arguments: $1) }
     ) {
         self.logger = logger
@@ -59,6 +63,7 @@ public actor FileSystemStorageBackend: StorageBackend {
         self.qemuImgPath = qemuImgPath ?? Self.defaultQemuImgPath
         self.imageSource = imageSource
         self.runSubprocess = runSubprocess
+        self.enumerateVolumeStore = enumerateVolumeStore
 
         // Ensure storage directory exists
         do {
@@ -593,17 +598,26 @@ public actor FileSystemStorageBackend: StorageBackend {
 
         let entries: [String]
         do {
-            entries = try FileManager.default.contentsOfDirectory(atPath: volumeStoragePath)
-        } catch {
-            logger.error(
-                "Volume store exists but cannot be read; this host cannot account for its volumes",
+            entries = try enumerateVolumeStore(volumeStoragePath)
+        } catch  where Self.isFileNotFound(error) {
+            // A child can vanish while Foundation builds the returned names.
+            // The observed Darwin error wraps that ENOENT in
+            // NSFileReadUnknownError (Cocoa 256), even though the store itself
+            // remains readable. Retry the authoritative scan once after
+            // teardown has finished removing the entry.
+            logger.debug(
+                "A volume entry disappeared during inventory; retrying the scan",
                 metadata: [
                     "storagePath": .string(volumeStoragePath),
                     "error": .string(error.localizedDescription),
                 ])
-            throw StorageBackendError.hostMisconfiguration(
-                "cannot enumerate the volume store at \(volumeStoragePath): "
-                    + "\(error.localizedDescription). Ensure the agent user can read it.")
+            do {
+                entries = try enumerateVolumeStore(volumeStoragePath)
+            } catch {
+                throw unreadableVolumeStore(error)
+            }
+        } catch {
+            throw unreadableVolumeStore(error)
         }
 
         var volumes: [String: DiskAttachment] = [:]
@@ -618,6 +632,42 @@ public actor FileSystemStorageBackend: StorageBackend {
             }
         }
         return volumes
+    }
+
+    /// Foundation can wrap POSIX errors more than once. Only ENOENT means a
+    /// child raced this scan; EACCES, EIO, EMFILE, and every unknown error are
+    /// still failures of the store as a whole.
+    private static func isFileNotFound(_ error: Error) -> Bool {
+        var current: any Error = error
+        while true {
+            let candidate = current as NSError
+            if candidate.domain == NSCocoaErrorDomain,
+                candidate.code == NSFileNoSuchFileError || candidate.code == NSFileReadNoSuchFileError
+            {
+                return true
+            }
+            if candidate.domain == NSPOSIXErrorDomain,
+                candidate.code == POSIXErrorCode.ENOENT.rawValue
+            {
+                return true
+            }
+            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
+                return false
+            }
+            current = underlying
+        }
+    }
+
+    private func unreadableVolumeStore(_ error: Error) -> StorageBackendError {
+        logger.error(
+            "Volume store exists but cannot be read; this host cannot account for its volumes",
+            metadata: [
+                "storagePath": .string(volumeStoragePath),
+                "error": .string(error.localizedDescription),
+            ])
+        return .hostMisconfiguration(
+            "cannot enumerate the volume store at \(volumeStoragePath): "
+                + "\(error.localizedDescription). Ensure the agent user can read it.")
     }
 
     /// Runs `write` against a staging path and publishes its output to `path`

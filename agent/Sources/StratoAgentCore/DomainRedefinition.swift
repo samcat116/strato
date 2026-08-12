@@ -18,9 +18,9 @@ import StratoShared
 /// nothing. That was a real capability difference between two drivers the
 /// control plane cannot tell apart.
 ///
-/// So this is what a boot does before it starts a stopped domain: it makes the
-/// definition able to satisfy the spec the VM is being booted for. "Recreate the
-/// VM" becomes "stop and start it".
+/// So this is what a boot or stopped-domain resize does before acting: it makes
+/// the definition able to satisfy the current spec. "Recreate the VM" becomes
+/// "stop and start it".
 ///
 /// ## Why the existing document is edited rather than rebuilt
 ///
@@ -66,7 +66,8 @@ import StratoShared
 /// operator told to "stop and start the VM" would restart and still see the old
 /// size. This is not a resize path for all that: a domain whose ceilings already
 /// fit its spec is left completely alone, and converging *that* VM's size stays
-/// `resizeVM`'s job.
+/// `resizeVM`'s job. STR-248 drives a stopped shrink through that resize path;
+/// this pass prepares any simultaneous upward ceiling change first.
 public enum DomainRedefinition {
 
     /// The outcome of one widening pass.

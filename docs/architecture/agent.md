@@ -713,10 +713,11 @@ are defined exactly as they were before the feature existed.
 
 Resizing is **declarative, not an RPC**: the control plane writes the new
 sizing into the VM's desired state and bumps its generation, and the
-reconciler's planner — comparing each running VM's manifest sizing against
-the sync's spec — emits a `.resize` step. That survives dropped syncs by
-construction, since the next level-triggered sync re-derives the same diff.
-The step reaches `LibvirtService.resizeVM`:
+reconciler's planner compares the manifest sizing against the sync's spec.
+It emits a `.resize` step for a running VM resize and for a stopped QEMU vCPU
+shrink. That survives dropped syncs by construction, since the next
+level-triggered sync re-derives the same diff. The step reaches
+`LibvirtService.resizeVM`:
 
 - **vCPUs**: `domainSetVcpusFlags` with `AFFECT_LIVE|AFFECT_CONFIG`, so the
   count lands on the running guest and in the definition the next boot reads.
@@ -729,9 +730,11 @@ unplug is unreliable — so the API rejects a running vCPU shrink and tells the
 caller to stop the VM, resize it, and start it again. The libvirt driver repeats
 that guard so a desired entry accepted by an older control plane — or a smaller
 last-writer target racing with pending growth — cannot advance
-`observedGeneration` without changing the live count. Memory never shrinks below
-the boot size; that smaller figure is written to `CONFIG` and applies at the
-next reboot.
+`observedGeneration` without changing the live count. While the VM is stopped,
+the resize updates the persistent definition before convergence and before a
+planned boot, so the next guest starts with the smaller count. Memory never
+shrinks below the boot size; that smaller figure is written to `CONFIG` and
+applies at the next reboot.
 Growing past the ceilings the domain was defined with fails on the agent and is
 a `422` at the API, both naming a restart as the remedy — and since STR-187 that
 remedy works, because the boot rewrites `<vcpu>`'s maximum and `<maxMemory>` to
@@ -755,14 +758,11 @@ failed resize is re-planned by the next sync rather than looking applied.
   Entries older than the last applied generation are dropped (replays can't
   roll state back); equal generations still re-plan (drift correction);
   present-but-unlisted workloads are **held**, not deleted (below).
-  Drift correction is the reason an agent can report `observedGeneration` and
-  `failedGeneration` at the same value: a failing item never advances
-  `lastApplied`, so the two coincide only when an *earlier* item applied that
-  generation and a later one at the same number failed — a resized stopped VM
-  boots at the old size (`.boot` starts the definition the host holds) and is
-  corrected by the `.resize` the next sync plans. The control plane resolves
-  the pair on read, treating a failure at the current generation as not
-  converged (STR-191).
+  A stopped QEMU vCPU shrink is ordered before `.boot`; if changing the
+  persistent definition fails, the item does not advance `lastApplied` and the
+  VM does not start from the stale definition. More generally, a failing item
+  never advances `lastApplied`. The control plane treats a failure at the
+  current generation as not converged (STR-191).
 - **The `Reconciler` actor** executes items on **per-workload serial
   lanes** (`SerialTaskQueue` in `MessageOrdering.swift`: FIFO per key,
   concurrent across keys). A VM's lane key is its bare ID — the same lane
@@ -1057,13 +1057,14 @@ echoes it so the later host bridge can pin a session to one guest generation.
 The status is `running` while the daemon is serving. Sandbox-only launch,
 reidentify, clock, and log-follow operations are refused.
 
-Exec runs as the service account (root in the planned systemd unit), defaults to
+Exec runs as the service account (root in the packaged systemd unit), defaults to
 `/`, and inherits the service environment with request entries overlaid. Pipe
 sessions use a dedicated process group; TTY sessions use a new session and
 controlling PTY. Closing the host connection before `exec_exit` kills that
 group. Unlike the sandbox init, the daemon owns and waits for each child itself
-because it is not PID 1. STR-80 owns the systemd unit and release artifact;
-STR-82 owns the node-agent vsock bridge.
+because it is not PID 1. STR-80 packages it as
+`strato-guest-agent-<arch>.tar.gz` with a systemd unit and publishes
+`guest-agent-manifest.json`; STR-82 owns the node-agent vsock bridge.
 
 ## Networking
 

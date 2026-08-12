@@ -253,7 +253,7 @@ struct VMSpecBuilder {
             // entirely and stays out of the sync digest for headless VMs
             // (issue #566).
             console: ConsoleSpec(graphics: vm.graphicsConsole ? .vnc : nil),
-            sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? [],
+            sshAuthorizedKeys: vm.effectiveSSHAuthorizedKeys,
             userData: vm.userData,
             metadataSource: vm.metadataSource
         )

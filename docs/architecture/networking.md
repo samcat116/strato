@@ -214,6 +214,20 @@ factory extension in `InstanceMetadataFactory.swift`) and
 with no control-plane round trip, so it holds per VM exactly what the metadata
 listener serves — see [agent](./agent.md) §Instance metadata store.
 
+`PATCH /api/vms/:id` replaces a VM's tags and/or SSH authorized-key list
+(STR-66). The values and the VM generation advance in one transaction, then the
+control plane rings that VM's placed agent through the cross-replica desired-state
+doorbell. The next sync therefore updates `MetadataStore` without recreating or
+rebooting the VM, and an older delayed sync cannot overwrite the rotation.
+
+That guarantee ends at the metadata boundary. **cloud-init does not re-read and
+apply a rotated key inside an already-running guest.** An IMDS-backed VM sees
+the new document on its next datasource run — after a reboot, or an explicit
+`cloud-init clean` and re-run. A legacy `metadataSource: iso` VM keeps using the
+immutable payload on its seed ISO; the PATCH still updates its durable and IMDS
+metadata, but it cannot rotate the seed. Applying rotations live is the VM guest
+agent's job, not the IMDS's.
+
 The **listener** joining the two is STR-56: one child process per namespace,
 started by the agent through `ip netns exec`, answering on both addresses
 behind a mandatory IMDSv2-style token handshake and identifying its caller by

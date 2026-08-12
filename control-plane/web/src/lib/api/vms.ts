@@ -5,6 +5,7 @@ import { buildLogQueryString } from "./logs";
 import type {
   VM,
   CreateVMRequest,
+  PatchVMMetadataRequest,
   AcceptedMutation,
   Page,
   VMLogEntry,
@@ -39,6 +40,10 @@ export const vmsApi = {
 
   create(data: CreateVMRequest): Promise<AcceptedMutation<VM>> {
     return api.post<AcceptedMutation<VM>>("/api/vms", data);
+  },
+
+  patchMetadata(id: string, data: PatchVMMetadataRequest): Promise<VM> {
+    return api.patch<VM>(`/api/vms/${id}`, data);
   },
 
   listInterfaces(id: string): Promise<VMNetworkInterface[]> {

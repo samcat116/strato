@@ -231,6 +231,10 @@ export interface VM {
    * stub on the ISO. Optional only because older control planes omit it.
    */
   metadataSource?: MetadataSource;
+  /** Free-form operator tags published through the VM's instance metadata. */
+  tags?: Record<string, string>;
+  /** SSH authorized keys currently published through instance metadata. */
+  sshAuthorizedKeys?: string[];
   /**
    * Observed guest-agent (qga) view (issue #563). `qgaAvailable` is undefined
    * until the agent's slow poll first sees a responsive guest agent;
@@ -1217,6 +1221,12 @@ export interface CreateVMRequest {
    * `imds` requires QEMU and an OVN-backed agent.
    */
   metadataSource?: MetadataSource;
+}
+
+/** Mutable guest-visible metadata. Empty values clear; omission leaves alone. */
+export interface PatchVMMetadataRequest {
+  tags?: Record<string, string>;
+  sshAuthorizedKeys?: string[];
 }
 
 // Async VM operations: lifecycle mutations return 202 Accepted with an
