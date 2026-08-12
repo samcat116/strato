@@ -83,13 +83,14 @@ public struct SPIRENodeDependencyModule: NodeDependencyModule {
         async let identity = svid()
         let (supervisor, installed, identityHealth) = await (unit, installedVersion, identity)
 
-        // A usable Workload API SVID proves that the identity source is
-        // functional even when this systemd unit does not own the process (for
-        // example, the documented Docker/--no-systemd flow). Keep a known
-        // inactive or failed unit as supervisor metadata, but do not let it
-        // replace the functional result. A missing unit is not applicable to
-        // an externally supervised process.
-        if supervisor.supervisorState != .active,
+        // A missing or disabled unit does not own SPIRE's lifecycle (for
+        // example, the documented Docker/--no-systemd flow). In that mode a
+        // usable Workload API SVID is authoritative; keep a disabled unit's
+        // state as supervisor metadata. An enabled unit remains authoritative
+        // because SVIDManager may still hold a cached SVID after it stops.
+        let externallySupervised =
+            supervisor.supervisorState == .missing || supervisor.unitFileState == "disabled"
+        if externallySupervised,
             case .ready = identityHealth
         {
             return identityInspection(

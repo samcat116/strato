@@ -66,9 +66,11 @@ It only changes admission of new work that needs the affected feature.
 
 The initial registry observes SPIRE, libvirt, and OVN/OVS. SPIRE combines its
 systemd unit with the current Workload API X.509 SVID and warns before expiry.
-A successful SVID fetch is authoritative when SPIRE runs outside systemd; the
-inactive unit remains visible as supervisor metadata without withdrawing
-workload identity.
+A successful SVID fetch is authoritative when SPIRE runs outside systemd and
+the local unit is missing or disabled; a disabled unit remains visible as
+supervisor metadata without withdrawing workload identity. An enabled inactive
+or failed unit remains a functional failure even while the agent holds a cached
+SVID.
 Libvirt discovers `virtqemud.socket` or `libvirtd.socket` and reuses the bounded
 daemon-version probe, including the 11.5.0 compatibility floor. OVN/OVS checks
 the package units and versions, OVN NB and local OVSDB reads, `br-int`, and the

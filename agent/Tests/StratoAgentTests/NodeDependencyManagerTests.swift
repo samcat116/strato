@@ -342,21 +342,33 @@ struct InitialNodeDependencyModuleTests {
         #expect(healthyObservation.functionalState == .healthy)
         #expect(healthyObservation.permitsDependentWork)
 
-        let inactive = SystemdUnitObservation(
-            name: "spire-agent.service", loadState: "loaded", activeState: "inactive",
-            subState: "dead", unitFileState: "enabled")
-        let unavailable = SPIRENodeDependencyModule(
-            systemd: FakeSystemd(defaultObservation: inactive),
-            version: { "1.12.4" },
-            svid: { .unavailable("Workload API socket is unavailable") })
-        let unavailableManager = try NodeDependencyManager(
-            modules: [unavailable], logger: Logger(label: "test"))
+        let stoppedUnits: [(SystemdUnitObservation, NodeDependencyFailureCode)] = [
+            (
+                SystemdUnitObservation(
+                    name: "spire-agent.service", loadState: "loaded", activeState: "inactive",
+                    subState: "dead", unitFileState: "enabled"),
+                .inactiveUnit
+            ),
+            (
+                SystemdUnitObservation(
+                    name: "spire-agent.service", loadState: "loaded", activeState: "failed",
+                    subState: "failed", unitFileState: "enabled"),
+                .failedUnit
+            ),
+        ]
+        for (unit, expectedReason) in stoppedUnits {
+            let cachedIdentity = SPIRENodeDependencyModule(
+                systemd: FakeSystemd(defaultObservation: unit),
+                version: { "1.12.4" },
+                svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
+            let stoppedManager = try NodeDependencyManager(
+                modules: [cachedIdentity], logger: Logger(label: "test"))
 
-        let unavailableObservation = try #require(await unavailableManager.refresh().first)
-        #expect(unavailableObservation.supervisorState == .inactive)
-        #expect(unavailableObservation.functionalState == .unhealthy)
-        #expect(unavailableObservation.reason?.code == .inactiveUnit)
-        #expect(!unavailableObservation.permitsDependentWork)
+            let stoppedObservation = try #require(await stoppedManager.refresh().first)
+            #expect(stoppedObservation.functionalState == .unhealthy)
+            #expect(stoppedObservation.reason?.code == expectedReason)
+            #expect(!stoppedObservation.permitsDependentWork)
+        }
     }
 
     @Test("File-based SPIFFE does not require a local SPIRE service or binary")
