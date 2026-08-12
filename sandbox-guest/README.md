@@ -33,9 +33,10 @@ list is the only evidence the host has.
 
 The Cargo package under [`init/`](init/) also builds `strato-guest-agent`
 (STR-77), the normal-service counterpart for general-purpose Linux VMs. It is
-not part of this initramfs or `guest.json`; its systemd unit and release artifact
-belong to STR-80. Both executables import the same Rust `protocol` module, so
-their NDJSON shapes and portable protocol tests are one contract.
+not part of this initramfs or `guest.json`; it ships in its own per-architecture
+release tarball with a systemd unit (STR-80). Both executables import the same
+Rust `protocol` module, so their NDJSON shapes and portable protocol tests are
+one contract.
 
 ## What the init does
 
@@ -237,6 +238,15 @@ cargo build --release --locked --manifest-path init/Cargo.toml \
   --target x86_64-unknown-linux-musl --bin strato-guest-agent
 ```
 
+Or build the exact two-file release layout:
+
+```sh
+./build-guest-agent.sh --arch x86_64 --out ./build/guest-agent/x86_64
+# ./build/guest-agent/x86_64/
+#   strato-guest-agent
+#   strato-guest-agent.service
+```
+
 The sandbox init's Linux-only network ioctls and rtnetlink route have unit tests
 too, but their real check is a namespace, which needs no microVM, no OVN, and no
 control plane:
@@ -260,6 +270,19 @@ release flow. Install onto a host with `deploy/agent/install.sh
 --sandbox-guest`, which downloads the published `sandbox-guest-<arch>.tar.gz`
 into the agent's `sandbox_guest_image_path` (default
 `/var/lib/strato/sandbox/guest`).
+
+The same workflow publishes `strato-guest-agent-<arch>.tar.gz` for `x86_64`
+and `aarch64`, each with a `.sha256` sidecar, plus
+`guest-agent-manifest.json`. The manifest records the release version and Git
+SHA and maps each architecture to its asset URL, SHA-256, size, binary member,
+and systemd-unit member. The unit expects the binary at
+`/usr/local/bin/strato-guest-agent`.
+
+Publishing an artifact is not permission to mutate a tenant's VM. There is no
+guest-agent timer or automatic updater: initial installation is an explicit,
+tenant-visible opt-in, and later updates must be operator-triggered and audited.
+Protocol versioning handles skew; the host must withhold capabilities an older
+guest does not advertise rather than silently replacing software inside it.
 
 ## Kernel version
 

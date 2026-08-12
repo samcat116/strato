@@ -2,7 +2,8 @@
 //!
 //! This is a normal service process, not PID 1. It binds only AF_VSOCK,
 //! answers the shared guest control protocol, and runs host-requested commands
-//! in the already-booted VM. Packaging and the systemd unit belong to STR-80.
+//! in the already-booted VM. `sandbox-guest/build-guest-agent.sh` produces its
+//! release layout alongside the systemd unit.
 
 #[cfg(target_os = "linux")]
 #[path = "guest_agent/mod.rs"]
