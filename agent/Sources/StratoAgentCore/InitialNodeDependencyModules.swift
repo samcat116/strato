@@ -83,18 +83,20 @@ public struct SPIRENodeDependencyModule: NodeDependencyModule {
         async let identity = svid()
         let (supervisor, installed, identityHealth) = await (unit, installedVersion, identity)
 
-        // A missing or disabled unit does not own SPIRE's lifecycle (for
-        // example, the documented Docker/--no-systemd flow). In that mode a
-        // usable Workload API SVID is authoritative; keep a disabled unit's
-        // state as supervisor metadata. An enabled unit remains authoritative
-        // because SVIDManager may still hold a cached SVID after it stops.
+        // A confirmed absent or disabled unit does not own SPIRE's lifecycle
+        // (for example, the documented Docker/--no-systemd flow). In that mode
+        // a usable Workload API SVID is authoritative; keep a disabled unit's
+        // state as supervisor metadata. An inspection failure must not select
+        // this path because SVIDManager may still hold a cached SVID after a
+        // systemd-owned agent stops.
         let externallySupervised =
-            supervisor.supervisorState == .missing || supervisor.unitFileState == "disabled"
+            supervisor.loadState == "not-found"
+            || (supervisor.loadState == "loaded" && supervisor.unitFileState == "disabled")
         if externallySupervised,
             case .ready = identityHealth
         {
             return identityInspection(
-                supervisorState: supervisor.supervisorState == .missing
+                supervisorState: supervisor.loadState == "not-found"
                     ? .notApplicable : supervisor.supervisorState,
                 installedVersion: installed,
                 identityHealth: identityHealth)
@@ -108,13 +110,23 @@ public struct SPIRENodeDependencyModule: NodeDependencyModule {
                 reason: .init(code: .missingUnit, message: "spire-agent.service is not installed"))
         }
         guard supervisor.supervisorState == .active else {
+            let reason: NodeDependencyFailureReason =
+                switch supervisor.supervisorState {
+                case .failed:
+                    .init(code: .failedUnit, message: "spire-agent.service is \(supervisor.activeState)")
+                case .inactive:
+                    .init(code: .inactiveUnit, message: "spire-agent.service is \(supervisor.activeState)")
+                default:
+                    .init(
+                        code: .functionalProbeFailed,
+                        message: "could not verify spire-agent.service state (load=\(supervisor.loadState), "
+                            + "active=\(supervisor.activeState))")
+                }
             return NodeDependencyInspection(
                 supervisorState: supervisor.supervisorState, installedVersion: installed,
                 compatibility: installed == nil ? .unknown : .compatible,
                 functionalState: .unhealthy,
-                reason: .init(
-                    code: supervisor.supervisorState == .failed ? .failedUnit : .inactiveUnit,
-                    message: "spire-agent.service is \(supervisor.activeState)"))
+                reason: reason)
         }
         guard installed != nil else {
             return NodeDependencyInspection(
@@ -217,12 +229,11 @@ public struct LibvirtNodeDependencyModule: NodeDependencyModule {
                 compatibility: .unknown, functionalState: .unhealthy,
                 reason: .init(code: .malformedOutput, message: detail))
         case .reachable(let daemonVersion):
-            // A successful daemon probe is authoritative for externally
-            // supervised deployments. `discoverFirst` reports `.missing` both
-            // when neither unit exists and when systemd cannot be inspected
-            // (for example, the documented container agent using the host's
-            // mounted libvirt socket). Preserve known inactive/failed units,
-            // but do not gate a reachable daemon on an unavailable supervisor.
+            // Unlike the cached SPIRE SVID, this is a live daemon probe. It is
+            // authoritative when no local unit exists or systemd inspection is
+            // unavailable (for example, a container agent using the host's
+            // mounted libvirt socket). A known loaded unit remains functional
+            // evidence and must be active.
             let effectiveSupervisor: NodeDependencySupervisorState =
                 supervisor.supervisorState == .missing || supervisor.supervisorState == .unknown
                 ? .notApplicable : supervisor.supervisorState
@@ -235,6 +246,20 @@ public struct LibvirtNodeDependencyModule: NodeDependencyModule {
                     reason: .init(
                         code: .incompatibleVersion,
                         message: "libvirt \(daemonVersion) is older than required \(LibvirtProbe.minimumVersion)"))
+            }
+            guard effectiveSupervisor == .active || effectiveSupervisor == .notApplicable else {
+                let code: NodeDependencyFailureCode =
+                    effectiveSupervisor == .failed
+                    ? .failedUnit
+                    : effectiveSupervisor == .inactive ? .inactiveUnit : .functionalProbeFailed
+                return NodeDependencyInspection(
+                    supervisorState: effectiveSupervisor,
+                    installedVersion: installed,
+                    daemonVersion: daemonVersion.description,
+                    compatibility: .compatible, functionalState: .unhealthy,
+                    reason: .init(
+                        code: code,
+                        message: "\(supervisor.name) is \(supervisor.activeState)"))
             }
             return NodeDependencyInspection(
                 supervisorState: effectiveSupervisor,

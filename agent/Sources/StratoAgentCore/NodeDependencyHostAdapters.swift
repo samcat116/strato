@@ -73,7 +73,8 @@ public struct SystemdUnitObservation: Sendable, Equatable {
     }
 
     public var supervisorState: NodeDependencySupervisorState {
-        guard loadState == "loaded" else { return .missing }
+        if loadState == "not-found" { return .missing }
+        guard loadState == "loaded" else { return .unknown }
         switch activeState {
         case "active": return .active
         case "activating", "reloading": return .activating
@@ -134,13 +135,18 @@ public struct SystemdHostAdapter: SystemdControlling {
 
     public func discoverFirst(units: [String]) async -> SystemdUnitObservation {
         var firstLoaded: SystemdUnitObservation?
+        var firstUnknown: SystemdUnitObservation?
         for unit in units {
             let observation = await inspect(unit: unit)
-            guard observation.loadState == "loaded" else { continue }
-            if observation.supervisorState == .active { return observation }
-            if firstLoaded == nil { firstLoaded = observation }
+            if observation.loadState == "loaded" {
+                if observation.supervisorState == .active { return observation }
+                if firstLoaded == nil { firstLoaded = observation }
+            } else if observation.supervisorState == .unknown, firstUnknown == nil {
+                firstUnknown = observation
+            }
         }
         if let firstLoaded { return firstLoaded }
+        if let firstUnknown { return firstUnknown }
         return SystemdUnitObservation(
             name: units.first ?? "unknown", loadState: "not-found", activeState: "inactive",
             subState: "dead", unitFileState: "unknown")
