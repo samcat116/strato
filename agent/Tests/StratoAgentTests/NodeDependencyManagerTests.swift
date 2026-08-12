@@ -417,6 +417,104 @@ struct InitialNodeDependencyModuleTests {
     }
 }
 
+@Suite("Dependency probe descriptor stress", .serialized)
+struct DependencyProbeDescriptorStressTests {
+    // Each refresh launches three libvirt and five OVN/OVS commands. This runs
+    // 1,200 subprocesses, well past the old 1024-descriptor failure point.
+    private let refreshIterations = 150
+
+    @Test("Libvirt and OVN observations stay healthy across repeated commands")
+    func repeatedCommandObservationsRemainHealthy() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("strato-dependency-probe-stress-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let systemctl = directory.appendingPathComponent("systemctl")
+        try makeExecutable(
+            at: systemctl,
+            body: """
+                printf 'LoadState=loaded\\nActiveState=active\\nSubState=running\\nUnitFileState=enabled\\n'
+                """)
+        try makeExecutable(
+            at: directory.appendingPathComponent("virsh"),
+            body: "printf 'Running against daemon: 12.0.0\\n'")
+
+        let executor = NodeDependencyCommandExecutor()
+        let systemd = SystemdHostAdapter(executor: executor, executable: systemctl.path)
+        let libvirt = LibvirtNodeDependencyModule(
+            systemd: systemd,
+            installedVersion: { await commandOutput(executor, value: "12.0.0") },
+            probe: {
+                await LibvirtProbe.probe(
+                    searchPath: directory.path, timeout: .seconds(2))
+            })
+        let networking = OVNOVSNodeDependencyModule(
+            systemd: systemd,
+            ovsVersion: { await commandOutput(executor, value: "3.5.0") },
+            ovnVersion: { await commandOutput(executor, value: "25.03.0") },
+            functional: { await commandHealth(executor) })
+        let manager = try NodeDependencyManager(
+            modules: [libvirt, networking],
+            policy: .init(functionalFailureThreshold: 1),
+            logger: Logger(label: "test.dependency-probe-descriptor-stress"))
+
+        for iteration in 0..<refreshIterations {
+            let observations = await manager.refresh()
+            let libvirtObservation = try #require(
+                observations.first { $0.id == .libvirt })
+            let networkingObservation = try #require(
+                observations.first { $0.id == .ovnOvs })
+
+            try #require(
+                libvirtObservation.functionalState == .healthy,
+                "libvirt became unhealthy after refresh \(iteration + 1)")
+            try #require(
+                networkingObservation.functionalState == .healthy,
+                "OVN/OVS became unhealthy after refresh \(iteration + 1)")
+            #expect(libvirtObservation.permitsDependentWork)
+            #expect(networkingObservation.permitsDependentWork)
+        }
+    }
+
+    private func makeExecutable(at url: URL, body: String) throws {
+        try "#!/bin/sh\n\(body)\n".write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+}
+
+private func commandOutput(
+    _ executor: NodeDependencyCommandExecutor,
+    value: String
+) async -> String? {
+    do {
+        let result = try await executor.execute(
+            try BoundedHostCommand(executable: "/bin/echo", arguments: [value]))
+        guard result.terminationStatus == 0 else { return nil }
+        return String(data: result.standardOutput, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    } catch {
+        return nil
+    }
+}
+
+private func commandHealth(
+    _ executor: NodeDependencyCommandExecutor
+) async -> NodeDependencyFunctionalHealth {
+    do {
+        let result = try await executor.execute(
+            try BoundedHostCommand(executable: "/bin/echo", arguments: ["healthy"]))
+        guard result.terminationStatus == 0 else {
+            return .unhealthy("functional probe exited \(result.terminationStatus)")
+        }
+        return .healthy
+    } catch {
+        return .unhealthy("functional probe failed: \(error)")
+    }
+}
+
 private actor CallCounter {
     private(set) var value = 0
     func increment() { value += 1 }

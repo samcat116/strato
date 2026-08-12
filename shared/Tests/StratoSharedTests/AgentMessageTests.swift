@@ -137,6 +137,26 @@ struct AgentMessageTests {
         #expect(try throughEnvelope(capable).tpmCapable == true)
     }
 
+    @Test("Metadata service capability is explicit and absent means incapable")
+    func agentRegisterMetadataServiceCapable() throws {
+        let implicit = AgentRegisterMessage(
+            agentId: "agent-1",
+            hostname: "hv-01.example",
+            version: "1.2.3",
+            resources: Fixtures.resources
+        )
+        #expect(try throughEnvelope(implicit).metadataServiceCapable == nil)
+
+        let capable = AgentRegisterMessage(
+            agentId: "agent-2",
+            hostname: "hv-02.example",
+            version: "1.2.3",
+            resources: Fixtures.resources,
+            metadataServiceCapable: true
+        )
+        #expect(try throughEnvelope(capable).metadataServiceCapable == true)
+    }
+
     @Test("Operating system reporting: absent for old builds, carried when reported")
     func agentRegisterOperatingSystem() throws {
         let implicit = AgentRegisterMessage(

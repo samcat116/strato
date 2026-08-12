@@ -150,6 +150,24 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "metadata_enabled")
     var metadataEnabled: Bool
 
+    /// Where this VM reads first-boot guest configuration (STR-64). The
+    /// historical `.iso` shape carries the complete immutable NoCloud seed;
+    /// `.imds` keeps only pre-network bootstrap on that ISO and fetches the
+    /// remaining documents from the link-local metadata service.
+    ///
+    /// Fixed at create because the ISO is materialized with the domain. The
+    /// default stays `.iso` for this phase, and the migration gives every
+    /// existing row that explicit value so no VM changes bootstrap path during
+    /// an upgrade.
+    @Enum(key: "metadata_source")
+    var metadataSource: MetadataSource
+
+    /// Secret capability used only by an IMDS-backed NoCloud `seedfrom` URL.
+    /// It is stable for the VM's lifetime because the ISO is materialized once,
+    /// and it is not part of any public VM response.
+    @Field(key: "metadata_seed_token")
+    var metadataSeedToken: UUID
+
     // Observed guest-agent (qga) state (issue #563). Purely informational and
     // best-effort: nil until the agent's guest-info poll first sees a
     // responsive qga on this VM. `qgaAvailable` records the positive liveness
@@ -203,6 +221,12 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "environment")
     var environment: String
 
+    /// Free-form operator tags published to the guest through instance
+    /// metadata (STR-66). Ordinary metadata only: neither the control plane nor
+    /// the guest may treat a tag as an authorization claim.
+    @Field(key: "tags")
+    var tags: [String: String]
+
     // Optional reference to the Image used to create this VM (new image system)
     @OptionalParent(key: "image_id")
     var sourceImage: Image?
@@ -253,9 +277,18 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "cmdline")
     var cmdline: String?
 
-    // SSH public key authorized for the guest's default user via cloud-init.
+    // Legacy create-time SSH key. Kept during the plural authorized-key
+    // transition so an older control-plane replica can still read the first
+    // key written by STR-66. New assembly uses `effectiveSSHAuthorizedKeys`.
     @OptionalField(key: "ssh_public_key")
     var sshPublicKey: String?
+
+    /// The authoritative keys published in `InstanceMetadata` and carried in
+    /// `VMSpec` (STR-66). Empty is a real value: it revokes every key from the
+    /// metadata document, even though applying that revocation inside an
+    /// already-running guest remains cloud-init's responsibility.
+    @Field(key: "ssh_authorized_keys")
+    var sshAuthorizedKeys: [String]
 
     // Caller-supplied cloud-init user data (any format cloud-init dispatches
     // on: #cloud-config, #! scripts, #include, MIME multipart, ...), stored
@@ -331,7 +364,9 @@ final class VM: Model, @unchecked Sendable {
         tpmEnabled: Bool = false,
         guestAgentEnabled: Bool = false,
         graphicsConsole: Bool = false,
-        metadataEnabled: Bool = true
+        metadataEnabled: Bool = true,
+        metadataSource: MetadataSource = .iso,
+        metadataSeedToken: UUID = UUID()
     ) {
         self.id = id
         self.name = name
@@ -339,6 +374,7 @@ final class VM: Model, @unchecked Sendable {
         self.image = image
         self.$project.id = projectID
         self.environment = environment
+        self.tags = [:]
         self.cpu = cpu
         self.maxCpu = maxCpu ?? cpu
         self.memory = memory
@@ -361,6 +397,9 @@ final class VM: Model, @unchecked Sendable {
         self.guestAgentEnabled = guestAgentEnabled
         self.graphicsConsole = graphicsConsole
         self.metadataEnabled = metadataEnabled
+        self.metadataSource = metadataSource
+        self.metadataSeedToken = metadataSeedToken
+        self.sshAuthorizedKeys = []
     }
 }
 
@@ -369,6 +408,20 @@ extension VM: Content {}
 // MARK: - Computed Properties
 
 extension VM {
+    /// Plural STR-66 storage, with a compatibility fallback for a row created
+    /// by an older replica before the backfill or during a rolling deployment.
+    var effectiveSSHAuthorizedKeys: [String] {
+        sshAuthorizedKeys.isEmpty ? sshPublicKey.map { [$0] } ?? [] : sshAuthorizedKeys
+    }
+
+    /// Writes both the authoritative plural field and the legacy first-key
+    /// projection. Keeping the latter in step makes a rollback lose at most the
+    /// additional keys rather than all SSH access.
+    func setSSHAuthorizedKeys(_ keys: [String]) {
+        sshAuthorizedKeys = keys
+        sshPublicKey = keys.first
+    }
+
     var isRunning: Bool {
         return status == .running
     }
@@ -605,6 +658,11 @@ struct NetworkInterfaceResponse: Content {
     }
 }
 
+enum InstanceIdentityStatus: String, Content, Sendable {
+    case enabled
+    case revoked
+}
+
 struct VMDetailResponse: Content {
     let id: UUID?
     let name: String
@@ -645,6 +703,12 @@ struct VMDetailResponse: Content {
     /// it to be off, because that is what an operator set and what turning the
     /// network's switch back on would restore.
     let metadataEnabled: Bool
+    /// Guest-bootstrap source selected when the VM was created (STR-64).
+    let metadataSource: MetadataSource
+    /// Mutable, guest-visible instance metadata (STR-66). Tags are ordinary
+    /// operator annotations, never identity or authorization input.
+    let tags: [String: String]
+    let sshAuthorizedKeys: [String]
     /// Observed guest-agent view (issue #563). `qgaAvailable` is nil until the
     /// agent's slow poll first sees a responsive qga; `observedHostname` is the
     /// guest OS's own hostname when it reported one.
@@ -681,6 +745,14 @@ struct VMDetailResponse: Content {
     /// do comes from role bindings against that principal. Nil when the caller
     /// did not resolve it, and when an administrator revoked the registration.
     let spiffeId: String?
+    /// The workload-registration row id, which is also the IAM principal id
+    /// role bindings name. Nil together with `spiffeId` after revocation.
+    let instanceIdentityPrincipalId: UUID?
+    /// Whether the registration was present when the response was assembled.
+    /// Nil only when a caller constructs the DTO without resolving identity;
+    /// older control planes omit the field and clients must treat that as
+    /// unknown rather than revocation.
+    let instanceIdentityStatus: InstanceIdentityStatus?
     /// How far the VM is from the state the API was last asked to put it in
     /// (STR-142), derived from the generation pair and the agent's reported
     /// convergence progress. A client can refetch the VM until
@@ -690,7 +762,13 @@ struct VMDetailResponse: Content {
     let createdAt: Date?
     let updatedAt: Date?
 
-    init(from vm: VM, securityGroupsEnforced: Bool? = nil, spiffeId: String? = nil) {
+    init(
+        from vm: VM,
+        securityGroupsEnforced: Bool? = nil,
+        spiffeId: String? = nil,
+        instanceIdentityPrincipalId: UUID? = nil,
+        instanceIdentityStatus: InstanceIdentityStatus? = nil
+    ) {
         self.id = vm.id
         self.name = vm.name
         self.description = vm.description
@@ -714,12 +792,17 @@ struct VMDetailResponse: Content {
             .map { NetworkInterfaceResponse(from: $0, vm: vm) }
         self.securityGroupsEnforced = securityGroupsEnforced
         self.spiffeId = spiffeId
+        self.instanceIdentityPrincipalId = instanceIdentityPrincipalId
+        self.instanceIdentityStatus = instanceIdentityStatus
         self.hostname = vm.hostname
         self.secureBoot = vm.secureBoot
         self.tpmEnabled = vm.tpmEnabled
         self.guestAgentEnabled = vm.guestAgentEnabled
         self.graphicsConsole = vm.graphicsConsole
         self.metadataEnabled = vm.metadataEnabled
+        self.metadataSource = vm.metadataSource
+        self.tags = vm.tags
+        self.sshAuthorizedKeys = vm.effectiveSSHAuthorizedKeys
         self.qgaAvailable = vm.qgaAvailable
         self.observedHostname = vm.observedHostname
         self.guestMemoryTotalBytes = vm.guestMemoryTotalBytes

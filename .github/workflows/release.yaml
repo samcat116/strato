@@ -792,6 +792,8 @@ jobs:
              "strato-cli-linux-x86_64.tar.gz",
              "strato-cli-linux-arm64.tar.gz",
              "strato-cli-macos-arm64.tar.gz",
+             "strato-guest-agent-x86_64.tar.gz",
+             "strato-guest-agent-aarch64.tar.gz",
              "strato-1.2.3-source.tar.gz",
              "strato-1.2.3-compose.tar.gz",
              "agent-manifest.json",
@@ -827,7 +829,8 @@ jobs:
           # strato-*.tar.gz asset the pattern did not select is a pattern that
           # fell behind the build matrix, not an asset to skip silently. The
           # deliberate non-bundles are subtracted by name: the CLI-only assets
-          # (STR-45), source archive, and canonical Compose deployment archive.
+          # (STR-45), VM guest-agent assets (STR-80), source archive, and
+          # canonical Compose deployment archive.
           # Checked against the live release rather than a fixture, so it needs
           # no maintenance when a leg is added — it just fails until the
           # pattern catches up.
@@ -836,6 +839,7 @@ jobs:
                   | select(startswith("strato-") and endswith(".tar.gz"))
                   | select(test($ENV.BUNDLE_ASSET_PATTERN) | not)
                   | select((startswith("strato-cli-")
+                            or test("^strato-guest-agent-(x86_64|aarch64)\\.tar\\.gz$")
                             or test("-(source|compose)\\.tar\\.gz$")) | not)' \
             > unmatched.txt
           if [ -s unmatched.txt ]; then

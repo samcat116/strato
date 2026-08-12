@@ -157,7 +157,7 @@ struct AgentController: RouteCollection {
     /// (localhost) origin.
     private func webSocketBaseURL(req: Request) -> String {
         let host =
-            Environment.get("EXTERNAL_HOSTNAME").map(Self.sanitizedHost)
+            req.controlPlaneConfiguration.string(.externalHostname).map(Self.sanitizedHost)
             ?? req.headers["host"].first
             ?? "localhost:8080"
 
@@ -582,7 +582,9 @@ struct AgentController: RouteCollection {
             if readable.contains(IAMNode(type: .agent, id: agentId)) { visible.append(agent) }
         }
 
-        return try visible.map { try AgentResponse(from: $0) }
+        let targetVersion = AgentVersionTarget.version(
+            configuration: req.controlPlaneConfiguration)
+        return try visible.map { try AgentResponse(from: $0, targetVersion: targetVersion) }
     }
 
     func getAgent(req: Request) async throws -> AgentResponse {
@@ -607,7 +609,10 @@ struct AgentController: RouteCollection {
             .all()
             .map(AgentResponse.HeldWorkloadSummary.init(from:))
 
-        return try AgentResponse(from: agent, heldWorkloads: held)
+        return try AgentResponse(
+            from: agent,
+            targetVersion: AgentVersionTarget.version(configuration: req.controlPlaneConfiguration),
+            heldWorkloads: held)
     }
 
     // MARK: - Workload adoption (STR-98)
@@ -1087,7 +1092,10 @@ struct AgentController: RouteCollection {
             // be invented. A deployment with no target of its own (a dev build,
             // or a main-branch image — exactly when overrides get used) must
             // say what the artifact's binary will report.
-            guard let explicitVersion = request.targetVersion ?? AgentVersionTarget.version else {
+            guard
+                let explicitVersion = request.targetVersion
+                    ?? AgentVersionTarget.version(configuration: req.controlPlaneConfiguration)
+            else {
                 throw Abort(
                     .badRequest,
                     reason:
@@ -1104,7 +1112,10 @@ struct AgentController: RouteCollection {
             artifactOverride = override
             artifactURL = override.url
         } else {
-            guard let target = AgentVersionTarget.version else {
+            guard
+                let target = AgentVersionTarget.version(
+                    configuration: req.controlPlaneConfiguration)
+            else {
                 throw Abort(
                     .badRequest,
                     reason:
@@ -1208,7 +1219,10 @@ struct AgentController: RouteCollection {
         try await requireAgentAction(req, agent: agent, action: "agent:manage")
 
         guard let assigned = agent.updateDesiredVersion else {
-            return try AgentResponse(from: agent)
+            return try AgentResponse(
+                from: agent,
+                targetVersion: AgentVersionTarget.version(
+                    configuration: req.controlPlaneConfiguration))
         }
 
         agent.clearUpdateAssignment()
@@ -1225,7 +1239,9 @@ struct AgentController: RouteCollection {
         // update rather than waiting for the periodic backstop.
         await req.agentService.syncDesiredState(agentId: agentId.uuidString)
 
-        return try AgentResponse(from: agent)
+        return try AgentResponse(
+            from: agent,
+            targetVersion: AgentVersionTarget.version(configuration: req.controlPlaneConfiguration))
     }
 
     // MARK: - Agent Properties
@@ -1284,7 +1300,9 @@ struct AgentController: RouteCollection {
             await req.agentService.syncDesiredState(agentId: agentId.uuidString)
         }
 
-        return try AgentResponse(from: agent)
+        return try AgentResponse(
+            from: agent,
+            targetVersion: AgentVersionTarget.version(configuration: req.controlPlaneConfiguration))
     }
 
 }

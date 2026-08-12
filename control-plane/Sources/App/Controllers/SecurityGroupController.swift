@@ -217,6 +217,13 @@ struct SecurityGroupController: RouteCollection {
 
         do {
             try await req.db.transaction { db in
+                // PostgreSQL checks the self-reference's NO ACTION FK before
+                // the owner-side CASCADE can remove the same rule. Delete the
+                // group's own rules explicitly so a self rule does not make a
+                // non-default group undeletable.
+                try await SecurityGroupRule.query(on: db)
+                    .filter(\.$securityGroup.$id == groupId)
+                    .delete()
                 try await group.delete(on: db)
                 try await RoleBindingService.revokeAll(nodeType: .securityGroup, nodeID: groupId, on: db)
             }
@@ -350,9 +357,15 @@ struct SecurityGroupController: RouteCollection {
         // that cannot realize a sandbox NIC at all.
         switch target.workload {
         case .vm(let vm):
-            try await Self.assertRealizersSupportSecurityGroups(for: vm, on: req.db)
+            try await Self.assertRealizersSupportSecurityGroups(
+                for: vm,
+                offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+                on: req.db)
         case .sandbox(let sandbox):
-            try await Self.assertSandboxNICCanBeFiltered(sandbox, on: req.db)
+            try await Self.assertSandboxNICCanBeFiltered(
+                sandbox,
+                offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+                on: req.db)
         }
 
         // Read-guard-write under one transaction and one per-NIC lock, so the
@@ -585,8 +598,14 @@ struct SecurityGroupController: RouteCollection {
     /// `SecurityGroupService.realization`, so this gate and the API's
     /// `securityGroupsEnforced` indicator can never disagree. An unplaced VM
     /// passes — see the call site.
-    static func assertRealizersSupportSecurityGroups(for vm: VM, on db: Database) async throws {
-        try assertRealizersSupportSecurityGroups(try await SecurityGroupService.realization(for: vm, on: db))
+    static func assertRealizersSupportSecurityGroups(
+        for vm: VM,
+        offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
+        on db: Database
+    ) async throws {
+        try assertRealizersSupportSecurityGroups(
+            try await SecurityGroupService.realization(
+                for: vm, offlineGrace: offlineGrace, on: db))
     }
 
     /// The sandbox twin (STR-103), which asks one question first: a host that
@@ -595,7 +614,11 @@ struct SecurityGroupController: RouteCollection {
     /// attach would record filtering that nothing can apply. An unplaced
     /// sandbox passes, like an unplaced VM — the project's default group is
     /// attached in the create transaction, long before scheduling.
-    static func assertSandboxNICCanBeFiltered(_ sandbox: Sandbox, on db: Database) async throws {
+    static func assertSandboxNICCanBeFiltered(
+        _ sandbox: Sandbox,
+        offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
+        on db: Database
+    ) async throws {
         guard let hypervisorId = sandbox.hypervisorId,
             let hostID = UUID(uuidString: hypervisorId),
             let host = try await Agent.find(hostID, on: db)
@@ -609,7 +632,9 @@ struct SecurityGroupController: RouteCollection {
                     + "configures the interface"
             )
         }
-        try assertRealizersSupportSecurityGroups(try await SecurityGroupService.realization(host: host, on: db))
+        try assertRealizersSupportSecurityGroups(
+            try await SecurityGroupService.realization(
+                host: host, offlineGrace: offlineGrace, on: db))
     }
 
     private static func assertRealizersSupportSecurityGroups(

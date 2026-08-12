@@ -3,8 +3,18 @@ import Testing
 
 @testable import StratoAgentCore
 
-@Suite("Process Runner Tests")
+@Suite("Process Runner Tests", .serialized)
 struct ProcessRunnerTests {
+
+    private let descriptorChildEnvironmentKey =
+        "STRATO_PROCESS_RUNNER_DESCRIPTOR_STRESS_SCENARIO"
+    private let commandDescriptorStressIterations = 1_200
+    // Linux corelibs-foundation needs substantially longer to reap each
+    // timed-out child. Fifty iterations still exceed the old two-FD leak's
+    // allowance without making this suite take several minutes.
+    private let timeoutDescriptorStressIterations = 50
+    private let descriptorSampleInterval = 100
+    private let descriptorAllowance = 64
 
     @Test("Captures exit status, stdout, and stderr")
     func capturesOutputAndStatus() async throws {
@@ -74,5 +84,146 @@ struct ProcessRunnerTests {
                 timeout: .seconds(5),
                 maxOutputBytes: 8)
         }
+    }
+
+    @Test("Repeated successful commands release their file descriptors")
+    func successfulCommandsReleaseFileDescriptors() async throws {
+        let scenario = "successful"
+        if try await launchIsolatedDescriptorTestIfNeeded(
+            scenario: scenario,
+            filter: "ProcessRunnerTests.successfulCommandsReleaseFileDescriptors"
+        ) {
+            return
+        }
+        let baseline = try openFileDescriptorCount()
+
+        for iteration in 0..<commandDescriptorStressIterations {
+            let result = try await ProcessRunner.run(
+                executableURL: URL(fileURLWithPath: "/bin/sh"),
+                arguments: ["-c", "printf ok"]
+            )
+            #expect(result.terminationStatus == 0)
+            try requireOpenFileDescriptorsRemainBounded(
+                after: iteration, from: baseline)
+        }
+
+        try requireOpenFileDescriptorsRemainBounded(from: baseline)
+        print(descriptorTestSentinel(for: scenario))
+    }
+
+    @Test("Repeated failed commands release their file descriptors")
+    func failedCommandsReleaseFileDescriptors() async throws {
+        let scenario = "failed"
+        if try await launchIsolatedDescriptorTestIfNeeded(
+            scenario: scenario,
+            filter: "ProcessRunnerTests.failedCommandsReleaseFileDescriptors"
+        ) {
+            return
+        }
+        let baseline = try openFileDescriptorCount()
+
+        for iteration in 0..<commandDescriptorStressIterations {
+            let result = try await ProcessRunner.run(
+                executableURL: URL(fileURLWithPath: "/bin/sh"),
+                arguments: ["-c", "exit 1"]
+            )
+            #expect(result.terminationStatus == 1)
+            try requireOpenFileDescriptorsRemainBounded(
+                after: iteration, from: baseline)
+        }
+
+        try requireOpenFileDescriptorsRemainBounded(from: baseline)
+        print(descriptorTestSentinel(for: scenario))
+    }
+
+    @Test("Repeated timed-out commands release their file descriptors")
+    func timedOutCommandsReleaseFileDescriptors() async throws {
+        let scenario = "timed-out"
+        if try await launchIsolatedDescriptorTestIfNeeded(
+            scenario: scenario,
+            filter: "ProcessRunnerTests.timedOutCommandsReleaseFileDescriptors"
+        ) {
+            return
+        }
+        let baseline = try openFileDescriptorCount()
+
+        for iteration in 0..<timeoutDescriptorStressIterations {
+            await #expect(throws: ProcessTimedOutError.self) {
+                try await ProcessRunner.run(
+                    executableURL: URL(fileURLWithPath: "/bin/sh"),
+                    arguments: ["-c", "exec >/dev/null 2>&1; exec sleep 60"],
+                    timeout: .milliseconds(5)
+                )
+            }
+            try requireOpenFileDescriptorsRemainBounded(
+                after: iteration, from: baseline)
+        }
+
+        try requireOpenFileDescriptorsRemainBounded(from: baseline)
+        print(descriptorTestSentinel(for: scenario))
+    }
+
+    /// Descriptor counts are process-wide. The agent suite runs in parallel,
+    /// so each stress scenario re-executes only itself in a child test process
+    /// where unrelated suites cannot move the baseline.
+    private func launchIsolatedDescriptorTestIfNeeded(
+        scenario: String,
+        filter: String
+    ) async throws -> Bool {
+        if ProcessInfo.processInfo.environment[descriptorChildEnvironmentKey] == scenario {
+            return false
+        }
+
+        var environment = ProcessInfo.processInfo.environment
+        environment[descriptorChildEnvironmentKey] = scenario
+        var arguments = Array(CommandLine.arguments.dropFirst())
+        if let filterIndex = arguments.firstIndex(of: "--filter"),
+            arguments.indices.contains(filterIndex + 1)
+        {
+            arguments[filterIndex + 1] = filter
+        } else {
+            arguments.append(contentsOf: ["--filter", filter])
+        }
+        let result = try await ProcessRunner.run(
+            executableURL: URL(fileURLWithPath: CommandLine.arguments[0]),
+            arguments: arguments,
+            timeout: .seconds(300),
+            environment: environment,
+            maxOutputBytes: 1 << 20)
+        let output = result.combinedOutput
+        try #require(
+            result.terminationStatus == 0,
+            "isolated descriptor test failed: \(output)")
+        try #require(
+            output.contains(descriptorTestSentinel(for: scenario)),
+            "isolated descriptor test did not execute: \(output)")
+        return true
+    }
+
+    private func descriptorTestSentinel(for scenario: String) -> String {
+        "STRATO_PROCESS_RUNNER_DESCRIPTOR_STRESS_PASSED_\(scenario)"
+    }
+
+    private func requireOpenFileDescriptorsRemainBounded(
+        after iteration: Int? = nil,
+        from baseline: Int
+    ) throws {
+        if let iteration, !(iteration + 1).isMultiple(of: descriptorSampleInterval) {
+            return
+        }
+        let observed = try openFileDescriptorCount()
+        try #require(
+            observed <= baseline + descriptorAllowance,
+            "open file descriptors grew from \(baseline) to \(observed)"
+        )
+    }
+
+    private func openFileDescriptorCount() throws -> Int {
+        #if os(Linux)
+        let descriptorDirectory = "/proc/self/fd"
+        #else
+        let descriptorDirectory = "/dev/fd"
+        #endif
+        return try FileManager.default.contentsOfDirectory(atPath: descriptorDirectory).count
     }
 }

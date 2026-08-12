@@ -165,7 +165,23 @@ public actor MetadataResponder {
             return .rejected(404, "not found")
         }
 
-        // 5. The session handshake.
+        // 5. NoCloud's narrow bootstrap capability. Stock NoCloud follows a
+        //    `seedfrom` URL with ordinary GETs and cannot mint or attach an
+        //    IMDSv2 session token. The unguessable URL authenticates only the
+        //    three NoCloud documents, remains bound to the source VM by step 3,
+        //    and remains subject to the kill switch in step 4.
+        if case .noCloudSeed(let presented, let path) = route {
+            guard let metadata = byVM[vmId],
+                Self.seedTokenMatches(presented, expected: metadata.noCloudSeedToken),
+                let path,
+                let body = MetadataDocument.render(path, for: metadata)
+            else {
+                return .rejected(404, "not found")
+            }
+            return MetadataResponse(status: 200, body: body)
+        }
+
+        // 6. The session handshake for every ordinary IMDS document.
         switch route {
         case .mintToken(let ttlSeconds):
             let token = await tokens.mint(for: vmId, ttlSeconds: ttlSeconds, at: now)
@@ -190,12 +206,16 @@ public actor MetadataResponder {
                     headers: [.init("www-authenticate", "Strato-IMDSv2")])
             }
 
+        case .noCloudSeed:
+            // Handled above; unreachable.
+            return .rejected(400, "bad request")
+
         case .rejected:
             // Handled at step 1; unreachable.
             return .rejected(400, "bad request")
         }
 
-        // 6. The document itself, now that the caller is known and authenticated.
+        // 7. The document itself, now that the caller is known and authenticated.
         if case .identity(let audience) = route {
             // A missing or empty policy is the VM-level opt-in boundary. Use
             // the same 404 as an unknown caller so this endpoint never confirms
@@ -254,5 +274,21 @@ public actor MetadataResponder {
             return .rejected(404, "not found")
         }
         return MetadataResponse(status: 200, body: body)
+    }
+
+    /// Compares the fixed-size capability without exposing a useful matching
+    /// prefix through request timing. Bootstrap is rare, so the small temporary
+    /// byte arrays are preferable to introducing a second token-store API.
+    private static func seedTokenMatches(_ presented: UUID, expected: UUID?) -> Bool {
+        guard let expected else { return false }
+        let presentedBytes = Array(presented.uuidString.utf8)
+        let expectedBytes = Array(expected.uuidString.utf8)
+        guard presentedBytes.count == expectedBytes.count else { return false }
+
+        var difference: UInt8 = 0
+        for index in presentedBytes.indices {
+            difference |= presentedBytes[index] ^ expectedBytes[index]
+        }
+        return difference == 0
     }
 }

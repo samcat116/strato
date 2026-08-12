@@ -20,8 +20,12 @@ enum OrgTrustDomainProvisioning {
     /// string is immutable once any SVID has been issued under it.
     ///
     /// Call inside the organization-create transaction.
-    static func claim(organizationID: UUID, on db: Database) async throws {
-        guard OrgTrustDomainsFeature.isEnabled else { return }
+    static func claim(
+        organizationID: UUID,
+        configuration: ControlPlaneConfiguration,
+        on db: Database
+    ) async throws {
+        guard configuration.bool(.spireOrgTrustDomainsEnabled) == true else { return }
 
         let existing = try await OrgTrustDomain.query(on: db)
             .filter(\.$organizationID == organizationID)
@@ -30,7 +34,7 @@ enum OrgTrustDomainProvisioning {
 
         let trustDomain = OrgTrustDomain.trustDomain(
             forOrganization: organizationID,
-            platformTrustDomain: PlatformTrustDomain.current
+            platformTrustDomain: configuration.string(.spireTrustDomain)!
         )
 
         // The derived domain is a truncation of the org UUID, so a collision

@@ -30,10 +30,10 @@ struct ProxyTrustConfig: Sendable {
     ///   HTTPS compose topology, which `setup.sh` configures).
     var trustedProxyHops: Int
 
-    static func fromEnvironment() -> ProxyTrustConfig {
+    static func fromConfiguration(_ configuration: ControlPlaneConfiguration) -> ProxyTrustConfig {
         ProxyTrustConfig(
-            trustForwardedFor: Environment.get("RATE_LIMIT_TRUST_FORWARDED_FOR").flatMap(Bool.init) ?? true,
-            trustedProxyHops: max(1, Environment.get("RATE_LIMIT_TRUSTED_PROXY_HOPS").flatMap(Int.init) ?? 1)
+            trustForwardedFor: configuration.bool(.rateLimitTrustForwardedFor)!,
+            trustedProxyHops: configuration.int(.rateLimitTrustedProxyHops)!
         )
     }
 
@@ -69,10 +69,9 @@ extension Application {
         typealias Value = ProxyTrustConfig
     }
 
-    /// Set once in `configure`; falls back to the environment so services
-    /// constructed in tests without a full `configure` still resolve sanely.
+    /// Set once in `configure` after startup configuration validation.
     var proxyTrust: ProxyTrustConfig {
-        get { storage[ProxyTrustConfigKey.self] ?? .fromEnvironment() }
+        get { storage[ProxyTrustConfigKey.self] ?? .init(trustForwardedFor: true, trustedProxyHops: 1) }
         set { setStorageValue(ProxyTrustConfigKey.self, to: newValue) }
     }
 }

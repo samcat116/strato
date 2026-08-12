@@ -24,21 +24,8 @@ struct RegistrationPolicy: Sendable {
     /// Environment variable that drives the setting.
     static let environmentKey = "SELF_REGISTRATION_ENABLED"
 
-    /// Open unless explicitly switched off.
-    ///
-    /// Accepts the usual falsy spellings rather than only Swift's `Bool.init`,
-    /// which parses "true"/"false" and nothing else: an operator who writes
-    /// `SELF_REGISTRATION_ENABLED=0` means to close registration, and silently
-    /// leaving it open would be the worst possible reading of that.
-    static func parse(_ raw: String?) -> Bool {
-        guard let value = raw?.trimmingCharacters(in: .whitespaces).lowercased(), !value.isEmpty else {
-            return true
-        }
-        return !["false", "0", "no", "off"].contains(value)
-    }
-
-    static func fromEnvironment() -> RegistrationPolicy {
-        RegistrationPolicy(selfRegistrationEnabled: parse(Environment.get(environmentKey)))
+    static func fromConfiguration(_ configuration: ControlPlaneConfiguration) -> RegistrationPolicy {
+        RegistrationPolicy(selfRegistrationEnabled: configuration.bool(.selfRegistrationEnabled)!)
     }
 
     /// The effective answer for right now: the setting, or bootstrap.
@@ -68,10 +55,10 @@ extension Application {
         typealias Value = RegistrationPolicy
     }
 
-    /// Configured in `configure.swift`; falls back to the environment so a test
-    /// application that never ran `configure` still gets the real default.
+    /// Configured in `configure.swift`; tests that skip full configuration get
+    /// the documented open-registration default.
     var registrationPolicy: RegistrationPolicy {
-        get { storage[RegistrationPolicyKey.self] ?? .fromEnvironment() }
+        get { storage[RegistrationPolicyKey.self] ?? .init(selfRegistrationEnabled: true) }
         set { setStorageValue(RegistrationPolicyKey.self, to: newValue) }
     }
 }

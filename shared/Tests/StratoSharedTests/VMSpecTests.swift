@@ -99,6 +99,7 @@ struct VMSpecTests {
         #expect(decoded.console == nil)
         #expect(decoded.diskBytes == nil)
         #expect(!decoded.guestAgentEnabled)
+        #expect(decoded.metadataSource == .iso)
     }
 
     @Test func guestAgentOptInRoundTrips() throws {
@@ -117,13 +118,43 @@ struct VMSpecTests {
         #expect(try decodeJSON(VMSpec.self, from: json).guestAgentEnabled == false)
     }
 
-    @Test func attachmentCopiesPreserveGuestAgentOptIn() {
+    @Test func metadataSourceRoundTrips() throws {
         let spec = VMSpec(
             cpus: 1, memoryBytes: 268_435_456, boot: .disk(firmware: nil),
-            guestAgentEnabled: true)
+            metadataSource: .imds)
+        #expect(try roundTrip(spec).metadataSource == .imds)
+    }
+
+    @Test func specWithoutMetadataSourceDefaultsToISO() throws {
+        let json = """
+            {"cpus":2,"maxCpus":2,"memoryBytes":1073741824,"maxMemoryBytes":1073741824,
+             "sharedMemory":false,"hugepages":false,"boot":{"disk":{}},"volumes":[],"networks":[],
+             "sshAuthorizedKeys":[]}
+            """
+        #expect(try decodeJSON(VMSpec.self, from: json).metadataSource == .iso)
+    }
+
+    @Test func attachmentCopiesPreserveCreateTimeGuestConfiguration() {
+        let spec = VMSpec(
+            cpus: 1, memoryBytes: 268_435_456, boot: .disk(firmware: nil),
+            guestAgentEnabled: true, metadataSource: .imds)
         #expect(spec.withVolumes([]).guestAgentEnabled)
         #expect(spec.withNetworks([]).guestAgentEnabled)
         #expect(spec.withSizing(from: spec).guestAgentEnabled)
+        #expect(spec.withVolumes([]).metadataSource == .imds)
+        #expect(spec.withNetworks([]).metadataSource == .imds)
+        #expect(spec.withSizing(from: spec).metadataSource == .imds)
+    }
+
+    @Test func unknownMetadataSourceFailsDecode() {
+        let json = """
+            {"cpus":2,"maxCpus":2,"memoryBytes":1073741824,"maxMemoryBytes":1073741824,
+             "sharedMemory":false,"hugepages":false,"boot":{"disk":{}},"volumes":[],"networks":[],
+             "sshAuthorizedKeys":[],"metadataSource":"future"}
+            """
+        #expect(throws: DecodingError.self) {
+            try decodeJSON(VMSpec.self, from: json)
+        }
     }
 
     @Test func diskBytesRoundTrip() throws {

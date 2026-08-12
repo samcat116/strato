@@ -1154,6 +1154,57 @@ struct ReconciliationTests {
         #expect(plan.items.map(\.steps) == [[.boot]])
     }
 
+    @Test("A stopped vCPU shrink is applied before its generation converges")
+    func stoppedVCPUShrinkConvergesOnlyAfterResize() async {
+        let vmId = UUID()
+        let key = vmId.uuidString
+        let actuator = MockActuator(presence: [key: .managed(.shutdown)])
+        await actuator.setSizing([key: VMSizing(cpus: 2, memoryBytes: 1 << 30)])
+        let reconciler = makeReconciler(actuator)
+
+        await reconciler.apply(
+            Self.sync([
+                Self.desiredSized(vmId, status: .shutdown, generation: 2, cpus: 1)
+            ]))
+        _ = await actuator.waitForReports(1)
+
+        #expect(await actuator.performed.map(\.step) == [.resize])
+        #expect(await reconciler.observedGeneration(for: key) == 2)
+    }
+
+    @Test("A failed stopped vCPU shrink cannot advance the observed generation")
+    func failedStoppedVCPUShrinkDoesNotConverge() async {
+        let vmId = UUID()
+        let key = vmId.uuidString
+        let actuator = MockActuator(presence: [key: .managed(.shutdown)])
+        await actuator.setSizing([key: VMSizing(cpus: 2, memoryBytes: 1 << 30)])
+        await actuator.setFailure(
+            HypervisorServiceError.invalidConfiguration("persistent definition unchanged"))
+        let reconciler = makeReconciler(actuator)
+
+        await reconciler.apply(
+            Self.sync([
+                Self.desiredSized(vmId, status: .shutdown, generation: 2, cpus: 1)
+            ]))
+        _ = await actuator.waitForReports(1)
+
+        #expect(await reconciler.observedGeneration(for: key) == 0)
+        #expect(await reconciler.lastError(for: key)?.contains("persistent definition unchanged") == true)
+    }
+
+    @Test("A stopped vCPU shrink is applied before boot")
+    func stoppedVCPUShrinkPrecedesBoot() {
+        let vmId = UUID()
+        let plan = Reconciler.plan(
+            desired: [Self.desiredSized(vmId, generation: 2, cpus: 1)],
+            present: [vmId.uuidString: .managed(.shutdown)],
+            lastApplied: [vmId.uuidString: 1],
+            presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)]
+        )
+
+        #expect(plan.items.map(\.steps) == [[.resize, .boot]])
+    }
+
     @Test("A stale resize sync is dropped")
     func planDropsStaleResize() {
         let vmId = UUID()

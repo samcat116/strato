@@ -32,6 +32,10 @@ let package = Package(
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.24.0"),
         // 🔐 Swift Crypto for cryptographic operations
         .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
+        // Typed, composable configuration providers. Environment values are
+        // resolved once at startup through the throwing fetch APIs so malformed
+        // overrides cannot silently fall back to defaults.
+        .package(url: "https://github.com/apple/swift-configuration.git", from: "1.2.0"),
         // X.509 parsing and chain verification (SPIFFE SVID validation). Keep in
         // lockstep with agent/ and shared/.
         .package(url: "https://github.com/apple/swift-certificates.git", from: "1.19.4"),
@@ -114,6 +118,7 @@ let package = Package(
                 .product(name: "SwiftSSF", package: "swift-ssf"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "Configuration", package: "swift-configuration"),
                 .product(name: "X509", package: "swift-certificates"),
                 .product(name: "OpenAPIVapor", package: "swift-openapi-vapor"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),

@@ -22,7 +22,51 @@ struct CreateVMNetworkInterfaceRequest: Content {
     }
 }
 
+/// The mutable portion of a VM's guest-visible instance metadata (STR-66).
+///
+/// Omission leaves a field alone; an empty map/list clears it. Explicit JSON
+/// `null` also decodes as omission, so callers that want to revoke every tag or
+/// key must send `{}` or `[]` respectively.
+struct PatchVMMetadataRequest: Content, ValidatedRequestBody {
+    static let maxTags = 64
+    static let maxAuthorizedKeys = 64
+
+    var tags: [String: String]?
+    var sshAuthorizedKeys: [String]?
+
+    mutating func validate() throws {
+        try Validate.stringMap(
+            tags, "tags", maxEntries: Self.maxTags,
+            maxKeyLength: Validate.nameLength, maxValueLength: Validate.textLength)
+        if let tags {
+            for (key, value) in tags {
+                guard !key.isEmpty else {
+                    throw Abort(.badRequest, reason: "Keys in 'tags' must not be empty")
+                }
+                guard !key.contains("\n"), !key.contains("\r") else {
+                    throw Abort(.badRequest, reason: "Keys in 'tags' must be one line")
+                }
+                guard !key.contains("\0"), !value.contains("\0") else {
+                    throw Abort(.badRequest, reason: "Keys and values in 'tags' must not contain NUL characters")
+                }
+            }
+        }
+
+        try Validate.stringList(
+            sshAuthorizedKeys, "sshAuthorizedKeys", maxEntries: Self.maxAuthorizedKeys)
+        if let requested = sshAuthorizedKeys {
+            sshAuthorizedKeys = try requested.compactMap {
+                try Validate.sshPublicKey($0, "sshAuthorizedKeys")
+            }
+        }
+    }
+}
+
 struct VMController: RouteCollection {
+    struct VMProjectGrantResponse: Content {
+        let grant: ProjectMemberController.ProjectWorkloadGrantResponse?
+    }
+
     /// Validates caller-supplied cloud-init user data: bounded in size and
     /// starting with a header cloud-init actually dispatches on — a payload
     /// without one (say, a script missing its shebang) would be silently
@@ -75,7 +119,9 @@ struct VMController: RouteCollection {
         vms.post(use: create)
         vms.group(":vmID") { vm in
             vm.get(use: show)
+            vm.get("project-grant", use: projectGrant)
             vm.put(use: update)
+            vm.patch(use: patchMetadata)
             vm.delete(use: delete)
             vm.post("start", use: start)
             vm.post("stop", use: stop)
@@ -349,7 +395,10 @@ struct VMController: RouteCollection {
 
         // Batched for the same reason the authorization decision is: a
         // per-row realizer walk would be three queries per VM.
-        let enforcement = try await SecurityGroupService.enforcementByVM(allVMs, on: req.db)
+        let enforcement = try await SecurityGroupService.enforcementByVM(
+            allVMs,
+            offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+            on: req.db)
 
         let visible = allVMs.filter { vm in
             vm.id.map { readable.contains(IAMNode(type: .virtualMachine, id: $0)) } ?? false
@@ -363,13 +412,17 @@ struct VMController: RouteCollection {
         // also the one worth not widening with rows whose identity is about to
         // be discarded — and resolving an identity for a VM the caller may not
         // read is work with no reader.
-        let spiffeIDs = try await GuestIdentity.spiffeIDs(
+        let identities = try await GuestIdentity.registrations(
             forVMs: visible.compactMap(\.id), on: req.db)
 
         return visible.compactMap { vm in
             guard let id = vm.id else { return nil }
             return VMDetailResponse(
-                from: vm, securityGroupsEnforced: enforcement[id], spiffeId: spiffeIDs[id])
+                from: vm,
+                securityGroupsEnforced: enforcement[id],
+                spiffeId: identities[id]?.spiffeID,
+                instanceIdentityPrincipalId: identities[id]?.principalID,
+                instanceIdentityStatus: identities[id] == nil ? .revoked : .enabled)
         }
     }
 
@@ -398,10 +451,49 @@ struct VMController: RouteCollection {
             try await interface.$securityGroupMemberships.load(on: req.db)
         }
 
-        return try await VMDetailResponse(
+        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
+        let enforcement = try await SecurityGroupService.enforcement(
+            for: vm,
+            offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+            on: req.db)
+        return VMDetailResponse(
             from: vm,
-            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db),
-            spiffeId: GuestIdentity.spiffeID(forVM: vm.requireID(), on: req.db))
+            securityGroupsEnforced: enforcement,
+            spiffeId: identity?.spiffeID,
+            instanceIdentityPrincipalId: identity?.principalID,
+            instanceIdentityStatus: identity == nil ? .revoked : .enabled)
+    }
+
+    /// The one project role held by this VM's instance identity. This follows
+    /// the VM detail authorization boundary instead of requiring visibility
+    /// into the project's complete member inventory.
+    func projectGrant(req: Request) async throws -> VMProjectGrantResponse {
+        let vm = try await fetchVMWithAction(req: req, action: "vm:read")
+        let vmID = try vm.requireID()
+        guard let identity = try await GuestIdentity.registration(forVM: vmID, on: req.db) else {
+            return VMProjectGrantResponse(grant: nil)
+        }
+
+        let bindings = try await RoleBindingService.activeBindings(
+            principalType: .workload,
+            principalID: identity.principalID,
+            nodeType: .project,
+            nodeID: vm.$project.id,
+            on: req.db)
+        guard let binding = bindings.first else {
+            return VMProjectGrantResponse(grant: nil)
+        }
+
+        let displayNames = try await RoleDisplayNames.forRoleIDs([binding.roleID], on: req.db)
+        return VMProjectGrantResponse(
+            grant: ProjectMemberController.ProjectWorkloadGrantResponse(
+                registrationId: identity.principalID,
+                spiffeId: identity.spiffeID,
+                vmId: vmID,
+                displayName: vm.name,
+                role: binding.roleID,
+                roleDisplayName: displayNames.displayName(forRoleID: binding.roleID),
+                grantedAt: binding.createdAt))
     }
 
     func create(req: Request) async throws -> Response {
@@ -467,6 +559,10 @@ struct VMController: RouteCollection {
             // above: hardening a workload that is already running is the case
             // this exists for.
             let metadataEnabled: Bool?
+            // Where cloud-init reads first-boot guest configuration (STR-64).
+            // Defaults to the historical full ISO and is fixed at create,
+            // because the agent materializes that ISO with the domain.
+            let metadataSource: MetadataSource?
 
             mutating func validate() throws {
                 name = try Validate.name(name)
@@ -642,6 +738,19 @@ struct VMController: RouteCollection {
             chosenHypervisor = compatible.count == 1 ? compatible.first! : .qemu
         }
 
+        let metadataEnabled = createRequest.metadataEnabled ?? true
+        let metadataSource = createRequest.metadataSource ?? .iso
+        if metadataSource == .imds, !metadataEnabled {
+            throw Abort(
+                .badRequest,
+                reason: "'metadataSource: imds' requires 'metadataEnabled' to be true during VM creation")
+        }
+        if metadataSource == .imds, chosenHypervisor == .firecracker {
+            throw Abort(
+                .badRequest,
+                reason: "'metadataSource: imds' is not supported for firecracker VMs; use the qemu hypervisor")
+        }
+
         let vm = VM(
             name: createRequest.name,
             description: createRequest.description ?? "",
@@ -658,7 +767,8 @@ struct VMController: RouteCollection {
             tpmEnabled: createRequest.tpm ?? false,
             guestAgentEnabled: createRequest.guestAgentEnabled ?? false,
             graphicsConsole: createRequest.graphicsConsole ?? false,
-            metadataEnabled: createRequest.metadataEnabled ?? true
+            metadataEnabled: metadataEnabled,
+            metadataSource: metadataSource
         )
         vm.cmdline = cmdlineValue
         // Link VM to source image
@@ -680,7 +790,7 @@ struct VMController: RouteCollection {
         // Guest login: authorize the caller-provided SSH public key via
         // cloud-init. Already trimmed, bounded and parsed by
         // `CreateVMRequest.validate()`; empty input arrived here as nil.
-        vm.sshPublicKey = createRequest.sshPublicKey
+        vm.setSSHAuthorizedKeys(createRequest.sshPublicKey.map { [$0] } ?? [])
 
         // Guest provisioning: caller-supplied cloud-init user data, stored
         // verbatim (leading bytes are the format header cloud-init dispatches
@@ -798,6 +908,21 @@ struct VMController: RouteCollection {
                         }
                         resolvedInterfaces.append(
                             (interface, network, try network.requireID(), resolvedRequestedGroupsByIndex[index]))
+                    }
+
+                    // An IMDS seed carries no real user data of its own. At
+                    // least one selected network must publish the metadata
+                    // localport/listener or the seedfrom hand-off can never
+                    // complete. This runs inside the create transaction after
+                    // project-scoped resolution; throwing rolls back the VM
+                    // row and quota reservation together.
+                    if vm.metadataSource == .imds,
+                        !resolvedInterfaces.contains(where: { $0.network.metadataEnabled })
+                    {
+                        throw Abort(
+                            .badRequest,
+                            reason: "'metadataSource: imds' requires at least one selected network "
+                                + "with metadata enabled")
                     }
 
                     // The VM's DNS label (issue #770), resolved against the
@@ -998,6 +1123,7 @@ struct VMController: RouteCollection {
                         vmID: vmID,
                         organizationID: rootOrganizationID,
                         createdBy: userID,
+                        configuration: req.controlPlaneConfiguration,
                         on: db
                     )
 
@@ -1219,8 +1345,9 @@ struct VMController: RouteCollection {
         let cpuDelta = newCPU - existingVM.cpu
         let memoryDelta = newMemory - existingVM.memory
 
-        // A resting VM re-spawns from the new spec on its next boot, so both
-        // the sizing and its ceilings can move freely.
+        // A resting VM can apply the new sizing without live-unplug support.
+        // QEMU/libvirt still has a persistent definition to update, so this
+        // generation must reach the placed agent before it is converged.
         guard existingVM.status == .running else {
             guard existingVM.status == .created || existingVM.status == .shutdown || existingVM.status == .error
             else {
@@ -1231,11 +1358,11 @@ struct VMController: RouteCollection {
             }
             try await Self.requirePlacedResizeCapacity(
                 vm: existingVM, newCPU: newCPU, newMemory: newMemory, on: req)
-            let metadataEnabledChanged = try await req.db.transaction { db in
+            try await req.db.transaction { db in
                 guard try await existingVM.lockAndRefresh(on: db) else {
                     throw Abort(.notFound, reason: "VM no longer exists")
                 }
-                let metadataEnabledChanged = try await Self.applyMetadataUpdate(
+                _ = try await Self.applyMetadataUpdate(
                     updateRequest.metadataEnabled, to: existingVM, on: db)
                 try await QuotaEnforcementService.reserveVMResize(
                     for: project, environment: existingVM.environment,
@@ -1257,11 +1384,15 @@ struct VMController: RouteCollection {
                         reason: "Failed to advance the locked VM generation")
                 }
                 try await existingVM.save(on: db)
-                return metadataEnabledChanged
+            }
+            if let placedAgentId = existingVM.hypervisorId {
+                await req.application.agentService.syncDesiredState(agentId: placedAgentId)
             }
             await Self.nudgeAfterMetadataOrHostnameUpdate(
                 hostnameChanged: hostnameChanged,
-                metadataEnabledChanged: metadataEnabledChanged,
+                // The generation sync above already carries this switch to the
+                // placed agent. Only the fleet-scoped hostname nudge remains.
+                metadataEnabledChanged: false,
                 placedAgentId: existingVM.hypervisorId,
                 app: req.application)
             return try await Self.detailResponse(for: existingVM, on: req)
@@ -1351,6 +1482,55 @@ struct VMController: RouteCollection {
             placedAgentId: existingVM.hypervisorId,
             app: req.application)
         return try await Self.acceptedResponse(for: existingVM, accepted, on: req)
+    }
+
+    /// Replaces the guest-visible tags and authorized-key list without
+    /// recreating or rebooting the VM (STR-66).
+    ///
+    /// The payload and generation advance in one row-locking transaction. A
+    /// newer generation is what prevents a delayed sync from putting an older
+    /// metadata document back after a rotation; the placed agent is then rung
+    /// through the replica-aware desired-state doorbell so the new document
+    /// lands promptly rather than waiting for its periodic fetch.
+    func patchMetadata(req: Request) async throws -> Response {
+        _ = try req.requireActingUser("Mutating VM instance metadata")
+        let existingVM = try await fetchVMWithAction(req: req, action: "vm:update")
+        let patch = try req.content.decodeValidated(PatchVMMetadataRequest.self)
+        let vmID = try existingVM.requireID()
+
+        let (updatedVM, changed) = try await req.db.transaction { db -> (VM, Bool) in
+            guard try await existingVM.lockAndRefresh(on: db),
+                let committed = try await VM.find(vmID, on: db)
+            else {
+                throw Abort(.notFound, reason: "VM no longer exists")
+            }
+
+            let nextTags = patch.tags ?? committed.tags
+            let nextAuthorizedKeys = patch.sshAuthorizedKeys ?? committed.effectiveSSHAuthorizedKeys
+            let changed =
+                nextTags != committed.tags
+                || nextAuthorizedKeys != committed.effectiveSSHAuthorizedKeys
+            guard changed else { return (committed, false) }
+
+            committed.tags = nextTags
+            committed.setSSHAuthorizedKeys(nextAuthorizedKeys)
+            let expectedGeneration = committed.generation
+            guard
+                case .applied = try await committed.advanceDesiredStateGeneration(
+                    expectedGeneration: expectedGeneration, on: db)
+            else {
+                throw Abort(
+                    .internalServerError,
+                    reason: "Failed to advance the locked VM generation")
+            }
+            try await committed.save(on: db)
+            return (committed, true)
+        }
+
+        if changed, let placedAgentId = updatedVM.hypervisorId {
+            await req.application.agentService.syncDesiredState(agentId: placedAgentId)
+        }
+        return try await Self.detailResponse(for: updatedVM, on: req)
     }
 
     private static func runningVCPUShrinkAbort(from current: Int, to requested: Int) -> Abort {
@@ -1520,16 +1700,25 @@ struct VMController: RouteCollection {
         for vm: VM, on req: Request, resolvingEnforcement: Bool = true
     ) async throws -> VMDetailResponse {
         try await loadInterfaces(for: vm, on: req.db)
-        return try await VMDetailResponse(
+        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
+        let enforcement =
+            resolvingEnforcement
+            ? try await SecurityGroupService.enforcement(
+                for: vm,
+                offlineGrace: req.controlPlaneConfiguration.double(
+                    .siteControllerOfflineGraceSeconds),
+                on: req.db) : nil
+        return VMDetailResponse(
             from: vm,
-            securityGroupsEnforced: resolvingEnforcement
-                ? SecurityGroupService.enforcement(for: vm, on: req.db) : nil,
+            securityGroupsEnforced: enforcement,
             // Deliberately not behind `resolvingEnforcement`: that flag exists
             // because the enforcement walk costs its own queries and answers
             // nothing for a VM being torn down. This is one indexed point
             // lookup, and a client polling a delete still wants to know which
             // identity is going away.
-            spiffeId: GuestIdentity.spiffeID(forVM: vm.requireID(), on: req.db))
+            spiffeId: identity?.spiffeID,
+            instanceIdentityPrincipalId: identity?.principalID,
+            instanceIdentityStatus: identity == nil ? .revoked : .enabled)
     }
 
     /// The `202` body every accepted VM lifecycle mutation answers with
@@ -1715,10 +1904,17 @@ struct VMController: RouteCollection {
             try await interface.$observedAddresses.load(on: req.db)
             try await interface.$securityGroupMemberships.load(on: req.db)
         }
-        return try await VMDetailResponse(
+        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
+        let enforcement = try await SecurityGroupService.enforcement(
+            for: vm,
+            offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+            on: req.db)
+        return VMDetailResponse(
             from: vm,
-            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db),
-            spiffeId: GuestIdentity.spiffeID(forVM: vm.requireID(), on: req.db))
+            securityGroupsEnforced: enforcement,
+            spiffeId: identity?.spiffeID,
+            instanceIdentityPrincipalId: identity?.principalID,
+            instanceIdentityStatus: identity == nil ? .revoked : .enabled)
     }
 
     func start(req: Request) async throws -> Response {
@@ -1744,7 +1940,10 @@ struct VMController: RouteCollection {
             let agent = try await Agent.find(agentUUID, on: req.db),
             agent.supportsInterVMNetworking
         {
-            let authority = try await SiteNetworkAuthority.resolve(forAgent: agent, on: req.db)
+            let authority = try await SiteNetworkAuthority.resolve(
+                forAgent: agent,
+                offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
+                on: req.db)
             if let refusal = SiteNetworkAuthority.refusal(
                 authority, host: agent,
                 consequence: "this VM's network cannot be realized and it would never boot")

@@ -17,8 +17,14 @@ struct CreateLoadBalancerBackend: AsyncMigration {
             .field("last_health_check_at", .datetime)
             .field("created_at", .datetime)
             .field("updated_at", .datetime)
-            .unique(on: "load_balancer_id", "interface_id")
-            .unique(on: "load_balancer_id", "address")
+            .unique(
+                on: "load_balancer_id", "interface_id",
+                name: "uq_lb_backend_interface"
+            )
+            .unique(
+                on: "load_balancer_id", "address",
+                name: "uq_lb_backend_address"
+            )
             .create()
     }
 

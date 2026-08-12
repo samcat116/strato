@@ -2,8 +2,9 @@ import Fluent
 import Foundation
 import Vapor
 
-/// Manages direct project grants for users and groups. Both listing and
-/// mutation operate on `role_bindings`; there is no relational grant mirror.
+/// Manages direct project grants for users, groups, and workload principals.
+/// Both listing and mutation operate on `role_bindings`; there is no
+/// relational grant mirror.
 struct ProjectMemberController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let members = routes.grouped("api", "projects", ":projectID", "members")
@@ -15,6 +16,9 @@ struct ProjectMemberController: RouteCollection {
         let groups = routes.grouped("api", "projects", ":projectID", "groups")
         groups.post(use: grantGroup)
         groups.delete(":groupID", use: revokeGroup)
+
+        routes.grouped("api", "projects", ":projectID", "vm-principals")
+            .get(use: listVMPrincipals)
     }
 
     struct ProjectMemberResponse: Content {
@@ -40,6 +44,25 @@ struct ProjectMemberController: RouteCollection {
     struct ProjectMembersResponse: Content {
         let users: [ProjectMemberResponse]
         let groups: [ProjectGroupGrantResponse]
+        let workloads: [ProjectWorkloadGrantResponse]
+    }
+
+    struct ProjectWorkloadGrantResponse: Content {
+        let registrationId: UUID
+        let spiffeId: String
+        let vmId: UUID?
+        let displayName: String
+        let role: UUID
+        let roleDisplayName: String
+        let grantedAt: Date?
+    }
+
+    struct ProjectVMPrincipalResponse: Content {
+        let id: UUID
+        let name: String
+        let spiffeId: String?
+        let instanceIdentityPrincipalId: UUID?
+        let instanceIdentityStatus: InstanceIdentityStatus
     }
 
     struct GrantMemberRequest: Content {
@@ -66,6 +89,7 @@ struct ProjectMemberController: RouteCollection {
             nodeType: .project, nodeID: projectID, on: req.db)
         let userBindings = bindings.filter { $0.principalType == IAMPrincipalType.user.rawValue }
         let groupBindings = bindings.filter { $0.principalType == IAMPrincipalType.group.rawValue }
+        let workloadBindings = bindings.filter { $0.principalType == IAMPrincipalType.workload.rawValue }
 
         var users: [UUID: User] = [:]
         if !userBindings.isEmpty {
@@ -85,6 +109,18 @@ struct ProjectMemberController: RouteCollection {
                 groups[try group.requireID()] = group
             }
         }
+        var workloads: [UUID: WorkloadRegistration] = [:]
+        if !workloadBindings.isEmpty {
+            for workload in try await WorkloadRegistration.query(on: req.db)
+                .filter(\.$id ~~ Array(Set(workloadBindings.map(\.principalID))))
+                .filter(\.$kind == .workload)
+                .all()
+            {
+                workloads[try workload.requireID()] = workload
+            }
+        }
+        let workloadVMNames = try await GuestIdentity.names(
+            forVMs: workloads.values.compactMap { $0.$vm.id }, on: req.db)
 
         let rootOrgID = try await project.getRootOrganizationId(on: req.db)
         var internalUserIDs: Set<UUID> = []
@@ -120,7 +156,52 @@ struct ProjectMemberController: RouteCollection {
                     roleDisplayName: displayNames.displayName(forRoleID: binding.roleID),
                     grantedAt: binding.createdAt,
                     external: rootOrgID != nil && group.$organization.id != rootOrgID)
+            },
+            workloads: workloadBindings.compactMap { binding in
+                guard let workload = workloads[binding.principalID] else { return nil }
+                return ProjectWorkloadGrantResponse(
+                    registrationId: binding.principalID,
+                    spiffeId: workload.spiffeID,
+                    vmId: workload.$vm.id,
+                    displayName: workload.$vm.id.flatMap { workloadVMNames[$0] }
+                        ?? workload.displayName ?? workload.spiffeID,
+                    role: binding.roleID,
+                    roleDisplayName: displayNames.displayName(forRoleID: binding.roleID),
+                    grantedAt: binding.createdAt)
             })
+    }
+
+    /// The lightweight VM-principal inventory used by project IAM management.
+    /// Unlike `GET /api/vms`, this performs no interface or enforcement
+    /// hydration and returns the complete readable set in one request.
+    func listVMPrincipals(req: Request) async throws -> [ProjectVMPrincipalResponse] {
+        let project = try await req.requireProject()
+        try await OrganizationAccessService.requireProjectMember(project: project, on: req)
+        let projectID = try project.requireID()
+
+        let vms = try await VM.query(on: req.db)
+            .filter(\.$project.$id == projectID)
+            .sort(\.$createdAt, .descending)
+            .sort(\.$id, .descending)
+            .all()
+        let nodes = vms.compactMap { $0.id.map { IAMNode(type: .virtualMachine, id: $0) } }
+        let readable = try await req.canFilter("vm:read", on: nodes)
+        let visible = vms.filter { vm in
+            vm.id.map { readable.contains(IAMNode(type: .virtualMachine, id: $0)) } ?? false
+        }
+        let identities = try await GuestIdentity.registrations(
+            forVMs: visible.compactMap(\.id), on: req.db)
+
+        return visible.compactMap { vm in
+            guard let id = vm.id else { return nil }
+            let identity = identities[id]
+            return ProjectVMPrincipalResponse(
+                id: id,
+                name: vm.name,
+                spiffeId: identity?.spiffeID,
+                instanceIdentityPrincipalId: identity?.principalID,
+                instanceIdentityStatus: identity == nil ? .revoked : .enabled)
+        }
     }
 
     func grant(req: Request) async throws -> Response {

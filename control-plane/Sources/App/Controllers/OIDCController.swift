@@ -762,7 +762,8 @@ struct OIDCController: RouteCollection {
         // to at all); the guarded client then classifies the address the name
         // actually resolves to and pins the connection to it, so an allow-listed
         // host that resolves — or rebinds — to an internal address is refused.
-        try OIDCValidation.validateAllowedFetchURL(url, label: "Discovery URL")
+        try OIDCValidation.validateAllowedFetchURL(
+            url, label: "Discovery URL", configuration: req.controlPlaneConfiguration)
 
         let response = try await req.guardedHTTPClient.send(
             ClientRequest(method: .GET, url: URI(string: url)))
@@ -776,7 +777,7 @@ struct OIDCController: RouteCollection {
     /// `OIDCValidation.resolveBaseURL`.
     private func oidcRedirectURI(organizationID: UUID, providerID: UUID, on req: Request) throws -> String {
         let baseURL = try OIDCValidation.resolveBaseURL(
-            configured: Environment.get("BASE_URL"),
+            configured: req.controlPlaneConfiguration.string(.baseURL),
             environment: req.application.environment
         )
         return "\(baseURL)/auth/oidc/\(organizationID)/\(providerID)/callback"
@@ -800,7 +801,10 @@ struct OIDCController: RouteCollection {
         // client below still has to approve the address it resolves to — this
         // request carries the provider's decrypted client secret.
         try OIDCValidation.validateAllowedFetchURL(
-            tokenEndpoint, label: "Token endpoint", perProviderHosts: provider.discoveredHostSet)
+            tokenEndpoint,
+            label: "Token endpoint",
+            perProviderHosts: provider.discoveredHostSet,
+            configuration: req.controlPlaneConfiguration)
 
         let redirectURI = try oidcRedirectURI(
             organizationID: organizationID, providerID: providerID, on: req)
@@ -907,7 +911,10 @@ struct OIDCController: RouteCollection {
         // Same two gates as the discovery fetch: HTTPS + host allow-list here,
         // address classification and connection pinning in the guarded client.
         try OIDCValidation.validateAllowedFetchURL(
-            endpoint, label: "UserInfo endpoint", perProviderHosts: provider.discoveredHostSet)
+            endpoint,
+            label: "UserInfo endpoint",
+            perProviderHosts: provider.discoveredHostSet,
+            configuration: req.controlPlaneConfiguration)
         var request = ClientRequest(method: .GET, url: URI(string: endpoint))
         request.headers.bearerAuthorization = BearerAuthorization(token: accessToken)
         let response = try await req.guardedHTTPClient.send(request)
@@ -970,7 +977,10 @@ struct OIDCController: RouteCollection {
         // Same two gates as the discovery fetch: HTTPS + host allow-list here,
         // address classification and connection pinning in the guarded client.
         try OIDCValidation.validateAllowedFetchURL(
-            uri, label: "JWKS URI", perProviderHosts: provider.discoveredHostSet)
+            uri,
+            label: "JWKS URI",
+            perProviderHosts: provider.discoveredHostSet,
+            configuration: req.controlPlaneConfiguration)
 
         req.logger.debug("Fetching JWKS from URI", metadata: ["uri": .string(uri)])
 

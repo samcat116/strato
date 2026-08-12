@@ -492,6 +492,26 @@ package struct TestDataBuilder {
         return ou
     }
 
+    /// Reuses an organization's test site, or creates one when the fixture has
+    /// not needed site-scoped infrastructure yet.
+    package func placementSite(for project: Project) async throws -> Site {
+        guard let organizationID = try await project.getRootOrganizationId(on: db) else {
+            throw Abort(.internalServerError, reason: "Test project has no owning organization")
+        }
+        if let existing = try await Site.query(on: db)
+            .filter(\.$organization.$id == organizationID)
+            .first()
+        {
+            return existing
+        }
+        let site = Site(
+            name: "Test Site \(organizationID.uuidString)",
+            organizationScope: .organization(organizationID)
+        )
+        try await site.save(on: db)
+        return site
+    }
+
     /// A logical network in `project`. Nothing provisions one automatically
     /// (issue #765), so any fixture whose workloads need a network must make
     /// one — and two projects may safely share a name and a subnet.
@@ -507,26 +527,11 @@ package struct TestDataBuilder {
         externalAccess: Bool = true,
         site: Site? = nil
     ) async throws -> LogicalNetwork {
-        let placementSite: Site
+        let resolvedSite: Site
         if let site {
-            placementSite = site
+            resolvedSite = site
         } else {
-            guard let organizationID = try await project.getRootOrganizationId(on: db) else {
-                throw Abort(.internalServerError, reason: "Test project has no owning organization")
-            }
-            if let existing = try await Site.query(on: db)
-                .filter(\.$organization.$id == organizationID)
-                .first()
-            {
-                placementSite = existing
-            } else {
-                let created = Site(
-                    name: "Test Site \(organizationID.uuidString)",
-                    organizationScope: .organization(organizationID)
-                )
-                try await created.save(on: db)
-                placementSite = created
-            }
+            resolvedSite = try await placementSite(for: project)
         }
         let network = LogicalNetwork(
             name: name,
@@ -537,7 +542,7 @@ package struct TestDataBuilder {
             projectID: try project.requireID(),
             dhcpEnabled: dhcpEnabled,
             externalAccess: externalAccess,
-            siteID: try placementSite.requireID()
+            siteID: try resolvedSite.requireID()
         )
         try await network.save(on: db)
         return network

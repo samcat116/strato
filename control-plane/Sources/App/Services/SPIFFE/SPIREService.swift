@@ -178,20 +178,14 @@ public struct SPIREServiceConfig: Sendable {
         self.bundleRefreshInterval = bundleRefreshInterval
     }
 
-    /// Load configuration from environment variables
-    public static func fromEnvironment() -> SPIREServiceConfig {
-        let enabled = Environment.get("SPIRE_ENABLED")?.lowercased() == "true"
-        let trustDomain = Environment.get("SPIRE_TRUST_DOMAIN") ?? "strato.local"
-        let bundleEndpointURL = Environment.get("SPIRE_BUNDLE_ENDPOINT_URL")
-        let trustBundlePath = Environment.get("SPIRE_TRUST_BUNDLE_PATH")
-        let bundleRefreshInterval = TimeInterval(Environment.get("SPIRE_BUNDLE_REFRESH_INTERVAL") ?? "300") ?? 300
-
+    /// Load configuration from the validated startup snapshot.
+    static func fromConfiguration(_ configuration: ControlPlaneConfiguration) -> SPIREServiceConfig {
         return SPIREServiceConfig(
-            enabled: enabled,
-            trustDomain: trustDomain,
-            bundleEndpointURL: bundleEndpointURL,
-            trustBundlePath: trustBundlePath,
-            bundleRefreshInterval: bundleRefreshInterval
+            enabled: configuration.bool(.spireEnabled)!,
+            trustDomain: configuration.string(.spireTrustDomain)!,
+            bundleEndpointURL: configuration.string(.spireBundleEndpointURL),
+            trustBundlePath: configuration.string(.spireTrustBundlePath),
+            bundleRefreshInterval: configuration.double(.spireBundleRefreshInterval)
         )
     }
 }
@@ -697,7 +691,7 @@ extension Application {
 
     /// Configure SPIRE service
     public func configureSPIRE() async throws {
-        let config = SPIREServiceConfig.fromEnvironment()
+        let config = SPIREServiceConfig.fromConfiguration(controlPlaneConfiguration)
 
         guard config.enabled else {
             logger.info("SPIRE authentication is disabled")

@@ -141,6 +141,14 @@ final class Agent: Model, Content, @unchecked Sendable {
     @Field(key: "resolver_capable")
     var resolverCapable: Bool
 
+    /// Whether the agent initialized its guest-facing instance metadata
+    /// service at its last registration. Independent of overlay networking:
+    /// an OVN host may have the service disabled or lack a required host tool.
+    /// Defaults false so agents that have not advertised the capability cannot
+    /// receive an IMDS-backed VM.
+    @Field(key: "metadata_service_capable")
+    var metadataServiceCapable: Bool
+
     /// Latest dependency-health snapshot from registration or heartbeat.
     @Field(key: "dependency_observations")
     var dependencyObservations: [NodeDependencyObservation]
@@ -277,6 +285,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         sandboxNetworkingCapable: Bool = false,
         tpmCapable: Bool = false,
         resolverCapable: Bool = false,
+        metadataServiceCapable: Bool = false,
         dependencyObservations: [NodeDependencyObservation] = [],
         dependencyObservationsReceivedAt: Date? = nil,
         lastHeartbeat: Date? = nil
@@ -300,6 +309,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.sandboxNetworkingCapable = sandboxNetworkingCapable
         self.tpmCapable = tpmCapable
         self.resolverCapable = resolverCapable
+        self.metadataServiceCapable = metadataServiceCapable
         self.dependencyObservations = dependencyObservations
         self.dependencyObservationsReceivedAt = dependencyObservationsReceivedAt
         self.autoUpdate = false
@@ -426,6 +436,7 @@ extension Agent {
             sandboxNetworkingCapable: registration.sandboxNetworkingCapable ?? false,
             tpmCapable: registration.tpmCapable ?? false,
             resolverCapable: registration.resolverCapable ?? false,
+            metadataServiceCapable: registration.metadataServiceCapable ?? false,
             dependencyObservations: registration.dependencyObservations,
             lastHeartbeat: Date()
         )
@@ -632,6 +643,9 @@ struct AgentResponse: Content {
     let tpmCapable: Bool
     /// Whether this host can run the per-network DNS resolver (STR-40).
     let resolverCapable: Bool
+    /// Whether this host initialized the guest-facing instance metadata
+    /// service. IMDS-backed VMs only place on nodes reporting true.
+    let metadataServiceCapable: Bool
     /// Fresh dependency health used for feature-scoped placement gates.
     let dependencyObservations: [NodeDependencyObservation]
     /// Control-plane receipt time used to determine snapshot freshness.
@@ -712,7 +726,11 @@ struct AgentResponse: Content {
         }
     }
 
-    init(from agent: Agent, heldWorkloads: [HeldWorkloadSummary]? = nil) throws {
+    init(
+        from agent: Agent,
+        targetVersion: String?,
+        heldWorkloads: [HeldWorkloadSummary]? = nil
+    ) throws {
         guard let id = agent.id else {
             throw Abort(.internalServerError, reason: "Agent missing ID")
         }
@@ -731,6 +749,7 @@ struct AgentResponse: Content {
         self.sandboxNetworkingCapable = agent.effectiveSandboxNetworkingCapable
         self.tpmCapable = agent.tpmCapable
         self.resolverCapable = agent.effectiveResolverCapable
+        self.metadataServiceCapable = agent.metadataServiceCapable
         self.dependencyObservations = agent.dependencyObservations
         self.dependencyObservationsReceivedAt = agent.dependencyObservationsReceivedAt
         self.hostInfo = agent.hostInfo
@@ -740,10 +759,10 @@ struct AgentResponse: Content {
         self.lastHeartbeat = agent.lastHeartbeat
         self.createdAt = agent.createdAt
         self.isOnline = agent.isOnline
-        self.targetVersion = AgentVersionTarget.version
+        self.targetVersion = targetVersion
         self.updateAvailable = AgentVersionTarget.updateAvailable(
             agentVersion: agent.version,
-            target: AgentVersionTarget.version
+            target: targetVersion
         )
         self.autoUpdate = agent.autoUpdate
         self.updateDesiredVersion = agent.updateDesiredVersion

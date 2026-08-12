@@ -33,6 +33,7 @@ final class ProjectResolutionTests {
         let user: User
         let org: Organization
         let project: Project
+        let siteID: UUID
         /// A `.ready` image, because `VMController.create` validates the image
         /// and checks `read` on it *before* it resolves the project. Without a
         /// real image — and permission to read it for non-admin callers — a
@@ -72,12 +73,13 @@ final class ProjectResolutionTests {
             )
             let image = try await builder.createImage(
                 name: "Project Resolution Image", project: project, uploadedBy: user)
+            let siteID = try await builder.placementSite(for: project).requireID()
             let token = try await user.generateAPIKey(on: app.db)
 
             try await test(
                 Fixture(
                     app: app, builder: builder, user: user, org: org, project: project,
-                    image: image, token: token))
+                    siteID: siteID, image: image, token: token))
         } catch {
             try await app.shutdownForTesting()
             throw error
@@ -136,7 +138,9 @@ final class ProjectResolutionTests {
         try await app.test(.POST, "/api/networks") { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: token)
             try req.content.encode(
-                CreateNetworkRequest(name: "net-\(suffix)", subnet: "10.90.0.0/24", projectId: projectId))
+                CreateNetworkRequest(
+                    name: "net-\(suffix)", subnet: "10.90.0.0/24", projectId: projectId,
+                    siteId: fixture.siteID))
         } afterResponse: { res in
             try afterResponse("/api/networks", res)
         }
@@ -229,7 +233,9 @@ final class ProjectResolutionTests {
             try await fixture.app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
                 try req.content.encode(
-                    CreateNetworkRequest(name: "named-net", subnet: "10.92.0.0/24", projectId: targetID))
+                    CreateNetworkRequest(
+                        name: "named-net", subnet: "10.92.0.0/24", projectId: targetID,
+                        siteId: fixture.siteID))
             } afterResponse: { res in
                 #expect(res.status == .ok, "\(res.body.string)")
                 let network = try res.content.decode(NetworkResponse.self)
@@ -278,7 +284,9 @@ final class ProjectResolutionTests {
             try await fixture.app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
                 try req.content.encode(
-                    CreateNetworkRequest(name: "no-org-net", subnet: "10.93.0.0/24", projectId: projectID))
+                    CreateNetworkRequest(
+                        name: "no-org-net", subnet: "10.93.0.0/24", projectId: projectID,
+                        siteId: fixture.siteID))
             } afterResponse: { res in
                 #expect(res.status == .ok, "\(res.body.string)")
                 let network = try res.content.decode(NetworkResponse.self)

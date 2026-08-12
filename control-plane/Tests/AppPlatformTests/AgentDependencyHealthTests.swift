@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 import MetricsTestKit
 import StratoShared
 import Testing
@@ -86,6 +87,50 @@ struct AgentDependencyHealthTests {
             observation(.libvirt, capability: .qemuPlacement, state: .degraded, checkedAt: Date())
         ])
         #expect(agent.supportedHypervisors.contains(.qemu))
+    }
+
+    @Test("Repeated healthy dependency observations keep placement available")
+    func repeatedHealthyObservationsKeepPlacementAvailable() throws {
+        var logger = Logger(label: "test.dependency-health-placement")
+        logger.logLevel = .critical
+        let scheduler = SchedulerService(logger: logger)
+        let requirements = VMPlacementRequirements(
+            cpu: 2, memory: 2_048, disk: 20_000,
+            hypervisorType: .qemu,
+            requiresInterVMNetworking: true)
+
+        for iteration in 0..<150 {
+            let now = Date()
+            let agent = makeAgent(
+                observations: [
+                    observation(
+                        .libvirt, capability: .qemuPlacement,
+                        state: .healthy, checkedAt: now),
+                    observation(
+                        .ovnOvs, capability: .overlayNetworking,
+                        state: .healthy, checkedAt: now),
+                ],
+                receivedAt: now)
+            let candidate = SchedulableAgent(
+                id: "node-1", name: agent.name,
+                totalCPU: agent.totalCPU, availableCPU: agent.availableCPU,
+                totalMemory: agent.totalMemory, availableMemory: agent.availableMemory,
+                totalDisk: agent.totalDisk, availableDisk: agent.availableDisk,
+                status: agent.status, runningVMCount: 0,
+                supportedHypervisors: agent.supportedHypervisors,
+                supportsInterVMNetworking: agent.supportsInterVMNetworking)
+
+            try #require(
+                candidate.supportedHypervisors.contains(.qemu),
+                "QEMU placement became unavailable after observation \(iteration + 1)")
+            try #require(
+                candidate.supportsInterVMNetworking,
+                "OVN placement became unavailable after observation \(iteration + 1)")
+            #expect(
+                try scheduler.selectAgent(
+                    requirements: requirements, from: [candidate], vmName: "stress-vm")
+                    == "node-1")
+        }
     }
 
     @Test("Re-registration clears availability only for removed dependencies")

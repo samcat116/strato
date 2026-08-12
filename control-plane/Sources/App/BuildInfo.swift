@@ -9,10 +9,14 @@ import Vapor
 /// returns an empty identity.
 enum BuildInfo {
     /// Human-readable version (e.g. a git tag or chart appVersion). "dev" when unset.
-    static let version: String = Environment.get("STRATO_VERSION") ?? "dev"
+    static func version(configuration: ControlPlaneConfiguration) -> String {
+        configuration.string(.stratoVersion)!
+    }
 
     /// Git commit SHA the binary was built from. "unknown" when unset.
-    static let gitSHA: String = Environment.get("STRATO_GIT_SHA") ?? "unknown"
+    static func gitSHA(configuration: ControlPlaneConfiguration) -> String {
+        configuration.string(.stratoGitSHA)!
+    }
 }
 
 /// The version agents are expected to run, compared against each agent's
@@ -26,7 +30,11 @@ enum BuildInfo {
 /// against, so no update is ever flagged.
 enum AgentVersionTarget {
     /// Nil when no meaningful target exists (dev builds without an override).
-    static let version: String? = normalize(Environment.get("AGENT_TARGET_VERSION") ?? BuildInfo.version)
+    static func version(configuration: ControlPlaneConfiguration) -> String? {
+        normalize(
+            configuration.string(.agentTargetVersion)
+                ?? BuildInfo.version(configuration: configuration))
+    }
 
     static func normalize(_ raw: String) -> String? {
         raw == "dev" ? nil : raw

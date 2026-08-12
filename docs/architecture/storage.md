@@ -88,10 +88,10 @@ credentials; leaving both unset falls back to the ambient credential chain
 (IRSA, workload identity, instance role), which is preferable where available.
 `IMAGE_S3_SESSION_TOKEN` is optional alongside static credentials.
 
-Every `IMAGE_S3_*` variable treats an empty value as unset. Deployment
-templates routinely set a variable to the empty string rather than omitting it
-— Compose's `KEY: ${KEY:-}` form always sets the key — so "leave it empty"
-and "leave it unset" mean the same thing here.
+Optional string and credential `IMAGE_S3_*` variables treat an empty value as
+unset. `IMAGE_S3_VIRTUAL_HOST_STYLE` uses Swift Configuration's Boolean grammar
+(`true`, `false`, `yes`, `no`, `1`, or `0`, case-insensitively); the Compose
+template emits its explicit `false` default rather than an empty value.
 
 No object store is bundled with either deployment path — you supply the bucket.
 
@@ -249,6 +249,12 @@ every volume the sync wants, over bytes almost certainly still on disk, and the
 observed report's full-list semantics would confirm deletions that never
 happened. An agent that cannot answer reports `volumes: nil` and converges no
 volumes that round, which costs one sync and nothing else.
+
+A child that disappears while Foundation is enumerating the store is not an
+unreadable store. `listVolumes` recognizes an underlying `ENOENT` (including
+Darwin's Cocoa 256 wrapper) and retries the authoritative scan once after the
+concurrent teardown; permission, I/O, descriptor-exhaustion, and repeated
+enumeration failures still throw.
 
 ### Volumes are desired state
 

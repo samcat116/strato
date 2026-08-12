@@ -166,13 +166,6 @@ enum SnapshotRetention {
     /// overflow the date arithmetic.
     static let maxTTLSeconds: Int = 10 * 365 * 24 * 3600
 
-    /// The fleet default, or nil when none is configured.
-    static var defaultTTLSeconds: Int? {
-        guard let raw = Environment.get(defaultTTLEnvironmentKey), let seconds = Int(raw), seconds > 0
-        else { return nil }
-        return min(seconds, maxTTLSeconds)
-    }
-
     /// Resolves a create request's `ttlSeconds` into an absolute expiry.
     ///
     /// Absolute, not relative, for the reason every other deadline in this
@@ -184,7 +177,11 @@ enum SnapshotRetention {
     ///   fleet default; `0` is an explicit "keep forever" that overrides it,
     ///   because an operator who set a fleet default still needs a way to keep
     ///   one artifact.
-    static func expiry(requested: Int?, from now: Date = Date()) throws -> Date? {
+    static func expiry(
+        requested: Int?,
+        defaultTTLSeconds: Int? = nil,
+        from now: Date = Date()
+    ) throws -> Date? {
         let seconds: Int?
         if let requested {
             guard requested >= 0 else {

@@ -20,7 +20,8 @@ import StratoShared
 // STR-52 hung one more job off the same sync: each VM's `InstanceMetadata` is
 // projected onto the `MetadataStore` the guest-facing IMDS reads. It is not
 // actuation — no work item carries it — because a VM already in its desired
-// status plans no steps, and a metadata-only edit bumps no generation.
+// status plans no steps. Mutable tags/keys do bump the generation (STR-66),
+// while the hostname and service kill switch can still change at an equal one.
 //
 // STR-98 took omission out of the destructive path. A workload present here
 // that a sync does not list is *held* and reported as unrecognized; it is torn
@@ -228,9 +229,10 @@ public enum ReconcileStep: Equatable, Sendable {
     case boot
     case pause
     case resume
-    /// Converge a *running* VM's vCPU/memory sizing on the desired spec
-    /// (issue #568), or grow a volume to its desired size (STR-148). Sandboxes
-    /// are not resizable in place.
+    /// Converge a VM's vCPU/memory sizing on the desired spec (issue #568), or
+    /// grow a volume to its desired size (STR-148). A stopped QEMU VM also uses
+    /// this step to persist a vCPU shrink before its next boot (STR-248).
+    /// Sandboxes are not resizable in place.
     case resize
     /// Reconcile a managed QEMU VM's durable NIC set with its desired spec
     /// (STR-202), or replace a Firecracker VMM whose immutable MMDS interface
@@ -1099,10 +1101,10 @@ public actor Reconciler {
         // the whole IMDS design rests on.
         //
         // It is not carried on a work item either. A VM already in its desired
-        // status plans no steps at all, and an edit to what metadata carries
-        // (a hostname, an SSH key) changes no realization and so bumps no
-        // generation — so routing it through actuation would drop exactly the
-        // edits the metadata service exists to deliver.
+        // status plans no steps at all; mutable tag/key edits advance the
+        // generation without inventing a hypervisor action, while hostname and
+        // service-switch edits can still arrive at an equal generation. Routing
+        // the document through actuation would drop both shapes of edit.
         await recordMetadata(message.vms)
 
         // An agent that cannot enumerate its own workloads converges nothing
@@ -1905,28 +1907,26 @@ public actor Reconciler {
                 wantsRunning: entry.wantsRunning)
     }
 
-    /// Plans `.resize` for VMs that are already running the status the
-    /// control plane wants but at a different size than its spec asks for
-    /// (issue #568) — the declarative alternative to an imperative resize
-    /// RPC: it survives dropped syncs by construction, since the next
-    /// level-triggered sync re-derives the same diff.
+    /// Plans `.resize` for VMs that are already running the status the control
+    /// plane wants but at a different size than its spec asks for (issue #568),
+    /// and for a stopped QEMU VM whose persistent vCPU count must shrink before
+    /// its next boot (STR-248). This is the declarative alternative to an
+    /// imperative resize RPC: it survives dropped syncs by construction, since
+    /// the next level-triggered sync re-derives the same diff.
     ///
-    /// A VM with other steps planned is left alone: `.create` builds the
-    /// process from the new spec wholesale, so resizing on top would be
-    /// redundant at best. A VM that isn't running is left alone too — but "a
-    /// stopped VM picks the new size up at its next boot" is only half the
-    /// story, and the missing half is why the equal-generation rule below
-    /// exists. `.boot` starts the definition **the host already holds**
-    /// (`bootVM` takes no spec; only `.create` writes one), so a resized
-    /// stopped VM comes up at the *old* size, `lastApplied` advances to the
-    /// entry's generation, and the size is realized on the next sync by the
-    /// drift-correcting `.resize` planned here — a second work item at a
-    /// generation already applied.
+    /// A running VM with other steps planned is left alone: `.create` builds
+    /// the process from the new spec wholesale, so resizing on top would be
+    /// redundant at best. A stopped vCPU shrink is the exception. `.boot`
+    /// starts the persistent definition **the host already holds** (`bootVM`
+    /// takes no spec), and `DomainRedefinition` only widens vCPU ceilings. The
+    /// offline `.resize` is therefore inserted before `.boot`, or becomes the
+    /// sole step while shutdown remains desired. That ordering also keeps the
+    /// generation unapplied if libvirt fails to update the definition.
     ///
-    /// That second item is the only way this agent can report
-    /// `observedGeneration` and `failedGeneration` at the same value (STR-191):
-    /// a failing item never advances `lastApplied`, so the two coincide only
-    /// when something *else* already applied that generation successfully.
+    /// Equal-generation planning remains drift correction rather than a no-op.
+    /// A boot may have applied a generation before a running-size probe exposes
+    /// work still left to do; if that later resize fails, this agent can report
+    /// `observedGeneration` and `failedGeneration` at the same value (STR-191).
     /// Nothing here compensates for it — `lastApplied` is honest and must stay
     /// honest. The control plane resolves the pair on read, by treating a
     /// failure at the current generation as not converged.
@@ -1941,11 +1941,17 @@ public actor Reconciler {
         guard !sizing.isEmpty else { return }
         for entry in desired where !entry.wantsAbsent {
             let id = entry.vmId.uuidString
-            guard case .managed(.running)? = present[id],
-                entry.desiredStatus == .running,
-                let observed = sizing[id],
-                observed.differs(from: entry.spec)
+            guard case .managed(let status)? = present[id],
+                let observed = sizing[id]
             else { continue }
+            let runningResize =
+                status == .running && entry.desiredStatus == .running
+                && observed.differs(from: entry.spec)
+            let stoppedVCPUShrink =
+                entry.hypervisorType == .qemu
+                && (status == .shutdown || status == .created)
+                && entry.spec.cpus < observed.cpus
+            guard runningResize || stoppedVCPUShrink else { continue }
             // Same staleness rule as the core diff: an older sync must never
             // undo a newer one, and an equal generation is drift correction —
             // which is deliberately *not* "already done". See the note above
@@ -1953,12 +1959,19 @@ public actor Reconciler {
             if let applied = lastApplied[id], entry.generation < applied { continue }
 
             if let index = items.firstIndex(where: { $0.kind == .vm && $0.id == id }) {
-                guard items[index].steps.isEmpty else { continue }
+                var steps = items[index].steps
+                if steps.isEmpty {
+                    steps = [.resize]
+                } else if stoppedVCPUShrink, let boot = steps.firstIndex(of: .boot) {
+                    steps.insert(.resize, at: boot)
+                } else {
+                    continue
+                }
                 // The item this replaces may exist *only* to write the edge
                 // record (`planCore`'s adoption case), so carry that decision
                 // over rather than losing it to a resize.
                 items[index] = ReconcileWorkItem(
-                    kind: .vm, id: id, generation: entry.generation, steps: [.resize],
+                    kind: .vm, id: id, generation: entry.generation, steps: steps,
                     target: entry.asTarget, appliedEdges: items[index].appliedEdges)
             } else {
                 items.append(

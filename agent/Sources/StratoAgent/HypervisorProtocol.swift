@@ -124,12 +124,13 @@ public protocol HypervisorService: Actor, Sendable {
     /// whole life, and outgrowing any of them would leave "recreate the VM" as
     /// the only remedy.
     ///
-    /// Called before `bootVM` and **never for a VM being created**, whose
-    /// configuration was built from this spec moments earlier. Best-effort by
-    /// contract: the caller boots the VM whether or not this succeeded, since a
-    /// VM that comes up at the ceiling it already had is strictly better than
-    /// one that does not come up. What the widening could not deliver surfaces
-    /// where it is actionable — on the attach or the resize that wanted it.
+    /// Called before `bootVM` or a stopped-domain resize, and **never for a VM
+    /// being created**, whose configuration was built from this spec moments
+    /// earlier. Boot treats it as best effort, since a VM that comes up at the
+    /// ceiling it already had is strictly better than one that does not come up;
+    /// a stopped resize treats failure as incomplete convergence. What the
+    /// widening could not deliver surfaces where it is actionable — on the
+    /// attach or resize that wanted it.
     ///
     /// - Parameters:
     ///   - vmId: The VM identifier
@@ -229,10 +230,11 @@ public protocol HypervisorService: Actor, Sendable {
     /// Removes the network device identified by the interface's stable MAC.
     func detachNetworkInterface(vmId: String, spec: NetworkSpec) async throws
 
-    /// Converges a running VM's vCPU count and memory size on `spec`
-    /// (issue #568), within the headroom the VM was created with. A backend
-    /// that cannot unplug a live vCPU must throw rather than report a
-    /// config-only write as a completed online CPU resize.
+    /// Converges a VM's vCPU count and memory size on `spec` (issue #568),
+    /// within the headroom the VM was created with. A stopped domain may be
+    /// resized in its persistent definition; a backend that cannot unplug a
+    /// live vCPU must throw rather than report a config-only write as a
+    /// completed online CPU resize.
     /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot
     ///   resize a running VM at all
     func resizeVM(vmId: String, spec: VMSpec) async throws

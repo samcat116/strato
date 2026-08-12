@@ -188,6 +188,12 @@ public struct AgentRegisterMessage: WebSocketMessage {
     /// older agents decode fine; absent means not capable, which is the safe
     /// default in both directions of skew.
     public let resolverCapable: Bool?
+    /// Whether this host initialized the guest-facing instance metadata
+    /// service. This is independent of overlay networking: an OVN host may
+    /// disable the service in its agent configuration or lack a host tool the
+    /// listener supervisor needs. Optional so absence is fail-closed when a
+    /// registration predates the capability.
+    public let metadataServiceCapable: Bool?
     /// Periodic, feature-scoped software dependency health. This is also sent
     /// at registration so a newly connected agent is not placement-eligible in
     /// the window before its first heartbeat.
@@ -210,6 +216,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         operatingSystem: OperatingSystem? = nil,
         hostInfo: HostInfo? = nil,
         resolverCapable: Bool? = nil,
+        metadataServiceCapable: Bool? = nil,
         dependencyObservations: [NodeDependencyObservation] = []
     ) {
         self.requestId = requestId
@@ -228,6 +235,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.operatingSystem = operatingSystem
         self.hostInfo = hostInfo
         self.resolverCapable = resolverCapable
+        self.metadataServiceCapable = metadataServiceCapable
         self.dependencyObservations = dependencyObservations
     }
 

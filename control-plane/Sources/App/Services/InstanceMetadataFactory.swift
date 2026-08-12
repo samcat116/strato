@@ -24,11 +24,11 @@ extension InstanceMetadata {
     /// reads all of it) carried on a sync that must stay valid however long it
     /// takes to arrive.
     ///
-    /// `vendorData` and `tags` are passed explicitly at their empty values
-    /// rather than defaulted, because each is a decision about what the
-    /// platform publishes to guests: Strato has no provisioning document of its
-    /// own yet, and no VM tag storage exists. When tags land, that is the one
-    /// line here that changes.
+    /// `vendorData` is passed explicitly at its empty value rather than
+    /// defaulted because it is a decision about what the platform publishes to
+    /// guests: Strato has no provisioning document of its own yet. Tags come
+    /// directly from the VM row; they are ordinary mutable metadata, never an
+    /// authorization input.
     ///
     /// `instanceSPIFFEID` is the VM's own instance identity (STR-55) —
     /// `spiffe://<trust-domain>/vm/<vm-id>`, the key its `workload_registrations`
@@ -75,19 +75,24 @@ extension InstanceMetadata {
                     interface: $0.interface, network: $0.network,
                     siteResolverCapable: siteResolverCapable)
             },
-            // The same single key the spec carries. Duplicated deliberately
+            // The same complete key list the spec carries. Duplicated deliberately
             // (see `InstanceMetadata.sshAuthorizedKeys`): the spec copy
-            // provisions at boot, this copy is what a running guest re-reads
-            // after an operator rotates it.
-            sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? [],
+            // provisions at boot, while this copy is what IMDS serves if a
+            // guest re-reads metadata after an operator rotates it.
+            sshAuthorizedKeys: vm.effectiveSSHAuthorizedKeys,
             userData: vm.userData,
             vendorData: nil,
-            tags: [:],
+            tags: vm.tags,
             identity: instanceSPIFFEID.map {
                 IdentityPolicy(
                     spiffeId: $0, audiences: identityAudiences,
                     ttlSeconds: identityTTLSeconds)
             },
+            // NoCloud cannot attach an IMDSv2 header while following
+            // `seedfrom`, so IMDS-backed VMs receive a narrow capability that
+            // authenticates only their bootstrap document paths. ISO-backed
+            // VMs never publish one.
+            noCloudSeedToken: vm.metadataSource == .imds ? vm.metadataSeedToken : nil,
             // The per-instance kill switch (STR-185). Sent as the column's
             // literal value rather than folded with the network's
             // `metadataEnabled`: the two are enforced at different layers — the

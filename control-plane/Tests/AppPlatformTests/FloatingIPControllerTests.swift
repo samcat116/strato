@@ -14,6 +14,24 @@ import AppTestSupport
 @Suite("Floating IP Controller Tests", .serialized)
 final class FloatingIPControllerTests {
 
+    fileprivate static let fixtureSiteID = UUID(uuidString: "00000000-0000-4000-8000-000000000344")!
+
+    private static func healthyOverlayObservation(at checkedAt: Date = Date())
+        -> NodeDependencyObservation
+    {
+        NodeDependencyObservation(
+            id: .ovnOvs,
+            role: .networking,
+            desiredState: .required,
+            ownership: .observeOnly,
+            supervisorState: .active,
+            compatibility: .compatible,
+            functionalState: .healthy,
+            checkedAt: checkedAt,
+            lastHealthyAt: checkedAt,
+            affectedCapabilities: [.overlayNetworking])
+    }
+
     private func withFloatingIPTestApp(
         _ test: (Application, User, Organization, Project, String) async throws -> Void
     ) async throws {
@@ -40,6 +58,11 @@ final class FloatingIPControllerTests {
                 description: "Project for floating IP tests",
                 organization: org
             )
+            let site = Site(
+                id: Self.fixtureSiteID,
+                name: "Floating IP Test Site",
+                organizationScope: .organization(try org.requireID()))
+            try await site.save(on: app.db)
             let token = try await user.generateAPIKey(on: app.db)
 
             try await test(app, user, org, project, token)
@@ -56,11 +79,13 @@ final class FloatingIPControllerTests {
     private func createPool(
         app: Application, org: Organization, token: String, siteId: UUID? = nil
     ) async throws -> FloatingIPPoolResponse {
+        let siteId = siteId ?? Self.fixtureSiteID
         var created: FloatingIPPoolResponse?
         try await app.test(.POST, "/api/floating-ip-pools") { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: token)
             try req.content.encode([
                 "name": "edge", "cidr": "203.0.113.0/29", "gateway": "203.0.113.1",
+                "siteId": siteId.uuidString,
                 "organizationId": org.id!.uuidString,
             ])
         } afterResponse: { res in
@@ -95,10 +120,19 @@ final class FloatingIPControllerTests {
     func poolValidation() async throws {
         try await withFloatingIPTestApp { app, _, org, _, token in
             for body in [
-                ["name": "bad", "cidr": "not-a-cidr", "organizationId": org.id!.uuidString],
-                ["name": "bad", "cidr": "203.0.113.0/31", "organizationId": org.id!.uuidString],
+                [
+                    "name": "bad", "cidr": "not-a-cidr",
+                    "siteId": Self.fixtureSiteID.uuidString,
+                    "organizationId": org.id!.uuidString,
+                ],
+                [
+                    "name": "bad", "cidr": "203.0.113.0/31",
+                    "siteId": Self.fixtureSiteID.uuidString,
+                    "organizationId": org.id!.uuidString,
+                ],
                 [
                     "name": "bad", "cidr": "203.0.113.0/29", "gateway": "198.51.100.1",
+                    "siteId": Self.fixtureSiteID.uuidString,
                     "organizationId": org.id!.uuidString,
                 ],
             ] {
@@ -120,13 +154,14 @@ final class FloatingIPControllerTests {
     @Test("Overlapping pool CIDRs are rejected within a scope but allowed across sites")
     func poolOverlapGuard() async throws {
         try await withFloatingIPTestApp { app, _, org, _, token in
-            _ = try await self.createPool(app: app, org: org, token: token)  // 203.0.113.0/29, unpinned
+            _ = try await self.createPool(app: app, org: org, token: token)
 
-            // Overlapping unpinned pool → 409 (same answering scope).
+            // An overlapping pool in the same site is rejected.
             try await app.test(.POST, "/api/floating-ip-pools") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
                     "name": "edge-overlap", "cidr": "203.0.113.0/28",
+                    "siteId": Self.fixtureSiteID.uuidString,
                     "organizationId": org.id!.uuidString,
                 ])
             } afterResponse: { res in
@@ -134,8 +169,7 @@ final class FloatingIPControllerTests {
             }
 
             // The same CIDR pinned to two *different* sites is two fabrics and
-            // is allowed — but each still conflicts with the unpinned pool, so
-            // use a disjoint range.
+            // is allowed.
             let siteA = Site(name: "site-a", organizationScope: .organization(org.id!))
             let siteB = Site(name: "site-b", organizationScope: .organization(org.id!))
             try await siteA.save(on: app.db)
@@ -160,19 +194,23 @@ final class FloatingIPControllerTests {
         try await withFloatingIPTestApp { app, _, org, _, token in
             let builder = TestDataBuilder(db: app.db)
             let otherOrg = try await builder.createOrganization(name: "FIP Other Org")
+            let otherSite = Site(
+                name: "FIP Other Site", organizationScope: .organization(try otherOrg.requireID()))
+            try await otherSite.save(on: app.db)
             let ou = OrganizationalUnit(
                 name: "FIP OU", description: "folder-owned pools", organizationID: org.id!,
                 path: "/\(org.id!.uuidString)", depth: 1)
             try await ou.save(on: app.db)
 
-            // Every pool below is unpinned, and unpinned pools conflict with
-            // everything regardless of owner — so each takes a disjoint CIDR
-            // and the only thing under test is the name.
-            func createPublicPool(cidr: String, owner: [String: String]) async throws -> HTTPStatus {
+            func createPublicPool(
+                cidr: String, siteID: UUID, owner: [String: String]
+            ) async throws -> HTTPStatus {
                 var status: HTTPStatus = .internalServerError
                 try await app.test(.POST, "/api/floating-ip-pools") { req in
                     req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                    try req.content.encode(["name": "public", "cidr": cidr].merging(owner) { a, _ in a })
+                    try req.content.encode(
+                        ["name": "public", "cidr": cidr, "siteId": siteID.uuidString]
+                            .merging(owner) { a, _ in a })
                 } afterResponse: { res in
                     status = res.status
                 }
@@ -180,23 +218,27 @@ final class FloatingIPControllerTests {
             }
 
             let first = try await createPublicPool(
-                cidr: "203.0.113.0/29", owner: ["organizationId": org.id!.uuidString])
+                cidr: "203.0.113.0/29", siteID: Self.fixtureSiteID,
+                owner: ["organizationId": org.id!.uuidString])
             #expect(first == .ok)
 
             // A second organization takes the same name: the whole point.
             let secondOrg = try await createPublicPool(
-                cidr: "198.51.100.0/29", owner: ["organizationId": otherOrg.id!.uuidString])
+                cidr: "198.51.100.0/29", siteID: try otherSite.requireID(),
+                owner: ["organizationId": otherOrg.id!.uuidString])
             #expect(secondOrg == .ok)
 
             // So does a folder inside the first organization — the two owner
             // columns are indexed separately.
             let folderOwned = try await createPublicPool(
-                cidr: "192.0.2.0/29", owner: ["organizationalUnitId": ou.id!.uuidString])
+                cidr: "192.0.2.0/29", siteID: Self.fixtureSiteID,
+                owner: ["organizationalUnitId": ou.id!.uuidString])
             #expect(folderOwned == .ok)
 
             // Within one owner the name is still taken.
             let duplicate = try await createPublicPool(
-                cidr: "203.0.113.8/29", owner: ["organizationId": org.id!.uuidString])
+                cidr: "203.0.113.8/29", siteID: Self.fixtureSiteID,
+                owner: ["organizationId": org.id!.uuidString])
             #expect(duplicate == .conflict)
         }
     }
@@ -217,7 +259,9 @@ final class FloatingIPControllerTests {
             // Re-pointing the gateway onto the live allocation → 409.
             try await app.test(.PUT, "/api/floating-ip-pools/\(pool.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(["gateway": "203.0.113.2"])
+                try req.content.encode([
+                    "gateway": "203.0.113.2", "siteId": Self.fixtureSiteID.uuidString,
+                ])
             } afterResponse: { res in
                 #expect(res.status == .conflict)
             }
@@ -225,7 +269,9 @@ final class FloatingIPControllerTests {
             // A free address is fine.
             try await app.test(.PUT, "/api/floating-ip-pools/\(pool.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(["gateway": "203.0.113.3"])
+                try req.content.encode([
+                    "gateway": "203.0.113.3", "siteId": Self.fixtureSiteID.uuidString,
+                ])
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let gateway = try res.content.decode(FloatingIPPoolResponse.self).gateway
@@ -464,10 +510,18 @@ final class FloatingIPControllerTests {
                 totalMemory: 1 << 33, availableMemory: 1 << 33,
                 totalDisk: 1 << 39, availableDisk: 1 << 39
             ),
-            protocolVersion: protocolVersion
+            networkCapability: .overlay,
+            protocolVersion: protocolVersion,
+            dependencyObservations: [Self.healthyOverlayObservation()]
         )
         let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: named, organizationScope: .organization(org.id!))
+            message, agentName: named, siteID: Self.fixtureSiteID,
+            organizationScope: .organization(org.id!))
+        let site = try #require(try await Site.find(Self.fixtureSiteID, on: app.db))
+        if site.$networkControllerAgent.id == nil {
+            site.$networkControllerAgent.id = agentUUID
+            try await site.save(on: app.db)
+        }
         vm.hypervisorId = agentUUID.uuidString
         try await vm.save(on: app.db)
     }
@@ -522,7 +576,7 @@ final class FloatingIPControllerTests {
             try await site.save(on: app.db)
             let agent = try #require(
                 try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.db))
-            agent.$site.id = site.id
+            agent.$site.id = try site.requireID()
             try await agent.save(on: app.db)
 
             var fipId: UUID?
@@ -569,7 +623,7 @@ final class FloatingIPControllerTests {
             let site = Site(name: "offline-controller", organizationScope: .organization(org.id!))
             try await site.save(on: app.db)
             let host = try #require(try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.db))
-            host.$site.id = site.id
+            host.$site.id = try site.requireID()
             try await host.save(on: app.db)
 
             let controllerUUID = try await app.agentService.registerAgent(
@@ -578,10 +632,13 @@ final class FloatingIPControllerTests {
                     resources: AgentResources(
                         totalCPU: 8, availableCPU: 8, totalMemory: 1 << 33, availableMemory: 1 << 33,
                         totalDisk: 1 << 39, availableDisk: 1 << 39),
-                    networkCapability: .overlay, protocolVersion: WireProtocol.currentVersion),
+                    networkCapability: .overlay, protocolVersion: WireProtocol.currentVersion,
+                    dependencyObservations: [Self.healthyOverlayObservation()]),
                 agentName: "fip-offline-ctl", siteID: site.id,
                 organizationScope: .organization(org.id!))
             let controller = try #require(try await Agent.find(controllerUUID, on: app.db))
+            site.$networkControllerAgent.id = controllerUUID
+            try await site.save(on: app.db)
             controller.lastHeartbeat = Date().addingTimeInterval(
                 -(SiteNetworkAuthority.controllerOfflineGrace + 600))
             try await controller.save(on: app.db)
@@ -711,11 +768,12 @@ final class FloatingIPControllerTests {
                 #expect(res.status == .forbidden)
             }
 
-            // Unpinned creation by the same caller is fine.
+            // Creation in the caller's own site is fine.
             try await app.test(.POST, "/api/floating-ip-pools") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
                 try req.content.encode([
                     "name": "cross-tenant", "cidr": "203.0.113.0/29",
+                    "siteId": Self.fixtureSiteID.uuidString,
                     "organizationId": org.id!.uuidString,
                 ])
             } afterResponse: { res in
@@ -858,8 +916,8 @@ final class FloatingIPControllerTests {
             let site = Site(name: "move-target", organizationScope: .organization(org.id!))
             try await site.save(on: app.db)
 
-            // Pinning the pool to a site while an address is attached to the
-            // (unpinned) old scope would strand the attachment.
+            // Moving the pool to another site while an address is attached
+            // would strand the attachment.
             try await app.test(.PUT, "/api/floating-ip-pools/\(pool.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(["siteId": site.id!.uuidString])
@@ -913,5 +971,49 @@ final class FloatingIPControllerTests {
                 #expect(res.status == .noContent)
             }
         }
+    }
+}
+
+/// Network fixtures unrelated to site behavior use the suite's real default
+/// site. Tests that exercise cross-site guards pass their site explicitly.
+private extension LogicalNetwork {
+    convenience init(
+        id: UUID? = nil,
+        name: String,
+        subnet: String,
+        gateway: String? = nil,
+        subnet6: String? = nil,
+        gateway6: String? = nil,
+        projectID: UUID,
+        createdByID: UUID? = nil,
+        dhcpEnabled: Bool = true,
+        dnsServers: [String] = [],
+        domainName: String? = nil,
+        leaseTime: Int? = nil,
+        externalAccess: Bool = true,
+        metadataEnabled: Bool = true,
+        resolverEnabled: Bool = true,
+        resolverIndex: Int? = nil,
+        generation: Int = 1
+    ) {
+        self.init(
+            id: id,
+            name: name,
+            subnet: subnet,
+            gateway: gateway,
+            subnet6: subnet6,
+            gateway6: gateway6,
+            projectID: projectID,
+            createdByID: createdByID,
+            dhcpEnabled: dhcpEnabled,
+            dnsServers: dnsServers,
+            domainName: domainName,
+            leaseTime: leaseTime,
+            externalAccess: externalAccess,
+            metadataEnabled: metadataEnabled,
+            resolverEnabled: resolverEnabled,
+            resolverIndex: resolverIndex,
+            generation: generation,
+            siteID: FloatingIPControllerTests.fixtureSiteID)
     }
 }

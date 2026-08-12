@@ -32,20 +32,6 @@ struct DatabaseStatementTimeout: Equatable, Sendable {
         self.milliseconds = milliseconds
     }
 
-    static func fromEnvironment() throws -> DatabaseStatementTimeout {
-        try resolve(Environment.get(environmentKey))
-    }
-
-    static func migrationFromEnvironment(
-        defaultingTo normalTimeout: DatabaseStatementTimeout
-    ) throws -> DatabaseStatementTimeout {
-        try resolve(
-            Environment.get(migrationEnvironmentKey),
-            environmentKey: migrationEnvironmentKey,
-            defaultMilliseconds: normalTimeout.milliseconds
-        )
-    }
-
     /// Resolve an explicit environment value, or the documented five-minute
     /// default when it is absent. Split out so tests do not mutate the process
     /// environment while other suites read it concurrently.

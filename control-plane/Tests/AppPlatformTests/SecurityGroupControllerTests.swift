@@ -16,6 +16,22 @@ import AppTestSupport
 @Suite("Security Group Controller Tests", .serialized)
 final class SecurityGroupControllerTests {
 
+    private static func healthyOverlayObservation(at checkedAt: Date = Date())
+        -> NodeDependencyObservation
+    {
+        NodeDependencyObservation(
+            id: .ovnOvs,
+            role: .networking,
+            desiredState: .required,
+            ownership: .observeOnly,
+            supervisorState: .active,
+            compatibility: .compatible,
+            functionalState: .healthy,
+            checkedAt: checkedAt,
+            lastHealthyAt: checkedAt,
+            affectedCapabilities: [.overlayNetworking])
+    }
+
     private func withSecurityGroupTestApp(
         _ test: (Application, User, Organization, Project, String) async throws -> Void
     ) async throws {
@@ -91,10 +107,13 @@ final class SecurityGroupControllerTests {
                     totalMemory: 1 << 33, availableMemory: 1 << 33,
                     totalDisk: 1 << 39, availableDisk: 1 << 39
                 ),
-                protocolVersion: protocolVersion
+                networkCapability: .overlay,
+                protocolVersion: protocolVersion,
+                dependencyObservations: [Self.healthyOverlayObservation()]
             )
             let agentUUID = try await app.agentService.registerAgent(
-                message, agentName: message.agentId, organizationScope: .organization(org.id!))
+                message, agentName: message.agentId, siteID: network.$site.id,
+                organizationScope: .organization(org.id!))
             vm.hypervisorId = agentUUID.uuidString
             try await vm.save(on: app.db)
         }
@@ -131,14 +150,34 @@ final class SecurityGroupControllerTests {
                 networkCapability: sandboxNetworkingCapable ? .overlay : nil,
                 protocolVersion: protocolVersion,
                 sandboxCapable: sandboxNetworkingCapable,
-                sandboxNetworkingCapable: sandboxNetworkingCapable
+                sandboxNetworkingCapable: sandboxNetworkingCapable,
+                dependencyObservations: sandboxNetworkingCapable
+                    ? [Self.healthyOverlayObservation()] : []
             )
             let agentUUID = try await app.agentService.registerAgent(
-                message, agentName: message.agentId, organizationScope: .organization(org.id!))
+                message, agentName: message.agentId, siteID: network.$site.id,
+                organizationScope: .organization(org.id!))
             sandbox.hypervisorId = agentUUID.uuidString
             try await sandbox.save(on: app.db)
         }
         return (sandbox, nic)
+    }
+
+    private func attachBootVolume(app: Application, vm: VM, agentID: String) async throws {
+        let owner = try #require(try await User.query(on: app.db).sort(\.$createdAt).first())
+        let boot = Volume(
+            name: "\(vm.name)-boot", description: "", projectID: vm.$project.id,
+            environment: vm.environment, size: vm.disk, format: .qcow2,
+            volumeType: .boot, status: .attached, createdByID: try owner.requireID())
+        boot.$vm.id = try vm.requireID()
+        boot.deviceName = VolumeDeviceName.disk(0).rawValue
+        boot.bootOrder = 0
+        boot.generation = 1
+        boot.observedGeneration = 1
+        try await boot.save(on: app.db)
+        try await placeVolume(
+            boot, on: agentID, at: "/var/lib/strato/volumes/\(try boot.requireID())/volume.qcow2",
+            state: .healthy, using: app.db)
     }
 
     // MARK: - Default group
@@ -499,7 +538,7 @@ final class SecurityGroupControllerTests {
             let site = Site(name: "SG Offline Site", organizationScope: .organization(org.id!))
             try await site.save(on: app.db)
             let host = try #require(try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.db))
-            host.$site.id = site.id
+            host.$site.id = try site.requireID()
             try await host.save(on: app.db)
 
             let controllerUUID = try await app.agentService.registerAgent(
@@ -508,10 +547,13 @@ final class SecurityGroupControllerTests {
                     resources: AgentResources(
                         totalCPU: 8, availableCPU: 8, totalMemory: 1 << 33, availableMemory: 1 << 33,
                         totalDisk: 1 << 39, availableDisk: 1 << 39),
-                    networkCapability: .overlay, protocolVersion: WireProtocol.currentVersion),
+                    networkCapability: .overlay, protocolVersion: WireProtocol.currentVersion,
+                    dependencyObservations: [Self.healthyOverlayObservation()]),
                 agentName: "sg-offline-ctl", siteID: site.id,
                 organizationScope: .organization(org.id!))
             let controller = try #require(try await Agent.find(controllerUUID, on: app.db))
+            site.$networkControllerAgent.id = controllerUUID
+            try await site.save(on: app.db)
             controller.lastHeartbeat = Date().addingTimeInterval(
                 -(SiteNetworkAuthority.controllerOfflineGrace + 600))
             try await controller.save(on: app.db)
@@ -790,6 +832,7 @@ final class SecurityGroupControllerTests {
             let (vm, nic) = try await self.createVMWithNIC(
                 app: app, org: org, project: project,
                 protocolVersion: WireProtocol.currentVersion)
+            try await self.attachBootVolume(app: app, vm: vm, agentID: vm.hypervisorId!)
             try await VMInterfaceSecurityGroup(
                 interfaceID: nic.id!, securityGroupID: web.id
             ).save(on: app.db)
@@ -897,6 +940,7 @@ final class SecurityGroupControllerTests {
             let (vm, nic) = try await self.createVMWithNIC(
                 app: app, org: org, project: project,
                 protocolVersion: WireProtocol.currentVersion)
+            try await self.attachBootVolume(app: app, vm: vm, agentID: vm.hypervisorId!)
             try await VMInterfaceSecurityGroup(
                 interfaceID: nic.id!, securityGroupID: web.id
             ).save(on: app.db)
@@ -1148,7 +1192,7 @@ final class SecurityGroupControllerTests {
         try await withSecurityGroupTestApp { app, _, org, project, _ in
             let (sandbox, _) = try await self.createSandboxWithNIC(
                 app: app, org: org, project: project,
-                protocolVersion: WireProtocol.currentVersion)
+                protocolVersion: WireProtocol.currentVersion, sandboxNetworkingCapable: true)
             let placed = try await SecurityGroupService.realization(
                 forHypervisorId: sandbox.hypervisorId, on: app.db)
             guard case .realizers(let agents) = placed else {

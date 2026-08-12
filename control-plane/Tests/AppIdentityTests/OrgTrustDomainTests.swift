@@ -52,30 +52,24 @@ final class OrgTrustDomainTests {
         #expect(upper == "org-3f2a91c04b7d4e5f.strato.local")
     }
 
-    /// Runs `body` with the per-org trust domain feature flag on.
-    ///
-    /// Through `EnvironmentFlag` rather than a bare `setenv`: the flag is read
-    /// from the live process environment on every access, and `.serialized`
-    /// orders tests within *this* suite while swift-testing runs suites in
-    /// parallel — so `GuestIdentityTests`, which drives the same variable, could
-    /// otherwise observe or clobber this one's window.
-    private func withFeatureFlagOn<T>(_ body: () async throws -> T) async throws -> T {
-        try await EnvironmentFlag.withValue("SPIRE_ORG_TRUST_DOMAINS_ENABLED", "true", body)
-    }
-
-    /// The off direction, which is the one that loses an unguarded race.
-    private func withFeatureFlagOff<T>(_ body: () async throws -> T) async throws -> T {
-        try await EnvironmentFlag.withValue("SPIRE_ORG_TRUST_DOMAINS_ENABLED", nil, body)
+    private func configuration(orgTrustDomainsEnabled: Bool) async throws
+        -> ControlPlaneConfiguration
+    {
+        try await ControlPlaneConfiguration.load(
+            environmentVariables: [
+                "SPIRE_ORG_TRUST_DOMAINS_ENABLED": orgTrustDomainsEnabled ? "true" : "false"
+            ],
+            for: .testing)
     }
 
     @Test("With the flag on, claim writes a pending row and teardown tombstones it")
     func provisioningLifecycleWithFlagOn() async throws {
         try await withApp { app in
             let orgID = UUID()
+            let configuration = try await self.configuration(orgTrustDomainsEnabled: true)
 
-            try await self.withFeatureFlagOn {
-                try await OrgTrustDomainProvisioning.claim(organizationID: orgID, on: app.db)
-            }
+            try await OrgTrustDomainProvisioning.claim(
+                organizationID: orgID, configuration: configuration, on: app.db)
 
             let claimed = try #require(
                 try await OrgTrustDomain.query(on: app.db)
@@ -90,9 +84,8 @@ final class OrgTrustDomainTests {
                         forOrganization: orgID, platformTrustDomain: PlatformTrustDomain.current))
 
             // Idempotent: the domain is immutable once any SVID exists under it.
-            try await self.withFeatureFlagOn {
-                try await OrgTrustDomainProvisioning.claim(organizationID: orgID, on: app.db)
-            }
+            try await OrgTrustDomainProvisioning.claim(
+                organizationID: orgID, configuration: configuration, on: app.db)
             let count = try await OrgTrustDomain.query(on: app.db)
                 .filter(\.$organizationID == orgID)
                 .count()
@@ -119,6 +112,7 @@ final class OrgTrustDomainTests {
             // Squat the domain a second organization would derive, then let
             // that organization try to claim it.
             let squatter = UUID()
+            let configuration = try await self.configuration(orgTrustDomainsEnabled: true)
             let contendedDomain = OrgTrustDomain.trustDomain(
                 forOrganization: squatter, platformTrustDomain: PlatformTrustDomain.current)
             try await OrgTrustDomain(organizationID: UUID(), trustDomain: contendedDomain)
@@ -128,9 +122,8 @@ final class OrgTrustDomainTests {
             // inside the org-create transaction, where it would become an
             // opaque 500 with no hint that a fresh org UUID is the remedy.
             await #expect(throws: OrgTrustDomainError.self) {
-                try await self.withFeatureFlagOn {
-                    try await OrgTrustDomainProvisioning.claim(organizationID: squatter, on: app.db)
-                }
+                try await OrgTrustDomainProvisioning.claim(
+                    organizationID: squatter, configuration: configuration, on: app.db)
             }
         }
     }
@@ -198,17 +191,15 @@ final class OrgTrustDomainTests {
     @Test("Organization creation writes no trust domain while the flag is off")
     func creationIsDormant() async throws {
         try await withApp { app in
-            // Guarded in the off direction too, or a parallel suite holding the
-            // flag on would make this claim write the row it asserts is absent.
-            try await self.withFeatureFlagOff {
-                let orgID = UUID()
-                try await OrgTrustDomainProvisioning.claim(organizationID: orgID, on: app.db)
+            let configuration = try await self.configuration(orgTrustDomainsEnabled: false)
+            let orgID = UUID()
+            try await OrgTrustDomainProvisioning.claim(
+                organizationID: orgID, configuration: configuration, on: app.db)
 
-                let count = try await OrgTrustDomain.query(on: app.db)
-                    .filter(\.$organizationID == orgID)
-                    .count()
-                #expect(count == 0)
-            }
+            let count = try await OrgTrustDomain.query(on: app.db)
+                .filter(\.$organizationID == orgID)
+                .count()
+            #expect(count == 0)
         }
     }
 

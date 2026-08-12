@@ -153,6 +153,33 @@ export interface paths {
         delete: operations["deleteVM"];
         options?: never;
         head?: never;
+        /**
+         * Update mutable instance metadata
+         * @description Replaces the VM's tags and/or SSH authorized-key list, advances its desired-state generation in the same transaction, and nudges the placed agent so the new metadata document is served promptly. The metadata changes without rebooting the VM, but cloud-init does not re-read and apply a rotated key inside an already-running guest. That requires a reboot or an explicit `cloud-init clean` and re-run on an IMDS-backed VM; an ISO-backed VM keeps its immutable seed payload. Live key rotation is the guest agent's responsibility.
+         */
+        patch: operations["patchVMMetadata"];
+        trace?: never;
+    };
+    "/api/vms/{vmID}/project-grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get the project role held by a VM's instance identity
+         * @description Returns only this VM principal's active role binding on its project. Requires `vm:read` on the VM, matching the VM detail endpoint; it does not require access to or load the project's complete member inventory.
+         */
+        get: operations["getVMProjectGrant"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
         patch?: never;
         trace?: never;
     };
@@ -3160,6 +3187,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectID}/vm-principals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a project's VM instance-identity principals
+         * @description Returns every VM the caller can read in the project, with only the fields needed to manage its instance-identity role. This is a single unpaged lightweight inventory operation; it does not hydrate VM interfaces or security-group enforcement.
+         */
+        get: operations["listProjectVMPrincipals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{projectID}/members/{userID}": {
         parameters: {
             query?: never;
@@ -5298,6 +5348,11 @@ export interface components {
         OperationStatus: "pending" | "succeeded" | "failed";
         /** @enum {string} */
         HypervisorType: "qemu" | "firecracker";
+        /**
+         * @description Where the VM reads its first-boot guest configuration.
+         * @enum {string}
+         */
+        MetadataSource: "iso" | "imds";
         /** @enum {string} */
         CPUArchitecture: "x86_64" | "arm64";
         CreateVMRequest: {
@@ -5368,10 +5423,15 @@ export interface components {
             /** @description Security groups for the VM's NIC (same project, at most 5). Omitted or empty means the project's default group — every NIC belongs to at least one group. */
             securityGroupIds?: string[];
             /**
-             * @description Whether the instance metadata service answers this VM. Turning it off denies the guest `169.254.169.254` and `[fd00:ec2::254]` outright — the listener refuses it and an OVN ACL drops its packets — which is what hardening one workload against SSRF needs, and what the per-network `metadataEnabled` is too coarse to give. Note that the metadata service is also how a guest reads its cloud-init configuration, so a VM created with this off may not finish provisioning. Requires an agent new enough to honour it; placement is constrained to such agents.
+             * @description Whether the instance metadata service answers this VM. Turning it off denies the guest `169.254.169.254` and `[fd00:ec2::254]` outright — the listener refuses it and an OVN ACL drops its packets — which is what hardening one workload against SSRF needs, and what the per-network `metadataEnabled` is too coarse to give. Note that a VM using `metadataSource: imds` also needs this service to fetch its cloud-init configuration. Requires an agent new enough to honour it; placement is constrained to such agents.
              * @default true
              */
             metadataEnabled: boolean;
+            /**
+             * @description Where cloud-init reads the guest bootstrap. `iso` preserves the complete immutable NoCloud seed. `imds` keeps `network-config` and a `seedfrom` stub on the ISO, then fetches meta-data and user-data from a per-VM capability URL on `169.254.169.254`. An IMDS-backed VM must enable its metadata service and select at least one network that has metadata enabled. It is supported only for QEMU and constrains placement to an OVN-capable agent that advertises a running metadata service. Fixed at VM creation.
+             * @default iso
+             */
+            metadataSource: components["schemas"]["MetadataSource"];
         };
         /** @description One VM network interface. Exactly one of `networkId` or `networkName` is required and is resolved inside the VM's project. */
         CreateVMNetworkInterfaceRequest: {
@@ -5397,6 +5457,15 @@ export interface components {
             memory?: number;
             /** @description Whether the instance metadata service answers this VM. Editable on a running VM and applied without a restart. Switching it *off* is refused with `409` when the VM sits on an agent too old to honour it, rather than reported as applied while the guest keeps reading its metadata. */
             metadataEnabled?: boolean;
+        };
+        /** @description Mutable guest-visible metadata. Omitted properties are unchanged; `{}` clears all tags and `[]` clears all authorized keys. */
+        PatchVMMetadataRequest: {
+            /** @description Free-form operator tags published to the guest. Keys are non-empty, single-line, and at most 128 characters. Tags are ordinary metadata and are never authorization claims. The EC2-compatible renderer exposes only keys that are safe as one EC2 tag path segment; other keys remain in Strato's shared metadata document. */
+            tags?: {
+                [key: string]: string;
+            };
+            /** @description Complete replacement list for the guest's default user. Each item is one validated OpenSSH authorized_keys entry. The IMDS document changes immediately, but cloud-init does not apply the new list to a guest that is already running without a reboot or an explicit clean and re-run. An ISO-backed VM continues using its immutable seed. */
+            sshAuthorizedKeys?: string[];
         };
         VMDetail: {
             /** Format: uuid */
@@ -5439,6 +5508,14 @@ export interface components {
             graphicsConsole?: boolean;
             /** @description Whether the instance metadata service answers this VM. This is the VM's own switch, not the effective answer: a VM on a network with metadata turned off still reports `true` here unless someone turned it off for this VM. */
             metadataEnabled?: boolean;
+            /** @description Where this VM reads its first-boot guest configuration. Fixed at creation; VMs created before STR-64 report `iso`. */
+            metadataSource?: components["schemas"]["MetadataSource"];
+            /** @description Free-form operator tags published through instance metadata. */
+            tags?: {
+                [key: string]: string;
+            };
+            /** @description SSH authorized keys currently published through instance metadata. */
+            sshAuthorizedKeys?: string[];
             /** @description Whether the guest agent is responding. Absent until the agent's slow poll has seen the guest once. */
             qgaAvailable?: boolean;
             /** @description What the guest OS calls itself, when it reported one. Distinct from `hostname`, which is the DNS label Strato registers it under. */
@@ -5481,6 +5558,12 @@ export interface components {
             securityGroupsEnforced?: boolean;
             /** @description The VM's SPIFFE instance identity — `spiffe://<trust-domain>/vm/<vm-id>`, the lookup key its workload registration is filed under. A name, never an authorization: what the identity may do comes from role bindings against that principal, and a registration with none authorizes nothing. Absent means either an older control plane that does not report the field, or a registration an administrator revoked — never that the VM is exempt. */
             spiffeId?: string;
+            /**
+             * Format: uuid
+             * @description The workload-registration row id and IAM principal id for this instance identity. Use it as the subject of a project workload grant. Absent together with `spiffeId` after identity revocation.
+             */
+            instanceIdentityPrincipalId?: string;
+            instanceIdentityStatus?: components["schemas"]["InstanceIdentityStatus"];
             conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
@@ -7327,10 +7410,11 @@ export interface components {
             /** @enum {string} */
             type: "organization" | "organizational_unit" | "project";
         };
-        /** @description A project's user role grants and group role grants. */
+        /** @description A project's direct user, group, and workload role grants. */
         ProjectMembers: {
             users: components["schemas"]["ProjectMember"][];
             groups: components["schemas"]["ProjectGroupGrant"][];
+            workloads: components["schemas"]["ProjectWorkloadGrant"][];
         };
         ProjectMember: {
             /** Format: uuid */
@@ -7365,6 +7449,46 @@ export interface components {
             grantedAt?: string;
             /** @description The group belongs to another organization — a cross-org grant, which UIs should render prominently. */
             external: boolean;
+        };
+        ProjectWorkloadGrant: {
+            /**
+             * Format: uuid
+             * @description The workload registration id and IAM principal id.
+             */
+            registrationId: string;
+            spiffeId: string;
+            /**
+             * Format: uuid
+             * @description Present when this principal is a VM's instance identity.
+             */
+            vmId?: string;
+            displayName: string;
+            /**
+             * Format: uuid
+             * @description The role's canonical `iam_roles` id.
+             */
+            role: string;
+            roleDisplayName: string;
+            /** Format: date-time */
+            grantedAt?: string;
+        };
+        /** @description The active project binding held by this VM's instance identity. The `grant` field is absent when the identity has no project role. */
+        VMProjectGrantResponse: {
+            grant?: components["schemas"]["ProjectWorkloadGrant"];
+        };
+        /**
+         * @description Whether the VM's workload registration exists. Older control planes omit this field; clients must treat absence as unknown, never revoked.
+         * @enum {string}
+         */
+        InstanceIdentityStatus: "enabled" | "revoked";
+        ProjectVMPrincipal: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            spiffeId?: string;
+            /** Format: uuid */
+            instanceIdentityPrincipalId?: string;
+            instanceIdentityStatus: components["schemas"]["InstanceIdentityStatus"];
         };
         /**
          * Format: uuid
@@ -7416,6 +7540,10 @@ export interface components {
         };
         SetSeededRoleRequest: {
             role: components["schemas"]["SeededRoleName"];
+        };
+        SetWorkloadRoleRequest: {
+            /** @description The canonical id of a role returned by `GET /api/iam/roles/bindable` for the project. Seeded role names remain accepted for compatibility with older clients. */
+            role: string;
         };
         /** @description One workload-registry row: a SPIFFE identity and the principal it names. The SPIFFE ID is a lookup key only — nothing is ever parsed out of an SVID. */
         WorkloadRegistration: {
@@ -7674,6 +7802,8 @@ export interface components {
             tpmCapable: boolean;
             /** @description Whether this node can run the per-network DNS resolver. Resolver enablement requires every node in the site to report true. */
             resolverCapable: boolean;
+            /** @description Whether this node initialized the guest-facing instance metadata service. IMDS-backed VMs only place on nodes reporting true; OVN networking alone is not sufficient. */
+            metadataServiceCapable: boolean;
             /** @description Latest feature-scoped software dependency health reported by the agent. Fresh healthy observations are authoritative for new placement; failures do not terminate running workloads. */
             dependencyObservations: components["schemas"]["NodeDependencyObservation"][];
             /**
@@ -9839,6 +9969,64 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    patchVMMetadata: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchVMMetadataRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated virtual machine. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VMDetail"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getVMProjectGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The VM's project grant, if one exists. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VMProjectGrantResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     startVM: {
@@ -14820,6 +15008,33 @@ export interface operations {
             409: components["responses"]["Conflict"];
         };
     };
+    listProjectVMPrincipals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's readable VM principals. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectVMPrincipal"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     revokeProjectMember: {
         parameters: {
             query?: never;
@@ -16248,7 +16463,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SetSeededRoleRequest"];
+                "application/json": components["schemas"]["SetWorkloadRoleRequest"];
             };
         };
         responses: {

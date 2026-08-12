@@ -411,12 +411,25 @@ final class ServiceAccountAPITests {
                 registrationID = registration.id
             }
 
-            // Grant it viewer on the project (org admin holds iam:setPolicy).
+            // Grant it a custom project role by canonical id (org admin holds
+            // iam:setPolicy). This is the same bindable-role vocabulary the
+            // VM instance-identity UI consumes.
+            let roleID = UUID()
+            let role = IAMRoleDefinition(
+                id: roleID,
+                name: "workload-reader",
+                ownerType: .project,
+                ownerID: projectID,
+                cedarText: RoleDescriptor.canonicalPermitText(
+                    id: roleID, actions: ["project:read"]),
+                actions: ["project:read"],
+                managed: false)
+            try await role.save(on: app.db)
             try await app.test(
                 .PUT, "/api/projects/\(projectID)/workload-grants/\(registrationID!)"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: env.adminToken)
-                try req.content.encode(RoleBody(role: "viewer"))
+                try req.content.encode(RoleBody(role: roleID.uuidString))
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
@@ -425,6 +438,23 @@ final class ServiceAccountAPITests {
                 try await WhoCanService.can(
                     principalType: .workload, principalID: registrationID,
                     action: "project:read", node: projectNode, app: app, on: app.db))
+
+            // The ordinary project-access listing now includes workload
+            // principals, so a project admin can render and edit the binding
+            // without access to the system-admin registry inventory.
+            try await app.test(.GET, "/api/projects/\(projectID)/members") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: env.adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let members = try res.content.decode(
+                    ProjectMemberController.ProjectMembersResponse.self)
+                let workload = try #require(
+                    members.workloads.first { $0.registrationId == registrationID })
+                #expect(workload.spiffeId == "spiffe://acme.example/batch/uploader")
+                #expect(workload.displayName == "Uploader")
+                #expect(workload.role == roleID)
+                #expect(workload.roleDisplayName == "workload-reader")
+            }
 
             // Deleting the registration deletes the principal and its grants.
             try await app.test(.DELETE, "/api/workload-registrations/\(registrationID!)") { req in

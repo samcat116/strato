@@ -2,6 +2,17 @@ import Foundation
 
 // MARK: - Hypervisor-Neutral VM Specification
 
+/// Where a VM reads its first-boot guest configuration.
+///
+/// The ISO path is the compatibility default: the seed carries the complete
+/// NoCloud payload. The IMDS path keeps only the addressing bootstrap on the
+/// ISO, then follows a NoCloud `seedfrom` URL to the agent's link-local
+/// metadata service for mutable meta-data and user-data.
+public enum MetadataSource: String, Codable, CaseIterable, Sendable {
+    case iso
+    case imds
+}
+
 /// Hypervisor-neutral description of a VM, sent from the control plane to an agent.
 ///
 /// The spec carries only what the control plane can legitimately know: resource
@@ -72,6 +83,10 @@ public struct VMSpec: Codable, Sendable {
     /// config when it builds the guest-bootstrap media. Nil when the caller
     /// provided none.
     public let userData: String?
+    /// Where cloud-init reads the VM's guest-bootstrap documents. Defaults to
+    /// the historical full seed ISO; `.imds` leaves only `network-config` and
+    /// a `seedfrom` meta-data stub on that ISO.
+    public let metadataSource: MetadataSource
 
     public init(
         cpus: Int,
@@ -89,7 +104,8 @@ public struct VMSpec: Codable, Sendable {
         networks: [NetworkSpec] = [],
         console: ConsoleSpec? = nil,
         sshAuthorizedKeys: [String] = [],
-        userData: String? = nil
+        userData: String? = nil,
+        metadataSource: MetadataSource = .iso
     ) {
         self.cpus = cpus
         self.maxCpus = maxCpus ?? cpus
@@ -107,18 +123,20 @@ public struct VMSpec: Codable, Sendable {
         self.console = console
         self.sshAuthorizedKeys = sshAuthorizedKeys
         self.userData = userData
+        self.metadataSource = metadataSource
     }
 
     private enum CodingKeys: String, CodingKey {
         case cpus, maxCpus, memoryBytes, maxMemoryBytes, balloonTargetBytes, diskBytes
         case sharedMemory, hugepages, boot, machine, guestAgentEnabled
-        case volumes, networks, console, sshAuthorizedKeys, userData
+        case volumes, networks, console, sshAuthorizedKeys, userData, metadataSource
     }
 
-    /// `guestAgentEnabled` was added after VMSpec became durable in the agent
-    /// manifest. Missing means the old, safe behavior: no Strato guest agent
-    /// and therefore no host vsock device. Every pre-existing required field
-    /// remains strict rather than acquiring a compatibility default here.
+    /// `guestAgentEnabled` and `metadataSource` were added after VMSpec became
+    /// durable in the agent manifest. Their missing values preserve the old,
+    /// safe behavior: no Strato guest agent and a complete seed ISO. Every
+    /// pre-existing required field remains strict rather than acquiring a
+    /// compatibility default here.
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
@@ -137,7 +155,8 @@ public struct VMSpec: Codable, Sendable {
             networks: try c.decode([NetworkSpec].self, forKey: .networks),
             console: try c.decodeIfPresent(ConsoleSpec.self, forKey: .console),
             sshAuthorizedKeys: try c.decode([String].self, forKey: .sshAuthorizedKeys),
-            userData: try c.decodeIfPresent(String.self, forKey: .userData))
+            userData: try c.decodeIfPresent(String.self, forKey: .userData),
+            metadataSource: try c.decodeIfPresent(MetadataSource.self, forKey: .metadataSource) ?? .iso)
     }
 
     /// The machine profile to realize. Nil selects the explicit both-off
@@ -171,7 +190,8 @@ public struct VMSpec: Codable, Sendable {
             networks: networks,
             console: console,
             sshAuthorizedKeys: sshAuthorizedKeys,
-            userData: userData
+            userData: userData,
+            metadataSource: metadataSource
         )
     }
 
@@ -196,7 +216,8 @@ public struct VMSpec: Codable, Sendable {
             networks: networks,
             console: console,
             sshAuthorizedKeys: sshAuthorizedKeys,
-            userData: userData
+            userData: userData,
+            metadataSource: metadataSource
         )
     }
 
@@ -219,7 +240,8 @@ public struct VMSpec: Codable, Sendable {
             networks: networks,
             console: console,
             sshAuthorizedKeys: sshAuthorizedKeys,
-            userData: userData
+            userData: userData,
+            metadataSource: metadataSource
         )
     }
 

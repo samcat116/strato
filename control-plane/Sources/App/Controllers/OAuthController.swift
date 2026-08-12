@@ -149,7 +149,7 @@ struct OAuthController: RouteCollection {
         )
         try await authorization.save(on: req.db)
 
-        let origin = Self.publicOrigin()
+        let origin = Self.publicOrigin(configuration: req.controlPlaneConfiguration)
         return DeviceAuthorizationResponse(
             deviceCode: deviceCode,
             userCode: userCode,
@@ -162,10 +162,10 @@ struct OAuthController: RouteCollection {
 
     /// The browser-facing origin for the verification URL. The frontend is a
     /// separate service, so this comes from configuration, not the request.
-    static func publicOrigin() -> String {
+    static func publicOrigin(configuration: ControlPlaneConfiguration) -> String {
         let origin =
-            Environment.get("STRATO_PUBLIC_URL")
-            ?? Environment.get("WEBAUTHN_RELYING_PARTY_ORIGIN")
+            configuration.explicitlyConfiguredString(.stratoPublicURL)
+            ?? configuration.explicitlyConfiguredString(.webauthnRelyingPartyOrigin)
             ?? "http://localhost:3000"
         return origin.hasSuffix("/") ? String(origin.dropLast()) : origin
     }

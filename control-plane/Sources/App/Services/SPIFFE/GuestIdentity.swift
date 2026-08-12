@@ -14,6 +14,14 @@ import Vapor
 /// authorization model already holds shut.
 enum GuestIdentity {
 
+    /// The registry fields a VM response needs to name its instance-identity
+    /// principal. The row id is the IAM principal id; the SPIFFE URI is only
+    /// its authentication lookup key.
+    struct RegistrationReference: Sendable {
+        let principalID: UUID
+        let spiffeID: String
+    }
+
     /// The guest-VM SPIFFE namespace (`docs/architecture/guest-identity.md`).
     ///
     /// Refused by `WorkloadRegistry.validateRegistrable` so registration API
@@ -73,10 +81,13 @@ enum GuestIdentity {
     /// operator's back.
     static func trustDomain(
         forOrganization organizationID: UUID?,
+        configuration: ControlPlaneConfiguration,
         on db: any Database
     ) async throws -> String {
-        let platform = PlatformTrustDomain.current
-        guard OrgTrustDomainsFeature.isEnabled, let organizationID else { return platform }
+        let platform = configuration.string(.spireTrustDomain)!
+        guard configuration.bool(.spireOrgTrustDomainsEnabled) == true, let organizationID else {
+            return platform
+        }
 
         guard
             let row = try await OrgTrustDomain.query(on: db)
@@ -108,11 +119,34 @@ enum GuestIdentity {
         vmID: UUID,
         organizationID: UUID?,
         createdBy: UUID?,
+        configuration: ControlPlaneConfiguration,
         on db: any Database
     ) async throws -> WorkloadRegistration {
-        let trustDomain = try await trustDomain(forOrganization: organizationID, on: db)
+        let trustDomain = try await trustDomain(
+            forOrganization: organizationID, configuration: configuration, on: db)
         let registration = WorkloadRegistration(
             spiffeID: spiffeID(forVM: vmID, trustDomain: trustDomain),
+            kind: .workload,
+            organizationID: organizationID,
+            createdBy: createdBy,
+            vmID: vmID
+        )
+        try await registration.save(on: db)
+        return registration
+    }
+
+    /// Convenience for focused tests whose subject is registration rather than
+    /// control-plane configuration. Production supplies the immutable startup
+    /// snapshot through the overload above.
+    @discardableResult
+    static func register(
+        vmID: UUID,
+        organizationID: UUID?,
+        createdBy: UUID?,
+        on db: any Database
+    ) async throws -> WorkloadRegistration {
+        let registration = WorkloadRegistration(
+            spiffeID: spiffeID(forVM: vmID, trustDomain: PlatformTrustDomain.current),
             kind: .workload,
             organizationID: organizationID,
             createdBy: createdBy,
@@ -148,33 +182,49 @@ enum GuestIdentity {
     /// (`RoleBindingService` bounds its own sweeps the same way.)
     private static let lookupChunkSize = 1000
 
-    /// The SPIFFE IDs of a set of VMs.
+    /// The instance-identity registrations of a set of VMs.
     ///
-    /// The batched form is the only one the desired-state assembly and the VM
-    /// list may use: both run over every VM in scope, so a per-VM lookup there
-    /// is a fleet-wide load multiplier rather than a per-VM cost. A VM missing
-    /// from the result has no registration — an administrator revoked it — and
-    /// is vended no identity.
-    static func spiffeIDs(forVMs vmIDs: [UUID], on db: any Database) async throws -> [UUID: String] {
+    /// The batched form is the only one the VM list may use: it runs over every
+    /// VM in scope, so a per-VM lookup there is a fleet-wide load multiplier
+    /// rather than a per-VM cost. A VM missing from the result has no
+    /// registration — an administrator revoked it — and is vended no identity.
+    static func registrations(
+        forVMs vmIDs: [UUID], on db: any Database
+    ) async throws -> [UUID: RegistrationReference] {
         guard !vmIDs.isEmpty else { return [:] }
 
-        var result: [UUID: String] = [:]
+        var result: [UUID: RegistrationReference] = [:]
         for start in stride(from: 0, to: vmIDs.count, by: lookupChunkSize) {
             let chunk = Array(vmIDs[start..<min(start + lookupChunkSize, vmIDs.count)])
             let rows = try await WorkloadRegistration.query(on: db)
                 .filter(\.$vm.$id ~~ chunk)
                 .all()
             for row in rows {
-                guard let vmID = row.$vm.id else { continue }
-                result[vmID] = row.spiffeID
+                guard let vmID = row.$vm.id, let principalID = row.id else { continue }
+                result[vmID] = RegistrationReference(
+                    principalID: principalID, spiffeID: row.spiffeID)
             }
         }
         return result
     }
 
+    /// The SPIFFE IDs of a set of VMs, for desired-state assembly and other
+    /// callers that do not need the principal id.
+    static func spiffeIDs(forVMs vmIDs: [UUID], on db: any Database) async throws -> [UUID: String] {
+        try await registrations(forVMs: vmIDs, on: db).mapValues(\.spiffeID)
+    }
+
+    /// One VM's registration reference. Nil after an administrator revokes
+    /// the identity through the one-way registry deletion surface.
+    static func registration(
+        forVM vmID: UUID, on db: any Database
+    ) async throws -> RegistrationReference? {
+        try await registrations(forVMs: [vmID], on: db)[vmID]
+    }
+
     /// One VM's SPIFFE ID, for the single-resource endpoints. Nil when the VM
     /// has no registration.
     static func spiffeID(forVM vmID: UUID, on db: any Database) async throws -> String? {
-        try await spiffeIDs(forVMs: [vmID], on: db)[vmID]
+        try await registration(forVM: vmID, on: db)?.spiffeID
     }
 }

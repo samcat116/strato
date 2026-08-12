@@ -54,6 +54,7 @@ export default function AgentDetailPage() {
     ...(agent?.sandboxNetworkingCapable ? ["Sandbox networking"] : []),
     ...(agent?.tpmCapable ? ["vTPM"] : []),
     ...(agent?.resolverCapable ? ["DNS resolver"] : []),
+    ...(agent?.metadataServiceCapable ? ["Instance metadata"] : []),
   ];
 
   if (!id) {

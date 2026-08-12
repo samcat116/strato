@@ -156,6 +156,10 @@ public enum MetadataDocumentPath: Sendable, Equatable, Hashable {
 /// any state — that is `MetadataResponder`'s job.
 public enum MetadataRoute: Sendable, Equatable {
     case mintToken(ttlSeconds: Int)
+    /// A NoCloud `seedfrom` read authenticated by the per-VM capability in
+    /// the URL. This is intentionally separate from ordinary documents so the
+    /// responder cannot accidentally widen the tokenless surface.
+    case noCloudSeed(token: UUID, document: MetadataDocumentPath?)
     case document(MetadataDocumentPath)
     /// Strato's guest-identity surface. Deliberately outside `/latest/`: it is
     /// not part of the EC2-compatible metadata tree.
@@ -182,6 +186,21 @@ public enum MetadataRoute: Sendable, Equatable {
 public enum MetadataRouter {
     public static let tokenPath = "/latest/api/token"
     public static let identityPath = GuestIdentityLimits.metadataIdentityPath
+    static let noCloudSeedPrefix = "/latest/nocloud/"
+
+    /// The trailing slash is required: NoCloud appends `meta-data`,
+    /// `user-data`, and `network-config` to this URL.
+    static func noCloudSeedPath(for token: UUID) -> String {
+        "\(noCloudSeedPrefix)\(token.uuidString.lowercased())/"
+    }
+
+    /// Removes the URL capability before a request target reaches logging.
+    /// Match the prefix even in an otherwise malformed target so a rejected
+    /// request cannot smuggle the credential into logs.
+    static func redactedTargetForLogging(_ target: String) -> String {
+        guard let prefix = target.range(of: noCloudSeedPrefix) else { return target }
+        return String(target[..<prefix.upperBound]) + "[redacted]"
+    }
 
     public static func route(method: String, target: String, headers: MetadataHeaders) -> MetadataRoute {
         guard let parsed = parse(target: target) else {
@@ -216,6 +235,9 @@ public enum MetadataRouter {
                 return .rejected(.rejected(400, "identity requests require exactly one audience"))
             }
             return .identity(audience: audience)
+        }
+        if parsed.query == nil, let seed = noCloudSeedDocument(for: parsed.path) {
+            return seed
         }
         guard parsed.query == nil, let document = document(for: parsed.path) else {
             return .unknownDocument
@@ -307,6 +329,29 @@ public enum MetadataRouter {
             guard path.count > 1, path.hasSuffix("/"), !path.hasSuffix("//") else { return nil }
             return document(for: String(path.dropLast()))
         }
+    }
+
+    private static func noCloudSeedDocument(for path: String) -> MetadataRoute? {
+        guard path.hasPrefix(noCloudSeedPrefix) else { return nil }
+        let remainder = path.dropFirst(noCloudSeedPrefix.count)
+        let components = remainder.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count == 2,
+            let token = UUID(uuidString: String(components[0])),
+            token.uuidString.caseInsensitiveCompare(String(components[0])) == .orderedSame
+        else { return nil }
+
+        let document: MetadataDocumentPath?
+        switch components[1] {
+        case "meta-data": document = .noCloudMetaData
+        case "user-data": document = .userData
+        case "network-config": document = .networkConfig
+        // A valid capability still authenticates an optional NoCloud filename
+        // the service does not provide. Let the responder return a plain 404
+        // instead of challenging stock NoCloud for an IMDSv2 header it cannot
+        // send (for example, when it probes `vendor-data`).
+        default: document = nil
+        }
+        return .noCloudSeed(token: token, document: document)
     }
 
     /// Splits a hierarchical EC2 path while accepting one trailing slash and

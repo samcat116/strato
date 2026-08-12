@@ -219,6 +219,20 @@ it (the factory extension in `InstanceMetadataFactory.swift`) and
 with no control-plane round trip, so it holds per VM exactly what the metadata
 listener serves — see [agent](./agent.md) §Instance metadata store.
 
+`PATCH /api/vms/:id` replaces a VM's tags and/or SSH authorized-key list
+(STR-66). The values and the VM generation advance in one transaction, then the
+control plane rings that VM's placed agent through the cross-replica desired-state
+doorbell. The next sync therefore updates `MetadataStore` without recreating or
+rebooting the VM, and an older delayed sync cannot overwrite the rotation.
+
+That guarantee ends at the metadata boundary. **cloud-init does not re-read and
+apply a rotated key inside an already-running guest.** An IMDS-backed VM sees
+the new document on its next datasource run — after a reboot, or an explicit
+`cloud-init clean` and re-run. A legacy `metadataSource: iso` VM keeps using the
+immutable payload on its seed ISO; the PATCH still updates its durable and IMDS
+metadata, but it cannot rotate the seed. Applying rotations live is the VM guest
+agent's job, not the IMDS's.
+
 The **listener** joining the two is STR-56: one child process per namespace,
 started by the agent through `ip netns exec`, answering on both addresses
 behind a mandatory IMDSv2-style token handshake and identifying its caller by
@@ -1188,12 +1202,17 @@ verification on real multi-node hardware (recipe in
 - **cloud-init's Ec2 datasource can complete the handshake, but the EC2 tree is
   still partial.** The listener speaks EC2's header names deliberately
   ([ADR 0006](../adr/0006-imds-session-auth.md)), so a guest that probes
-  `/latest/meta-data/instance-id` gets an answer and `/latest/user-data` now
-  carries the same bytes as the seed ISO. The rest of the EC2 tree is 404 until
-  STR-65 renders it. NoCloud-net's exact `/latest/meta-data`,
-  `/latest/user-data`, and optional `/latest/network-config` documents are
-  ready, but nothing depends on them until STR-64 replaces the full seed ISO
-  with a `seedfrom` stub; `datasource_list` still puts NoCloud ahead of Ec2.
+  `/latest/meta-data/instance-id` gets an answer and `/latest/user-data` carries
+  the same rendered bytes as a full seed ISO. The rest of the EC2 tree is 404
+  until STR-65 renders it. A VM created with `metadataSource: imds` uses
+  NoCloud-net's exact `meta-data`, `user-data`, and optional `network-config`
+  documents below `/latest/nocloud/<per-VM capability>/`: its ISO retains
+  network bootstrap, an empty discovery `user-data`, and a `seedfrom` stub
+  instead of embedding guest user data. The source-bound capability is the
+  authentication stock NoCloud can send; ordinary `/latest/*` reads still
+  require IMDSv2. `metadataSource: iso`
+  remains the default for this phase, and `datasource_list` still puts NoCloud
+  ahead of Ec2.
 - **A downgrade below wire v37 strips a network's resolver addresses** from its
   localport and reverts the DHCP row in the same sync, so guests are told to use
   the network's configured servers again at their next lease (within one
