@@ -557,8 +557,9 @@ public actor FileSystemStorageBackend: StorageBackend {
     /// child raced this scan; EACCES, EIO, EMFILE, and every unknown error are
     /// still failures of the store as a whole.
     private static func isFileNotFound(_ error: Error) -> Bool {
-        var current: NSError? = error as NSError
-        while let candidate = current {
+        var current: any Error = error
+        while true {
+            let candidate = current as NSError
             if candidate.domain == NSCocoaErrorDomain,
                 candidate.code == NSFileNoSuchFileError || candidate.code == NSFileReadNoSuchFileError
             {
@@ -569,9 +570,11 @@ public actor FileSystemStorageBackend: StorageBackend {
             {
                 return true
             }
-            current = candidate.userInfo[NSUnderlyingErrorKey] as? NSError
+            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
+                return false
+            }
+            current = underlying
         }
-        return false
     }
 
     private func unreadableVolumeStore(_ error: Error) -> StorageBackendError {
