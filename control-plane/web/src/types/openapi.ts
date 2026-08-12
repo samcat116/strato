@@ -153,7 +153,11 @@ export interface paths {
         delete: operations["deleteVM"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update mutable instance metadata
+         * @description Replaces the VM's tags and/or SSH authorized-key list, advances its desired-state generation in the same transaction, and nudges the placed agent so the new metadata document is served promptly. The metadata changes without rebooting the VM, but cloud-init does not re-read and apply a rotated key inside an already-running guest. That requires a reboot or an explicit `cloud-init clean` and re-run on an IMDS-backed VM; an ISO-backed VM keeps its immutable seed payload. Live key rotation is the guest agent's responsibility.
+         */
+        patch: operations["patchVMMetadata"];
         trace?: never;
     };
     "/api/vms/{vmID}/start": {
@@ -5408,6 +5412,15 @@ export interface components {
             /** @description Whether the instance metadata service answers this VM. Editable on a running VM and applied without a restart. Switching it *off* is refused with `409` when the VM sits on an agent too old to honour it, rather than reported as applied while the guest keeps reading its metadata. */
             metadataEnabled?: boolean;
         };
+        /** @description Mutable guest-visible metadata. Omitted properties are unchanged; `{}` clears all tags and `[]` clears all authorized keys. */
+        PatchVMMetadataRequest: {
+            /** @description Free-form operator tags published to the guest. Keys are non-empty, single-line, and at most 128 characters. Tags are ordinary metadata and are never authorization claims. The EC2-compatible renderer exposes only keys that are safe as one EC2 tag path segment; other keys remain in Strato's shared metadata document. */
+            tags?: {
+                [key: string]: string;
+            };
+            /** @description Complete replacement list for the guest's default user. Each item is one validated OpenSSH authorized_keys entry. The IMDS document changes immediately, but cloud-init does not apply the new list to a guest that is already running without a reboot or an explicit clean and re-run. An ISO-backed VM continues using its immutable seed. */
+            sshAuthorizedKeys?: string[];
+        };
         VMDetail: {
             /** Format: uuid */
             id?: string;
@@ -5451,6 +5464,12 @@ export interface components {
             metadataEnabled?: boolean;
             /** @description Where this VM reads its first-boot guest configuration. Fixed at creation; VMs created before STR-64 report `iso`. */
             metadataSource?: components["schemas"]["MetadataSource"];
+            /** @description Free-form operator tags published through instance metadata. */
+            tags?: {
+                [key: string]: string;
+            };
+            /** @description SSH authorized keys currently published through instance metadata. */
+            sshAuthorizedKeys?: string[];
             /** @description Whether the guest agent is responding. Absent until the agent's slow poll has seen the guest once. */
             qgaAvailable?: boolean;
             /** @description What the guest OS calls itself, when it reported one. Distinct from `hostname`, which is the DNS label Strato registers it under. */
@@ -9853,6 +9872,37 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    patchVMMetadata: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchVMMetadataRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated virtual machine. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VMDetail"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     startVM: {

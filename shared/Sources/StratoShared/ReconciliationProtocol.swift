@@ -925,9 +925,10 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// reconcile, including deletion when turned off.
     ///
     /// Carried here rather than only on per-NIC specs for `dhcpEnabled`'s
-    /// reason: metadata edits don't bump VM generations, so a converged VM
-    /// never re-realizes its NICs and the network reconcile is the only path
-    /// that reaches a live network whose setting changed.
+    /// reason: network-level metadata settings don't bump each attached VM's
+    /// generation, so a converged VM never re-realizes its NICs and the network
+    /// reconcile is the only path that reaches a live network whose setting
+    /// changed.
     ///
     /// Nil ≙ a control plane that predates the field: the agent neither creates
     /// nor *deletes* the port. The deletion half is load-bearing in a way it is

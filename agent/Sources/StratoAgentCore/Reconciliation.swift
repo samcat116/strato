@@ -20,7 +20,8 @@ import StratoShared
 // STR-52 hung one more job off the same sync: each VM's `InstanceMetadata` is
 // projected onto the `MetadataStore` the guest-facing IMDS reads. It is not
 // actuation — no work item carries it — because a VM already in its desired
-// status plans no steps, and a metadata-only edit bumps no generation.
+// status plans no steps. Mutable tags/keys do bump the generation (STR-66),
+// while the hostname and service kill switch can still change at an equal one.
 //
 // STR-98 took omission out of the destructive path. A workload present here
 // that a sync does not list is *held* and reported as unrecognized; it is torn
@@ -1098,10 +1099,10 @@ public actor Reconciler {
         // the whole IMDS design rests on.
         //
         // It is not carried on a work item either. A VM already in its desired
-        // status plans no steps at all, and an edit to what metadata carries
-        // (a hostname, an SSH key) changes no realization and so bumps no
-        // generation — so routing it through actuation would drop exactly the
-        // edits the metadata service exists to deliver.
+        // status plans no steps at all; mutable tag/key edits advance the
+        // generation without inventing a hypervisor action, while hostname and
+        // service-switch edits can still arrive at an equal generation. Routing
+        // the document through actuation would drop both shapes of edit.
         await recordMetadata(message.vms)
 
         // An agent that cannot enumerate its own workloads converges nothing

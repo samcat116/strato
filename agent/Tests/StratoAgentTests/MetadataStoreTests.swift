@@ -133,12 +133,13 @@ struct MetadataStoreTests {
         #expect(await store.appliedGeneration(for: vmId) == 7)
     }
 
-    @Test("An equal generation still applies, so a metadata-only edit reaches the guest")
+    @Test("An equal generation still applies, so a level-triggered metadata edit reaches the guest")
     func appliesEqualGeneration() async {
         // Load-bearing rather than merely consistent with the reconciler's
-        // drift-correction reading: editing a hostname or an SSH key changes
-        // nothing about how the VM is realized, so the control plane bumps no
-        // generation for it. A strict `>` would freeze the edit out forever.
+        // drift-correction reading: editing a hostname or the metadata-service
+        // switch changes nothing about how the VM is realized, so the control
+        // plane bumps no generation for it. A strict `>` would freeze the edit
+        // out forever. STR-66 tag/key rotations use a newer generation instead.
         let store = MetadataStore()
         let vmId = UUID()
         await store.apply(Self.metadata(vmId, hostname: "before"), generation: 4, for: vmId)
