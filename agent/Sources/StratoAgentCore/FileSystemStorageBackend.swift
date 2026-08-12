@@ -518,7 +518,7 @@ public actor FileSystemStorageBackend: StorageBackend {
         let entries: [String]
         do {
             entries = try enumerateVolumeStore(volumeStoragePath)
-        } catch where Self.isFileNotFound(error) {
+        } catch  where Self.isFileNotFound(error) {
             // A child can vanish while Foundation builds the returned names.
             // The observed Darwin error wraps that ENOENT in
             // NSFileReadUnknownError (Cocoa 256), even though the store itself
