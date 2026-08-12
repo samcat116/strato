@@ -1,0 +1,71 @@
+control-plane/Tests/AppResourceTests/GuestExecTests.swift
+  s_d67c324c6e1ac6::t_0c5ce50f7c7c4b 10-15,65,88-91,195-279,283-285,288,290-291,307,315,325,328,334-335,341,351-352,354,360-361,366-379,386-387,392,405,411-412,417,426,431-432,440-441,447-448,453,457,459-461,463-464,473,477-478,496,503-504,515-516,528-529,537-538,551,557
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_d67c324c6e1ac6::t_2f63e869fb4e4b 451,457,463,468,619
+shared/Sources/StratoShared/GuestExecMessages.swift
+  s_d67c324c6e1ac6::t_2f63e869fb4e4b 16
+control-plane/Tests/AppIAMTests/IAMAuthorizerTests.swift
+  s_d67c324c6e1ac6::t_c07ea097f75045 621,629-630
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_d67c324c6e1ac6::t_55b0b7fd95d1a4 875-876,923
+  s_d67c324c6e1ac6::t_2f63e869fb4e4b 908-910
+docs/architecture/multi-replica.md
+  s_d67c324c6e1ac6::t_f6a50c185d3f9b 119,121
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_d67c324c6e1ac6::t_c07ea097f75045 346-348
+control-plane/Sources/App/Services/GuestExecSessionManager.swift
+  s_d67c324c6e1ac6::t_2f4fb2b0108d81 178-179
+  s_d67c324c6e1ac6::t_684800746948a9 6-7,10-12,14,25,27,43-54,60-61,76-77,92-93,106-107,126,129-130,149,158-159,166,170,174,180,182-183,189-190,198-200,205,208-209,223-226,229,232-233,245-246,248-249,268-271,280,296-297,312,326,411,417,481-486,496,498,509,523,535-536,539,541,544,550-551
+  s_d67c324c6e1ac6::t_4b2ff0288f9a15 15,21,150-151
+control-plane/Sources/App/routes.swift
+  s_d67c324c6e1ac6::t_2f63e869fb4e4b 87-88
+agent/Sources/StratoAgentCore/OrderedByteRelay.swift
+  s_d67c324c6e1ac6::t_61f962720501d0 16
+control-plane/Sources/App/Controllers/VMController.swift
+  s_d67c324c6e1ac6::t_2f63e869fb4e4b 133,1753-1760,1763-1808,1810-1814
+  s_d67c324c6e1ac6::t_55b0b7fd95d1a4 1761-1762,1809
+  s_d67c324c6e1ac6::t_09cf52143d9a6b 1815-1816
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_d67c324c6e1ac6::t_c07ea097f75045 67-68
+control-plane/Sources/App/Controllers/GuestExecWebSocketController.swift
+  s_d67c324c6e1ac6::t_eb8692062083f3 29-30,32-34,46,49-107,111-113,126-129,133,136-137,141-142,148,150-151,160,162-163,191,250,252-253,258,260-261,299-300,307-308,312,324-325,327,331,333-334,346
+  s_d67c324c6e1ac6::t_fea0669707b9e1 117-118
+  s_d67c324c6e1ac6::t_55b0b7fd95d1a4 6-28
+  s_d67c324c6e1ac6::t_4b2ff0288f9a15 173
+  s_d67c324c6e1ac6::t_2f4fb2b0108d81 338-339
+docs/architecture/iam.md
+  s_d67c324c6e1ac6::t_c07ea097f75045 705-706
+control-plane/Sources/App/Services/AgentService.swift
+  s_d67c324c6e1ac6::t_2f63e869fb4e4b 625,665
+control-plane/Tests/AppPlatformTests/OpenAPISpecDriftTests.swift
+  s_d67c324c6e1ac6::t_4027bfddb445e4 36-37
+docs/api-reference.md
+  s_d67c324c6e1ac6::t_f6a50c185d3f9b 189
+control-plane/Sources/App/Services/ConsoleSessionManager.swift
+  s_d67c324c6e1ac6::t_d7c86be7f8ed89 376
+docs/architecture/control-plane.md
+  s_d67c324c6e1ac6::t_f6a50c185d3f9b 141-142
+docs/architecture/sandboxes.md
+  s_d67c324c6e1ac6::t_f6a50c185d3f9b 455-462
+control-plane/Sources/App/openapi.yaml
+  s_d67c324c6e1ac6::t_4027bfddb445e4 111-116
+control-plane/Tests/AppResourceTests/GuestExecAttachIntegrationTests.swift
+  s_d67c324c6e1ac6::t_fea0669707b9e1 153-163
+  s_d67c324c6e1ac6::t_865948dfd0a10a 12,19-20,22-25,55,71-72,75-112,118,133-134,180,187-201,449-450,464-471
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "065b0c3a6576823a12ca1c2e3392014c639c84e3",
+  "prompts": {},
+  "sessions": {
+    "s_d67c324c6e1ac6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff5f4-f585-7181-8147-316937d752f7",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
