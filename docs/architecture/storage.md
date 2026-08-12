@@ -250,6 +250,12 @@ observed report's full-list semantics would confirm deletions that never
 happened. An agent that cannot answer reports `volumes: nil` and converges no
 volumes that round, which costs one sync and nothing else.
 
+A child that disappears while Foundation is enumerating the store is not an
+unreadable store. `listVolumes` recognizes an underlying `ENOENT` (including
+Darwin's Cocoa 256 wrapper) and retries the authoritative scan once after the
+concurrent teardown; permission, I/O, descriptor-exhaustion, and repeated
+enumeration failures still throw.
+
 ### Volumes are desired state
 
 A volume's lifecycle runs on the reconciliation loop, not on RPCs (ADR 0001

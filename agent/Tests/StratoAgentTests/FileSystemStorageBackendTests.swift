@@ -89,6 +89,46 @@ private struct StaticImageSource: ImageSource {
     func localImagePath(for imageInfo: ImageInfo) async throws -> String { path }
 }
 
+/// Deterministically models the observed Foundation boundary: read the real
+/// entries, remove one from another task, then emit the observed Cocoa wrapper
+/// instead of relying on scheduler timing to make the native call fail.
+private final class DisappearingVolumeEnumerator: Sendable {
+    private let disappearingDirectory: String
+
+    init(disappearingDirectory: String) {
+        self.disappearingDirectory = disappearingDirectory
+    }
+
+    func contents(atPath path: String) throws -> [String] {
+        let entries = try FileManager.default.contentsOfDirectory(atPath: path)
+        guard FileManager.default.fileExists(atPath: disappearingDirectory) else { return entries }
+
+        let removed = DispatchSemaphore(value: 0)
+        Task.detached { [disappearingDirectory] in
+            try? FileManager.default.removeItem(atPath: disappearingDirectory)
+            removed.signal()
+        }
+        removed.wait()
+        precondition(!FileManager.default.fileExists(atPath: disappearingDirectory))
+
+        throw NSError(
+            domain: NSCocoaErrorDomain,
+            code: NSFileReadUnknownError,
+            userInfo: [NSUnderlyingErrorKey: POSIXError(.ENOENT)])
+    }
+}
+
+/// A wrapped I/O failure has the same Cocoa surface as the disappearing-entry
+/// race, but its underlying cause is store-level and must remain fatal.
+private struct FailingVolumeEnumerator: Sendable {
+    func contents(atPath path: String) throws -> [String] {
+        throw NSError(
+            domain: NSCocoaErrorDomain,
+            code: NSFileReadUnknownError,
+            userInfo: [NSUnderlyingErrorKey: POSIXError(.EIO)])
+    }
+}
+
 private func makeImageInfo() -> ImageInfo {
     ImageInfo(
         imageId: UUID(),
@@ -111,13 +151,17 @@ struct FileSystemStorageBackendTests {
     private func makeBackend(
         root: String,
         recorder: SubprocessRecorder,
-        imageSource: (any ImageSource)? = nil
+        imageSource: (any ImageSource)? = nil,
+        enumerateVolumeStore: @escaping @Sendable (String) throws -> [String] = {
+            try FileManager.default.contentsOfDirectory(atPath: $0)
+        }
     ) -> FileSystemStorageBackend {
         FileSystemStorageBackend(
             logger: Logger(label: "test"),
             volumeStoragePath: root,
             qemuImgPath: "/fake/qemu-img",
             imageSource: imageSource,
+            enumerateVolumeStore: enumerateVolumeStore,
             runSubprocess: { executable, arguments in
                 await recorder.record(executable: executable, arguments: arguments)
             }
@@ -412,6 +456,33 @@ struct FileSystemStorageBackendTests {
         #expect(listed[published]?.path == "\(root)/\(published)/volume.qcow2")
     }
 
+    /// STR-251: model teardown outside the backend actor removing a directory
+    /// after it was enumerated. The observed ENOENT is wrapped as Cocoa 256;
+    /// that child race must not turn the whole store into a host failure or
+    /// prevent the create immediately following cleanup.
+    @Test func teardownAndCreateSurviveAnEntryDisappearingDuringInventory() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let removedId = UUID().uuidString
+        let removedDirectory = "\(root)/\(removedId)"
+        try FileManager.default.createDirectory(atPath: removedDirectory, withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: "\(removedDirectory)/volume.qcow2", contents: Data("old".utf8))
+
+        let enumerator = DisappearingVolumeEnumerator(disappearingDirectory: removedDirectory)
+        let backend = makeBackend(
+            root: root,
+            recorder: SubprocessRecorder(),
+            enumerateVolumeStore: { try enumerator.contents(atPath: $0) })
+
+        #expect(try await backend.listVolumes().isEmpty)
+
+        let createdId = UUID().uuidString
+        _ = try await backend.createVolume(volumeId: createdId, sizeBytes: 42, format: .qcow2)
+        let listed = try await backend.listVolumes()
+        #expect(Set(listed.keys) == [createdId])
+    }
+
     /// A store that does not exist yet is genuinely empty — every host is in
     /// that state before its first volume.
     @Test func listVolumesTreatsAnAbsentStoreAsEmpty() async throws {
@@ -439,6 +510,19 @@ struct FileSystemStorageBackendTests {
         let storePath = "\(root)/store"
         FileManager.default.createFile(atPath: storePath, contents: Data("not a directory".utf8))
         let backend = makeBackend(root: storePath, recorder: SubprocessRecorder())
+
+        await #expect(throws: StorageBackendError.self) {
+            try await backend.listVolumes()
+        }
+    }
+
+    @Test func listVolumesStillThrowsForAGenuineIOFailure() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let enumerator = FailingVolumeEnumerator()
+        let backend = makeBackend(
+            root: root, recorder: SubprocessRecorder(),
+            enumerateVolumeStore: { try enumerator.contents(atPath: $0) })
 
         await #expect(throws: StorageBackendError.self) {
             try await backend.listVolumes()
