@@ -236,11 +236,13 @@ VM, resize it, and start it again. A smaller target can still supersede a pendin
 growth request under the level-triggered last-writer-wins contract. If the live
 runtime races ahead of its report, the agent refuses the resulting shrink rather
 than advancing convergence. On a **stopped** VM the new
-sizing (and the ceilings, which the next boot re-spawns from) is simply
-persisted and answered `200`. Quota accounting always follows the *current*
-sizing, never the ceiling: reserving to the maximum would strand capacity
-the VM may never use, and the scheduler's placement figures are the same
-current values.
+sizing (and the ceilings) is persisted and answered `200`, but it is not yet
+converged. The control plane sends the new generation to the placed agent. For
+a QEMU vCPU shrink, the agent must update the persistent libvirt definition
+before it acknowledges that generation or starts the VM. Quota accounting
+always follows the *current* sizing, never the ceiling: reserving to the maximum
+would strand capacity the VM may never use, and the scheduler's placement
+figures are the same current values.
 
 The same endpoint carries `balloonTarget` (issue #567 phase 2), the memory an
 operator will hold the guest to. It is deliberately *not* a quota movement:
@@ -267,11 +269,12 @@ past its `targetGeneration`; failed is a `degraded` whose `sinceGeneration`
 equals it.
 
 That third clause is what makes the two answers **mutually exclusive**
-(STR-191). Without it both could hold at once, because the agent advances its
-applied generation per *work item* and plans more than one item per generation:
-a boot converges and stamps the number, then the drift-correcting resize
-planned at the same number fails. `converged` is derived *from* the assigned
-`degraded` rather than alongside it, so the exclusion is structural.
+(STR-191). Without it both could hold at once whenever one work item applies a
+generation and a later item at the same generation fails. `converged` is
+derived *from* the assigned `degraded` rather than alongside it, so the
+exclusion is structural. Stopped vCPU shrink additionally prevents this state
+by applying the persistent resize before boot and advancing the generation only
+after that resize succeeds (STR-248).
 
 The same derivation answers both readers. `conditions.converged` is what a
 client polls and `isConverged` is what the reconciliation paths read — the

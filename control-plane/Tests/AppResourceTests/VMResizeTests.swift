@@ -8,10 +8,10 @@ import AppTestSupport
 
 /// Tests for online CPU growth/memory resize (issue #568): `PUT /api/vms/:id`
 /// moves a VM's sizing, applying it as a desired-state change with a `resize`
-/// operation while the VM runs, or as a plain edit (which may also raise the
-/// hot-add ceilings) while it rests. Live CPU shrink is rejected. The same
-/// endpoint carries an operator's balloon target (issue #567 phase 2), which
-/// moves the guest's usable memory without moving the grant it is charged for.
+/// operation while the VM runs, or by updating the persistent definition while
+/// it rests. Live CPU shrink is rejected. The same endpoint carries an
+/// operator's balloon target (issue #567 phase 2), which moves the guest's
+/// usable memory without moving the grant it is charged for.
 @Suite("VM Resize Tests", .serialized)
 final class VMResizeTests {
 
@@ -71,6 +71,7 @@ final class VMResizeTests {
                 lastHeartbeat: Date()
             )
             agent.wireProtocolVersion = agentWireVersion
+            agent.$site.id = try await builder.placementSite(for: project).requireID()
             try await agent.save(on: app.db)
 
             let vm = try await builder.createVM(name: "resize-vm", project: project)
@@ -126,8 +127,8 @@ final class VMResizeTests {
 
     // MARK: - Resting VM
 
-    @Test("Resizing a stopped VM applies immediately and raises the ceilings")
-    func stoppedResizeAppliesDirectly() async throws {
+    @Test("Resizing a stopped VM records the desired sizing and raises the ceilings")
+    func stoppedResizeRecordsDesiredSizing() async throws {
         try await withResizeTestApp { app, _, vm, _, token in
             let sixteenGB = Int64(16 * 1024 * 1024 * 1024)
             try await put(app, vm, token: token, body: ["cpu": 12, "memory": sixteenGB]) { res in
@@ -135,6 +136,11 @@ final class VMResizeTests {
                 let detail = try res.content.decode(VMDetailResponse.self)
                 #expect(detail.cpu == 12)
                 #expect(detail.memory == sixteenGB)
+                #expect(!detail.conditions.converged)
+                #expect(
+                    detail.conditions.targetGeneration
+                        > detail.conditions.observedGeneration
+                )
             }
 
             let refreshed = try #require(try await VM.find(vm.id, on: app.db))
@@ -145,8 +151,9 @@ final class VMResizeTests {
             #expect(refreshed.maxMemory == sixteenGB)
             #expect(refreshed.generation > vm.generation)
 
-            // No agent work is involved, so nothing is left outstanding for the
-            // stuck-convergence sweep to judge.
+            // The legacy 200 response does not create a mutation deadline. The
+            // generation still reaches the agent, which must update its stopped
+            // definition before it advances observedGeneration (STR-248).
             #expect(refreshed.convergenceDeadline == nil)
         }
     }

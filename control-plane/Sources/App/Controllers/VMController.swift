@@ -1354,8 +1354,9 @@ struct VMController: RouteCollection {
         let cpuDelta = newCPU - existingVM.cpu
         let memoryDelta = newMemory - existingVM.memory
 
-        // A resting VM re-spawns from the new spec on its next boot, so both
-        // the sizing and its ceilings can move freely.
+        // A resting VM can apply the new sizing without live-unplug support.
+        // QEMU/libvirt still has a persistent definition to update, so this
+        // generation must reach the placed agent before it is converged.
         guard existingVM.status == .running else {
             guard existingVM.status == .created || existingVM.status == .shutdown || existingVM.status == .error
             else {
@@ -1366,11 +1367,11 @@ struct VMController: RouteCollection {
             }
             try await Self.requirePlacedResizeCapacity(
                 vm: existingVM, newCPU: newCPU, newMemory: newMemory, on: req)
-            let metadataEnabledChanged = try await req.db.transaction { db in
+            try await req.db.transaction { db in
                 guard try await existingVM.lockAndRefresh(on: db) else {
                     throw Abort(.notFound, reason: "VM no longer exists")
                 }
-                let metadataEnabledChanged = try await Self.applyMetadataUpdate(
+                _ = try await Self.applyMetadataUpdate(
                     updateRequest.metadataEnabled, to: existingVM, on: db)
                 try await QuotaEnforcementService.reserveVMResize(
                     for: project, environment: existingVM.environment,
@@ -1392,11 +1393,15 @@ struct VMController: RouteCollection {
                         reason: "Failed to advance the locked VM generation")
                 }
                 try await existingVM.save(on: db)
-                return metadataEnabledChanged
+            }
+            if let placedAgentId = existingVM.hypervisorId {
+                await req.application.agentService.syncDesiredState(agentId: placedAgentId)
             }
             await Self.nudgeAfterMetadataOrHostnameUpdate(
                 hostnameChanged: hostnameChanged,
-                metadataEnabledChanged: metadataEnabledChanged,
+                // The generation sync above already carries this switch to the
+                // placed agent. Only the fleet-scoped hostname nudge remains.
+                metadataEnabledChanged: false,
                 placedAgentId: existingVM.hypervisorId,
                 app: req.application)
             return try await Self.detailResponse(for: existingVM, on: req)

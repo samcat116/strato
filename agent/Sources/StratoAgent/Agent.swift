@@ -4954,9 +4954,9 @@ extension Agent: ReconcileActuator {
             message: "VM created by reconciliation", operation: "create")
     }
 
-    /// Applies a running VM's new vCPU/memory sizing (issue #568) and records
-    /// it in the manifest, so the next sync diffs against what the VM is now
-    /// actually running with instead of re-planning the same resize forever.
+    /// Applies a VM's new vCPU/memory sizing (issue #568) and records it in the
+    /// manifest, so the next sync diffs against what the VM is now running with
+    /// or, for a stopped VM, what its persistent definition will boot with.
     ///
     /// The manifest write happens only after the driver reports success:
     /// recording the new sizing first would make a failed resize look applied
@@ -4988,9 +4988,29 @@ extension Agent: ReconcileActuator {
         }
         defer { capacityAdmissionLedger.release(claim) }
         let service = try reconcileService(for: item.id)
+
+        // An offline vCPU shrink can share a mutation with a memory or vCPU
+        // growth. Widen first, exactly as boot does, or `resizeVM` can apply the
+        // shrink and then fail forever against the old memory/vCPU ceiling while
+        // the planner keeps the boot that would widen it behind this step.
+        let status = try await service.getVMStatus(vmId: item.id)
+        if status == .shutdown || status == .created {
+            try await service.redefineVM(vmId: item.id, spec: desired.spec)
+            if entry.hypervisorType == .qemu,
+                desiredReservation.memoryBytes > currentReservation.memoryBytes
+            {
+                managedVMs[item.id] = entry.reservingMemory(
+                    atLeast: desiredReservation.memoryBytes)
+                // The persistent definition is already wider even if the
+                // sizing write below fails, so its reservation is durable now.
+                persistManifest()
+            }
+        }
         try await service.resizeVM(vmId: item.id, spec: desired.spec)
 
-        managedVMs[item.id] = entry.with(spec: entry.spec.withSizing(from: desired.spec))
+        let preparedEntry = managedVMs[item.id] ?? entry
+        managedVMs[item.id] = preparedEntry.with(
+            spec: preparedEntry.spec.withSizing(from: desired.spec))
         persistManifest()
         await sendVMLog(
             vmId: item.id, level: .info, eventType: .operation,

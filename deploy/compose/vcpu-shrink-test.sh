@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# End-to-end contract test for STR-241 against a real libvirt agent.
+# End-to-end contract test for STR-241 and STR-248 against a real libvirt agent.
 #
 # Creates and starts a 2-vCPU VM, proves API convergence agrees with the live
 # libvirt count, verifies a running 2 -> 1 update is rejected without changing
 # either fact, then applies the supported stop/resize/start sequence and proves
-# both surfaces report 1 vCPU.
+# the persistent definition changes before boot and both final surfaces report
+# 1 vCPU.
 set -euo pipefail
 
 ORIGIN="${ORIGIN:-}"
@@ -127,9 +128,13 @@ live_vcpus() {
   virsh -q -c "$LIBVIRT_URI" vcpucount "$VM_ID" --live --active | tr -d '[:space:]'
 }
 
-echo "STR-241 live vCPU shrink contract"
+persistent_vcpus() {
+  virsh -q -c "$LIBVIRT_URI" vcpucount "$VM_ID" --config --active | tr -d '[:space:]'
+}
+
+echo "STR-241/STR-248 vCPU shrink contract"
 create_body="$(printf \
-  '{"name":"str-241-%s","imageId":"%s","projectId":"%s","networkId":"%s","environment":"development","cpu":2,"maxCpu":2,"memory":536870912,"disk":2147483648}' \
+  '{"name":"str-248-%s","imageId":"%s","projectId":"%s","networkId":"%s","environment":"development","cpu":2,"maxCpu":2,"memory":536870912,"disk":10737418240}' \
   "$$" "$IMAGE_ID" "$PROJECT_ID" "$NETWORK_ID")"
 code="$(request POST /api/vms "$TMP_DIR/create.json" "$create_body")"
 expect_code "create 2-vCPU VM" "$code" 202 "$TMP_DIR/create.json"
@@ -174,6 +179,13 @@ expect_code "resize stopped VM to 1 vCPU" "$code" 200 "$TMP_DIR/stopped-resize.j
   echo "FAIL: stopped resize response did not record 1 vCPU" >&2
   exit 1
 }
+target="$(json_get "d['conditions']['targetGeneration']" "$TMP_DIR/stopped-resize.json")"
+wait_converged "$VM_ID" "$target" "stopped vCPU resize"
+[[ "$(persistent_vcpus)" == 1 ]] || {
+  echo "FAIL: stopped resize converged without changing the persistent vCPU count" >&2
+  exit 1
+}
+echo "  ok: stopped resize persisted 1 vCPU before boot"
 
 code="$(request POST "/api/vms/${VM_ID}/start" "$TMP_DIR/restart.json")"
 expect_code "start resized VM" "$code" 202 "$TMP_DIR/restart.json"
@@ -188,4 +200,4 @@ assert d["cpu"] == 1, d
 assert d["conditions"]["converged"] is True, d["conditions"]
 PY
 echo "  ok: after stop/resize/start, converged API state agrees with libvirt live count 1"
-echo "PASS: STR-241"
+echo "PASS: STR-241 and STR-248"
