@@ -113,7 +113,9 @@ info:
       /api/sandboxes/{sandboxID}/exec` + `GET
       /api/sandboxes/{sandboxID}/exec/{sessionID}/attach` — guest exec
       (WebSocket attach). Both resource kinds use the same binary stdin/output
-      and JSON control-frame contract.
+      and JSON control-frame contract. VM minting is fail-closed unless the VM
+      opted into the Strato guest agent and its assigned hypervisor explicitly
+      advertises a node-agent guest-exec bridge.
 
     Everything else the control plane serves is described here. A route-drift
     test (`AppPlatformTests/OpenAPISpecDriftTests`) boots the app and enforces

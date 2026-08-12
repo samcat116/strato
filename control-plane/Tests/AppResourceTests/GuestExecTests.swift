@@ -56,14 +56,15 @@ final class GuestExecTests {
         try await app.shutdownForTesting()
     }
 
-    /// Registers an in-memory Firecracker-capable agent (current wire
-    /// protocol) and optionally maps the sandbox to it. Returns the agent's
-    /// UUID string.
+    /// Registers an in-memory agent (current wire protocol) and optionally
+    /// maps a workload to it. VM guest exec is opt-in so tests cannot
+    /// accidentally model today's bridge-less production agent as capable.
     private func registerAgent(
         app: Application,
         sandbox: Sandbox? = nil,
         vm: VM? = nil,
-        named agentName: String = "exec-agent"
+        named agentName: String = "exec-agent",
+        supportsVMGuestExec: Bool? = nil
     ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: agentName,
@@ -74,6 +75,15 @@ final class GuestExecTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
+            hypervisors: [
+                HypervisorSupport(
+                    type: .qemu,
+                    available: true,
+                    accelerated: true,
+                    capabilities: .capabilities(for: .qemu),
+                    supportsVsock: true,
+                    supportsGuestExec: supportsVMGuestExec)
+            ],
             protocolVersion: WireProtocol.currentVersion,
             sandboxCapable: true
         )
@@ -246,6 +256,7 @@ final class GuestExecTests {
             user.isSystemAdmin = true
             try await user.save(on: app.db)
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+            vm.guestAgentEnabled = true
             vm.setStatus(.running)
             try await vm.save(on: app.db)
 
@@ -258,12 +269,32 @@ final class GuestExecTests {
         }
     }
 
-    @Test("VM exec is rejected (503) when this replica does not hold the agent socket")
-    func vmExecUnavailableWithoutLocalSocket() async throws {
+    @Test("VM exec is rejected (400) when the VM guest agent was not enabled")
+    func vmExecRejectedWithoutGuestAgent() async throws {
         try await withSandboxTestApp { app, user, project, _, token in
             user.isSystemAdmin = true
             try await user.save(on: app.db)
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+            vm.setStatus(.running)
+            try await vm.save(on: app.db)
+
+            try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(ExecBody(command: ["/bin/sh"]))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("guest agent enabled"))
+            }
+        }
+    }
+
+    @Test("VM exec is rejected (503) when the assigned agent does not advertise its bridge")
+    func vmExecUnavailableWithoutAdvertisedBridge() async throws {
+        try await withSandboxTestApp { app, user, project, _, token in
+            user.isSystemAdmin = true
+            try await user.save(on: app.db)
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+            vm.guestAgentEnabled = true
             _ = try await self.registerAgent(app: app, vm: vm)
             vm.setStatus(.running)
             try await vm.save(on: app.db)
@@ -273,6 +304,28 @@ final class GuestExecTests {
                 try req.content.encode(ExecBody(command: ["/bin/sh"]))
             } afterResponse: { res in
                 #expect(res.status == .serviceUnavailable)
+                #expect(res.body.string.contains("does not support VM guest exec"))
+            }
+        }
+    }
+
+    @Test("VM exec is rejected (503) when this replica does not hold the agent socket")
+    func vmExecUnavailableWithoutLocalSocket() async throws {
+        try await withSandboxTestApp { app, user, project, _, token in
+            user.isSystemAdmin = true
+            try await user.save(on: app.db)
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+            vm.guestAgentEnabled = true
+            _ = try await self.registerAgent(app: app, vm: vm, supportsVMGuestExec: true)
+            vm.setStatus(.running)
+            try await vm.save(on: app.db)
+
+            try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(ExecBody(command: ["/bin/sh"]))
+            } afterResponse: { res in
+                #expect(res.status == .serviceUnavailable)
+                #expect(res.body.string.contains("requires the replica holding the agent socket"))
             }
         }
     }

@@ -88,6 +88,7 @@ struct GuestExecAttachIntegrationTests {
             case .virtualMachine:
                 let vm = try await builder.createVM(name: "exec-ws-vm", project: project)
                 vm.hypervisorId = try registeredAgent.requireID().uuidString
+                vm.guestAgentEnabled = true
                 vm.setStatus(.running)
                 try await vm.save(on: app.db)
                 collection = "vms"
@@ -467,7 +468,8 @@ private func encodeGuestExecAgentRegister(agentName: String) throws -> String {
                     available: true,
                     accelerated: true,
                     capabilities: .capabilities(for: .qemu),
-                    supportsVsock: true)
+                    supportsVsock: true,
+                    supportsGuestExec: true)
             ],
             protocolVersion: WireProtocol.currentVersion,
             sandboxCapable: true

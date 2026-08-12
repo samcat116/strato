@@ -456,7 +456,12 @@ endpoint.
   /api/vms/:id/exec/:sessionId/attach` — the same mint/attach exchange for a
   running VM, guarded and re-checked with `vm:exec`. The pending session keeps
   a kind discriminator, so a token minted for one resource kind cannot attach
-  through the other kind's route even if the UUID and user match.
+  through the other kind's route even if the UUID and user match. Minting also
+  requires a VM created with the Strato guest agent enabled and an assigned
+  hypervisor that explicitly advertises `supportsGuestExec`; absence is
+  fail-closed. Current agents do not advertise it until STR-82 provides the
+  node-agent vsock bridge, so the route returns 503 instead of minting a session
+  that cannot execute.
 
 Like the VM console, guest exec is **single-replica**: the browser WebSocket must
 land on the replica holding the agent socket (`GuestExecSessionManager`

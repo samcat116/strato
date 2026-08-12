@@ -1770,6 +1770,12 @@ struct VMController: RouteCollection {
                 reason: "VM must be running to exec. Current state: \(vm.status.rawValue)")
         }
 
+        guard vm.guestAgentEnabled else {
+            throw Abort(
+                .badRequest,
+                reason: "VM exec requires a VM created with the Strato guest agent enabled")
+        }
+
         guard let agentIdString = vm.hypervisorId,
             let agentId = UUID(uuidString: agentIdString)
         else {
@@ -1778,6 +1784,19 @@ struct VMController: RouteCollection {
 
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.internalServerError, reason: "Agent not found for VM")
+        }
+
+        // A virtio-vsock device does not prove that this agent build has the
+        // node-agent bridge that speaks the guest exec protocol. Fail closed
+        // until the assigned backend explicitly advertises STR-82 support;
+        // otherwise every successfully minted session would be rejected by
+        // the production agent after attach.
+        guard agent.supportsGuestExec(for: vm.hypervisorType) else {
+            throw Abort(
+                .serviceUnavailable,
+                reason:
+                    "Agent '\(agent.name)' does not support VM guest exec for \(vm.hypervisorType.rawValue)"
+            )
         }
 
         // Exec frames flow over the agent's WebSocket, which only this
