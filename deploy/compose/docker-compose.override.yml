@@ -1,0 +1,16 @@
+services:
+  control-plane:
+    build:
+      context: ../..
+      dockerfile: control-plane/Dockerfile
+    pull_policy: never
+  frontend:
+    build:
+      context: ../../control-plane/web
+      dockerfile: Dockerfile
+    pull_policy: never
+  # Shares the control-plane image tag, so `docker compose build control-plane`
+  # already produced what this runs. Without pull_policy it would try to fetch
+  # the GHCR :main tag and seed users with a build that isn't the one under test.
+  bootstrap:
+    pull_policy: never
