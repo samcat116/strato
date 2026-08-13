@@ -3802,7 +3802,7 @@ extension Agent: ReconcileActuator {
         // `with(spec:)`, not a fresh entry: re-adoption rewrites what the VM is
         // running, never the vsock CID it holds (STR-72) nor the record of what
         // has been applied to it (STR-151).
-        var adoptedEntry = entry.with(spec: spec)
+        var adoptedEntry = entry.recordingAdoption(of: spec)
         if entry.hypervisorType == .firecracker {
             adoptedEntry = adoptedEntry.applyingFirecrackerMMDSPolicy()
         }

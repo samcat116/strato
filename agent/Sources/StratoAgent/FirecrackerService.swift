@@ -70,19 +70,17 @@ actor FirecrackerService: HypervisorService {
         // transport is a UDS, so it never consumes this host-global lease.
         vsockCID: UInt32? = nil
     ) async throws {
-        logger.info("Creating Firecracker VM", metadata: ["vmId": .string(vmId)])
+        let bootArtifacts = try await resolveBootArtifacts(spec: spec, imageInfo: imageInfo)
+        try await createVM(
+            vmId: vmId, spec: spec, bootArtifacts: bootArtifacts,
+            networkAttachments: networkAttachments, metadata: metadata)
+    }
 
-        // Boot parameters start from the spec's direct-kernel fields. When the
-        // image supplies kernel artifacts, they take precedence and are
-        // resolved to agent-local cache paths below.
-        var kernelPath: String?
-        var initramfsPath: String?
-        var cmdline: String?
-        if case .directKernel(let specKernel, let specInitramfs, let specCmdline) = spec.boot {
-            kernelPath = specKernel.isEmpty ? nil : specKernel
-            initramfsPath = specInitramfs
-            cmdline = specCmdline
-        }
+    private func createVM(
+        vmId: String, spec: VMSpec, bootArtifacts: FirecrackerBootArtifacts,
+        networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
+    ) async throws {
+        logger.info("Creating Firecracker VM", metadata: ["vmId": .string(vmId)])
 
         // Firecracker can only realize TAP attachments. Reject anything else up
         // front instead of silently launching the VM without its NICs.
@@ -124,57 +122,6 @@ actor FirecrackerService: HypervisorService {
             id: bootVolume.volumeId.uuidString, path: bootPath, readOnly: bootVolume.readonly
         )
 
-        if let imageInfo {
-            guard let imageSource else {
-                throw HypervisorServiceError.invalidConfiguration(
-                    "Firecracker cannot realize typed kernel artifacts without an image-source service")
-            }
-            guard imageInfo.artifact(ofKind: .kernel) != nil else {
-                throw HypervisorServiceError.invalidConfiguration(
-                    "Firecracker image \(imageInfo.imageId) has no kernel artifact")
-            }
-            guard imageInfo.artifact(ofKind: .rootfs) != nil else {
-                throw HypervisorServiceError.invalidConfiguration(
-                    "Firecracker image \(imageInfo.imageId) has no rootfs artifact")
-            }
-            logger.info(
-                "Realizing boot artifacts from image",
-                metadata: [
-                    "vmId": .string(vmId),
-                    "imageId": .string(imageInfo.imageId.uuidString),
-                ])
-
-            do {
-                // Direct-kernel boot artifacts (kernel, optional initramfs) are
-                // opaque blobs fetched into the cache as-is. When the image
-                // supplies its own kernel it fully owns the direct-kernel boot:
-                // drop any stale spec initramfs so the image kernel is never
-                // paired with a legacy/nonexistent initrd, then use the image's
-                // initramfs only if it provides one.
-                kernelPath = try await imageSource.localImagePath(for: imageInfo, kind: .kernel)
-                if imageInfo.artifact(ofKind: .initramfs) != nil {
-                    initramfsPath = try await imageSource.localImagePath(for: imageInfo, kind: .initramfs)
-                } else {
-                    initramfsPath = nil
-                }
-
-            } catch {
-                logger.error(
-                    "Failed to realize kernel artifacts from image",
-                    metadata: [
-                        "vmId": .string(vmId),
-                        "error": .string(error.localizedDescription),
-                    ])
-                throw error
-            }
-        }
-
-        // Firecracker cannot boot without a kernel — from the image or the spec.
-        guard let kernelPath = kernelPath, !kernelPath.isEmpty else {
-            throw HypervisorServiceError.invalidConfiguration(
-                "Firecracker requires direct kernel boot - no kernel artifact or kernel path available")
-        }
-
         // MMDS carries the complete cloud-init document. Firecracker's 50 KiB
         // default API limit is smaller than Strato's accepted user data before
         // the surrounding EC2 tree is added, so raise this VMM's finite limit
@@ -193,9 +140,9 @@ actor FirecrackerService: HypervisorService {
 
             // Configure boot source (qualified: StratoShared also declares a BootSource)
             let bootSource = SwiftFirecracker.BootSource(
-                kernelImagePath: kernelPath,
-                initrdPath: initramfsPath,
-                bootArgs: cmdline ?? "console=ttyS0 reboot=k panic=1 pci=off"
+                kernelImagePath: bootArtifacts.kernelPath,
+                initrdPath: bootArtifacts.initramfsPath,
+                bootArgs: bootArtifacts.cmdline ?? "console=ttyS0 reboot=k panic=1 pci=off"
             )
             try await manager.configureBootSource(bootSource)
 
@@ -543,6 +490,11 @@ actor FirecrackerService: HypervisorService {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
 
+        // Resolve or download the replacement's kernel while the current VMM
+        // is still healthy. A temporarily unavailable image must fail this
+        // attempt without shutting down a guest that cannot yet be recreated.
+        let bootArtifacts = try await resolveBootArtifacts(spec: spec, imageInfo: imageInfo)
+
         logger.info(
             "Replacing Firecracker VMM to reconfigure MMDS interfaces",
             metadata: ["vmId": .string(vmId)])
@@ -558,8 +510,27 @@ actor FirecrackerService: HypervisorService {
         // level-triggered retry must start here rather than failing vmNotFound.
         // createVM owns cleanup for any new process that fails configuration.
         try await createVM(
-            vmId: vmId, spec: spec, imageInfo: imageInfo,
+            vmId: vmId, spec: spec, bootArtifacts: bootArtifacts,
             networkAttachments: networkAttachments, metadata: metadata)
+    }
+
+    private func resolveBootArtifacts(
+        spec: VMSpec, imageInfo: ImageInfo?
+    ) async throws -> FirecrackerBootArtifacts {
+        if let imageInfo {
+            logger.info(
+                "Realizing boot artifacts from image",
+                metadata: ["imageId": .string(imageInfo.imageId.uuidString)])
+        }
+        do {
+            return try await FirecrackerBootArtifactResolver.resolve(
+                spec: spec, imageInfo: imageInfo, imageSource: imageSource)
+        } catch {
+            logger.error(
+                "Failed to resolve Firecracker boot artifacts",
+                metadata: ["error": .string(error.localizedDescription)])
+            throw error
+        }
     }
 
     /// Asks the guest to flush and shut down, then proves its VMM exited before

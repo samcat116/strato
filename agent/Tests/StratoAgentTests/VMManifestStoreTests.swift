@@ -106,6 +106,30 @@ struct VMManifestStoreTests {
         #expect(resized.firecrackerMMDSPolicyApplied == true)
     }
 
+    @Test("Firecracker adoption preserves the MMDS policy realized before restart")
+    func firecrackerAdoptionPreservesRealizedMMDSPolicy() {
+        let interfaceId = UUID()
+        let networkId = UUID()
+        func network(metadataEnabled: Bool) -> NetworkSpec {
+            NetworkSpec(
+                interfaceId: interfaceId, deviceName: "net0", orderIndex: 0,
+                network: "management", networkId: networkId,
+                metadataEnabled: metadataEnabled)
+        }
+        let realized = makeSpec().withNetworks([network(metadataEnabled: true)])
+        let desired = makeSpec(cpus: 8).withNetworks([network(metadataEnabled: false)])
+        let entry = VMManifestEntry(
+            hypervisorType: .firecracker, spec: realized,
+            firecrackerMMDSPolicyApplied: true)
+
+        let adopted = entry.recordingAdoption(of: desired)
+
+        #expect(adopted.spec.cpus == 8)
+        #expect(adopted.spec.networks.count == 1)
+        #expect(adopted.spec.networks[0].metadataEnabled == true)
+        #expect(adopted.firecrackerMMDSPolicyApplied == true)
+    }
+
     @Test("Disk reservations survive the manifest round-trip")
     func diskReservationRoundTrip() throws {
         let dir = try makeTempDir()
