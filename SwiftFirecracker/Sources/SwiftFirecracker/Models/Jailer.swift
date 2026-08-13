@@ -115,7 +115,10 @@ public struct JailerOptions: Sendable {
     /// so the trailing section (after `--`) deliberately does not repeat it —
     /// only the api-sock (pinned to the version-stable in-jail default) and
     /// the log level are passed through.
-    func arguments(vmId: String, firecrackerBinaryPath: String) -> [String] {
+    func arguments(
+        vmId: String, firecrackerBinaryPath: String,
+        httpAPIMaxPayloadSize: Int? = nil
+    ) -> [String] {
         var args = [
             "--id", vmId,
             "--exec-file", firecrackerBinaryPath,
@@ -142,6 +145,9 @@ public struct JailerOptions: Sendable {
             "--api-sock", Self.apiSocketPathInJail,
             "--level", "Info",
         ]
+        if let httpAPIMaxPayloadSize {
+            args += ["--http-api-max-payload-size", String(httpAPIMaxPayloadSize)]
+        }
         return args
     }
 }

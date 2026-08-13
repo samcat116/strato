@@ -91,6 +91,33 @@ public protocol HypervisorService: Actor, Sendable {
         metadata: InstanceMetadata?, vsockCID: UInt32?
     ) async throws
 
+    /// Replaces any backend-local metadata snapshot for a managed VM.
+    ///
+    /// Network-served backends read from `MetadataStore` directly and use the
+    /// default no-op. Firecracker overrides this because MMDS holds its own
+    /// copy inside the VMM process; nil means replace that copy with an empty
+    /// store, never retain the previous document.
+    func refreshInstanceMetadata(vmId: String, metadata: InstanceMetadata?) async throws
+
+    /// Restores backend-local knowledge of the immutable metadata interface
+    /// policy after adopting a surviving VM. The manifest remains the source
+    /// of truth; this only reconnects a new service instance to policy already
+    /// installed in the old hypervisor process.
+    func restoreMetadataInterfaceInventory(vmId: String, interfaces: [String]) async
+
+    /// Rebuilds the backend process so its immutable per-interface metadata
+    /// policy matches `networkAttachments`, leaving the VM created but not
+    /// booted. The caller restores the desired power state in later reconcile
+    /// steps.
+    ///
+    /// Firecracker implements this because its MMDS interface allow-list can
+    /// only be configured before boot. Other backends reject the operation;
+    /// their metadata transport is not configured through this seam.
+    func reconfigureMetadataInterfaces(
+        vmId: String, spec: VMSpec, imageInfo: ImageInfo?,
+        networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
+    ) async throws
+
     /// Makes whatever stored configuration this backend holds for a *stopped*
     /// VM able to satisfy `spec`, before the boot that will read it (STR-187).
     ///
@@ -363,6 +390,18 @@ public protocol HypervisorService: Actor, Sendable {
 // MARK: - Default Implementations
 
 public extension HypervisorService {
+    func refreshInstanceMetadata(vmId: String, metadata: InstanceMetadata?) async throws {}
+
+    func restoreMetadataInterfaceInventory(vmId: String, interfaces: [String]) async {}
+
+    func reconfigureMetadataInterfaces(
+        vmId: String, spec: VMSpec, imageInfo: ImageInfo?,
+        networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
+    ) async throws {
+        throw HypervisorServiceError.notSupported(
+            "\(hypervisorType.displayName) does not require metadata-interface reconfiguration")
+    }
+
     func attachNetworkInterface(
         vmId: String, spec: NetworkSpec, attachment: ResolvedNetworkAttachment
     ) async throws {

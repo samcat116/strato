@@ -87,6 +87,11 @@ struct ReconciliationTests {
         VMSpec(cpus: cpus, memoryBytes: 1 << 30, boot: .disk(firmware: nil))
     }
 
+    private static func metadata(_ vmId: UUID, enabled: Bool = true) -> InstanceMetadata {
+        InstanceMetadata(
+            instanceId: vmId, projectId: UUID(), serviceEnabled: enabled)
+    }
+
     private static func desired(
         _ vmId: UUID,
         status: DesiredVMStatus,
@@ -486,25 +491,157 @@ struct ReconciliationTests {
         #expect(starting.items.first?.steps == [.reconfigureNetworks, .boot])
     }
 
-    @Test("Firecracker does not plan post-create network reconciliation")
-    func firecrackerNetworkChangesAreNotPlanned() {
+    @Test("Firecracker recreates its VMM when the MMDS NIC policy changes")
+    func firecrackerMetadataNetworkChangesRecreateVMM() {
         let vmId = UUID()
+        let interfaceId = UUID()
+        let networkId = UUID()
+        let current = NetworkSpec(
+            interfaceId: interfaceId, deviceName: "net0", orderIndex: 0,
+            network: "management", networkId: networkId,
+            macAddress: "52:54:00:00:00:01", metadataEnabled: true)
+        let target = NetworkSpec(
+            interfaceId: interfaceId, deviceName: "net0", orderIndex: 0,
+            network: "management", networkId: networkId,
+            macAddress: "52:54:00:00:00:01", metadataEnabled: false)
         let desired = DesiredVMState(
             vmId: vmId,
             hypervisorType: .firecracker,
             spec: VMSpec(
                 cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil),
-                networks: [NetworkSpec(network: "new", networkId: UUID())]),
+                networks: [target]),
             desiredStatus: .running,
-            generation: 2)
+            generation: 2,
+            metadata: Self.metadata(vmId))
         let plan = Reconciler.plan(
             desired: [desired],
             present: [vmId.uuidString: .managed(.running)],
             lastApplied: [vmId.uuidString: 1],
             appliedEdges: [vmId.uuidString: AppliedEdgeNonces()],
-            presentNetworks: [vmId.uuidString: []])
+            presentNetworks: [vmId.uuidString: [current]])
         #expect(plan.items.count == 1)
+        #expect(plan.items.first?.steps == [.reconfigureNetworks, .boot])
+    }
+
+    @Test("A stale Firecracker MMDS policy sync is dropped")
+    func staleFirecrackerMetadataNetworkChangeIsNotPlanned() {
+        let vmId = UUID()
+        let interfaceId = UUID()
+        let networkId = UUID()
+        func network(metadataEnabled: Bool) -> NetworkSpec {
+            NetworkSpec(
+                interfaceId: interfaceId, deviceName: "net0", orderIndex: 0,
+                network: "management", networkId: networkId,
+                metadataEnabled: metadataEnabled)
+        }
+        let desired = DesiredVMState(
+            vmId: vmId, hypervisorType: .firecracker,
+            spec: VMSpec(
+                cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil),
+                networks: [network(metadataEnabled: false)]),
+            desiredStatus: .running, generation: 4,
+            metadata: Self.metadata(vmId))
+
+        let plan = Reconciler.plan(
+            desired: [desired],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 5],
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()],
+            presentNetworks: [vmId.uuidString: [network(metadataEnabled: true)]])
+
+        #expect(plan.items.isEmpty)
+    }
+
+    @Test("Firecracker restores paused state after MMDS NIC reconfiguration")
+    func firecrackerMetadataNetworkChangeRestoresPausedState() {
+        let vmId = UUID()
+        let interfaceId = UUID()
+        let networkId = UUID()
+        func network(metadataEnabled: Bool) -> NetworkSpec {
+            NetworkSpec(
+                interfaceId: interfaceId, deviceName: "net0", orderIndex: 0,
+                network: "management", networkId: networkId,
+                metadataEnabled: metadataEnabled)
+        }
+        let current = network(metadataEnabled: false)
+        let target = network(metadataEnabled: true)
+        let desired = DesiredVMState(
+            vmId: vmId, hypervisorType: .firecracker,
+            spec: VMSpec(
+                cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil),
+                networks: [target]),
+            desiredStatus: .paused, generation: 2,
+            metadata: Self.metadata(vmId))
+
+        let plan = Reconciler.plan(
+            desired: [desired],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 1],
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()],
+            presentNetworks: [vmId.uuidString: [current]])
+
+        #expect(plan.items.first?.steps == [.reconfigureNetworks, .boot, .pause])
+    }
+
+    @Test("Firecracker ignores unsupported post-create NIC edits when MMDS policy is unchanged")
+    func firecrackerNonMetadataNetworkChangesAreNotPlanned() {
+        let vmId = UUID()
+        let current = NetworkSpec(
+            network: "old", networkId: UUID(), metadataEnabled: false)
+        let desired = DesiredVMState(
+            vmId: vmId, hypervisorType: .firecracker,
+            spec: VMSpec(
+                cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil),
+                networks: [
+                    NetworkSpec(
+                        network: "new", networkId: UUID(), metadataEnabled: false)
+                ]),
+            desiredStatus: .running, generation: 2,
+            metadata: Self.metadata(vmId))
+
+        let plan = Reconciler.plan(
+            desired: [desired],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 1],
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()],
+            presentNetworks: [vmId.uuidString: [current]])
+
         #expect(plan.items.first?.steps.isEmpty == true)
+    }
+
+    @Test("Firecracker recreates its VMM when the VM metadata switch changes")
+    func firecrackerVMMetadataSwitchReconfiguresMMDS() {
+        let vmId = UUID()
+        let network = NetworkSpec(
+            interfaceId: UUID(), deviceName: "net0", orderIndex: 0,
+            network: "management", networkId: UUID(), metadataEnabled: true)
+        func desired(metadataEnabled: Bool) -> DesiredVMState {
+            DesiredVMState(
+                vmId: vmId, hypervisorType: .firecracker,
+                spec: VMSpec(
+                    cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil),
+                    networks: [network]),
+                desiredStatus: .running, generation: 1,
+                metadata: Self.metadata(vmId, enabled: metadataEnabled))
+        }
+
+        let enabling = Reconciler.plan(
+            desired: [desired(metadataEnabled: true)],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 1],
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()],
+            presentNetworks: [vmId.uuidString: [network]],
+            presentFirecrackerMMDSInterfaces: [vmId.uuidString: []])
+        #expect(enabling.items.first?.steps == [.reconfigureNetworks, .boot])
+
+        let disabling = Reconciler.plan(
+            desired: [desired(metadataEnabled: false)],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 1],
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()],
+            presentNetworks: [vmId.uuidString: [network]],
+            presentFirecrackerMMDSInterfaces: [vmId.uuidString: ["eth0"]])
+        #expect(disabling.items.first?.steps == [.reconfigureNetworks, .boot])
     }
 
     // MARK: - Unknown host contents (STR-138)

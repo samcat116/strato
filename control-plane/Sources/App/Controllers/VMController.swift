@@ -797,9 +797,6 @@ struct VMController: RouteCollection {
         // on, so no trimming).
         vm.userData = try Self.validatedUserData(createRequest.userData)
 
-        // User data is only delivered on the QEMU disk-boot path (the NoCloud
-        // seed ISO); Firecracker VMs have no injection path yet. Reject rather
-        // than return 202 and silently ignore the payload.
         // Secure Boot and a vTPM are firmware-boot features, and Firecracker
         // boots a kernel directly with no UEFI and no TPM device at all.
         // Rejecting is the only honest answer: accepting would return 202 for a
@@ -815,12 +812,6 @@ struct VMController: RouteCollection {
             throw Abort(
                 .badRequest,
                 reason: "'guestAgentEnabled' is not supported for firecracker VMs; use the qemu hypervisor")
-        }
-
-        if vm.userData != nil, vm.hypervisorType == .firecracker {
-            throw Abort(
-                .badRequest,
-                reason: "'userData' is not supported for firecracker VMs (cloud-init runs only on QEMU disk boot)")
         }
 
         // Firecracker emulates no display device at all — it boots a kernel
@@ -917,6 +908,30 @@ struct VMController: RouteCollection {
                         }
                         resolvedInterfaces.append(
                             (interface, network, try network.requireID(), resolvedRequestedGroupsByIndex[index]))
+                    }
+
+                    // Firecracker has no NoCloud disk or another user-data
+                    // injection path: cloud-init reads the EC2 document from
+                    // MMDS. Accepting the payload while either policy layer
+                    // makes MMDS unreachable would return 202 for data the
+                    // guest can never retrieve.
+                    if vm.hypervisorType == .firecracker, vm.userData != nil {
+                        guard vm.metadataEnabled else {
+                            throw Abort(
+                                .badRequest,
+                                reason:
+                                    "'userData' for firecracker VMs requires 'metadataEnabled' to be true")
+                        }
+                        guard
+                            resolvedInterfaces.contains(where: {
+                                $0.network.metadataEnabled && $0.network.dhcpEnabled
+                            })
+                        else {
+                            throw Abort(
+                                .badRequest,
+                                reason: "'userData' for firecracker VMs requires at least one selected network "
+                                    + "with metadata and DHCP enabled")
+                        }
                     }
 
                     // An IMDS seed carries no real user data of its own. At

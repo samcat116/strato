@@ -61,7 +61,11 @@ struct VMManifestStoreTests {
                 hypervisorType: .qemu,
                 spec: makeSpec(cpus: 2),
                 realizedMemoryReservationBytes: 8_589_934_592),
-            "vm-b": VMManifestEntry(hypervisorType: .firecracker, spec: makeSpec(cpus: 4, memoryBytes: 1_073_741_824)),
+            "vm-b": VMManifestEntry(
+                hypervisorType: .firecracker,
+                spec: makeSpec(cpus: 4, memoryBytes: 1_073_741_824),
+                firecrackerMMDSPolicyApplied: true,
+                firecrackerMMDSInterfaces: ["eth0", "eth2"]),
         ])
 
         let loaded = store.load().loadedEntries
@@ -72,6 +76,66 @@ struct VMManifestStoreTests {
         #expect(loaded["vm-b"]?.hypervisorType == .firecracker)
         #expect(loaded["vm-b"]?.spec.cpus == 4)
         #expect(loaded["vm-b"]?.spec.memoryBytes == 1_073_741_824)
+        #expect(loaded["vm-b"]?.firecrackerMMDSPolicyApplied == true)
+        #expect(loaded["vm-b"]?.firecrackerMMDSInterfaces == ["eth0", "eth2"])
+    }
+
+    @Test("A legacy Firecracker entry decodes without an MMDS policy marker")
+    func entryWithoutFirecrackerMMDSPolicyDecodes() throws {
+        let encoded = try JSONEncoder().encode(
+            VMManifestEntry(
+                hypervisorType: .firecracker, spec: makeSpec(),
+                firecrackerMMDSPolicyApplied: true))
+        var object = try #require(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object.removeValue(forKey: "firecrackerMMDSPolicyApplied")
+        object.removeValue(forKey: "firecrackerMMDSInterfaces")
+
+        let legacy = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(VMManifestEntry.self, from: legacy)
+
+        #expect(decoded.hypervisorType == .firecracker)
+        #expect(decoded.firecrackerMMDSPolicyApplied == nil)
+        #expect(decoded.firecrackerMMDSInterfaces == nil)
+    }
+
+    @Test("Re-specing a Firecracker entry keeps its MMDS policy marker")
+    func withSpecKeepsFirecrackerMMDSPolicy() {
+        let entry = VMManifestEntry(
+            hypervisorType: .firecracker, spec: makeSpec(cpus: 2),
+            firecrackerMMDSPolicyApplied: true,
+            firecrackerMMDSInterfaces: ["eth0"])
+
+        let resized = entry.with(spec: makeSpec(cpus: 8))
+
+        #expect(resized.firecrackerMMDSPolicyApplied == true)
+        #expect(resized.firecrackerMMDSInterfaces == ["eth0"])
+    }
+
+    @Test("Firecracker adoption preserves the MMDS policy realized before restart")
+    func firecrackerAdoptionPreservesRealizedMMDSPolicy() {
+        let interfaceId = UUID()
+        let networkId = UUID()
+        func network(metadataEnabled: Bool) -> NetworkSpec {
+            NetworkSpec(
+                interfaceId: interfaceId, deviceName: "net0", orderIndex: 0,
+                network: "management", networkId: networkId,
+                metadataEnabled: metadataEnabled)
+        }
+        let realized = makeSpec().withNetworks([network(metadataEnabled: true)])
+        let desired = makeSpec(cpus: 8).withNetworks([network(metadataEnabled: false)])
+        let entry = VMManifestEntry(
+            hypervisorType: .firecracker, spec: realized,
+            firecrackerMMDSPolicyApplied: true,
+            firecrackerMMDSInterfaces: ["eth0"])
+
+        let adopted = entry.recordingAdoption(of: desired)
+
+        #expect(adopted.spec.cpus == 8)
+        #expect(adopted.spec.networks.count == 1)
+        #expect(adopted.spec.networks[0].metadataEnabled == true)
+        #expect(adopted.firecrackerMMDSPolicyApplied == true)
+        #expect(adopted.firecrackerMMDSInterfaces == ["eth0"])
     }
 
     @Test("Disk reservations survive the manifest round-trip")
