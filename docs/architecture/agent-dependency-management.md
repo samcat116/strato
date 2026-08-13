@@ -67,11 +67,12 @@ It only changes admission of new work that needs the affected feature.
 The initial registry observes SPIRE, libvirt, and OVN/OVS. SPIRE combines its
 systemd unit with the current Workload API X.509 SVID and warns before expiry.
 A successful SVID fetch is authoritative when SPIRE runs outside systemd and
-the local unit is confirmed absent. A disabled unit remains systemd-owned:
-disablement removes boot-time enablement links but does not stop the unit or
-prevent another unit from starting it. A failed systemd inspection does not
-prove external ownership. An inactive or failed local unit remains a functional
-failure even while the agent holds a cached SVID.
+the local unit is confirmed absent, or when the agent's install mode explicitly
+identifies a container. A disabled unit remains systemd-owned: disablement
+removes boot-time enablement links but does not stop the unit or prevent another
+unit from starting it. A failed systemd inspection without the container marker
+does not prove external ownership. An inactive or failed local unit remains a
+functional failure even while the agent holds a cached SVID.
 Definitive load failures such as a masked unit, an invalid setting, or a unit
 load error are categorical. A failed or malformed systemd inspection remains
 unknown rather than being treated as missing or failed.

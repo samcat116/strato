@@ -363,6 +363,29 @@ struct InitialNodeDependencyModuleTests {
         #expect(observation.permitsDependentWork)
     }
 
+    @Test("Container install mode makes the Workload API authoritative without systemd")
+    func containerWorkloadAPIState() async throws {
+        let unavailableSystemd = SystemdUnitObservation(
+            name: "spire-agent.service", loadState: "unknown", activeState: "unknown",
+            subState: "unknown", unitFileState: "unknown")
+        let containerIdentity = SPIRENodeDependencyModule(
+            systemd: FakeSystemd(defaultObservation: unavailableSystemd),
+            source: .workloadAPI,
+            installMode: .container(marker: "STRATO_INSTALL_MODE"),
+            version: { nil },
+            svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
+        let manager = try NodeDependencyManager(
+            modules: [containerIdentity], logger: Logger(label: "test"))
+
+        let observation = try #require(await manager.refresh().first)
+        #expect(observation.supervisorState == .notApplicable)
+        #expect(observation.installedVersion == nil)
+        #expect(observation.compatibility == .compatible)
+        #expect(observation.functionalState == .healthy)
+        #expect(observation.reason == nil)
+        #expect(observation.permitsDependentWork)
+    }
+
     @Test("A disabled SPIRE unit remains systemd-owned when it becomes inactive")
     func disabledSPIREUnitRemainsSystemdOwned() async throws {
         let inactive = SystemdUnitObservation(

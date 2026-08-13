@@ -52,6 +52,7 @@ public struct SPIRENodeDependencyModule: NodeDependencyModule {
 
     private let systemd: any SystemdControlling
     private let source: SPIREIdentitySource
+    private let installMode: AgentInstallMode
     private let version: @Sendable () async -> String?
     private let svid: @Sendable () async -> SPIREIdentityHealth
     private let now: @Sendable () -> Date
@@ -59,12 +60,14 @@ public struct SPIRENodeDependencyModule: NodeDependencyModule {
     public init(
         systemd: any SystemdControlling,
         source: SPIREIdentitySource = .workloadAPI,
+        installMode: AgentInstallMode = .supervisedBinary,
         version: @escaping @Sendable () async -> String?,
         svid: @escaping @Sendable () async -> SPIREIdentityHealth,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.systemd = systemd
         self.source = source
+        self.installMode = installMode
         self.version = version
         self.svid = svid
         self.now = now
@@ -77,17 +80,25 @@ public struct SPIRENodeDependencyModule: NodeDependencyModule {
                 installedVersion: nil,
                 identityHealth: await svid())
         }
+        // The container marker explicitly puts SPIRE outside this process's
+        // supervisor namespace. Do not run irrelevant systemd or local-binary
+        // probes there; the mounted Workload API is authoritative.
+        if installMode.isContainer {
+            return identityInspection(
+                supervisorState: .notApplicable,
+                installedVersion: nil,
+                identityHealth: await svid())
+        }
 
         async let unit = systemd.inspect(unit: "spire-agent.service")
         async let installedVersion = version()
         async let identity = svid()
         let (supervisor, installed, identityHealth) = await (unit, installedVersion, identity)
 
-        // A confirmed absent unit does not own SPIRE's lifecycle (for example,
-        // the documented Docker/--no-systemd flow). In that mode a usable
-        // Workload API SVID is authoritative. A disabled unit or an inspection
-        // failure must not select this path because SVIDManager may still hold
-        // a cached SVID after a systemd-owned agent stops.
+        // A confirmed absent unit proves external supervision for a binary
+        // install (for example, the --no-systemd flow). An inspection failure
+        // alone must not select this path because SVIDManager may still hold a
+        // cached SVID after a systemd-owned agent stops.
         if supervisor.loadState == "not-found",
             case .ready = identityHealth
         {

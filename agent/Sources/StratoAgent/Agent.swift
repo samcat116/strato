@@ -300,6 +300,7 @@ actor Agent {
     // late, but can never make a live agent miss liveness reports.
     private var dependencyManager: NodeDependencyManager?
     private var dependencyObservationTask: Task<Void, Never>?
+    private let installMode: AgentInstallMode
     private let imageCachePath: String?
     // Byte budgets for the image caches; nil means unbounded (see
     // image_cache_max_size_gb / sandbox_image_cache_max_size_gb).
@@ -436,6 +437,7 @@ actor Agent {
         hardwareAccelerationEnabled: Bool = true,
         qemuMemoryOverheadBytes: Int64 = Int64(AgentConfig.defaultQEMUMemoryOverheadMB) * 1024 * 1024,
         simulation: SimulationConfig? = nil,
+        installMode: AgentInstallMode = .detect(),
         spiffeConfig: SPIFFEConfig? = nil,
         teardownGuard: TeardownGuard = TeardownGuard(),
         desiredStateFullRefetchInterval: Duration = DesiredStatePoller.defaultFullRefetchInterval,
@@ -472,6 +474,7 @@ actor Agent {
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
         self.qemuMemoryOverheadBytes = qemuMemoryOverheadBytes
         self.simulation = simulation
+        self.installMode = installMode
         self.spiffeConfig = spiffeConfig
         self.teardownGuard = teardownGuard
         self.desiredStateFullRefetchInterval = desiredStateFullRefetchInterval
@@ -1819,6 +1822,7 @@ actor Agent {
                 SPIRENodeDependencyModule(
                     systemd: systemd,
                     source: spiffeConfig?.sourceType == "files" ? .files : .workloadAPI,
+                    installMode: installMode,
                     version: {
                         await spireVersionCache.value(maxAge: 300) {
                             await DependencyVersionProbe.version(
@@ -2956,7 +2960,7 @@ extension Agent {
             inFlightReconcileItems += await reconciler.inFlightWorkloads(kind: .sandbox).count
         }
         let conditions = AutoUpdateGate.Conditions(
-            installMode: AgentInstallMode.detect(),
+            installMode: installMode,
             inFlightReconcileItems: inFlightReconcileItems
         )
         if let reason = AutoUpdateGate.blockedReason(conditions) {

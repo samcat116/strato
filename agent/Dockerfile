@@ -164,8 +164,9 @@ ENV STRATO_VERSION=${STRATO_VERSION}
 ENV STRATO_GIT_SHA=${STRATO_GIT_SHA}
 
 # Authoritative install-mode marker (see AgentInstallMode.detect): agents in
-# this image refuse self-update with a "managed externally" error — the image
-# is the update mechanism here.
+# this image refuse self-update and treat host SPIRE as externally supervised.
+# The image is the update mechanism, and the mounted Workload API is the SPIRE
+# functional-health source.
 ENV STRATO_INSTALL_MODE=container
 
 # Ensure all further commands run as the strato user
