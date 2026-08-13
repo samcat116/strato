@@ -36,7 +36,8 @@ final class WebSocketManager: @unchecked Sendable {
     /// the agent reconnected while its previous socket's close was still
     /// pending: that delayed close will take the `removeConnection(ifCurrent:)`
     /// no-match path and skip its cleanup, so the caller must tear down state
-    /// tied to the superseded connection (e.g. console sessions) here instead.
+    /// tied to the superseded connection (e.g. console or guest-exec sessions)
+    /// here instead.
     /// Must be called from the WebSocket's event loop.
     @discardableResult
     func setConnection(agentKey: String, websocket: WebSocket) -> WebSocket? {

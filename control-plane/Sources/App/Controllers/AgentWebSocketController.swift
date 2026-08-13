@@ -626,12 +626,14 @@ struct AgentWebSocketController: RouteCollection {
             }
 
             // Store WebSocket for this agent. If this reconnect superseded a
-            // still-open prior socket, its console sessions are now stale (a
-            // fresh agent process holds no console pty) and the delayed close
-            // will skip them — tear them down here so their browsers don't sit
-            // on a frozen terminal.
+            // still-open prior socket, its console and guest-exec sessions are
+            // now stale (a fresh agent process owns none of their guest-side
+            // processes) and the delayed close will skip them — tear them down
+            // here so their browsers don't sit on frozen terminals.
             if req.application.websocketManager.setConnection(agentKey: agentKey, websocket: ws) != nil {
                 req.application.consoleSessionManager.closeAllSessions(
+                    forAgent: agentKey, reason: "agent reconnected")
+                req.application.guestExecSessionManager.closeAllSessions(
                     forAgent: agentKey, reason: "agent reconnected")
             }
 
