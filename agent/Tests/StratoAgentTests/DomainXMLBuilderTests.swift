@@ -87,12 +87,13 @@ struct DomainXMLBuilderTests {
         boot: BootSource = .disk(firmware: nil),
         machine: MachineProfile? = nil,
         guestAgentEnabled: Bool = false,
-        graphics: GraphicsMode? = nil
+        graphics: GraphicsMode? = nil,
+        metadataSource: MetadataSource = .iso
     ) -> VMSpec {
         VMSpec(
             cpus: cpus, maxCpus: maxCpus, memoryBytes: memoryBytes, maxMemoryBytes: maxMemoryBytes,
             boot: boot, machine: machine, guestAgentEnabled: guestAgentEnabled,
-            console: ConsoleSpec(graphics: graphics))
+            console: ConsoleSpec(graphics: graphics), metadataSource: metadataSource)
     }
 
     static func input(
@@ -382,6 +383,26 @@ struct DomainXMLBuilderTests {
     func isWellFormed(_ scenario: Scenario) throws {
         let xml = try DomainXMLBuilder.build(scenario.input)
         #expect(Self.parses(xml))
+    }
+
+    @Test("x86 IMDS guests advertise NoCloud network mode through SMBIOS")
+    func imdsNoCloudNetworkHint() throws {
+        let xml = try DomainXMLBuilder.build(
+            Self.input(spec: Self.spec(metadataSource: .imds)))
+
+        #expect(xml.contains("<sysinfo type='smbios'>"))
+        #expect(
+            xml.contains("<entry name='serial'>ds=nocloud;dsmode=net</entry>"))
+        #expect(xml.contains("<smbios mode='sysinfo'/>"))
+    }
+
+    @Test("full ISO guests do not receive an IMDS datasource hint")
+    func isoHasNoNoCloudNetworkHint() throws {
+        let xml = try DomainXMLBuilder.build(Self.input(spec: Self.spec()))
+
+        #expect(!xml.contains("<sysinfo"))
+        #expect(!xml.contains("<smbios"))
+        #expect(!xml.contains("ds=nocloud"))
     }
 
     private static func parses(_ xml: String) -> Bool {

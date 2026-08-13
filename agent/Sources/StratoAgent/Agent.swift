@@ -4199,6 +4199,19 @@ extension Agent: ReconcileActuator {
             }
         }
         do {
+            // Existing IMDS VMs may carry a seed and persistent definition
+            // created before the NoCloudNet bootstrap repair. Re-realizing the
+            // NICs is idempotent and gives the provisioner the current guest
+            // network document. Treat this migration as required: a VM that
+            // merely starts while cloud-init falls back is not converged.
+            if !item.steps.contains(.create), desired.spec.metadataSource == .imds {
+                let attachments = try await networkOrchestrator.prepareAttachments(
+                    vmId: item.id, networks: desired.spec.networks,
+                    metadataDenied: desired.metadata.map { !$0.isServiceEnabled } ?? false)
+                try await service.convergeGuestBootstrap(
+                    vmId: item.id, spec: desired.spec,
+                    networkAttachments: attachments, metadata: desired.metadata)
+            }
             try await service.ensureMemoryCeiling(vmId: item.id, spec: desired.spec)
             try await service.bootVM(vmId: item.id)
         } catch {

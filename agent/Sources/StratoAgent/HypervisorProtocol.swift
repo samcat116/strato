@@ -116,6 +116,19 @@ public protocol HypervisorService: Actor, Sendable {
     ///   - spec: The desired spec this boot is converging on
     func redefineVM(vmId: String, spec: VMSpec) async throws
 
+    /// Converges guest-bootstrap state that a persistent backend created with
+    /// an older agent before a stopped VM boots. Backends that rebuild their
+    /// process from the current spec have no stored bootstrap state and use the
+    /// default no-op.
+    ///
+    /// Unlike `redefineVM`, this is required rather than best effort: booting
+    /// with a stale IMDS seed or datasource hint can leave cloud-init degraded
+    /// while the VM itself appears healthy.
+    func convergeGuestBootstrap(
+        vmId: String, spec: VMSpec,
+        networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
+    ) async throws
+
     /// Converges the backend's process-memory ceiling before a boot. Backends
     /// without a persistent VMM process definition use the default no-op;
     /// libvirt treats this as required whenever cgroup memory support exists.
@@ -419,6 +432,11 @@ public extension HypervisorService {
     /// from a stored configuration) need nothing before a boot: a spawn that
     /// reads the spec has no stored ceiling to widen.
     func redefineVM(vmId: String, spec: VMSpec) async throws {}
+
+    func convergeGuestBootstrap(
+        vmId: String, spec: VMSpec,
+        networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
+    ) async throws {}
 
     func ensureMemoryCeiling(vmId: String, spec: VMSpec) async throws {}
 
