@@ -82,6 +82,22 @@ struct JailerOptionsTests {
         #expect(barrier.contains("memory.max=1207959552"))
     }
 
+    @Test("the HTTP payload ceiling is passed through to Firecracker")
+    func payloadLimitArguments() {
+        let args = options.arguments(
+            vmId: "vm-1", firecrackerBinaryPath: "/usr/local/bin/firecracker",
+            httpAPIMaxPayloadSize: 1_048_576)
+        let passThrough = Array(args.drop(while: { $0 != "--" }).dropFirst())
+
+        #expect(passThrough.contains("--http-api-max-payload-size"))
+        #expect(passThrough.contains("1048576"))
+
+        let direct = FirecrackerClient.firecrackerArguments(
+            socketPath: "/tmp/vm-1.sock", vmId: "vm-1",
+            httpAPIMaxPayloadSize: 1_048_576)
+        #expect(Array(direct.suffix(2)) == ["--http-api-max-payload-size", "1048576"])
+    }
+
     @Test("cgroup-version is omitted when there are no cgroup limits")
     func cgroupVersionOnlyWithLimits() {
         var versionOnly = options

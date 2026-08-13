@@ -333,6 +333,27 @@ public enum DomainXMLBuilder {
                 [("placement", "static"), ("current", maxCpus > spec.cpus ? "\(spec.cpus)" : nil)],
                 text: "\(maxCpus)"))
 
+        // NoCloud's network datasource is opt-in: the local seedfrom stub is
+        // not enough for newer cloud-init releases to select NoCloudNet during
+        // init-network. Advertise a non-secret datasource hint through SMBIOS
+        // for IMDS-backed x86 guests. `dsmode=net` is explicit rather than the
+        // deprecated `nocloud-net` spelling, which cloud-init 26 reports as a
+        // recoverable error and therefore leaves the VM degraded.
+        if spec.metadataSource == .imds && input.architecture == .x86_64 {
+            domain.append(
+                DomainXMLNode(
+                    "sysinfo", [("type", "smbios")],
+                    children: [
+                        DomainXMLNode(
+                            "system",
+                            children: [
+                                DomainXMLNode(
+                                    "entry", [("name", "serial")],
+                                    text: "ds=nocloud;dsmode=net")
+                            ])
+                    ]))
+        }
+
         domain.append(osNode(input, machine: machine))
         domain.append(featuresNode(input, machine: machine))
         domain.append(cpuNode(input, hotplugBytes: hotplugBytes, maxCpus: maxCpus))
@@ -380,6 +401,10 @@ public enum DomainXMLBuilder {
                 "type",
                 [("arch", libvirtArch(input.architecture)), ("machine", machineType(input.architecture))],
                 text: "hvm"))
+
+        if input.spec.metadataSource == .imds && input.architecture == .x86_64 {
+            os.append(DomainXMLNode("smbios", [("mode", "sysinfo")]))
+        }
 
         if let kernelBoot {
             os.append(DomainXMLNode("kernel", text: kernelBoot.kernel))

@@ -507,6 +507,16 @@ extension Agent {
         }
     }
 
+    /// Whether the agent explicitly advertised a node-agent guest-exec bridge
+    /// for the requested VM backend. Vsock support is necessary but not
+    /// sufficient: until STR-82 lands, current agents attach the device but
+    /// deliberately reject `.virtualMachine` exec messages.
+    func supportsGuestExec(for hypervisor: HypervisorType) -> Bool {
+        hypervisors.contains {
+            $0.type == hypervisor && $0.available && $0.supportsGuestExec == true
+        }
+    }
+
     /// Only OVN-backed agents can provide VM-to-VM networking; user-mode
     /// (SLIRP) agents cannot. Absence is not capability.
     var supportsInterVMNetworking: Bool {

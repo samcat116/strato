@@ -58,13 +58,33 @@ public struct VMManifestEntry: Codable, Sendable {
     /// so a manifest-less re-registration cannot replay a VM's whole reboot
     /// history. See `AppliedEdgeNonces`.
     public var appliedEdges: AppliedEdgeNonces?
+    /// Whether this agent has applied Firecracker's pre-boot MMDS interface
+    /// allow-list to the VMM represented by this entry.
+    ///
+    /// Nil identifies manifests written before STR-67. That distinction is
+    /// required during adoption: the surviving process has the same network
+    /// spec as desired state, but no `/mmds/config`, and Firecracker exposes no
+    /// post-boot repair path. The agent recreates that VMM once, then records
+    /// true. Non-Firecracker VMs and sandboxes leave this nil.
+    public private(set) var firecrackerMMDSPolicyApplied: Bool?
+    /// Exact Firecracker interface ids admitted to MMDS by the represented
+    /// VMM. Unlike `spec.networks`, this includes the per-VM metadata kill
+    /// switch as well as per-network policy, so a metadata-only desired-state
+    /// update remains observable after an agent restart.
+    ///
+    /// Nil is the compatibility shape written before this policy was recorded
+    /// exactly. A marked STR-67 entry then falls back to the network list,
+    /// matching what those builds configured.
+    public private(set) var firecrackerMMDSInterfaces: [String]?
 
     public init(
         hypervisorType: HypervisorType,
         spec: VMSpec,
         realizedMemoryReservationBytes: Int64? = nil,
         vsockCID: UInt32? = nil,
-        appliedEdges: AppliedEdgeNonces? = nil
+        appliedEdges: AppliedEdgeNonces? = nil,
+        firecrackerMMDSPolicyApplied: Bool? = nil,
+        firecrackerMMDSInterfaces: [String]? = nil
     ) {
         self.kind = .vm
         self.hypervisorType = hypervisorType
@@ -73,6 +93,8 @@ public struct VMManifestEntry: Codable, Sendable {
         self.sandboxSpec = nil
         self.vsockCID = vsockCID
         self.appliedEdges = appliedEdges
+        self.firecrackerMMDSPolicyApplied = firecrackerMMDSPolicyApplied
+        self.firecrackerMMDSInterfaces = firecrackerMMDSInterfaces
     }
 
     /// A sandbox entry. Sandboxes boot through Firecracker only, so the
@@ -86,6 +108,8 @@ public struct VMManifestEntry: Codable, Sendable {
         self.sandboxSpec = sandboxSpec
         self.vsockCID = nil
         self.appliedEdges = appliedEdges
+        self.firecrackerMMDSPolicyApplied = nil
+        self.firecrackerMMDSInterfaces = nil
     }
 
     /// The same workload with a new spec — a resize, or a volume attached or
@@ -105,6 +129,32 @@ public struct VMManifestEntry: Codable, Sendable {
     public func with(spec newSpec: VMSpec) -> VMManifestEntry {
         var copy = self
         copy.spec = newSpec
+        return copy
+    }
+
+    /// Records the desired spec after re-adopting a surviving VM without
+    /// claiming that Firecracker's immutable MMDS allow-list changed with it.
+    ///
+    /// A Firecracker entry carrying the policy marker describes a VMM that was
+    /// already configured from the manifest's network list. Desired state may
+    /// have changed while the agent was down, but reconnecting to that process
+    /// does not apply the new list. Keep the realized networks until the
+    /// reconciler replaces the VMM; every other part of the desired spec can be
+    /// recorded immediately. Legacy entries have no reliable realized policy,
+    /// so their one-time upgrade path decides what to record instead.
+    public func recordingAdoption(of desiredSpec: VMSpec) -> VMManifestEntry {
+        guard hypervisorType == .firecracker, firecrackerMMDSPolicyApplied == true else {
+            return with(spec: desiredSpec)
+        }
+        return with(spec: desiredSpec.withNetworks(spec.networks))
+    }
+
+    /// Records the exact immutable MMDS allow-list installed in the current
+    /// Firecracker process.
+    public func applyingFirecrackerMMDSPolicy(interfaces: [String]) -> VMManifestEntry {
+        var copy = self
+        copy.firecrackerMMDSPolicyApplied = true
+        copy.firecrackerMMDSInterfaces = interfaces
         return copy
     }
 

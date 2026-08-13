@@ -64,8 +64,8 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             updateAction: "vm:update",
             deleteAction: "vm:delete",
             snapshotAction: "vm:snapshot",
-            // `exec` and `run` are listed ahead of the routes that will serve
-            // them (issue #804). Both fallbacks are weaker than the act they
+            // `exec` is live and `run` is listed ahead of the route that will
+            // serve it (issue #804). Both fallbacks are weaker than the act they
             // would gate: an unlisted POST subpath falls back to `update` and
             // an unlisted GET to `read`, so leaving these out would hand
             // in-guest execution an editor — or, for the WebSocket attach, a

@@ -70,6 +70,82 @@ import StratoShared
 /// this pass prepares any simultaneous upward ceiling change first.
 public enum DomainRedefinition {
 
+    /// Adds the two libvirt elements that make an existing x86 IMDS guest
+    /// select NoCloud's network mode at its next boot.
+    ///
+    /// Domains created before the IMDS bootstrap repair have neither element:
+    /// rebuilding them through `DomainXMLBuilder` would lose host-resolved and
+    /// libvirt-assigned state, so the boot path applies this narrow edit to the
+    /// inactive definition instead. A domain that already carries the hint is
+    /// a no-op, which makes the migration safe to run before every boot.
+    ///
+    /// An existing, different SMBIOS declaration is refused rather than
+    /// overwritten. Strato did not emit one before this migration, and silently
+    /// replacing an operator-authored serial would change guest-visible
+    /// hardware.
+    public static func addingIMDSBootstrapHint(
+        toInactiveDomainXML xml: String,
+        metadataSource: MetadataSource,
+        architecture: CPUArchitecture
+    ) throws -> String? {
+        guard metadataSource == .imds, architecture == .x86_64 else { return nil }
+
+        var domain = try DomainXMLNode.parse(xml)
+        guard domain.name == "domain" else {
+            throw DomainInventoryError.unparseable("no <domain> element")
+        }
+        guard let osIndex = domain.firstIndex(ofChildNamed: "os") else {
+            throw DomainInventoryError.unparseable("the domain document declares no <os>")
+        }
+
+        let serial = "ds=nocloud;dsmode=net"
+        let sysinfos = domain.children.filter { $0.name == "sysinfo" && $0.attribute("type") == "smbios" }
+        let hasSerialHint = sysinfos.contains { sysinfo in
+            sysinfo.child(named: "system")?.children.contains {
+                $0.name == "entry" && $0.attribute("name") == "serial" && $0.text == serial
+            } == true
+        }
+        if !hasSerialHint && !sysinfos.isEmpty {
+            throw DomainInventoryError.unparseable(
+                "an existing SMBIOS sysinfo would have to be replaced to add the IMDS datasource hint")
+        }
+
+        let os = domain.children[osIndex]
+        let existingSMBIOS = os.child(named: "smbios")
+        if let existingSMBIOS, existingSMBIOS.attribute("mode") != "sysinfo" {
+            throw DomainInventoryError.unparseable(
+                "<os> already selects a different SMBIOS mode")
+        }
+
+        var changed = false
+        if !hasSerialHint {
+            domain.insert(
+                DomainXMLNode(
+                    "sysinfo", [("type", "smbios")],
+                    children: [
+                        DomainXMLNode(
+                            "system",
+                            children: [
+                                DomainXMLNode(
+                                    "entry", [("name", "serial")],
+                                    text: serial)
+                            ])
+                    ]),
+                at: osIndex)
+            changed = true
+        }
+
+        if existingSMBIOS == nil {
+            domain.editChild(named: "os") { os in
+                let insertion = os.firstIndex(ofChildNamed: "type").map { $0 + 1 } ?? 0
+                os.insert(DomainXMLNode("smbios", [("mode", "sysinfo")]), at: insertion)
+            }
+            changed = true
+        }
+
+        return changed ? domain.render() : nil
+    }
+
     /// The outcome of one widening pass.
     public struct Widening: Sendable, Equatable {
         /// The document to hand `virDomainDefineXML`, or nil when the domain's

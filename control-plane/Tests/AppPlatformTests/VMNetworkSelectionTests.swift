@@ -58,6 +58,21 @@ final class VMNetworkSelectionTests {
 
     private func gb(_ value: Double) -> Int64 { Int64(value * 1024 * 1024 * 1024) }
 
+    private func addFirecrackerArtifacts(to image: Image, on db: any Database) async throws {
+        let imageID = try image.requireID()
+        let checksum = String(repeating: "c", count: 64)
+        try await ImageArtifact(
+            imageID: imageID, kind: .kernel, format: nil,
+            architecture: image.architecture, filename: "vmlinux", size: 1,
+            checksum: checksum, storagePath: "images/\(imageID)/kernel/vmlinux"
+        ).save(on: db)
+        try await ImageArtifact(
+            imageID: imageID, kind: .rootfs, format: .raw,
+            architecture: image.architecture, filename: "rootfs.raw", size: 1,
+            checksum: checksum, storagePath: "images/\(imageID)/rootfs/rootfs.raw"
+        ).save(on: db)
+    }
+
     private func withApp(
         _ test: (Application, User, Organization, Project, Image, String) async throws -> Void
     ) async throws {
@@ -436,12 +451,12 @@ final class VMNetworkSelectionTests {
         }
     }
 
-    @Test("POST /api/vms rejects user data for firecracker VMs (400)")
-    func createFirecrackerWithUserDataRejected() async throws {
+    @Test("POST /api/vms persists user data for Firecracker MMDS delivery")
+    func createFirecrackerWithUserData() async throws {
         try await withApp { app, _, _, project, image, token in
-            // Cloud-init user data only reaches the guest on the QEMU
-            // disk-boot path; a firecracker create must fail loudly instead
-            // of accepting a payload the agent would silently ignore.
+            try await addFirecrackerArtifacts(to: image, on: app.db)
+
+            let userData = "#cloud-config\npackages: [nginx]\n"
             try await app.test(.POST, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -449,15 +464,85 @@ final class VMNetworkSelectionTests {
                         name: "fc-userdata-vm", imageId: image.id, projectId: project.id,
                         environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
                         networkId: nil, networkName: "default",
-                        userData: "#cloud-config\npackages: [nginx]\n",
+                        userData: userData,
                         hypervisorType: "firecracker"))
             } afterResponse: { res in
-                #expect(res.status == .badRequest)
-                #expect(res.body.string.contains("firecracker"))
+                #expect(res.status == .accepted)
             }
 
             let vm = try await VM.query(on: app.db).filter(\.$name == "fc-userdata-vm").first()
-            #expect(vm == nil)
+            #expect(vm?.hypervisorType == .firecracker)
+            #expect(vm?.userData == userData)
+        }
+    }
+
+    @Test("POST /api/vms rejects Firecracker user data without reachable MMDS")
+    func createFirecrackerUserDataRequiresReachableMMDS() async throws {
+        try await withApp { app, _, _, project, image, token in
+            try await addFirecrackerArtifacts(to: image, on: app.db)
+            let userData = "#cloud-config\npackages: [nginx]\n"
+
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "fc-userdata-disabled-vm", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: "default",
+                        userData: userData, hypervisorType: "firecracker",
+                        metadataEnabled: false))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("metadataEnabled"))
+            }
+
+            let defaultNetwork = try #require(
+                try await LogicalNetwork.query(on: app.db)
+                    .filter(\.$project.$id == project.id!)
+                    .filter(\.$name == "default")
+                    .first())
+            defaultNetwork.metadataEnabled = false
+            try await defaultNetwork.save(on: app.db)
+
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "fc-userdata-disabled-network", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: "default",
+                        userData: userData, hypervisorType: "firecracker"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("at least one selected network"))
+            }
+
+            defaultNetwork.metadataEnabled = true
+            defaultNetwork.dhcpEnabled = false
+            try await defaultNetwork.save(on: app.db)
+
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "fc-userdata-no-dhcp", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: "default",
+                        userData: userData, hypervisorType: "firecracker"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("DHCP"))
+            }
+
+            #expect(
+                try await VM.query(on: app.db)
+                    .filter(\.$name == "fc-userdata-disabled-vm").first() == nil)
+            #expect(
+                try await VM.query(on: app.db)
+                    .filter(\.$name == "fc-userdata-disabled-network").first() == nil)
+            #expect(
+                try await VM.query(on: app.db)
+                    .filter(\.$name == "fc-userdata-no-dhcp").first() == nil)
         }
     }
 

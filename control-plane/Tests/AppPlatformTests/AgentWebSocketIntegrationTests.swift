@@ -200,6 +200,84 @@ struct AgentWebSocketIntegrationTests {
         }
     }
 
+    // MARK: - (3) A replacement socket tears down state owned by its predecessor
+
+    @Test("Replacing an agent socket tears down its guest exec sessions")
+    func replacementSocketClosesGuestExecSessions() async throws {
+        try await withRunningApp { app, port in
+            self.enableSPIRE(on: app)
+
+            let agentName = "agent-reconnect"
+            let org = try await self.makeOrg(app: app)
+            let site = Site(
+                name: "ws-reconnect-dc",
+                organizationScope: .organization(try org.requireID()))
+            try await site.save(on: app.db)
+            let enrollment = AgentEnrollment(
+                agentName: agentName,
+                spiffeID: "spiffe://strato.local/agent/\(agentName)",
+                expirationHours: 1,
+                siteID: try site.requireID(),
+                organizationScope: .organization(try org.requireID()))
+            try await enrollment.save(on: app.db)
+
+            let first = try await AgentTestClient.connect(
+                app: app, port: port, name: agentName,
+                headers: self.xfccHeaders(agentName: agentName))
+            first.send(try encodeRegister(agentName: agentName))
+            #expect(try await first.nextEnvelope().type == .agentRegisterResponse)
+
+            let manager = app.guestExecSessionManager
+            let resourceId = UUID().uuidString
+            let userId = UUID().uuidString
+            let attached = manager.createPendingSession(
+                resourceKind: .virtualMachine,
+                resourceId: resourceId,
+                agentKey: agentKey(agentName),
+                userId: userId,
+                command: ["/bin/sh"],
+                env: nil,
+                workingDir: nil,
+                tty: true,
+                rows: 24,
+                cols: 80
+            )
+            _ = try manager.attachSession(
+                sessionId: attached.sessionId,
+                resourceKind: attached.resourceKind,
+                resourceId: attached.resourceId,
+                userId: attached.userId,
+                websocket: nil
+            )
+            let pending = manager.createPendingSession(
+                resourceKind: .virtualMachine,
+                resourceId: resourceId,
+                agentKey: agentKey(agentName),
+                userId: userId,
+                command: ["/bin/true"],
+                env: nil,
+                workingDir: nil,
+                tty: false,
+                rows: nil,
+                cols: nil
+            )
+
+            let replacement = try await AgentTestClient.connect(
+                app: app, port: port, name: agentName,
+                headers: self.xfccHeaders(agentName: agentName))
+            replacement.send(try encodeRegister(agentName: agentName))
+            #expect(try await replacement.nextEnvelope().type == .agentRegisterResponse)
+
+            // The register response is routed only after setConnection and its
+            // replacement cleanup complete, so these assertions do not poll.
+            #expect(manager.getSession(sessionId: attached.sessionId) == nil)
+            #expect(manager.hasPendingSession(sessionId: pending.sessionId) == false)
+
+            try await first.close()
+            try await replacement.close()
+        }
+    }
+
     // MARK: - (4) Refusals: no SPIRE configured, and no client certificate
 
     @Test("A control plane without SPIRE configured refuses the agent socket outright")

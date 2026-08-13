@@ -127,8 +127,12 @@ public actor FirecrackerClient {
 
     /// Creates a new microVM with the given configuration
     /// Returns a FirecrackerManager connected to the new VM
-    public func createVM(vmId: String) async throws -> FirecrackerManager {
-        try await createVM(vmId: vmId, jail: nil)
+    public func createVM(
+        vmId: String, httpAPIMaxPayloadSize: Int? = nil
+    ) async throws -> FirecrackerManager {
+        try await createVM(
+            vmId: vmId, jail: nil,
+            httpAPIMaxPayloadSize: httpAPIMaxPayloadSize)
     }
 
     /// Creates a new microVM, optionally inside the jailer barrier (issue
@@ -141,7 +145,10 @@ public actor FirecrackerClient {
     /// **before** this call (the client never wipes an existing jail root, so
     /// pre-staged content survives), and must pass in-jail paths to the
     /// returned manager's configure calls.
-    public func createVM(vmId: String, jail: JailerOptions?) async throws -> FirecrackerManager {
+    public func createVM(
+        vmId: String, jail: JailerOptions?,
+        httpAPIMaxPayloadSize: Int? = nil
+    ) async throws -> FirecrackerManager {
         // Check if VM already exists
         guard runningVMs[vmId] == nil else {
             throw FirecrackerError.vmAlreadyRunning(vmId)
@@ -180,14 +187,14 @@ public actor FirecrackerClient {
         let process = Process()
         if let jail {
             process.executableURL = URL(fileURLWithPath: jail.jailerBinaryPath)
-            process.arguments = jail.arguments(vmId: vmId, firecrackerBinaryPath: firecrackerBinaryPath)
+            process.arguments = jail.arguments(
+                vmId: vmId, firecrackerBinaryPath: firecrackerBinaryPath,
+                httpAPIMaxPayloadSize: httpAPIMaxPayloadSize)
         } else {
             process.executableURL = URL(fileURLWithPath: firecrackerBinaryPath)
-            process.arguments = [
-                "--api-sock", socketPath,
-                "--id", vmId,
-                "--level", "Info",
-            ]
+            process.arguments = Self.firecrackerArguments(
+                socketPath: socketPath, vmId: vmId,
+                httpAPIMaxPayloadSize: httpAPIMaxPayloadSize)
         }
 
         // Capture output for logging. Both streams are drained continuously
@@ -326,6 +333,23 @@ public actor FirecrackerClient {
         return manager
     }
 
+    /// Firecracker argv shared by production spawn and unit coverage. The
+    /// payload ceiling is opt-in so callers that do not use MMDS preserve the
+    /// VMM's own default.
+    static func firecrackerArguments(
+        socketPath: String, vmId: String, httpAPIMaxPayloadSize: Int?
+    ) -> [String] {
+        var arguments = [
+            "--api-sock", socketPath,
+            "--id", vmId,
+            "--level", "Info",
+        ]
+        if let httpAPIMaxPayloadSize {
+            arguments += ["--http-api-max-payload-size", String(httpAPIMaxPayloadSize)]
+        }
+        return arguments
+    }
+
     /// Spawns a fresh Firecracker process and restores it from a snapshot
     /// (issue #426) — the restore counterpart of the boot flow. The snapshot
     /// carries the full device topology, so no configuration calls are made;
@@ -425,6 +449,33 @@ public actor FirecrackerClient {
                 "pid": "\(pid.map(String.init) ?? "unknown")",
             ])
         return (manager, info)
+    }
+
+    /// Waits for a tracked Firecracker process to exit without signalling it.
+    ///
+    /// This is the confirmation half of a guest-initiated shutdown. Callers
+    /// first ask the guest to quiesce through `SendCtrlAltDel`, then use this
+    /// observation before reopening its disk in another VMM. Returning false
+    /// means the process either remained live for the whole budget or has no
+    /// process identity strong enough to prove that it exited.
+    public func waitForVMExit(vmId: String, timeout: Duration) async throws -> Bool {
+        guard let vm = runningVMs[vmId] else {
+            throw FirecrackerError.vmNotFound(vmId)
+        }
+
+        if let process = vm.process {
+            guard process.isRunning else { return true }
+            guard let exitLatch = vm.exitLatch else { return false }
+            _ = await exitLatch.wait(upTo: timeout)
+            return !process.isRunning
+        }
+
+        guard let pid = vm.adoptedPID, let identity = vm.pidIdentity else {
+            return false
+        }
+        guard identity.matches(pid: pid) else { return true }
+        await Self.waitForExit(pid: pid, identity: identity, timeout: timeout)
+        return !identity.matches(pid: pid)
     }
 
     /// Destroys a VM and cleans up resources

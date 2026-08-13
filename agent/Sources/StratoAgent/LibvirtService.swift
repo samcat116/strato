@@ -742,6 +742,60 @@ actor LibvirtService: HypervisorService {
         }
     }
 
+    /// Migrates the persistent bootstrap state of IMDS VMs created by an older
+    /// agent. The seed is rebuilt from current desired state so its local
+    /// network document no longer tries to rename an already-active interface,
+    /// and the inactive domain gains the SMBIOS hint that selects NoCloudNet.
+    ///
+    /// This is required boot convergence, not part of the best-effort resource
+    /// widening above. A failed migration must keep the VM stopped: otherwise a
+    /// successful QEMU start could conceal a cloud-init datasource failure.
+    func convergeGuestBootstrap(
+        vmId: String, spec: VMSpec,
+        networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
+    ) async throws {
+        guard spec.metadataSource == .imds else { return }
+
+        try await perform("guest-bootstrap", vmId: vmId) {
+            guard let token = metadata?.noCloudSeedToken else {
+                throw HypervisorServiceError.invalidConfiguration(
+                    "IMDS VM \(vmId) has no NoCloud seed capability in desired metadata")
+            }
+
+            let dom = try await domain(vmId)
+            guard !LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId)) else {
+                return
+            }
+
+            let repairedXML = try DomainRedefinition.addingIMDSBootstrapHint(
+                toInactiveDomainXML: try await inactiveDomainXML(dom, vmId: vmId),
+                metadataSource: spec.metadataSource,
+                architecture: .current)
+
+            let vmDirectory = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
+            let isoPath = VMDirectoryLayout.cloudInitISO(vmDirectory: vmDirectory)
+            let refreshed = await CloudInitProvisioner(logger: logger).makeNoCloudISO(
+                at: isoPath, vmId: vmId, hostname: metadata?.hostname,
+                sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
+                metadataSource: spec.metadataSource, noCloudSeedToken: token,
+                networkAttachments: networkAttachments)
+            guard refreshed else {
+                throw HypervisorServiceError.diskError(
+                    "could not refresh the IMDS bootstrap seed for VM \(vmId)")
+            }
+
+            guard let repairedXML else { return }
+            logger.info(
+                "Adding the IMDS NoCloud datasource hint before boot",
+                metadata: ["vmId": .string(vmId)])
+            _ = try await call(
+                "libvirt-redefine", vmId: vmId, seconds: StageBudget.hypervisorSpawnSeconds
+            ) { client, deadline in
+                try await client.domainDefineXML(xml: repairedXML, deadline: deadline)
+            }
+        }
+    }
+
     /// Required boot-time convergence, separate from best-effort widening.
     /// The inactive definition is the source the next QEMU process reads.
     func ensureMemoryCeiling(vmId: String, spec: VMSpec) async throws {

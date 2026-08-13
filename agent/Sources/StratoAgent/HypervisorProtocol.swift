@@ -91,6 +91,33 @@ public protocol HypervisorService: Actor, Sendable {
         metadata: InstanceMetadata?, vsockCID: UInt32?
     ) async throws
 
+    /// Replaces any backend-local metadata snapshot for a managed VM.
+    ///
+    /// Network-served backends read from `MetadataStore` directly and use the
+    /// default no-op. Firecracker overrides this because MMDS holds its own
+    /// copy inside the VMM process; nil means replace that copy with an empty
+    /// store, never retain the previous document.
+    func refreshInstanceMetadata(vmId: String, metadata: InstanceMetadata?) async throws
+
+    /// Restores backend-local knowledge of the immutable metadata interface
+    /// policy after adopting a surviving VM. The manifest remains the source
+    /// of truth; this only reconnects a new service instance to policy already
+    /// installed in the old hypervisor process.
+    func restoreMetadataInterfaceInventory(vmId: String, interfaces: [String]) async
+
+    /// Rebuilds the backend process so its immutable per-interface metadata
+    /// policy matches `networkAttachments`, leaving the VM created but not
+    /// booted. The caller restores the desired power state in later reconcile
+    /// steps.
+    ///
+    /// Firecracker implements this because its MMDS interface allow-list can
+    /// only be configured before boot. Other backends reject the operation;
+    /// their metadata transport is not configured through this seam.
+    func reconfigureMetadataInterfaces(
+        vmId: String, spec: VMSpec, imageInfo: ImageInfo?,
+        networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
+    ) async throws
+
     /// Makes whatever stored configuration this backend holds for a *stopped*
     /// VM able to satisfy `spec`, before the boot that will read it (STR-187).
     ///
@@ -115,6 +142,19 @@ public protocol HypervisorService: Actor, Sendable {
     ///   - vmId: The VM identifier
     ///   - spec: The desired spec this boot is converging on
     func redefineVM(vmId: String, spec: VMSpec) async throws
+
+    /// Converges guest-bootstrap state that a persistent backend created with
+    /// an older agent before a stopped VM boots. Backends that rebuild their
+    /// process from the current spec have no stored bootstrap state and use the
+    /// default no-op.
+    ///
+    /// Unlike `redefineVM`, this is required rather than best effort: booting
+    /// with a stale IMDS seed or datasource hint can leave cloud-init degraded
+    /// while the VM itself appears healthy.
+    func convergeGuestBootstrap(
+        vmId: String, spec: VMSpec,
+        networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
+    ) async throws
 
     /// Converges the backend's process-memory ceiling before a boot. Backends
     /// without a persistent VMM process definition use the default no-op;
@@ -350,6 +390,18 @@ public protocol HypervisorService: Actor, Sendable {
 // MARK: - Default Implementations
 
 public extension HypervisorService {
+    func refreshInstanceMetadata(vmId: String, metadata: InstanceMetadata?) async throws {}
+
+    func restoreMetadataInterfaceInventory(vmId: String, interfaces: [String]) async {}
+
+    func reconfigureMetadataInterfaces(
+        vmId: String, spec: VMSpec, imageInfo: ImageInfo?,
+        networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
+    ) async throws {
+        throw HypervisorServiceError.notSupported(
+            "\(hypervisorType.displayName) does not require metadata-interface reconfiguration")
+    }
+
     func attachNetworkInterface(
         vmId: String, spec: NetworkSpec, attachment: ResolvedNetworkAttachment
     ) async throws {
@@ -419,6 +471,11 @@ public extension HypervisorService {
     /// from a stored configuration) need nothing before a boot: a spawn that
     /// reads the spec has no stored ceiling to widen.
     func redefineVM(vmId: String, spec: VMSpec) async throws {}
+
+    func convergeGuestBootstrap(
+        vmId: String, spec: VMSpec,
+        networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
+    ) async throws {}
 
     func ensureMemoryCeiling(vmId: String, spec: VMSpec) async throws {}
 

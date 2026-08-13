@@ -51,6 +51,97 @@ struct EC2MetadataRendererTests {
         EC2MetadataRenderer.render(path, for: metadata)
     }
 
+    private static func value(at path: [String], in document: JSONValue) -> JSONValue? {
+        path.reduce(Optional(document)) { value, component in
+            guard let value, case .object(let object) = value else { return nil }
+            return object[component]
+        }
+    }
+
+    @Test("the Firecracker limit accepts worst-case maximum user data")
+    func maximumUserDataFitsFirecrackerPayloadLimit() throws {
+        let header = "#cloud-config\n"
+        let userData =
+            header
+            + String(
+                repeating: "\0",
+                count: CloudInitUserDataFormat.maxBytes - header.utf8.count)
+        let metadata = InstanceMetadata(
+            instanceId: Self.vmID,
+            projectId: Self.projectID,
+            userData: userData,
+            serviceEnabled: true)
+
+        let payload = try JSONEncoder().encode(
+            EC2MetadataRenderer.mmdsDocument(for: metadata))
+
+        #expect(userData.utf8.count == CloudInitUserDataFormat.maxBytes)
+        #expect(payload.count > 51_200)
+        #expect(payload.count <= FirecrackerMMDSInterfacePlan.payloadLimitBytes)
+    }
+
+    @Test("the Firecracker limit accepts the complete maximum mutable metadata document")
+    func maximumAggregateMetadataFitsFirecrackerPayloadLimit() throws {
+        let validKeyPrefix =
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f "
+        let maximumKey =
+            validKeyPrefix
+            + String(
+                repeating: "😀",
+                count: 4_096 - validKeyPrefix.unicodeScalars.count)
+        let keys = Array(repeating: maximumKey, count: 64)
+
+        let maximumTagValue = String(repeating: "\u{0001}", count: 4_096)
+        let tags = Dictionary(
+            uniqueKeysWithValues: (0..<64).map { index in
+                let prefix = "tag-\(index)-"
+                return (
+                    prefix + String(repeating: "x", count: 128 - prefix.count),
+                    maximumTagValue
+                )
+            })
+
+        let header = "#cloud-config\n"
+        let userData =
+            header
+            + String(
+                repeating: "\0",
+                count: CloudInitUserDataFormat.maxBytes - header.utf8.count)
+        let nics = (0..<8).map { index in
+            MetadataNIC(
+                deviceName: "net\(index)",
+                macAddress: String(format: "52:54:00:00:00:%02x", index),
+                networkId: UUID(), networkName: String(repeating: "n", count: 128),
+                ipAddress: "10.0.\(index).2", prefixLength: 24, gateway: "10.0.\(index).1",
+                ipv6Address: "fd00::\(index + 1)", ipv6PrefixLength: 64,
+                gateway6: "fd00::1", mtu: 65_535, metadataEnabled: true)
+        }
+        let metadata = InstanceMetadata(
+            instanceId: Self.vmID,
+            hostname: String(repeating: "h", count: 63),
+            projectId: Self.projectID,
+            region: String(repeating: "r", count: 128),
+            availabilityZone: String(repeating: "z", count: 128),
+            nics: nics,
+            sshAuthorizedKeys: keys,
+            userData: userData,
+            tags: tags,
+            serviceEnabled: true)
+
+        let payload = try JSONEncoder().encode(
+            EC2MetadataRenderer.mmdsDocument(
+                for: metadata, options: .init(disclosePlacement: true)))
+
+        #expect(maximumKey.unicodeScalars.count == 4_096)
+        #expect(keys.count == 64)
+        #expect(tags.count == 64)
+        #expect(tags.allSatisfy { $0.key.unicodeScalars.count == 128 })
+        #expect(tags.allSatisfy { $0.value.unicodeScalars.count == 4_096 })
+        #expect(userData.utf8.count == CloudInitUserDataFormat.maxBytes)
+        #expect(payload.count > 1024 * 1024)
+        #expect(payload.count <= FirecrackerMMDSInterfacePlan.payloadLimitBytes)
+    }
+
     @Test("the root advertises exactly the servable EC2 categories")
     func rootListingGolden() {
         #expect(
@@ -185,5 +276,62 @@ struct EC2MetadataRendererTests {
         #expect(EC2MetadataRenderer.render(.network, for: minimal) == nil)
         #expect(EC2MetadataRenderer.render(.publicKeys, for: minimal) == nil)
         #expect(EC2MetadataRenderer.render(.tags, for: minimal) == nil)
+    }
+
+    @Test("the Firecracker MMDS snapshot carries the same EC2 leaves")
+    func mmdsSnapshotParity() throws {
+        let document = EC2MetadataRenderer.mmdsDocument(for: Self.metadata)
+
+        #expect(
+            Self.value(at: ["latest", "meta-data", "instance-id"], in: document)
+                == .string(try #require(Self.render(.instanceID))))
+        #expect(
+            Self.value(
+                at: [
+                    "latest", "meta-data", "network", "interfaces", "macs",
+                    "52:54:00:12:34:56", "subnet-ipv4-cidr-block",
+                ],
+                in: document)
+                == .string("10.20.30.0/24"))
+        #expect(
+            Self.value(
+                at: ["latest", "meta-data", "public-keys", "0", "openssh-key"],
+                in: document)
+                == .string("ssh-ed25519 AAAA-primary operator@example"))
+        #expect(
+            Self.value(at: ["latest", "meta-data", "tags", "instance", "Role"], in: document)
+                == .string("frontend"))
+        #expect(
+            Self.value(
+                at: ["latest", "meta-data", "tags", "instance", "not/a/path"],
+                in: document) == nil)
+        #expect(
+            Self.value(at: ["latest", "meta-data", "placement"], in: document) == nil)
+        #expect(
+            Self.value(at: ["latest", "user-data"], in: document)
+                == .string(CloudInitProvisioner.userDataDocument(for: Self.metadata)))
+
+        let identity = try #require(
+            Self.value(
+                at: ["latest", "dynamic", "instance-identity", "document"],
+                in: document))
+        guard case .string(let identityJSON) = identity else {
+            Issue.record("MMDS identity document was not a string leaf")
+            return
+        }
+        let identityObject = try #require(
+            JSONSerialization.jsonObject(with: Data(identityJSON.utf8)) as? [String: String])
+        #expect(identityObject["instanceId"] == Self.vmID.uuidString)
+
+        // The store is JSON-encodable without an Any-typed translation layer.
+        let encoded = try JSONEncoder().encode(document)
+        #expect(try JSONDecoder().decode(JSONValue.self, from: encoded) == document)
+    }
+
+    @Test("disabled metadata replaces MMDS with an empty snapshot")
+    func disabledMMDSSnapshot() {
+        let disabled = InstanceMetadata(
+            instanceId: Self.vmID, projectId: Self.projectID, serviceEnabled: false)
+        #expect(EC2MetadataRenderer.mmdsDocument(for: disabled) == .object([:]))
     }
 }

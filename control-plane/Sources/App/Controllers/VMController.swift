@@ -139,6 +139,7 @@ struct VMController: RouteCollection {
             vm.post("resume", use: resume)
             vm.get("status", use: status)
             vm.get("operations", use: listOperations)
+            vm.post("exec", use: exec)
             vm.get("interfaces", use: listInterfaces)
             vm.post("interfaces", use: attachInterface)
             vm.group("interfaces", ":interfaceID") { interface in
@@ -807,9 +808,6 @@ struct VMController: RouteCollection {
         // on, so no trimming).
         vm.userData = try Self.validatedUserData(createRequest.userData)
 
-        // User data is only delivered on the QEMU disk-boot path (the NoCloud
-        // seed ISO); Firecracker VMs have no injection path yet. Reject rather
-        // than return 202 and silently ignore the payload.
         // Secure Boot and a vTPM are firmware-boot features, and Firecracker
         // boots a kernel directly with no UEFI and no TPM device at all.
         // Rejecting is the only honest answer: accepting would return 202 for a
@@ -825,12 +823,6 @@ struct VMController: RouteCollection {
             throw Abort(
                 .badRequest,
                 reason: "'guestAgentEnabled' is not supported for firecracker VMs; use the qemu hypervisor")
-        }
-
-        if vm.userData != nil, vm.hypervisorType == .firecracker {
-            throw Abort(
-                .badRequest,
-                reason: "'userData' is not supported for firecracker VMs (cloud-init runs only on QEMU disk boot)")
         }
 
         // Firecracker emulates no display device at all — it boots a kernel
@@ -927,6 +919,30 @@ struct VMController: RouteCollection {
                         }
                         resolvedInterfaces.append(
                             (interface, network, try network.requireID(), resolvedRequestedGroupsByIndex[index]))
+                    }
+
+                    // Firecracker has no NoCloud disk or another user-data
+                    // injection path: cloud-init reads the EC2 document from
+                    // MMDS. Accepting the payload while either policy layer
+                    // makes MMDS unreachable would return 202 for data the
+                    // guest can never retrieve.
+                    if vm.hypervisorType == .firecracker, vm.userData != nil {
+                        guard vm.metadataEnabled else {
+                            throw Abort(
+                                .badRequest,
+                                reason:
+                                    "'userData' for firecracker VMs requires 'metadataEnabled' to be true")
+                        }
+                        guard
+                            resolvedInterfaces.contains(where: {
+                                $0.network.metadataEnabled && $0.network.dhcpEnabled
+                            })
+                        else {
+                            throw Abort(
+                                .badRequest,
+                                reason: "'userData' for firecracker VMs requires at least one selected network "
+                                    + "with metadata and DHCP enabled")
+                        }
                     }
 
                     // An IMDS seed carries no real user data of its own. At
@@ -1757,6 +1773,89 @@ struct VMController: RouteCollection {
         try await AcceptedMutation(
             detail(for: vm, on: req, resolvingEnforcement: resolvingEnforcement), accepted
         ).acceptedResponse()
+    }
+
+    // MARK: - Exec (STR-81)
+
+    /// `POST /api/vms/:id/exec`: mint an exec session inside a running VM.
+    /// The process starts only when the caller attaches to the returned
+    /// WebSocket path.
+    func exec(req: Request) async throws -> Response {
+        let user = try req.requireActingUser("Mutating a VM")
+
+        let execRequest = try req.content.decode(GuestExecRequest.self)
+        try execRequest.validate()
+
+        let vm = try await fetchVMWithAction(req: req, action: "vm:exec")
+        let vmID = try vm.requireID()
+
+        guard vm.isRunning else {
+            throw Abort(
+                .badRequest,
+                reason: "VM must be running to exec. Current state: \(vm.status.rawValue)")
+        }
+
+        guard vm.guestAgentEnabled else {
+            throw Abort(
+                .badRequest,
+                reason: "VM exec requires a VM created with the Strato guest agent enabled")
+        }
+
+        guard let agentIdString = vm.hypervisorId,
+            let agentId = UUID(uuidString: agentIdString)
+        else {
+            throw Abort(.conflict, reason: "VM is not placed on any agent")
+        }
+
+        guard let agent = try await Agent.find(agentId, on: req.db) else {
+            throw Abort(.internalServerError, reason: "Agent not found for VM")
+        }
+
+        // A virtio-vsock device does not prove that this agent build has the
+        // node-agent bridge that speaks the guest exec protocol. Fail closed
+        // until the assigned backend explicitly advertises STR-82 support;
+        // otherwise every successfully minted session would be rejected by
+        // the production agent after attach.
+        guard agent.supportsGuestExec(for: vm.hypervisorType) else {
+            throw Abort(
+                .serviceUnavailable,
+                reason:
+                    "Agent '\(agent.name)' does not support VM guest exec for \(vm.hypervisorType.rawValue)"
+            )
+        }
+
+        // Exec frames flow over the agent's WebSocket, which only this
+        // process can write to. If another replica holds the socket the
+        // client must retry against that replica (console parity).
+        guard req.application.websocketManager.getConnection(agentKey: agent.identity.key) != nil else {
+            throw Abort(
+                .serviceUnavailable,
+                reason:
+                    "Agent '\(agent.name)' is not connected to this control-plane replica; exec requires the replica holding the agent socket"
+            )
+        }
+
+        let session = req.guestExecSessionManager.createPendingSession(
+            resourceKind: .virtualMachine,
+            resourceId: vmID.uuidString,
+            agentKey: agent.identity.key,
+            userId: try user.requireID().uuidString,
+            command: execRequest.command,
+            env: execRequest.env,
+            workingDir: execRequest.workingDir,
+            tty: execRequest.tty ?? false,
+            rows: execRequest.rows,
+            cols: execRequest.cols
+        )
+
+        let response = Response(status: .created)
+        try response.content.encode(
+            GuestExecSessionResponse(
+                sessionId: session.sessionId,
+                websocketPath: "/api/vms/\(vmID.uuidString)/exec/\(session.sessionId)/attach",
+                expiresAt: session.expiresAt
+            ))
+        return response
     }
 
     func delete(req: Request) async throws -> Response {

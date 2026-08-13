@@ -125,6 +125,20 @@ extension EC2MetadataPath.NetworkInterfaceLeaf {
     }
 }
 
+extension EC2MetadataPath.NetworkInterfaceLeaf: CaseIterable {
+    public static let allCases: [Self] = [
+        .deviceNumber,
+        .ipv6s,
+        .localHostname,
+        .localIPv4s,
+        .mac,
+        .ownerID,
+        .subnetID,
+        .subnetIPv4CIDRBlock,
+        .subnetIPv6CIDRBlocks,
+    ]
+}
+
 /// One address in EC2's `dynamic/` tree.
 public enum EC2DynamicPath: Sendable, Equatable, Hashable {
     case index
@@ -157,6 +171,89 @@ public struct EC2MetadataRenderOptions: Sendable, Equatable {
 
 /// Renders the EC2 projection of one `InstanceMetadata` value.
 public enum EC2MetadataRenderer {
+    /// Renders the EC2 document as Firecracker's nested MMDS data store.
+    ///
+    /// MMDS is an object tree rather than a read-through HTTP router, so each
+    /// leaf is copied from the same path renderer the OVN transport uses. A
+    /// metadata refresh replaces this entire value; an empty object therefore
+    /// means "serve nothing" rather than "leave the previous snapshot alone".
+    public static func mmdsDocument(
+        for metadata: InstanceMetadata,
+        options: EC2MetadataRenderOptions = .init()
+    ) -> JSONValue {
+        guard metadata.isServiceEnabled else { return .object([:]) }
+
+        var metaData: [String: JSONValue] = [:]
+        insert(.instanceID, as: "instance-id", metadata: metadata, options: options, into: &metaData)
+        insert(.hostname, as: "hostname", metadata: metadata, options: options, into: &metaData)
+        insert(.localHostname, as: "local-hostname", metadata: metadata, options: options, into: &metaData)
+        insert(.localIPv4, as: "local-ipv4", metadata: metadata, options: options, into: &metaData)
+        insert(.ipv6, as: "ipv6", metadata: metadata, options: options, into: &metaData)
+        insert(.mac, as: "mac", metadata: metadata, options: options, into: &metaData)
+
+        var interfaces: [String: JSONValue] = [:]
+        for nic in metadata.nics {
+            let macAddress = nic.macAddress.lowercased()
+            var leaves: [String: JSONValue] = [:]
+            for leaf in EC2MetadataPath.NetworkInterfaceLeaf.allCases {
+                guard
+                    let value = render(
+                        .networkInterfaceLeaf(macAddress: macAddress, leaf: leaf),
+                        for: metadata,
+                        options: options)
+                else { continue }
+                leaves[leaf.rawValue] = .string(value)
+            }
+            interfaces[macAddress] = .object(leaves)
+        }
+        if !interfaces.isEmpty {
+            metaData["network"] = .object([
+                "interfaces": .object([
+                    "macs": .object(interfaces)
+                ])
+            ])
+        }
+
+        if options.disclosePlacement {
+            var placement: [String: JSONValue] = [:]
+            insert(
+                .availabilityZone, as: "availability-zone", metadata: metadata,
+                options: options, into: &placement)
+            insert(.region, as: "region", metadata: metadata, options: options, into: &placement)
+            if !placement.isEmpty { metaData["placement"] = .object(placement) }
+        }
+
+        let keys = servableSSHKeys(metadata)
+        if !keys.isEmpty {
+            metaData["public-keys"] = .object(
+                Dictionary(
+                    uniqueKeysWithValues: keys.indices.map { index in
+                        (String(index), .object(["openssh-key": .string(keys[index])]))
+                    }))
+        }
+
+        let tags = servableTags(metadata.tags)
+        if !tags.isEmpty {
+            metaData["tags"] = .object([
+                "instance": .object(tags.mapValues(JSONValue.string))
+            ])
+        }
+
+        var latest: [String: JSONValue] = [
+            "meta-data": .object(metaData),
+            "user-data": .string(CloudInitProvisioner.userDataDocument(for: metadata)),
+        ]
+        if let identity = render(.instanceIdentityDocument, for: metadata, options: options) {
+            latest["dynamic"] = .object([
+                "instance-identity": .object([
+                    "document": .string(identity)
+                ])
+            ])
+        }
+
+        return .object(["latest": .object(latest)])
+    }
+
     public static func render(
         _ path: EC2MetadataPath,
         for metadata: InstanceMetadata,
@@ -378,5 +475,16 @@ public enum EC2MetadataRenderer {
 
     private static func listing<S: Sequence>(_ values: S) -> String where S.Element == String {
         values.sorted().joined(separator: "\n")
+    }
+
+    private static func insert(
+        _ path: EC2MetadataPath,
+        as key: String,
+        metadata: InstanceMetadata,
+        options: EC2MetadataRenderOptions,
+        into object: inout [String: JSONValue]
+    ) {
+        guard let value = render(path, for: metadata, options: options) else { return }
+        object[key] = .string(value)
     }
 }

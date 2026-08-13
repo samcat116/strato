@@ -420,12 +420,14 @@ run swtpm for VMs. Killed by Firecracker having no TPM (so it cannot generalize
 to sandboxes) and by per-guest DevID certificates requiring a device-identity CA
 — a larger project than this one.
 
-**3. Firecracker MMDS.** Already wrapped and ready
-(`SwiftFirecracker/Sources/SwiftFirecracker/Models/MMDS.swift`,
-`FirecrackerManager.configureMMDS`) and called by nothing. Killed by needing
-guest networking; by being sandbox-only with no QEMU counterpart; and by being a
-pull-only metadata store readable by anything in the guest that can reach the
-link-local address — no stream, so no rotation and no revocation.
+**3. Firecracker MMDS.** This is now the Firecracker VM transport for the
+ordinary EC2 metadata document (STR-67), with no host-side networking. It is
+still rejected as a Workload API or private-key delivery mechanism: MMDS is a
+pull-only, agent-refreshed snapshot readable by anything in the guest that can
+reach the link-local address, with no rotation stream and no per-workload
+isolation inside the VM. It also remains intentionally absent from sandboxes,
+whose guest contract is `SandboxConfigDrive`, and has no QEMU-vsock counterpart
+for this identity protocol.
 
 **4. cloud-init `write_files`.** The NoCloud ISO is built once during `createVM`
 and attached read-only — structurally a one-shot bootstrap channel. It cannot

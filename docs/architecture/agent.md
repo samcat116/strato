@@ -557,6 +557,14 @@ bootstrap is deliberately per-backend. Firecracker currently has no cloud-init
 injection path, so VM creation rejects both `imds` and caller-supplied user data
 for that hypervisor instead of accepting configuration it cannot deliver.
 
+Before an existing IMDS-backed QEMU VM boots, the agent refreshes that local
+seed from current desired state and narrowly migrates its inactive libvirt
+definition when the x86 NoCloud network-mode SMBIOS hint is absent. This makes
+the bootstrap repair apply to VMs created by older agents without rebuilding
+their domain XML or changing full-ISO guests. A failed refresh or migration
+keeps the VM stopped; a running QEMU process alone is not evidence that
+cloud-init selected the intended datasource.
+
 VM creation rejects `imds` when the VM-level metadata switch is off or when
 none of its selected logical networks publish metadata. Either configuration
 would create a seed whose hand-off URL has no reachable listener; `iso` remains
@@ -1065,7 +1073,11 @@ controlling PTY. Closing the host connection before `exec_exit` kills that
 group. Unlike the sandbox init, the daemon owns and waits for each child itself
 because it is not PID 1. STR-80 packages it as
 `strato-guest-agent-<arch>.tar.gz` with a systemd unit and publishes
-`guest-agent-manifest.json`; STR-82 owns the node-agent vsock bridge.
+`guest-agent-manifest.json`; STR-82 owns the node-agent vsock bridge. Until that
+bridge lands, the agent does not advertise
+`HypervisorSupport.supportsGuestExec`; the control plane therefore returns 503
+before minting a VM exec session rather than handing the browser a session the
+agent will immediately reject.
 
 ## Networking
 
@@ -1273,6 +1285,43 @@ would be wrong:
 
 A nil `metadata` on a desired entry is authoritative and withdraws what we
 serve for that VM.
+
+### Firecracker MMDS (a refreshed snapshot)
+
+Firecracker VMs use the same `MetadataStore` and EC2 renderer, but a different
+transport (STR-67). `FirecrackerService.createVM` opts each
+`metadataEnabled` NIC into MMDS by its Firecracker interface id (`eth0`,
+`eth1`, ...), configures **MMDS v2**, and pushes the nested `/latest`
+document from the generation-guarded store before the VM boots. MMDS terminates
+inside Firecracker, so this path does not need an OVN localport, network
+namespace, host listener, or any other host networking. A NIC not named in the
+MMDS configuration cannot reach it.
+
+The interface allow-list is Firecracker pre-boot configuration. Editing a
+Firecracker VM's per-NIC `metadataEnabled` policy therefore replaces the VMM
+process against the same managed disks and TAPs, installs the new allow-list,
+and restores the desired running/paused/shutdown state. The operation interrupts
+a running guest; it does not recreate its storage or network identity. This is
+the enforcement path that prevents a disabled NIC from retaining MMDS access.
+
+Unlike the OVN listener below, MMDS is **not a read-through view** of
+`MetadataStore`. It is a per-VMM snapshot replaced with `PUT /mmds`. After
+each desired-state sync records metadata, the agent re-renders the store's
+generation-guarded value and replaces each managed Firecracker VM's MMDS
+snapshot; equal-generation metadata-only edits therefore propagate, and a nil,
+withdrawn, disabled, or agent-globally-disabled document replaces the old
+snapshot with an empty object. The service caches the last successfully pushed
+bytes only to avoid an identical PUT. Re-adoption performs the same refresh
+from the durable metadata store immediately, then normal syncs remain the retry
+mechanism.
+
+That copy boundary is an intentional semantic difference: metadata mutations
+become visible to a Firecracker guest **no sooner than the agent applies the
+desired-state sync**, and the guest reads the last successful snapshot between
+syncs. Freshness is thus bounded by desired-state sync cadence rather than
+request time. This applies to Firecracker **VMs only**. Sandboxes are not
+cloud-init consumers and keep their separate `SandboxConfigDrive` guest
+contract; the sandbox runtime never configures MMDS.
 
 ### Instance metadata server (the guest-facing listener)
 

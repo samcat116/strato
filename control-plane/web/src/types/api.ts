@@ -614,6 +614,7 @@ export interface HypervisorSupport {
   unavailabilityReason?: string;
   capabilities: HypervisorCapabilities;
   supportsVsock?: boolean;
+  supportsGuestExec?: boolean;
 }
 
 // Descriptive hardware/platform/OS details the agent reports at registration,
@@ -1178,6 +1179,8 @@ export interface CreateVMRequest {
    * format cloud-init dispatches on: `#cloud-config`, `#!` shell script,
    * `#include`, `## template: jinja`, or a full MIME multipart document
    * (which replaces Strato's built-in provisioning entirely).
+   * Firecracker delivers this through MMDS, so its VM metadata service and at
+   * least one selected metadata-enabled network must be enabled at creation.
    */
   userData?: string;
   /**
