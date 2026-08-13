@@ -618,7 +618,7 @@ final class IAMAuthorizerBackstopTests {
                 method: method, pathComponents: path.split(separator: "/"), resource: sandboxes)
         }
 
-        // The two shapes the guest-agent exec endpoints will serve. The
+        // The live interactive shape and the reserved async shape. The
         // failure this guards is silent: an unlisted POST subpath falls back
         // to `vm:update` — an *editor* action gating a root shell.
         #expect(action("/api/vms/\(id)/exec") == "vm:exec")
@@ -626,8 +626,8 @@ final class IAMAuthorizerBackstopTests {
 
         // An interactive session is a WebSocket upgrade — a GET — so the verb
         // has to win over the `read` default there too, or the shell is gated
-        // on a *viewer* action. This is the live shape of the sandbox exec
-        // attach route, generalized to VMs by the guest-agent work.
+        // on a *viewer* action. Sandbox and VM attach must derive their own
+        // exec actions rather than the read fallback.
         #expect(action("/api/vms/\(id)/exec", .GET) == "vm:exec")
         #expect(action("/api/vms/\(id)/exec/\(id)/attach", .GET) == "vm:exec")
         #expect(sandboxAction("/api/sandboxes/\(id)/exec/\(id)/attach", .GET) == "sandbox:exec")

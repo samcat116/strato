@@ -702,7 +702,8 @@ could previously reach on a safe method, all of them the defect rather than
 collateral: the sandbox exec-attach WebSocket (`sandbox:exec`, a GET), the VM
 console upgrade (`vm:viewConsole`, an editor action — and CLI sessions, which
 the hand-written scope carve-out never checked, are now covered by the same
-path), and `vm:exec`/`vm:runCommand` when their routes land.
+path), the VM exec-attach WebSocket (`vm:exec`, also a GET), and
+`vm:runCommand` when its route lands.
 
 A fourth follows from the same rule but surfaces differently, and operators
 driving enrollment tooling with a read-only credential need to widen it before

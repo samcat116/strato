@@ -3455,6 +3455,9 @@ extension Agent {
             ])
 
         guard message.resourceKind == .sandbox else {
+            // Defense in depth: the current registration deliberately omits
+            // `supportsGuestExec`, so the control plane must not send VM exec
+            // here until STR-82 installs and advertises the node-agent bridge.
             await sendGuestExecClosed(
                 sessionId: message.sessionId, reason: "VM exec is not supported by this agent build")
             return

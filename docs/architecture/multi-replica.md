@@ -116,9 +116,9 @@ socket.
 Live byte streams — console, exec, log forwarding — do stay imperative by
 design (ADR 0001: session lifetime is a browser tab, not cluster intent), but
 they are **not** correlated request/response and never travelled this path:
-`ConsoleSessionManager` and `SandboxExecSessionManager` write straight to the
+`ConsoleSessionManager` and `GuestExecSessionManager` write straight to the
 local socket and fail if this replica does not hold it, which is the
-single-replica limitation `docs/architecture/sandboxes.md` records.
+single-replica limitation the guest-exec and console surfaces record.
 
 v34 left the forwarding path with no sender at all, and STR-152 (ADR stage 11)
 deleted it: `AgentService.sendMessageToAgentWithResponse` and the

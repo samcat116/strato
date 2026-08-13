@@ -13,7 +13,7 @@ import Foundation
 /// recovers.
 ///
 /// This is the discipline the sandbox exec path already uses (see
-/// `SandboxExecWebSocketController`'s pump): producers `yield` synchronously,
+/// `GuestExecWebSocketController`'s pump): producers `yield` synchronously,
 /// preserving arrival order, and exactly one consumer task drains the stream,
 /// so the sink is entered once at a time and in order.
 public final class OrderedByteRelay: Sendable {

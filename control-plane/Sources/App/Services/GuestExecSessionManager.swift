@@ -3,29 +3,28 @@ import NIOConcurrencyHelpers
 import StratoShared
 import Vapor
 
-/// Manages sandbox exec sessions (issue #423) between browser WebSockets and
-/// agents, closely modeled on `ConsoleSessionManager`.
+/// Manages guest exec sessions between browser WebSockets and agents, closely
+/// modeled on `ConsoleSessionManager`.
 ///
 /// A session has two phases:
-/// 1. **Pending** — minted by `POST /api/sandboxes/:id/exec`. Records who may
-///    attach (the creating user), which sandbox/agent the exec targets, and
-///    the exec request itself. Expires after `pendingSessionTTL` if never
+/// 1. **Pending** — minted by `POST /api/{vms|sandboxes}/:id/exec`. Records who
+///    may attach (the creating user), which resource/agent the exec targets,
+///    and the exec request itself. Expires after `pendingSessionTTL` if never
 ///    attached; expired entries are swept lazily on access.
-/// 2. **Attached** — the browser connected to
-///    `/api/sandboxes/:id/exec/:sessionId/attach` and the
-///    `GuestExecStartMessage` went to the agent. Frames are relayed both
+/// 2. **Attached** — the browser connected to the resource's exec attach route
+///    and the `GuestExecStartMessage` went to the agent. Frames are relayed both
 ///    ways until exit/close.
 ///
 /// Like the console path, messages go to the agent only over a *local*
 /// WebSocket (`app.websocketManager`): exec requires the control-plane
 /// replica that holds the agent's socket (single-replica limitation, accepted
-/// and documented in `docs/architecture/sandboxes.md`).
+/// and documented in `docs/architecture/multi-replica.md`).
 ///
 /// This is NOT an actor to avoid event loop conflicts with NIO WebSockets.
 /// Safety: `app` is immutable and every access to pending, attached, browser,
-/// and sandbox-index state is inside `lock`. Returned session values are
+/// and resource-index state is inside `lock`. Returned session values are
 /// immutable snapshots rather than references to that state.
-final class SandboxExecSessionManager: @unchecked Sendable {
+final class GuestExecSessionManager: @unchecked Sendable {
     /// How long a pending session may sit unattached before it expires.
     static let pendingSessionTTL: TimeInterval = 60
 
@@ -41,14 +40,25 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     /// Maps sessionId -> browser WebSocket.
     private var frontendConnections: [String: WebSocket] = [:]
 
-    /// Maps sandboxId -> attached sessionIds (multiple execs may run at once).
-    private var sandboxSessions: [String: Set<String>] = [:]
+    /// Maps a kind-aware resource key to its attached session ids.
+    private var resourceSessions: [ResourceKey: Set<String>] = [:]
+
+    private struct ResourceKey: Hashable {
+        let kind: GuestResourceKind
+        let id: String
+
+        init(kind: GuestResourceKind, id: String) {
+            self.kind = kind
+            self.id = UUID(uuidString: id)?.uuidString ?? id
+        }
+    }
 
     /// A minted-but-not-yet-attached exec session: everything needed to build
     /// the `GuestExecStartMessage` once the browser attaches.
     struct PendingExecSession: Sendable {
         let sessionId: String
-        let sandboxId: String
+        let resourceKind: GuestResourceKind
+        let resourceId: String
         let agentKey: String
         let userId: String
         let command: [String]
@@ -63,7 +73,8 @@ final class SandboxExecSessionManager: @unchecked Sendable {
 
     struct AttachedExecSession: Sendable {
         let sessionId: String
-        let sandboxId: String
+        let resourceKind: GuestResourceKind
+        let resourceId: String
         let agentKey: String
         let userId: String
         let attachedAt: Date
@@ -78,7 +89,8 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     /// Mint a pending session for a validated exec request. Returns the
     /// session (including `expiresAt`) for the 201 response.
     func createPendingSession(
-        sandboxId: String,
+        resourceKind: GuestResourceKind,
+        resourceId: String,
         agentKey: String,
         userId: String,
         command: [String],
@@ -91,7 +103,8 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     ) -> PendingExecSession {
         let session = PendingExecSession(
             sessionId: UUID().uuidString,
-            sandboxId: sandboxId,
+            resourceKind: resourceKind,
+            resourceId: resourceId,
             agentKey: agentKey,
             userId: userId,
             command: command,
@@ -110,10 +123,11 @@ final class SandboxExecSessionManager: @unchecked Sendable {
         }
 
         app.logger.info(
-            "Sandbox exec session created",
+            "Guest exec session created",
             metadata: [
                 "sessionId": .string(session.sessionId),
-                "sandboxId": .string(sandboxId),
+                "resourceKind": .string(resourceKind.rawValue),
+                "resourceId": .string(resourceId),
                 "agentKey": .string(agentKey),
             ])
 
@@ -132,44 +146,48 @@ final class SandboxExecSessionManager: @unchecked Sendable {
 
     /// Consume a pending session and bind the browser WebSocket to it.
     ///
-    /// Validates that the session exists, has not expired, targets `sandboxId`,
-    /// and was minted for `userId`. On success the session moves from pending
-    /// to attached and the returned value carries the exec request for
+    /// Validates that the session exists, has not expired, targets the supplied
+    /// resource, and was minted for `userId`. On success the session moves from
+    /// pending to attached and the returned value carries the exec request for
     /// `sendExecStart(for:)`.
     ///
     /// `websocket` is optional only so unit tests can exercise the lifecycle
     /// without a live socket; the controller always passes one.
     func attachSession(
         sessionId: String,
-        sandboxId: String,
+        resourceKind: GuestResourceKind,
+        resourceId: String,
         userId: String,
         websocket: WebSocket?,
         now: Date = Date()
     ) throws -> PendingExecSession {
         let session = try lock.withLock { () -> PendingExecSession in
             if sessions[sessionId] != nil {
-                throw SandboxExecSessionError.alreadyAttached(sessionId)
+                throw GuestExecSessionError.alreadyAttached(sessionId)
             }
             guard let pending = pendingSessions[sessionId] else {
                 sweepExpiredPendingLocked(now: now)
-                throw SandboxExecSessionError.sessionNotFound(sessionId)
+                throw GuestExecSessionError.sessionNotFound(sessionId)
             }
             guard pending.expiresAt > now else {
                 pendingSessions.removeValue(forKey: sessionId)
-                throw SandboxExecSessionError.sessionExpired(sessionId)
+                throw GuestExecSessionError.sessionExpired(sessionId)
             }
             // Compare as UUIDs so casing differences cannot cause a false
             // mismatch between the minted id and the path parameter.
-            let sandboxMatches = UUID(uuidString: pending.sandboxId) == UUID(uuidString: sandboxId)
+            let resourceMatches =
+                pending.resourceKind == resourceKind
+                && UUID(uuidString: pending.resourceId) == UUID(uuidString: resourceId)
             let userMatches = UUID(uuidString: pending.userId) == UUID(uuidString: userId)
-            guard sandboxMatches, userMatches else {
-                throw SandboxExecSessionError.sessionMismatch(sessionId)
+            guard resourceMatches, userMatches else {
+                throw GuestExecSessionError.sessionMismatch(sessionId)
             }
 
             pendingSessions.removeValue(forKey: sessionId)
             sessions[sessionId] = AttachedExecSession(
                 sessionId: sessionId,
-                sandboxId: pending.sandboxId,
+                resourceKind: pending.resourceKind,
+                resourceId: pending.resourceId,
                 agentKey: pending.agentKey,
                 userId: pending.userId,
                 attachedAt: now
@@ -177,15 +195,18 @@ final class SandboxExecSessionManager: @unchecked Sendable {
             if let websocket {
                 frontendConnections[sessionId] = websocket
             }
-            sandboxSessions[pending.sandboxId, default: []].insert(sessionId)
+            resourceSessions[
+                ResourceKey(kind: pending.resourceKind, id: pending.resourceId), default: []
+            ].insert(sessionId)
             return pending
         }
 
         app.logger.info(
-            "Sandbox exec session attached",
+            "Guest exec session attached",
             metadata: [
                 "sessionId": .string(sessionId),
-                "sandboxId": .string(session.sandboxId),
+                "resourceKind": .string(session.resourceKind.rawValue),
+                "resourceId": .string(session.resourceId),
                 "agentKey": .string(session.agentKey),
             ])
 
@@ -199,15 +220,17 @@ final class SandboxExecSessionManager: @unchecked Sendable {
         lock.withLock {
             guard let session = sessions.removeValue(forKey: sessionId) else { return }
             frontendConnections.removeValue(forKey: sessionId)
-            sandboxSessions[session.sandboxId]?.remove(sessionId)
-            if sandboxSessions[session.sandboxId]?.isEmpty == true {
-                sandboxSessions.removeValue(forKey: session.sandboxId)
+            let resourceKey = ResourceKey(kind: session.resourceKind, id: session.resourceId)
+            resourceSessions[resourceKey]?.remove(sessionId)
+            if resourceSessions[resourceKey]?.isEmpty == true {
+                resourceSessions.removeValue(forKey: resourceKey)
             }
             app.logger.info(
-                "Sandbox exec session removed",
+                "Guest exec session removed",
                 metadata: [
                     "sessionId": .string(sessionId),
-                    "sandboxId": .string(session.sandboxId),
+                    "resourceKind": .string(session.resourceKind.rawValue),
+                    "resourceId": .string(session.resourceId),
                 ])
         }
     }
@@ -219,10 +242,11 @@ final class SandboxExecSessionManager: @unchecked Sendable {
         }
     }
 
-    /// All attached sessions for a sandbox.
-    func getSessionsForSandbox(sandboxId: String) -> [AttachedExecSession] {
+    /// All attached sessions for one guest resource.
+    func getSessions(resourceKind: GuestResourceKind, resourceId: String) -> [AttachedExecSession] {
         lock.withLock {
-            guard let sessionIds = sandboxSessions[sandboxId] else { return [] }
+            let resourceKey = ResourceKey(kind: resourceKind, id: resourceId)
+            guard let sessionIds = resourceSessions[resourceKey] else { return [] }
             return sessionIds.compactMap { sessions[$0] }
         }
     }
@@ -241,9 +265,10 @@ final class SandboxExecSessionManager: @unchecked Sendable {
             for (sessionId, session) in sessions where session.agentKey == agentKey {
                 sessions.removeValue(forKey: sessionId)
                 let websocket = frontendConnections.removeValue(forKey: sessionId)
-                sandboxSessions[session.sandboxId]?.remove(sessionId)
-                if sandboxSessions[session.sandboxId]?.isEmpty == true {
-                    sandboxSessions.removeValue(forKey: session.sandboxId)
+                let resourceKey = ResourceKey(kind: session.resourceKind, id: session.resourceId)
+                resourceSessions[resourceKey]?.remove(sessionId)
+                if resourceSessions[resourceKey]?.isEmpty == true {
+                    resourceSessions.removeValue(forKey: resourceKey)
                 }
                 closed.append((sessionId, websocket))
             }
@@ -252,7 +277,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
 
         for (sessionId, websocket) in closed {
             app.logger.info(
-                "Closed sandbox exec session: agent disconnected",
+                "Closed guest exec session: agent disconnected",
                 metadata: [
                     "sessionId": .string(sessionId),
                     "agentKey": .string(agentKey),
@@ -268,8 +293,8 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     /// Send the exec start message to the agent for a freshly attached session.
     func sendExecStart(for session: PendingExecSession) async throws {
         let message = GuestExecStartMessage(
-            resourceKind: .sandbox,
-            resourceId: session.sandboxId,
+            resourceKind: session.resourceKind,
+            resourceId: session.resourceId,
             sessionId: session.sessionId,
             command: session.command,
             env: session.env,
@@ -284,7 +309,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     /// Relay browser stdin bytes (and/or EOF) to the agent.
     func routeInput(sessionId: String, data: Data?, eof: Bool = false) async throws {
         guard let session = getSession(sessionId: sessionId) else {
-            throw SandboxExecSessionError.sessionNotFound(sessionId)
+            throw GuestExecSessionError.sessionNotFound(sessionId)
         }
         let message: GuestExecInputMessage
         if let data {
@@ -298,7 +323,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     /// Relay a browser resize request to the agent.
     func routeResize(sessionId: String, rows: Int, cols: Int) async throws {
         guard let session = getSession(sessionId: sessionId) else {
-            throw SandboxExecSessionError.sessionNotFound(sessionId)
+            throw GuestExecSessionError.sessionNotFound(sessionId)
         }
         let message = GuestExecResizeMessage(sessionId: sessionId, rows: rows, cols: cols)
         try await sendMessageToAgent(message, agentKey: session.agentKey)
@@ -383,13 +408,13 @@ final class SandboxExecSessionManager: @unchecked Sendable {
         }
         guard let session else {
             app.logger.debug(
-                "Sandbox exec \(event) for unknown session",
+                "Guest exec \(event) for unknown session",
                 metadata: ["sessionId": .string(sessionId), "agentKey": .string(agentKey)])
             return nil
         }
         guard session.agentKey == agentKey else {
             app.logger.warning(
-                "Dropping sandbox exec \(event) from an agent that does not own the session",
+                "Dropping guest exec \(event) from an agent that does not own the session",
                 metadata: [
                     "sessionId": .string(sessionId),
                     "agentKey": .string(agentKey),
@@ -453,8 +478,12 @@ final class SandboxExecSessionManager: @unchecked Sendable {
         for (sessionId, pending) in pendingSessions where pending.expiresAt <= now {
             pendingSessions.removeValue(forKey: sessionId)
             app.logger.debug(
-                "Expired unattached sandbox exec session",
-                metadata: ["sessionId": .string(sessionId), "sandboxId": .string(pending.sandboxId)])
+                "Expired unattached guest exec session",
+                metadata: [
+                    "sessionId": .string(sessionId),
+                    "resourceKind": .string(pending.resourceKind.rawValue),
+                    "resourceId": .string(pending.resourceId),
+                ])
         }
     }
 
@@ -464,9 +493,9 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     private func sendMessageToAgent<T: WebSocketMessage>(_ message: T, agentKey: String) async throws {
         guard let websocket = app.websocketManager.getConnection(agentKey: agentKey) else {
             app.logger.error(
-                "Agent WebSocket not found for sandbox exec message",
+                "Agent WebSocket not found for guest exec message",
                 metadata: ["agentKey": .string(agentKey)])
-            throw SandboxExecSessionError.agentNotConnected(agentKey)
+            throw GuestExecSessionError.agentNotConnected(agentKey)
         }
 
         let envelope = try MessageEnvelope(message: message)
@@ -477,7 +506,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
 
 // MARK: - Errors
 
-enum SandboxExecSessionError: Error, LocalizedError, Equatable {
+enum GuestExecSessionError: Error, LocalizedError, Equatable {
     case sessionNotFound(String)
     case sessionExpired(String)
     case sessionMismatch(String)
@@ -491,7 +520,7 @@ enum SandboxExecSessionError: Error, LocalizedError, Equatable {
         case .sessionExpired(let sessionId):
             return "Exec session expired: \(sessionId)"
         case .sessionMismatch(let sessionId):
-            return "Exec session does not match this sandbox or user: \(sessionId)"
+            return "Exec session does not match this resource or user: \(sessionId)"
         case .alreadyAttached(let sessionId):
             return "Exec session is already attached: \(sessionId)"
         case .agentNotConnected(let agentKey):
@@ -503,22 +532,22 @@ enum SandboxExecSessionError: Error, LocalizedError, Equatable {
 // MARK: - Application Extension
 
 extension Application {
-    private struct SandboxExecSessionManagerKey: StorageKey, LockKey {
-        typealias Value = SandboxExecSessionManager
+    private struct GuestExecSessionManagerKey: StorageKey, LockKey {
+        typealias Value = GuestExecSessionManager
     }
 
-    var sandboxExecSessionManager: SandboxExecSessionManager {
+    var guestExecSessionManager: GuestExecSessionManager {
         get {
-            lazyService(SandboxExecSessionManagerKey.self) { SandboxExecSessionManager(app: self) }
+            lazyService(GuestExecSessionManagerKey.self) { GuestExecSessionManager(app: self) }
         }
         set {
-            setStorageValue(SandboxExecSessionManagerKey.self, to: newValue)
+            setStorageValue(GuestExecSessionManagerKey.self, to: newValue)
         }
     }
 }
 
 extension Request {
-    var sandboxExecSessionManager: SandboxExecSessionManager {
-        return application.sandboxExecSessionManager
+    var guestExecSessionManager: GuestExecSessionManager {
+        return application.guestExecSessionManager
     }
 }

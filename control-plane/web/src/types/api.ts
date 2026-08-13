@@ -613,6 +613,7 @@ export interface HypervisorSupport {
   unavailabilityReason?: string;
   capabilities: HypervisorCapabilities;
   supportsVsock?: boolean;
+  supportsGuestExec?: boolean;
 }
 
 // Descriptive hardware/platform/OS details the agent reports at registration,
