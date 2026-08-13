@@ -28,7 +28,7 @@ struct GuestControlProtocolHardeningTests {
         // thing that can reject this: assert the case, not just that something
         // threw, or deleting the guard would leave the test green.
         let filler = String(repeating: "a", count: Limits.maxLineBytes)
-        let line = #"{"type":"log_eof","x":"\#(filler)"}"#
+        let line = #"{"type":"log_eof","nonce":"n","x":"\#(filler)"}"#
         let error = #expect(throws: GuestControlError.self) {
             try GuestControlProtocol.Response.decode(line: line)
         }
@@ -43,11 +43,11 @@ struct GuestControlProtocolHardeningTests {
     func lineAtCapAccepted() {
         // Same shape one byte shorter: it must decode, proving the cap does not
         // fire early. Unknown fields are ignored, so this is a plain log_eof.
-        let base = #"{"type":"log_eof","x":""}"#
+        let base = #"{"type":"log_eof","nonce":"n","x":""}"#
         let filler = String(repeating: "a", count: Limits.maxLineBytes - base.utf8.count)
-        let line = #"{"type":"log_eof","x":"\#(filler)"}"#
+        let line = #"{"type":"log_eof","nonce":"n","x":"\#(filler)"}"#
         #expect(line.utf8.count == Limits.maxLineBytes)
-        #expect((try? GuestControlProtocol.Response.decode(line: line)) == .logEof)
+        #expect((try? GuestControlProtocol.Response.decode(line: line)) == .logEof(nonce: "n"))
     }
 
     // MARK: - Field length caps
@@ -58,8 +58,8 @@ struct GuestControlProtocolHardeningTests {
         // would replace the guest's actual complaint with "field too large".
         let message = "boom: " + String(repeating: "x", count: Limits.maxMessageBytes)
         let response = try GuestControlProtocol.Response.decode(
-            line: #"{"type":"error","message":"\#(message)"}"#)
-        guard case .error(let delivered) = response else {
+            line: #"{"type":"error","nonce":"n","message":"\#(message)"}"#)
+        guard case .error(_, let delivered) = response else {
             Issue.record("expected an error response, got \(response)")
             return
         }
@@ -71,8 +71,9 @@ struct GuestControlProtocolHardeningTests {
     @Test("an error message at the cap is delivered whole, unmarked")
     func messageAtCapUntouched() {
         let atCap = String(repeating: "x", count: Limits.maxMessageBytes)
-        let accepted = try? GuestControlProtocol.Response.decode(line: #"{"type":"error","message":"\#(atCap)"}"#)
-        #expect(accepted == .error(message: atCap))
+        let accepted = try? GuestControlProtocol.Response.decode(
+            line: #"{"type":"error","nonce":"n","message":"\#(atCap)"}"#)
+        #expect(accepted == .error(nonce: "n", message: atCap))
     }
 
     @Test("oversized identity fields are refused on pong and status")
@@ -95,6 +96,16 @@ struct GuestControlProtocolHardeningTests {
         }
         #expect(throws: GuestControlError.self) {
             try GuestControlProtocol.Response.decode(line: #"{"type":"status","state":"running"}"#)
+        }
+        for line in [
+            #"{"type":"exec_started"}"#,
+            #"{"type":"output","stream":"stdout","data":"aGk="}"#,
+            #"{"type":"exec_exit","exit_code":0}"#,
+            #"{"type":"error","message":"boom"}"#,
+        ] {
+            #expect(throws: GuestControlError.self) {
+                try GuestControlProtocol.Response.decode(line: line)
+            }
         }
     }
 
@@ -126,9 +137,9 @@ struct GuestControlProtocolHardeningTests {
     @Test("a payload exactly at the cap is accepted")
     func payloadAtCapAccepted() throws {
         let bytes = Data(repeating: 0x41, count: Limits.maxPayloadBytes)
-        let line = #"{"type":"output","stream":"stdout","data":"\#(bytes.base64EncodedString())"}"#
+        let line = #"{"type":"output","nonce":"n","stream":"stdout","data":"\#(bytes.base64EncodedString())"}"#
         let response = try GuestControlProtocol.Response.decode(line: line)
-        #expect(response == .output(stream: "stdout", data: bytes))
+        #expect(response == .output(nonce: "n", stream: "stdout", data: bytes))
     }
 
     @Test("the encoded-length cap admits every payload the byte cap does")
@@ -149,11 +160,11 @@ struct GuestControlProtocolHardeningTests {
         for label in ["", "stdin", "STDOUT", "stdout\u{0}", String(repeating: "s", count: 4096)] {
             #expect(throws: GuestControlError.self) {
                 try GuestControlProtocol.Response.decode(
-                    line: #"{"type":"log","seq":1,"stream":"\#(label)","data":"aGk="}"#)
+                    line: #"{"type":"log","nonce":"n","seq":1,"stream":"\#(label)","data":"aGk="}"#)
             }
             #expect(throws: GuestControlError.self) {
                 try GuestControlProtocol.Response.decode(
-                    line: #"{"type":"output","stream":"\#(label)","data":"aGk="}"#)
+                    line: #"{"type":"output","nonce":"n","stream":"\#(label)","data":"aGk="}"#)
             }
         }
     }
@@ -168,12 +179,15 @@ struct GuestControlProtocolHardeningTests {
         for seq in [UInt64.max, UInt64.max - 1, Limits.maxLogSeq + 1] {
             #expect(throws: GuestControlError.self) {
                 try GuestControlProtocol.Response.decode(
-                    line: #"{"type":"log","seq":\#(seq),"stream":"stdout","data":"aGk="}"#)
+                    line: #"{"type":"log","nonce":"n","seq":\#(seq),"stream":"stdout","data":"aGk="}"#)
             }
         }
         let accepted = try? GuestControlProtocol.Response.decode(
-            line: #"{"type":"log","seq":\#(Limits.maxLogSeq),"stream":"stdout","data":"aGk="}"#)
-        #expect(accepted == .log(seq: Limits.maxLogSeq, stream: "stdout", data: Data("hi".utf8)))
+            line: #"{"type":"log","nonce":"n","seq":\#(Limits.maxLogSeq),"stream":"stdout","data":"aGk="}"#)
+        #expect(
+            accepted
+                == .log(
+                    nonce: "n", seq: Limits.maxLogSeq, stream: "stdout", data: Data("hi".utf8)))
     }
 
     @Test("an exit code outside the guest's i32 range is refused")
@@ -181,7 +195,8 @@ struct GuestControlProtocolHardeningTests {
         let outside = [Int(Int32.max) + 1, Int(Int32.min) - 1, Int.max, Int.min]
         for value in outside {
             #expect(throws: GuestControlError.self) {
-                try GuestControlProtocol.Response.decode(line: #"{"type":"exec_exit","exit_code":\#(value)}"#)
+                try GuestControlProtocol.Response.decode(
+                    line: #"{"type":"exec_exit","nonce":"n","exit_code":\#(value)}"#)
             }
             #expect(throws: GuestControlError.self) {
                 try GuestControlProtocol.Response.decode(
@@ -189,8 +204,8 @@ struct GuestControlProtocolHardeningTests {
             }
         }
         let edges = try? GuestControlProtocol.Response.decode(
-            line: #"{"type":"exec_exit","exit_code":\#(Int32.min)}"#)
-        #expect(edges == .execExit(exitCode: Int(Int32.min)))
+            line: #"{"type":"exec_exit","nonce":"n","exit_code":\#(Int32.min)}"#)
+        #expect(edges == .execExit(nonce: "n", exitCode: Int(Int32.min)))
     }
 
     @Test("an out-of-range control protocol version is refused, not compared against")
@@ -206,11 +221,11 @@ struct GuestControlProtocolHardeningTests {
     @Test("numbers too large for their field's Swift type are a rejection, not a crash")
     func unrepresentableNumbersRefused() {
         let lines = [
-            #"{"type":"exec_exit","exit_code":99999999999999999999999999}"#,
-            #"{"type":"log","seq":-1,"stream":"stdout","data":"aGk="}"#,
-            #"{"type":"log","seq":1e400,"stream":"stdout","data":"aGk="}"#,
-            #"{"type":"exec_exit","exit_code":1.5}"#,
-            #"{"type":"exec_exit","exit_code":NaN}"#,
+            #"{"type":"exec_exit","nonce":"n","exit_code":99999999999999999999999999}"#,
+            #"{"type":"log","nonce":"n","seq":-1,"stream":"stdout","data":"aGk="}"#,
+            #"{"type":"log","nonce":"n","seq":1e400,"stream":"stdout","data":"aGk="}"#,
+            #"{"type":"exec_exit","nonce":"n","exit_code":1.5}"#,
+            #"{"type":"exec_exit","nonce":"n","exit_code":NaN}"#,
         ]
         for line in lines {
             #expect(throws: GuestControlError.self) {
@@ -253,7 +268,7 @@ struct GuestControlProtocolHardeningTests {
     func deepNestingRejected() {
         for depth in [64, 1_000, 20_000] {
             let line =
-                #"{"type":"log","seq":1,"a":"# + String(repeating: "[", count: depth)
+                #"{"type":"log","nonce":"n","seq":1,"a":"# + String(repeating: "[", count: depth)
                 + String(repeating: "]", count: depth) + "}"
             #expect(throws: GuestControlError.self) {
                 try GuestControlProtocol.Response.decode(line: line)
@@ -265,7 +280,7 @@ struct GuestControlProtocolHardeningTests {
     func nonObjectLinesRejected() {
         let lines = [
             "", "   ", "\n", "null", "[]", "[1,2,3]", "\"exec_started\"", "42",
-            "{", "}", "{\"type\"", #"{"type":}"#, #"{"type":"exec_started""#,
+            "{", "}", "{\"type\"", #"{"type":}"#, #"{"type":"exec_started","nonce":"n""#,
             "\u{0}\u{0}\u{0}", "\u{FFFD}", #"{"type":123}"#, #"{"type":null}"#, "{}",
         ]
         for line in lines {
@@ -381,17 +396,20 @@ struct GuestControlProtocolHardeningTests {
             return nil
         case .status(let id, let nonce, _, let exitCode):
             return checkIdentity(id, "sandbox_id") ?? checkIdentity(nonce, "nonce") ?? checkExitCode(exitCode)
-        case .error(let message):
-            return message.utf8.count <= Limits.maxMessageBytes ? nil : "message is \(message.utf8.count) bytes"
-        case .output(let stream, let data):
-            return checkStdio(stream, data)
-        case .execExit(let exitCode):
-            return checkExitCode(exitCode)
-        case .log(let seq, let stream, let data):
+        case .error(let nonce, let message):
+            return checkIdentity(nonce, "nonce")
+                ?? (message.utf8.count <= Limits.maxMessageBytes ? nil : "message is \(message.utf8.count) bytes")
+        case .output(let nonce, let stream, let data):
+            return checkIdentity(nonce, "nonce") ?? checkStdio(stream, data)
+        case .execExit(let nonce, let exitCode):
+            return checkIdentity(nonce, "nonce") ?? checkExitCode(exitCode)
+        case .log(let nonce, let seq, let stream, let data):
+            if let violation = checkIdentity(nonce, "nonce") { return violation }
             if seq > Limits.maxLogSeq { return "seq \(seq)" }
             return checkStdio(stream, data)
-        case .execStarted, .logEof, .clockSynced, .launched, .reidentified:
-            return nil
+        case .execStarted(let nonce), .logEof(let nonce), .clockSynced(let nonce),
+            .launched(let nonce), .reidentified(let nonce):
+            return checkIdentity(nonce, "nonce")
         }
     }
 
@@ -404,15 +422,15 @@ struct GuestControlProtocolHardeningTests {
         #"{"type":"pong","sandbox_id":"sb-1","nonce":"n-1","control_protocol_version":4}"#,
         #"{"type":"status","sandbox_id":"sb-1","nonce":"n-1","state":"exited","exit_code":137}"#,
         #"{"type":"status","sandbox_id":"sb-1","nonce":"n-1","state":"held"}"#,
-        #"{"type":"error","message":"spawn failed"}"#,
-        #"{"type":"exec_started"}"#,
-        #"{"type":"output","stream":"stderr","data":"b29wcwo="}"#,
-        #"{"type":"exec_exit","exit_code":0}"#,
-        #"{"type":"log","seq":18,"stream":"stdout","data":"bGluZQo="}"#,
-        #"{"type":"log_eof"}"#,
-        #"{"type":"clock_synced"}"#,
-        #"{"type":"launched"}"#,
-        #"{"type":"reidentified"}"#,
+        #"{"type":"error","nonce":"n","message":"spawn failed"}"#,
+        #"{"type":"exec_started","nonce":"n"}"#,
+        #"{"type":"output","nonce":"n","stream":"stderr","data":"b29wcwo="}"#,
+        #"{"type":"exec_exit","nonce":"n","exit_code":0}"#,
+        #"{"type":"log","nonce":"n","seq":18,"stream":"stdout","data":"bGluZQo="}"#,
+        #"{"type":"log_eof","nonce":"n"}"#,
+        #"{"type":"clock_synced","nonce":"n"}"#,
+        #"{"type":"launched","nonce":"n"}"#,
+        #"{"type":"reidentified","nonce":"n"}"#,
     ]
 
     /// Interesting scalars to splice into a numeric or string position — the

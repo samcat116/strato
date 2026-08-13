@@ -174,6 +174,11 @@ actor Agent {
     private var managedSandboxes: [String: VMManifestEntry] = [:]
     private var orphanedSandboxes: [String: VMManifestEntry] = [:]
 
+    // QEMU VM exec sessions use the same guest protocol as sandboxes but reach
+    // it through the host kernel's AF_VSOCK transport (STR-82).
+    private let vmExecSessionManager: VMExecSessionManager
+    private var guestExecSessionKinds: [String: GuestResourceKind] = [:]
+
     // Virtual size per volume, so the reconciler can tell a volume that needs
     // growing from one that is already the size the sync asks for (STR-148).
     // In memory only, and deliberately: it is a cache of something the storage
@@ -212,8 +217,9 @@ actor Agent {
     // per-session event order and per-sandbox line order survive the hop out
     // of the runtime; two pump tasks drain them into outbound WebSocket
     // messages one at a time (mirroring the ordered inbound pipeline above).
-    private nonisolated let sandboxExecEvents: AsyncStream<(String, SandboxExecEvent)>
-    private nonisolated let sandboxExecEventsContinuation: AsyncStream<(String, SandboxExecEvent)>.Continuation
+    private nonisolated let sandboxExecEvents: AsyncStream<(String, GuestResourceKind, SandboxExecEvent)>
+    private nonisolated let sandboxExecEventsContinuation:
+        AsyncStream<(String, GuestResourceKind, SandboxExecEvent)>.Continuation
     private nonisolated let sandboxLogLines: AsyncStream<(String, String, String)>
     private nonisolated let sandboxLogLinesContinuation: AsyncStream<(String, String, String)>.Continuation
     private var sandboxExecPumpTask: Task<Void, Never>?
@@ -494,12 +500,14 @@ actor Agent {
         )
         self.metadataServiceEnabled = metadataServiceEnabled
         self.metadataHopLimit = metadataHopLimit
+        self.vmExecSessionManager = VMExecSessionManager(logger: logger)
 
         let (stream, continuation) = AsyncStream.makeStream(of: MessageEnvelope.self)
         self.inboundMessages = stream
         self.inboundContinuation = continuation
 
-        let (execEvents, execContinuation) = AsyncStream.makeStream(of: (String, SandboxExecEvent).self)
+        let (execEvents, execContinuation) = AsyncStream.makeStream(
+            of: (String, GuestResourceKind, SandboxExecEvent).self)
         self.sandboxExecEvents = execEvents
         self.sandboxExecEventsContinuation = execContinuation
 
@@ -857,8 +865,8 @@ actor Agent {
                 [continuation = sandboxLogLinesContinuation] sandboxId, streamName, line in
                 continuation.yield((sandboxId, streamName, line))
             }
-            startSandboxPumps()
         }
+        startSandboxPumps()
 
         // Hypervisor backends that push lifecycle transitions instead of only
         // answering status queries (STR-135). Started here because the driver
@@ -1038,6 +1046,11 @@ actor Agent {
         inboundContinuation.finish()
         messageConsumerTask?.cancel()
         messageConsumerTask = nil
+
+        // End VM exec channels before stopping their event pump. Closing a
+        // channel before exec_exit is also the guest-side process-group kill.
+        await vmExecSessionManager.closeAll(reason: "agent stopping")
+        guestExecSessionKinds.removeAll()
 
         // Stop the sandbox exec/log pumps the same way.
         sandboxExecEventsContinuation.finish()
@@ -1344,6 +1357,7 @@ actor Agent {
                     unavailabilityReason: support.unavailabilityReason,
                     capabilities: support.capabilities,
                     supportsVsock: preflight.vhostVsockAvailable,
+                    supportsGuestExec: preflight.vhostVsockAvailable,
                     version: support.version
                 )
             }
@@ -1692,7 +1706,8 @@ actor Agent {
                 available: true,
                 accelerated: true,
                 capabilities: HypervisorCapabilities.capabilities(for: type),
-                supportsVsock: type == .qemu ? true : nil
+                supportsVsock: type == .qemu ? true : nil,
+                supportsGuestExec: type == .qemu ? true : nil
             )
         }
     }
@@ -2037,6 +2052,8 @@ actor Agent {
         // toward a socket that cannot deliver it. Registration restarts the
         // follows.
         await sandboxRuntime?.controlPlaneDisconnected()
+        await vmExecSessionManager.closeAll(reason: "control plane disconnected")
+        guestExecSessionKinds.removeAll()
 
         reconnectTask = Task { [weak self] in
             await self?.runReconnectLoop()
@@ -3343,8 +3360,9 @@ extension Agent {
         if sandboxExecPumpTask == nil {
             let events = sandboxExecEvents
             sandboxExecPumpTask = Task { [weak self] in
-                for await (sessionId, event) in events {
-                    await self?.sendGuestExecEvent(sessionId: sessionId, event: event)
+                for await (sessionId, kind, event) in events {
+                    await self?.sendGuestExecEvent(
+                        sessionId: sessionId, resourceKind: kind, event: event)
                 }
             }
         }
@@ -3454,41 +3472,59 @@ extension Agent {
                 "tty": .stringConvertible(message.tty),
             ])
 
-        guard message.resourceKind == .sandbox else {
-            // Defense in depth: the current registration deliberately omits
-            // `supportsGuestExec`, so the control plane must not send VM exec
-            // here until STR-82 installs and advertises the node-agent bridge.
-            await sendGuestExecClosed(
-                sessionId: message.sessionId, reason: "VM exec is not supported by this agent build")
-            return
-        }
-
-        guard let runtime = sandboxRuntime else {
-            logger.error(
-                "Sandbox runtime not available for exec", metadata: ["sandboxId": .string(message.resourceId)])
-            await sendGuestExecClosed(
-                sessionId: message.sessionId, reason: "this agent has no sandbox runtime")
-            return
-        }
-
         let request = SandboxExecRequest(
             command: message.command, env: message.env, workingDir: message.workingDir,
             tty: message.tty, rows: message.rows, cols: message.cols)
 
-        // Events yield into the ordered pump stream (never send directly from
-        // the runtime's callback, which must stay non-blocking).
+        guard guestExecSessionKinds[message.sessionId] == nil else {
+            await sendGuestExecClosed(
+                sessionId: message.sessionId, reason: "exec session already exists")
+            return
+        }
+
+        // Register the route before starting. A guest can emit exec_started
+        // immediately; pre-registration keeps a terminal event racing the
+        // handshake from leaving a stale route behind.
+        guestExecSessionKinds[message.sessionId] = message.resourceKind
         let continuation = sandboxExecEventsContinuation
-        let sandboxId = message.resourceId
         let sessionId = message.sessionId
         do {
-            try await runtime.startExec(sandboxId: sandboxId, sessionId: sessionId, request: request) { event in
-                continuation.yield((sessionId, event))
+            switch message.resourceKind {
+            case .sandbox:
+                guard let runtime = sandboxRuntime else {
+                    throw SandboxRuntimeError.runtimeUnavailable
+                }
+                let sandboxId = message.resourceId
+                try await runtime.startExec(
+                    sandboxId: sandboxId, sessionId: sessionId, request: request
+                ) { event in
+                    continuation.yield((sessionId, .sandbox, event))
+                }
+            case .virtualMachine:
+                // Resolve from `managedVMs`, never orphanedVMs. That local
+                // placement check is the security boundary that keeps a
+                // compromised control-plane replica from choosing an
+                // arbitrary fleet CID on this host.
+                let placement = try VMGuestExecPlacement.resolve(
+                    vmId: message.resourceId, managedVMs: managedVMs)
+                let vmId = message.resourceId
+                let cid = placement.vsockCID
+                try await vmExecSessionManager.startExec(
+                    placement: placement, sessionId: sessionId, request: request,
+                    placementIsCurrent: { [weak self] in
+                        await self?.isCurrentVMExecPlacement(vmId: vmId, vsockCID: cid) == true
+                    }
+                ) { event in
+                    continuation.yield((sessionId, .virtualMachine, event))
+                }
             }
         } catch {
+            guestExecSessionKinds.removeValue(forKey: sessionId)
             logger.error(
-                "Failed to start sandbox exec session",
+                "Failed to start guest exec session",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
+                    "resourceKind": .string(message.resourceKind.rawValue),
+                    "resourceId": .string(message.resourceId),
                     "sessionId": .string(sessionId),
                     "error": .string(error.localizedDescription),
                 ])
@@ -3496,12 +3532,14 @@ extension Agent {
         }
     }
 
-    private func handleGuestExecInput(_ message: GuestExecInputMessage) async {
-        guard let runtime = sandboxRuntime else {
-            await sendGuestExecClosed(
-                sessionId: message.sessionId, reason: "this agent has no sandbox runtime")
-            return
+    private func isCurrentVMExecPlacement(vmId: String, vsockCID: UInt32) -> Bool {
+        guard let current = try? VMGuestExecPlacement.resolve(vmId: vmId, managedVMs: managedVMs) else {
+            return false
         }
+        return current.vsockCID == vsockCID
+    }
+
+    private func handleGuestExecInput(_ message: GuestExecInputMessage) async {
         if message.data != nil && message.rawData == nil {
             // The payload is present but not decodable base64: the stream is
             // corrupt, and forwarding nothing would silently swallow
@@ -3510,13 +3548,23 @@ extension Agent {
             logger.warning(
                 "Invalid guest exec input received (failed to decode base64); closing session",
                 metadata: ["sessionId": .string(message.sessionId)])
-            await runtime.closeExec(sessionId: message.sessionId)
+            await closeGuestExec(sessionId: message.sessionId)
             await sendGuestExecClosed(
                 sessionId: message.sessionId, reason: "undecodable exec input (invalid base64)")
             return
         }
         do {
-            try await runtime.sendExecInput(sessionId: message.sessionId, data: message.rawData, eof: message.eof)
+            switch guestExecSessionKinds[message.sessionId] {
+            case .sandbox:
+                guard let runtime = sandboxRuntime else { throw SandboxRuntimeError.runtimeUnavailable }
+                try await runtime.sendExecInput(
+                    sessionId: message.sessionId, data: message.rawData, eof: message.eof)
+            case .virtualMachine:
+                try await vmExecSessionManager.sendExecInput(
+                    sessionId: message.sessionId, data: message.rawData, eof: message.eof)
+            case nil:
+                throw VMExecBridgeError.sessionNotFound(message.sessionId)
+            }
         } catch {
             logger.warning(
                 "Failed to write guest exec input",
@@ -3524,18 +3572,24 @@ extension Agent {
                     "sessionId": .string(message.sessionId),
                     "error": .string(error.localizedDescription),
                 ])
+            await closeGuestExec(sessionId: message.sessionId)
             await sendGuestExecClosed(sessionId: message.sessionId, reason: error.localizedDescription)
         }
     }
 
     private func handleGuestExecResize(_ message: GuestExecResizeMessage) async {
-        guard let runtime = sandboxRuntime else {
-            await sendGuestExecClosed(
-                sessionId: message.sessionId, reason: "this agent has no sandbox runtime")
-            return
-        }
         do {
-            try await runtime.resizeExec(sessionId: message.sessionId, rows: message.rows, cols: message.cols)
+            switch guestExecSessionKinds[message.sessionId] {
+            case .sandbox:
+                guard let runtime = sandboxRuntime else { throw SandboxRuntimeError.runtimeUnavailable }
+                try await runtime.resizeExec(
+                    sessionId: message.sessionId, rows: message.rows, cols: message.cols)
+            case .virtualMachine:
+                try await vmExecSessionManager.resizeExec(
+                    sessionId: message.sessionId, rows: message.rows, cols: message.cols)
+            case nil:
+                throw VMExecBridgeError.sessionNotFound(message.sessionId)
+            }
         } catch {
             logger.warning(
                 "Failed to resize guest exec session",
@@ -3543,6 +3597,7 @@ extension Agent {
                     "sessionId": .string(message.sessionId),
                     "error": .string(error.localizedDescription),
                 ])
+            await closeGuestExec(sessionId: message.sessionId)
             await sendGuestExecClosed(sessionId: message.sessionId, reason: error.localizedDescription)
         }
     }
@@ -3555,14 +3610,35 @@ extension Agent {
                 "reason": .string(message.reason ?? ""),
             ])
         // The control plane already tore its side down; closing is terminal
-        // and needs no reply (and with no runtime there is nothing to close).
-        await sandboxRuntime?.closeExec(sessionId: message.sessionId)
+        // and needs no reply. Guest-side, this kills the exec process group if
+        // exec_exit has not arrived.
+        await closeGuestExec(sessionId: message.sessionId)
+    }
+
+    private func closeGuestExec(sessionId: String) async {
+        switch guestExecSessionKinds.removeValue(forKey: sessionId) {
+        case .sandbox:
+            await sandboxRuntime?.closeExec(sessionId: sessionId)
+        case .virtualMachine:
+            await vmExecSessionManager.closeExec(sessionId: sessionId)
+        case nil:
+            return
+        }
     }
 
     /// Translate one runtime exec event into its outbound message. Runs on the
     /// exec pump, so events are sent strictly in the order the runtime
     /// delivered them.
-    private func sendGuestExecEvent(sessionId: String, event: SandboxExecEvent) async {
+    private func sendGuestExecEvent(
+        sessionId: String, resourceKind: GuestResourceKind, event: SandboxExecEvent
+    ) async {
+        if case .exited = event {
+            if guestExecSessionKinds[sessionId] == resourceKind {
+                guestExecSessionKinds.removeValue(forKey: sessionId)
+            }
+        } else if case .closed = event, guestExecSessionKinds[sessionId] == resourceKind {
+            guestExecSessionKinds.removeValue(forKey: sessionId)
+        }
         guard let websocketClient else {
             // No control-plane socket: the event (possibly the session's
             // terminal one) is dropped. The control plane's agent-disconnect
