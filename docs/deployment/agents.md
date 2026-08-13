@@ -478,7 +478,10 @@ externally" reason (reported on the agent as `updateBlockedReason`): the binary
 is part of an immutable image layer, so the image is the update mechanism. Pull the new image and recreate the container
 (or roll the Deployment). The refusal is automatic — the agent image carries
 `STRATO_INSTALL_MODE=container`, and agents also detect standard container
-fingerprints (`/.dockerenv`, container cgroups) when the marker is absent.
+fingerprints (`/.dockerenv`, container cgroups) when the marker is absent. This
+install mode also marks the host SPIRE agent as externally supervised, so its
+mounted Workload API result remains authoritative when systemd is unavailable
+inside the container.
 
 ## Configuration
 

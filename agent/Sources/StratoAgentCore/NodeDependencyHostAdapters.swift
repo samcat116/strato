@@ -73,13 +73,30 @@ public struct SystemdUnitObservation: Sendable, Equatable {
     }
 
     public var supervisorState: NodeDependencySupervisorState {
-        guard loadState == "loaded" else { return .missing }
-        switch activeState {
-        case "active": return .active
-        case "activating", "reloading": return .activating
-        case "failed": return .failed
-        case "inactive", "deactivating": return .inactive
-        default: return .unknown
+        switch loadState {
+        case "not-found":
+            return .missing
+        case "unknown":
+            // The host adapter synthesizes this value when systemctl fails or
+            // its output cannot be parsed. It is not evidence about the unit.
+            return .unknown
+        case "masked", "bad-setting", "error":
+            // systemd returned a definitive load failure. Preserve it as a
+            // categorical local-unit failure instead of confusing it with
+            // failed inspection.
+            return .failed
+        case "loaded":
+            switch activeState {
+            case "active": return .active
+            case "activating", "reloading": return .activating
+            case "failed": return .failed
+            case "inactive", "deactivating": return .inactive
+            default: return .unknown
+            }
+        default:
+            // Other states such as stub or merged do not by themselves prove
+            // that the local service failed.
+            return .unknown
         }
     }
 }
@@ -134,13 +151,22 @@ public struct SystemdHostAdapter: SystemdControlling {
 
     public func discoverFirst(units: [String]) async -> SystemdUnitObservation {
         var firstLoaded: SystemdUnitObservation?
+        var firstLoadFailure: SystemdUnitObservation?
+        var firstUnknown: SystemdUnitObservation?
         for unit in units {
             let observation = await inspect(unit: unit)
-            guard observation.loadState == "loaded" else { continue }
-            if observation.supervisorState == .active { return observation }
-            if firstLoaded == nil { firstLoaded = observation }
+            if observation.loadState == "loaded" {
+                if observation.supervisorState == .active { return observation }
+                if firstLoaded == nil { firstLoaded = observation }
+            } else if observation.supervisorState == .failed, firstLoadFailure == nil {
+                firstLoadFailure = observation
+            } else if observation.supervisorState == .unknown, firstUnknown == nil {
+                firstUnknown = observation
+            }
         }
         if let firstLoaded { return firstLoaded }
+        if let firstLoadFailure { return firstLoadFailure }
+        if let firstUnknown { return firstUnknown }
         return SystemdUnitObservation(
             name: units.first ?? "unknown", loadState: "not-found", activeState: "inactive",
             subState: "dead", unitFileState: "unknown")

@@ -156,10 +156,13 @@ public struct NodeDependencyObservation: Codable, Equatable, Sendable {
     /// receiver concern because `checkedAt` comes from the agent's clock.
     public var permitsDependentWork: Bool {
         guard desiredState == .required,
-            compatibility == .compatible,
-            supervisorState == .active || supervisorState == .notApplicable
+            compatibility == .compatible
         else { return false }
 
+        // Supervisor state is diagnostic metadata. The dependency module has
+        // already incorporated it when the configured supervisor owns the
+        // process; externally supervised dependencies remain usable when their
+        // functional probe succeeds.
         // A single failed sample is reported as degraded but remains eligible;
         // the manager promotes it to unhealthy only after its failure threshold.
         return functionalState == .healthy || functionalState == .degraded
