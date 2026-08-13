@@ -550,11 +550,23 @@ shape at creation:
   seed has addressed the NIC, cloud-init follows the stub to the agent's live
   metadata listener for the real documents.
 
-The ISO cannot disappear even in `imds` mode: a statically addressed guest
+The ISO cannot disappear even in `imds` mode: a statically addressed QEMU guest
 needs `network-config` before it can reach the link-local listener. Guest
-bootstrap is deliberately per-backend. Firecracker currently has no cloud-init
-injection path, so VM creation rejects both `imds` and caller-supplied user data
-for that hypervisor instead of accepting configuration it cannot deliver.
+bootstrap is deliberately per-backend. Firecracker has no seed disk and does
+not use this selector; it exposes the EC2-compatible tree through MMDS instead.
+VM creation still rejects `metadataSource: imds` for Firecracker because that
+value specifically selects QEMU's NoCloud `seedfrom` shape, but it accepts
+caller user data when VM metadata is enabled and at least one NIC has both
+metadata and DHCP enabled.
+
+That acceptance is a delivery guarantee, not a claim about arbitrary guest
+bytes. The release pipeline publishes sandbox guest bundles, not normal VM
+`kernel` + `rootfs` image pairs; sandbox bundles use `strato-sandbox-init` and
+are not selectable through the VM image API. Firecracker VM images are supplied
+by operators, so their rootfs must contain cloud-init with the `Ec2` datasource
+enabled, and their kernel command line must not contain `cloud-init=disabled`.
+Without those guest prerequisites MMDS still serves the document, but nothing
+inside the guest consumes it.
 
 VM creation rejects `imds` when the VM-level metadata switch is off or when
 none of its selected logical networks publish metadata. Either configuration
@@ -587,8 +599,8 @@ fixing this repaired: **VMs created before it keep booting under their
 or a migration, whose destination agent renders a fresh seed from current
 metadata. Existing DNS drift is not repaired in place.
 
-The rendered `user-data` document — embedded in an `iso` seed or served over
-the metadata listener for `imds` — has two shapes:
+The QEMU `user-data` document — embedded in an `iso` seed or served over the
+metadata listener for `imds` — has two shapes:
 
 - **No caller user data**: a single `#cloud-config` carrying Strato's
   provisioning — a serial-console password (dev convenience for SLIRP

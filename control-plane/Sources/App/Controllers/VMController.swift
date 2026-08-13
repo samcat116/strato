@@ -793,8 +793,9 @@ struct VMController: RouteCollection {
         vm.setSSHAuthorizedKeys(createRequest.sshPublicKey.map { [$0] } ?? [])
 
         // Guest provisioning: caller-supplied cloud-init user data, stored
-        // verbatim (leading bytes are the format header cloud-init dispatches
-        // on, so no trimming).
+        // verbatim for either backend (leading bytes are the format header
+        // cloud-init dispatches on, so no trimming). QEMU puts it in its
+        // selected NoCloud transport; Firecracker exposes it through MMDS.
         vm.userData = try Self.validatedUserData(createRequest.userData)
 
         // Secure Boot and a vTPM are firmware-boot features, and Firecracker

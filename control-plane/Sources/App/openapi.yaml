@@ -9097,9 +9097,13 @@ components:
         userData:
           type: string
           description: >-
-            cloud-init user data. Firecracker delivers this through MMDS and
+            cloud-init user data, capped at 64 KiB and beginning with a format
+            header cloud-init recognizes. QEMU delivers it through the selected
+            NoCloud bootstrap source. Firecracker delivers it through MMDS and
             requires the VM metadata service plus at least one selected network
-            that publishes metadata.
+            with metadata and DHCP enabled. The Firecracker rootfs must include
+            cloud-init with its Ec2 datasource enabled, and its kernel command
+            line must not disable cloud-init.
         hypervisorType:
           $ref: "#/components/schemas/HypervisorType"
         secureBoot:

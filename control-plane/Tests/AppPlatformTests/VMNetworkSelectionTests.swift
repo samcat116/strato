@@ -3,6 +3,7 @@ import Vapor
 import Fluent
 import VaporTesting
 import AppTestSupport
+import StratoShared
 @testable import App
 
 /// Tests for choosing a VM's network at create time (VMController.create) and
@@ -464,6 +465,36 @@ final class VMNetworkSelectionTests {
             let vm = try await VM.query(on: app.db).filter(\.$name == "fc-userdata-vm").first()
             #expect(vm?.hypervisorType == .firecracker)
             #expect(vm?.userData == userData)
+        }
+    }
+
+    @Test("POST /api/vms validates Firecracker user data format and size")
+    func createFirecrackerValidatesUserData() async throws {
+        try await withApp { app, _, _, project, image, token in
+            try await addFirecrackerArtifacts(to: image, on: app.db)
+            let invalidPayloads = [
+                ("fc-userdata-headerless", "echo missing shebang\n"),
+                (
+                    "fc-userdata-oversized",
+                    "#cloud-config\n" + String(repeating: "a", count: CloudInitUserDataFormat.maxBytes)
+                ),
+            ]
+
+            for (name, userData) in invalidPayloads {
+                try await app.test(.POST, "/api/vms") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        CreateVMBody(
+                            name: name, imageId: image.id, projectId: project.id,
+                            environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                            networkId: nil, networkName: "default",
+                            userData: userData,
+                            hypervisorType: "firecracker"))
+                } afterResponse: { res in
+                    #expect(res.status == .badRequest)
+                }
+                #expect(try await VM.query(on: app.db).filter(\.$name == name).first() == nil)
+            }
         }
     }
 

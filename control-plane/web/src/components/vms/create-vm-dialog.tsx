@@ -125,6 +125,12 @@ export function CreateVMDialog({
     return compatible.length === 1 && compatible[0] === "firecracker";
   }, [readyImages, formData.imageId]);
 
+  const hasUserData = formData.userData.trim().length > 0;
+  const hasFirecrackerMetadataNetwork = networkInterfaces.some((nic) => {
+    const network = networks.find((candidate) => candidate.id === nic.networkId);
+    return network?.metadataEnabled && network.dhcpEnabled;
+  });
+
   // Handle image selection - applies defaults directly without useEffect
   const handleImageSelect = useCallback(
     (imageId: string) => {
@@ -181,6 +187,23 @@ export function CreateVMDialog({
     if (invalidMTU) {
       toast.error("MTU must be a whole number from 68 to 65535");
       return;
+    }
+
+    // Firecracker has no seed disk: cloud-init reaches caller user data only
+    // through MMDS after DHCP has configured at least one opted-in NIC. Mirror
+    // the API guard here so the form explains an actionable configuration
+    // error before submitting it.
+    if (isFirecracker && hasUserData) {
+      if (!metadataEnabled) {
+        toast.error("Firecracker user data requires instance metadata");
+        return;
+      }
+      if (!hasFirecrackerMetadataNetwork) {
+        toast.error(
+          "Firecracker user data requires a selected network with metadata and DHCP enabled"
+        );
+        return;
+      }
     }
 
     setQuotaError(null);
@@ -580,8 +603,9 @@ export function CreateVMDialog({
                   Guest bootstrap source
                 </Label>
                 <p className="text-xs text-muted-foreground">
-                  Choose where cloud-init reads hostname, SSH keys, and user
-                  data at first boot.
+                  {isFirecracker
+                    ? "Firecracker exposes guest bootstrap data through its metadata service."
+                    : "Choose where cloud-init reads hostname, SSH keys, and user data at first boot."}
                 </p>
               </div>
               <select
@@ -593,13 +617,16 @@ export function CreateVMDialog({
                 disabled={isLoading || isFirecracker}
                 className="w-full px-3 py-2 bg-background border border-input text-foreground rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <option value="iso">Seed ISO (default)</option>
+                <option value="iso">
+                  {isFirecracker ? "Firecracker MMDS" : "Seed ISO (default)"}
+                </option>
                 <option value="imds">Instance metadata service</option>
               </select>
               {isFirecracker ? (
                 <p className="text-xs text-muted-foreground">
-                  Firecracker does not have a cloud-init bootstrap path, so an
-                  IMDS-backed seed is unavailable for this image.
+                  Firecracker has no seed disk. It serves EC2-compatible
+                  metadata from MMDS on metadata-enabled NICs; the selected
+                  network must also provide DHCP so the guest can reach it.
                 </p>
               ) : metadataSource === "imds" ? (
                 <p className="text-xs text-muted-foreground">
@@ -744,10 +771,18 @@ export function CreateVMDialog({
                 className="w-full px-3 py-2 bg-background border border-border text-foreground rounded-md font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed resize-y"
               />
               <p className="text-xs text-muted-foreground">
-                Runs in the guest at first boot. Accepts any cloud-init format:{" "}
-                <code>#cloud-config</code>, a <code>#!</code> shell script,{" "}
-                <code>#include</code>, a Jinja template, or a full MIME
-                multipart document.
+                {isFirecracker ? (
+                  <>
+                    Delivered through Firecracker MMDS. The uploaded rootfs
+                    must include cloud-init with its EC2 datasource enabled,
+                    and the kernel command line must not disable cloud-init.
+                  </>
+                ) : (
+                  <>Runs in the guest at first boot. </>
+                )}{" "}
+                Accepts any cloud-init format: <code>#cloud-config</code>, a{" "}
+                <code>#!</code> shell script, <code>#include</code>, a Jinja
+                template, or a full MIME multipart document.
               </p>
             </div>
           </div>

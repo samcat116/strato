@@ -1178,7 +1178,9 @@ export interface CreateVMRequest {
    * `#include`, `## template: jinja`, or a full MIME multipart document
    * (which replaces Strato's built-in provisioning entirely).
    * Firecracker delivers this through MMDS, so its VM metadata service and at
-   * least one selected metadata-enabled network must be enabled at creation.
+   * least one selected metadata-and-DHCP-enabled network must be enabled at
+   * creation. Its rootfs must include cloud-init's EC2 datasource, and its
+   * kernel command line must not disable cloud-init.
    */
   userData?: string;
   /**
