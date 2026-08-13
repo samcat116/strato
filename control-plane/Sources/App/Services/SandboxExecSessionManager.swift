@@ -408,10 +408,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     private func sendOrphanedBridgeClose(sessionId: String, toAgentKey agentKey: String) {
         guard let websocket = app.websocketManager.getConnection(agentKey: agentKey) else { return }
         let message = GuestExecCloseMessage(sessionId: sessionId, reason: "unknown exec session")
-        guard
-            let envelope = try? MessageEnvelope(message: message),
-            let data = try? WireProtocol.makeEncoder().encode(envelope)
-        else { return }
+        guard let data = try? WireProtocol.encodeEnvelope(message) else { return }
         websocket.send(data)
         app.logger.debug(
             "Sent exec close for unknown session back to reporting agent",
@@ -469,8 +466,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
             throw SandboxExecSessionError.agentNotConnected(agentKey)
         }
 
-        let envelope = try MessageEnvelope(message: message)
-        let data = try WireProtocol.makeEncoder().encode(envelope)
+        let data = try WireProtocol.encodeEnvelope(message)
         websocket.send(data)
     }
 }

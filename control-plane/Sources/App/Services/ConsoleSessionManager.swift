@@ -541,8 +541,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
             throw ConsoleSessionError.agentNotConnected(agentKey)
         }
 
-        let envelope = try MessageEnvelope(message: message)
-        let data = try WireProtocol.makeEncoder().encode(envelope)
+        let data = try WireProtocol.encodeEnvelope(message)
 
         app.logger.debug(
             "Sending message to agent",

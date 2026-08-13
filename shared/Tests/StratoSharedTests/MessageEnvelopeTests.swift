@@ -21,6 +21,16 @@ struct MessageEnvelopeTests {
         #expect(inner.vmId == "vm-7")
     }
 
+    @Test("WireProtocol encodes the complete envelope")
+    func wireProtocolEncoding() throws {
+        let message = Fixtures.consoleConnect(vmId: "vm-7")
+        let expected = try WireProtocol.makeEncoder().encode(MessageEnvelope(message: message))
+
+        let encoded = try WireProtocol.encodeEnvelope(message)
+
+        #expect(encoded == expected)
+    }
+
     @Test("payload that does not match the requested type throws")
     func mismatchedPayloadThrows() throws {
         let envelope = try MessageEnvelope(message: SuccessMessage(requestId: "r1"))

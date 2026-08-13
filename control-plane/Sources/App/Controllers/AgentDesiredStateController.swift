@@ -175,8 +175,7 @@ struct AgentDesiredStateController: RouteCollection {
     }
 
     private static func payloadResponse(message: DesiredStateMessage, etag: String) throws -> Response {
-        let envelope = try MessageEnvelope(message: message)
-        let body = try WireProtocol.makeEncoder().encode(envelope)
+        let body = try WireProtocol.encodeEnvelope(message)
         let response = Response(status: .ok, body: .init(data: body))
         response.headers.contentType = .json
         response.headers.replaceOrAdd(name: .eTag, value: etag)
