@@ -1057,16 +1057,18 @@ echoes it so the later host bridge can pin a session to one guest generation.
 The status is `running` while the daemon is serving. Sandbox-only launch,
 reidentify, clock, and log-follow operations are refused.
 
-Exec runs as the service account (root in the planned systemd unit), defaults to
+Exec runs as the service account (root in the packaged systemd unit), defaults to
 `/`, and inherits the service environment with request entries overlaid. Pipe
 sessions use a dedicated process group; TTY sessions use a new session and
 controlling PTY. Closing the host connection before `exec_exit` kills that
 group. Unlike the sandbox init, the daemon owns and waits for each child itself
-because it is not PID 1. STR-80 owns the systemd unit and release artifact;
-STR-82 owns the node-agent vsock bridge. Until that bridge lands, the agent does
-not advertise `HypervisorSupport.supportsGuestExec`; the control plane therefore
-returns 503 before minting a VM exec session rather than handing the browser a
-session the agent will immediately reject.
+because it is not PID 1. STR-80 packages it as
+`strato-guest-agent-<arch>.tar.gz` with a systemd unit and publishes
+`guest-agent-manifest.json`; STR-82 owns the node-agent vsock bridge. Until that
+bridge lands, the agent does not advertise
+`HypervisorSupport.supportsGuestExec`; the control plane therefore returns 503
+before minting a VM exec session rather than handing the browser a session the
+agent will immediately reject.
 
 ## Networking
 

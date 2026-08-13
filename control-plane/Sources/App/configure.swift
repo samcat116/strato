@@ -416,6 +416,11 @@ public func configure(
     // rows are backfilled without changing what their guests receive.
     app.migrations.add(AddMutableMetadataToVM())
 
+    // STR-246: the guest-agent opt-in was added to the fresh-schema baseline
+    // without an upgrade migration. Repair preserved databases before any VM
+    // query can select the required field.
+    app.migrations.add(AddGuestAgentEnabledToVM())
+
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
     // that records it, so concurrent replica boots race the same migration and a

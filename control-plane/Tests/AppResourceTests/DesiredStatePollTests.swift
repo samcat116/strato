@@ -1,6 +1,7 @@
 import Fluent
 import Foundation
 import NIOCore
+import SQLKit
 import StratoShared
 import Testing
 import Vapor
@@ -35,7 +36,12 @@ struct DesiredStatePollTests {
         ("X-Forwarded-Client-Cert", "URI=spiffe://strato.local/\(identity)")
     }
 
-    private func registerAgentRow(app: Application, name: String) async throws -> Agent {
+    private func registerAgentRow(
+        app: Application,
+        name: String,
+        siteID: UUID? = nil,
+        organizationID: UUID? = nil
+    ) async throws -> Agent {
         let agent = Agent(
             name: name,
             hostname: "\(name).test",
@@ -47,6 +53,10 @@ struct DesiredStatePollTests {
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             )
         )
+        if let siteID {
+            agent.$site.id = siteID
+        }
+        agent.$organization.id = organizationID
         try await agent.save(on: app.db)
         return agent
     }
@@ -95,6 +105,54 @@ struct DesiredStatePollTests {
             #expect(response.headers.first(name: .eTag) != nil)
             let sync = try self.decodeSync(response)
             #expect(sync.vms.map(\.vmId) == [vm.id!])
+        }
+    }
+
+    @Test("A preserved pre-guest-agent schema migrates before desired-state polling")
+    func upgradesPreservedSchemaBeforePolling() async throws {
+        try await withRunningPollApp { app, port in
+            self.enableSPIRE(on: app)
+
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Upgrade Poll Org")
+            let project = try await builder.createProject(
+                name: "Upgrade Poll Project", description: "upgrade poll tests", organization: org)
+            let user = try await builder.createUser(
+                username: "upgrade-poll-user",
+                email: "upgrade-poll@example.com")
+            let site = try await builder.placementSite(for: project)
+            let agent = try await self.registerAgentRow(
+                app: app,
+                name: "poll-agent",
+                siteID: try site.requireID(),
+                organizationID: try org.requireID())
+            let vm = try await builder.createVM(name: "upgrade-poll-vm", project: project)
+            vm.hypervisorId = agent.id!.uuidString
+            try await vm.save(on: app.db)
+            let boot = try await builder.createVolume(
+                name: "upgrade-poll-boot", project: project, createdBy: user)
+            boot.$vm.id = vm.id
+            boot.volumeType = .boot
+            boot.deviceName = VolumeDeviceName.disk(0).rawValue
+            boot.bootOrder = 0
+            try await boot.save(on: app.db)
+
+            // Recreate a preserved database from the release immediately before
+            // guest_agent_enabled: the baseline is already recorded and contains
+            // live VM rows, but this incremental migration has not run yet.
+            let sql = try #require(app.db as? any SQLDatabase)
+            try await sql.raw("ALTER TABLE vms DROP COLUMN guest_agent_enabled").run()
+            try await MigrationLog.query(on: app.db)
+                .filter(\.$name == AddGuestAgentEnabledToVM().name)
+                .delete()
+
+            try await SchemaMigrator.run(on: app, options: .init())
+
+            let response = try await self.poll(app: app, port: port)
+            #expect(response.status == .ok)
+            let sync = try self.decodeSync(response)
+            #expect(sync.vms.map(\.vmId) == [vm.id!])
+            #expect(sync.vms.first?.spec.guestAgentEnabled == false)
         }
     }
 
