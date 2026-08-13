@@ -753,6 +753,21 @@ spire:
   # Logging level
   logLevel: "INFO"
 
+  agent:
+    guestIdentity:
+      # Exposes the Delegated Identity API to the chart's registered
+      # control-plane admin workload through a dedicated node-local directory.
+      # Enrolled hypervisor nodes remain off unless installed with
+      # --enable-guest-identity.
+      enabled: false
+      # Kept separate from the Workload API hostPath. The DaemonSet makes this
+      # root-owned and setgid to delegateGID; only the SPIRE agent and the
+      # control-plane container mount it.
+      socketHostPath: /var/run/spire/guest-identity
+      # The control-plane image's fixed vapor group. SPIRE creates admin.sock
+      # as 0770, inheriting this gid from the setgid directory.
+      delegateGID: 999
+
   # CA certificate TTL
   caTTL: "168h"  # 7 days
 

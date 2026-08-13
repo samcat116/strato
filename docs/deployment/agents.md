@@ -167,6 +167,10 @@ Useful flags (`--help` lists them all):
   [Host requirements](#host-requirements) for what it must contain)
 - `--trust-bundle PATH` — pin the SPIRE trust bundle instead of
   trust-on-first-use bootstrap
+- `--enable-guest-identity` — opt this node into SPIRE delegated identity for
+  guest workloads. This grants strato-agent access to every SVID in the node's
+  SPIRE cache and is deliberately off by default; see
+  [Guest workload identity](../architecture/guest-identity.md#trust-and-blast-radius).
 - `--no-telemetry` — skip the host telemetry stack
 
 The installer is **Linux-only**: `spire-agent`, systemd, and KVM all are, so
