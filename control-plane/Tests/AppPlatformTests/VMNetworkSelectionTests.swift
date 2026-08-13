@@ -12,6 +12,15 @@ import AppTestSupport
 @Suite("VM Network Selection Tests", .serialized)
 final class VMNetworkSelectionTests {
 
+    @Test("metadataSource defaults to IMDS only on the QEMU bootstrap path")
+    func metadataSourceDefault() {
+        #expect(VMController.resolvedMetadataSource(nil, for: .qemu) == .imds)
+        #expect(VMController.resolvedMetadataSource(nil, for: .firecracker) == .iso)
+        #expect(VMController.resolvedMetadataSource(.iso, for: .qemu) == .iso)
+        #expect(VMController.resolvedMetadataSource(.imds, for: .qemu) == .imds)
+        #expect(VMController.resolvedMetadataSource(.imds, for: .firecracker) == .imds)
+    }
+
     // Body mirroring VMController's private CreateVMRequest so tests can POST /api/vms.
     struct CreateVMBody: Content {
         let name: String
@@ -298,7 +307,7 @@ final class VMNetworkSelectionTests {
         }
     }
 
-    @Test("POST /api/vms persists metadataSource and defaults it to the full ISO")
+    @Test("POST /api/vms persists metadataSource and defaults QEMU VMs to IMDS")
     func createWithMetadataSource() async throws {
         try await withApp { app, _, _, project, image, token in
             for (name, source) in [("bootstrap-imds", "imds"), ("bootstrap-default", nil)] {
@@ -312,14 +321,14 @@ final class VMNetworkSelectionTests {
                             metadataSource: source))
                 } afterResponse: { res in
                     #expect(res.status == .accepted)
-                    #expect(res.body.string.contains("\"metadataSource\":\"\(source ?? "iso")\""))
+                    #expect(res.body.string.contains("\"metadataSource\":\"\(source ?? "imds")\""))
                 }
             }
 
             let imds = try await VM.query(on: app.db).filter(\.$name == "bootstrap-imds").first()
             let defaulted = try await VM.query(on: app.db).filter(\.$name == "bootstrap-default").first()
             #expect(imds?.metadataSource == .imds)
-            #expect(defaulted?.metadataSource == .iso)
+            #expect(defaulted?.metadataSource == .imds)
         }
     }
 

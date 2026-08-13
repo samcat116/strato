@@ -71,7 +71,7 @@ export function CreateVMDialog({
   // On by default: IMDS-backed bootstrap needs the listener, while ISO-backed
   // VMs can still use it as a guest metadata API.
   const [metadataEnabled, setMetadataEnabled] = useState(true);
-  const [metadataSource, setMetadataSource] = useState<MetadataSource>("iso");
+  const [metadataSource, setMetadataSource] = useState<MetadataSource>("imds");
   const [networkInterfaces, setNetworkInterfaces] = useState<NICRow[]>([
     initialNIC(),
   ]);
@@ -131,9 +131,11 @@ export function CreateVMDialog({
       const selectedImage = readyImages.find((img) => img.id === imageId);
       if (selectedImage) {
         const compatible = selectedImage.compatibleHypervisors ?? [];
-        if (compatible.length === 1 && compatible[0] === "firecracker") {
-          setMetadataSource("iso");
-        }
+        setMetadataSource(
+          compatible.length === 1 && compatible[0] === "firecracker"
+            ? "iso"
+            : "imds"
+        );
         setFormData((prev) => ({
           ...prev,
           imageId,
@@ -222,8 +224,8 @@ export function CreateVMDialog({
           // already assumes, while pinning a pre-STR-185 control plane to a key
           // it does not know.
           metadataEnabled: metadataEnabled ? undefined : false,
-          // The phase-one default is explicit in the form so users can opt a
-          // VM into the IMDS-backed seed without changing the fleet default.
+          // Keep the selected source explicit so the request matches what the
+          // form showed. Firecracker has no NoCloud seed and records `iso`.
           metadataSource: isFirecracker ? "iso" : metadataSource,
         }),
       watch: {
@@ -251,7 +253,7 @@ export function CreateVMDialog({
         setTpm(false);
         setGraphicsConsole(false);
         setMetadataEnabled(true);
-        setMetadataSource("iso");
+        setMetadataSource("imds");
         setNetworkInterfaces([initialNIC()]);
         setQuotaError(null);
       },
@@ -593,8 +595,8 @@ export function CreateVMDialog({
                 disabled={isLoading || isFirecracker}
                 className="w-full px-3 py-2 bg-background border border-input text-foreground rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <option value="iso">Seed ISO (default)</option>
-                <option value="imds">Instance metadata service</option>
+                <option value="imds">Instance metadata service (default)</option>
+                <option value="iso">Seed ISO</option>
               </select>
               {isFirecracker ? (
                 <p className="text-xs text-muted-foreground">
@@ -610,7 +612,7 @@ export function CreateVMDialog({
               ) : (
                 <p className="text-xs text-muted-foreground">
                   The complete, immutable NoCloud payload is written to the ISO.
-                  This preserves today&apos;s behavior.
+                  Use this compatibility path when the guest cannot use IMDS.
                 </p>
               )}
             </div>

@@ -198,6 +198,10 @@ cloud-config keys your values win. Supplying a full MIME multipart document
 instead replaces Strato's provisioning entirely — cloud-init then processes
 exactly what you wrote, and console/SSH setup is up to you.
 
+New QEMU VMs read this configuration from the instance metadata service by
+default. See [Instance metadata and bootstrap](/guide/instance-metadata) for
+the compatibility option and the replacement workflow for an existing VM.
+
 ## Viewing logs
 
 ```bash

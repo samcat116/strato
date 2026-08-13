@@ -155,10 +155,10 @@ final class VM: Model, @unchecked Sendable {
     /// `.imds` keeps only pre-network bootstrap on that ISO and fetches the
     /// remaining documents from the link-local metadata service.
     ///
-    /// Fixed at create because the ISO is materialized with the domain. The
-    /// default stays `.iso` for this phase, and the migration gives every
-    /// existing row that explicit value so no VM changes bootstrap path during
-    /// an upgrade.
+    /// Fixed at create because the ISO is materialized with the domain. New
+    /// QEMU API creates default to `.imds`; the schema migration and this
+    /// model's low-level initializer retain `.iso` so upgrades and fixture
+    /// construction never move an existing VM implicitly.
     @Enum(key: "metadata_source")
     var metadataSource: MetadataSource
 
