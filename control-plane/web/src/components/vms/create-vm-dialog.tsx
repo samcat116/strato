@@ -132,7 +132,8 @@ export function CreateVMDialog({
       if (selectedImage) {
         const compatible = selectedImage.compatibleHypervisors ?? [];
         setMetadataSource(
-          compatible.length === 1 && compatible[0] === "firecracker"
+          !metadataEnabled ||
+            (compatible.length === 1 && compatible[0] === "firecracker")
             ? "iso"
             : "imds"
         );
@@ -147,7 +148,7 @@ export function CreateVMDialog({
         setFormData((prev) => ({ ...prev, imageId }));
       }
     },
-    [readyImages]
+    [readyImages, metadataEnabled]
   );
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -226,7 +227,8 @@ export function CreateVMDialog({
           metadataEnabled: metadataEnabled ? undefined : false,
           // Keep the selected source explicit so the request matches what the
           // form showed. Firecracker has no NoCloud seed and records `iso`.
-          metadataSource: isFirecracker ? "iso" : metadataSource,
+          metadataSource:
+            isFirecracker || !metadataEnabled ? "iso" : metadataSource,
         }),
       watch: {
         kind: "create",
@@ -592,16 +594,23 @@ export function CreateVMDialog({
                 onChange={(e) =>
                   setMetadataSource(e.target.value as MetadataSource)
                 }
-                disabled={isLoading || isFirecracker}
+                disabled={isLoading || isFirecracker || !metadataEnabled}
                 className="w-full px-3 py-2 bg-background border border-input text-foreground rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <option value="imds">Instance metadata service (default)</option>
+                <option value="imds">
+                  Instance metadata service (QEMU default)
+                </option>
                 <option value="iso">Seed ISO</option>
               </select>
               {isFirecracker ? (
                 <p className="text-xs text-muted-foreground">
                   Firecracker does not have a cloud-init bootstrap path, so an
                   IMDS-backed seed is unavailable for this image.
+                </p>
+              ) : !metadataEnabled ? (
+                <p className="text-xs text-muted-foreground">
+                  IMDS bootstrap requires the instance metadata service. Seed
+                  ISO will be used while the service is disabled.
                 </p>
               ) : metadataSource === "imds" ? (
                 <p className="text-xs text-muted-foreground">
@@ -712,7 +721,11 @@ export function CreateVMDialog({
                   id="metadataEnabled"
                   type="checkbox"
                   checked={metadataEnabled}
-                  onChange={(e) => setMetadataEnabled(e.target.checked)}
+                  onChange={(e) => {
+                    const enabled = e.target.checked;
+                    setMetadataEnabled(enabled);
+                    if (!enabled) setMetadataSource("iso");
+                  }}
                   disabled={isLoading}
                   className="h-4 w-4 rounded border-input bg-background accent-blue-600"
                 />
