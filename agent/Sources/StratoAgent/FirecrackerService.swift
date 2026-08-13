@@ -26,6 +26,10 @@ actor FirecrackerService: HypervisorService {
     private var firecrackerClient: FirecrackerClient?
     private var vmManagers: [String: FirecrackerManager] = [:]
     private var vmSpecs: [String: VMSpec] = [:]
+    /// Exact pre-boot MMDS interface policy installed in each managed VMM.
+    /// The VM-level metadata switch participates in this list even though it
+    /// does not live in `VMSpec.networks`.
+    private var mmdsInterfaces: [String: [String]] = [:]
     /// Last successfully installed MMDS snapshot. Avoids rewriting the VMM's
     /// store on every level-triggered sync when the document did not change.
     private var mmdsPayloads: [String: Data] = [:]
@@ -170,10 +174,12 @@ actor FirecrackerService: HypervisorService {
             // interface while keeping another unable to reach the service. Seed
             // the EC2-shaped snapshot before `bootVM` starts the guest so cloud-init
             // cannot race the agent's first desired-state refresh.
-            let mmdsInterfaces = FirecrackerMMDSInterfacePlan.interfaceIDs(for: networkAttachments)
-            if !mmdsInterfaces.isEmpty {
+            let configuredMMDSInterfaces = FirecrackerMMDSInterfacePlan.interfaceIDs(
+                for: networkAttachments,
+                metadataServiceEnabled: metadata?.isServiceEnabled ?? false)
+            if !configuredMMDSInterfaces.isEmpty {
                 try await manager.configureMMDS(
-                    MMDSConfig(version: .v2, networkInterfaces: mmdsInterfaces))
+                    MMDSConfig(version: .v2, networkInterfaces: configuredMMDSInterfaces))
                 // The desired item that scheduled this create can be an older
                 // replay while MetadataStore already holds a newer generation.
                 // Read through its guard at the last possible moment instead of
@@ -192,6 +198,7 @@ actor FirecrackerService: HypervisorService {
             // Publish the manager only after every pre-boot API call succeeds.
             vmManagers[vmId] = manager
             vmSpecs[vmId] = spec
+            mmdsInterfaces[vmId] = configuredMMDSInterfaces
         } catch {
             // `FirecrackerClient.createVM` has already spawned and registered
             // the process. No caller can clean it up through this service yet,
@@ -281,6 +288,7 @@ actor FirecrackerService: HypervisorService {
         vmManagers.removeValue(forKey: vmId)
         vmSpecs.removeValue(forKey: vmId)
         mmdsPayloads.removeValue(forKey: vmId)
+        mmdsInterfaces.removeValue(forKey: vmId)
 
         // Remove the VM's directory, which holds the rootfs materialized at
         // create. Same rule as the QEMU driver: one recursive removal rather
@@ -451,6 +459,11 @@ actor FirecrackerService: HypervisorService {
 
         vmManagers[vmId] = manager
         vmSpecs[vmId] = spec
+        // Adopted manifests written before the exact policy field configured
+        // MMDS from the network list. The agent's durable policy inventory is
+        // authoritative for reconciliation; this fallback only suppresses
+        // pointless data PUTs when no network could have been configured.
+        mmdsInterfaces[vmId] = FirecrackerMMDSInterfacePlan.interfaceIDs(for: spec.networks)
 
         return Self.vmStatus(from: info.state)
     }
@@ -463,10 +476,7 @@ actor FirecrackerService: HypervisorService {
         guard let manager = vmManagers[vmId] else {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
-        guard
-            let spec = vmSpecs[vmId],
-            !FirecrackerMMDSInterfacePlan.interfaceIDs(for: spec.networks).isEmpty
-        else {
+        guard !(mmdsInterfaces[vmId] ?? []).isEmpty else {
             return
         }
 
@@ -477,6 +487,11 @@ actor FirecrackerService: HypervisorService {
         logger.info(
             "Refreshed Firecracker MMDS snapshot",
             metadata: ["vmId": .string(vmId), "bytes": .stringConvertible(payload.count)])
+    }
+
+    func restoreMetadataInterfaceInventory(vmId: String, interfaces: [String]) async {
+        guard vmManagers[vmId] != nil else { return }
+        mmdsInterfaces[vmId] = interfaces
     }
 
     /// Replaces only the Firecracker process. Managed disks and host-side TAPs
@@ -504,6 +519,7 @@ actor FirecrackerService: HypervisorService {
             vmManagers.removeValue(forKey: vmId)
             vmSpecs.removeValue(forKey: vmId)
             mmdsPayloads.removeValue(forKey: vmId)
+            mmdsInterfaces.removeValue(forKey: vmId)
         }
 
         // A failed replacement has already removed the old manager. Its next
@@ -613,6 +629,7 @@ actor FirecrackerService: HypervisorService {
         vmManagers.removeValue(forKey: vmId)
         vmSpecs.removeValue(forKey: vmId)
         mmdsPayloads.removeValue(forKey: vmId)
+        mmdsInterfaces.removeValue(forKey: vmId)
     }
 
     private static func mmdsPayload(for metadata: InstanceMetadata?) throws -> Data {

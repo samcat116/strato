@@ -87,6 +87,11 @@ struct ReconciliationTests {
         VMSpec(cpus: cpus, memoryBytes: 1 << 30, boot: .disk(firmware: nil))
     }
 
+    private static func metadata(_ vmId: UUID, enabled: Bool = true) -> InstanceMetadata {
+        InstanceMetadata(
+            instanceId: vmId, projectId: UUID(), serviceEnabled: enabled)
+    }
+
     private static func desired(
         _ vmId: UUID,
         status: DesiredVMStatus,
@@ -506,7 +511,8 @@ struct ReconciliationTests {
                 cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil),
                 networks: [target]),
             desiredStatus: .running,
-            generation: 2)
+            generation: 2,
+            metadata: Self.metadata(vmId))
         let plan = Reconciler.plan(
             desired: [desired],
             present: [vmId.uuidString: .managed(.running)],
@@ -533,7 +539,8 @@ struct ReconciliationTests {
             spec: VMSpec(
                 cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil),
                 networks: [network(metadataEnabled: false)]),
-            desiredStatus: .running, generation: 4)
+            desiredStatus: .running, generation: 4,
+            metadata: Self.metadata(vmId))
 
         let plan = Reconciler.plan(
             desired: [desired],
@@ -563,7 +570,8 @@ struct ReconciliationTests {
             spec: VMSpec(
                 cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil),
                 networks: [target]),
-            desiredStatus: .paused, generation: 2)
+            desiredStatus: .paused, generation: 2,
+            metadata: Self.metadata(vmId))
 
         let plan = Reconciler.plan(
             desired: [desired],
@@ -588,7 +596,8 @@ struct ReconciliationTests {
                     NetworkSpec(
                         network: "new", networkId: UUID(), metadataEnabled: false)
                 ]),
-            desiredStatus: .running, generation: 2)
+            desiredStatus: .running, generation: 2,
+            metadata: Self.metadata(vmId))
 
         let plan = Reconciler.plan(
             desired: [desired],
@@ -598,6 +607,41 @@ struct ReconciliationTests {
             presentNetworks: [vmId.uuidString: [current]])
 
         #expect(plan.items.first?.steps.isEmpty == true)
+    }
+
+    @Test("Firecracker recreates its VMM when the VM metadata switch changes")
+    func firecrackerVMMetadataSwitchReconfiguresMMDS() {
+        let vmId = UUID()
+        let network = NetworkSpec(
+            interfaceId: UUID(), deviceName: "net0", orderIndex: 0,
+            network: "management", networkId: UUID(), metadataEnabled: true)
+        func desired(metadataEnabled: Bool) -> DesiredVMState {
+            DesiredVMState(
+                vmId: vmId, hypervisorType: .firecracker,
+                spec: VMSpec(
+                    cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil),
+                    networks: [network]),
+                desiredStatus: .running, generation: 1,
+                metadata: Self.metadata(vmId, enabled: metadataEnabled))
+        }
+
+        let enabling = Reconciler.plan(
+            desired: [desired(metadataEnabled: true)],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 1],
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()],
+            presentNetworks: [vmId.uuidString: [network]],
+            presentFirecrackerMMDSInterfaces: [vmId.uuidString: []])
+        #expect(enabling.items.first?.steps == [.reconfigureNetworks, .boot])
+
+        let disabling = Reconciler.plan(
+            desired: [desired(metadataEnabled: false)],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 1],
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()],
+            presentNetworks: [vmId.uuidString: [network]],
+            presentFirecrackerMMDSInterfaces: [vmId.uuidString: ["eth0"]])
+        #expect(disabling.items.first?.steps == [.reconfigureNetworks, .boot])
     }
 
     // MARK: - Unknown host contents (STR-138)

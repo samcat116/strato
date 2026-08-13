@@ -67,6 +67,15 @@ public struct VMManifestEntry: Codable, Sendable {
     /// post-boot repair path. The agent recreates that VMM once, then records
     /// true. Non-Firecracker VMs and sandboxes leave this nil.
     public private(set) var firecrackerMMDSPolicyApplied: Bool?
+    /// Exact Firecracker interface ids admitted to MMDS by the represented
+    /// VMM. Unlike `spec.networks`, this includes the per-VM metadata kill
+    /// switch as well as per-network policy, so a metadata-only desired-state
+    /// update remains observable after an agent restart.
+    ///
+    /// Nil is the compatibility shape written before this policy was recorded
+    /// exactly. A marked STR-67 entry then falls back to the network list,
+    /// matching what those builds configured.
+    public private(set) var firecrackerMMDSInterfaces: [String]?
 
     public init(
         hypervisorType: HypervisorType,
@@ -74,7 +83,8 @@ public struct VMManifestEntry: Codable, Sendable {
         realizedMemoryReservationBytes: Int64? = nil,
         vsockCID: UInt32? = nil,
         appliedEdges: AppliedEdgeNonces? = nil,
-        firecrackerMMDSPolicyApplied: Bool? = nil
+        firecrackerMMDSPolicyApplied: Bool? = nil,
+        firecrackerMMDSInterfaces: [String]? = nil
     ) {
         self.kind = .vm
         self.hypervisorType = hypervisorType
@@ -84,6 +94,7 @@ public struct VMManifestEntry: Codable, Sendable {
         self.vsockCID = vsockCID
         self.appliedEdges = appliedEdges
         self.firecrackerMMDSPolicyApplied = firecrackerMMDSPolicyApplied
+        self.firecrackerMMDSInterfaces = firecrackerMMDSInterfaces
     }
 
     /// A sandbox entry. Sandboxes boot through Firecracker only, so the
@@ -98,6 +109,7 @@ public struct VMManifestEntry: Codable, Sendable {
         self.vsockCID = nil
         self.appliedEdges = appliedEdges
         self.firecrackerMMDSPolicyApplied = nil
+        self.firecrackerMMDSInterfaces = nil
     }
 
     /// The same workload with a new spec — a resize, or a volume attached or
@@ -137,11 +149,12 @@ public struct VMManifestEntry: Codable, Sendable {
         return with(spec: desiredSpec.withNetworks(spec.networks))
     }
 
-    /// Records that the current Firecracker process was created with the MMDS
-    /// policy represented by `spec.networks`.
-    public func applyingFirecrackerMMDSPolicy() -> VMManifestEntry {
+    /// Records the exact immutable MMDS allow-list installed in the current
+    /// Firecracker process.
+    public func applyingFirecrackerMMDSPolicy(interfaces: [String]) -> VMManifestEntry {
         var copy = self
         copy.firecrackerMMDSPolicyApplied = true
+        copy.firecrackerMMDSInterfaces = interfaces
         return copy
     }
 

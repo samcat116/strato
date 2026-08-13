@@ -79,6 +79,10 @@ struct NetworkAttachmentTests {
                 network: "management", attachment: .tap(interface: "tap3"), metadataEnabled: true),
         ]
         #expect(FirecrackerMMDSInterfacePlan.interfaceIDs(for: attachments) == ["eth1", "eth3"])
+        #expect(
+            FirecrackerMMDSInterfacePlan.interfaceIDs(
+                for: attachments, metadataServiceEnabled: false
+            ).isEmpty)
 
         let networks = [
             NetworkSpec(network: "private", networkId: UUID(), metadataEnabled: false),
@@ -86,6 +90,10 @@ struct NetworkAttachmentTests {
             NetworkSpec(network: "service", networkId: UUID(), metadataEnabled: true),
         ]
         #expect(FirecrackerMMDSInterfacePlan.interfaceIDs(for: networks) == ["eth2"])
+        #expect(
+            FirecrackerMMDSInterfacePlan.interfaceIDs(
+                for: networks, metadataServiceEnabled: false
+            ).isEmpty)
     }
 
 }

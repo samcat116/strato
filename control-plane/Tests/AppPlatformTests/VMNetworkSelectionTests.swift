@@ -508,12 +508,32 @@ final class VMNetworkSelectionTests {
                 #expect(res.body.string.contains("at least one selected network"))
             }
 
+            defaultNetwork.metadataEnabled = true
+            defaultNetwork.dhcpEnabled = false
+            try await defaultNetwork.save(on: app.db)
+
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "fc-userdata-no-dhcp", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: "default",
+                        userData: userData, hypervisorType: "firecracker"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("DHCP"))
+            }
+
             #expect(
                 try await VM.query(on: app.db)
                     .filter(\.$name == "fc-userdata-disabled-vm").first() == nil)
             #expect(
                 try await VM.query(on: app.db)
                     .filter(\.$name == "fc-userdata-disabled-network").first() == nil)
+            #expect(
+                try await VM.query(on: app.db)
+                    .filter(\.$name == "fc-userdata-no-dhcp").first() == nil)
         }
     }
 

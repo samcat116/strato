@@ -99,6 +99,12 @@ public protocol HypervisorService: Actor, Sendable {
     /// store, never retain the previous document.
     func refreshInstanceMetadata(vmId: String, metadata: InstanceMetadata?) async throws
 
+    /// Restores backend-local knowledge of the immutable metadata interface
+    /// policy after adopting a surviving VM. The manifest remains the source
+    /// of truth; this only reconnects a new service instance to policy already
+    /// installed in the old hypervisor process.
+    func restoreMetadataInterfaceInventory(vmId: String, interfaces: [String]) async
+
     /// Rebuilds the backend process so its immutable per-interface metadata
     /// policy matches `networkAttachments`, leaving the VM created but not
     /// booted. The caller restores the desired power state in later reconcile
@@ -372,6 +378,8 @@ public protocol HypervisorService: Actor, Sendable {
 
 public extension HypervisorService {
     func refreshInstanceMetadata(vmId: String, metadata: InstanceMetadata?) async throws {}
+
+    func restoreMetadataInterfaceInventory(vmId: String, interfaces: [String]) async {}
 
     func reconfigureMetadataInterfaces(
         vmId: String, spec: VMSpec, imageInfo: ImageInfo?,

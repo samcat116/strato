@@ -622,6 +622,11 @@ public protocol ReconcileActuator: Sendable {
     func observedSizing() async -> [String: VMSizing]
     /// Network specs durably recorded in each managed VM manifest.
     func observedNetworkSpecs() async -> [String: [NetworkSpec]]
+    /// Exact immutable MMDS interface allow-list recorded for each managed
+    /// Firecracker VM. This includes the per-VM metadata kill switch, which is
+    /// not represented by `NetworkSpec` and may change without a VM generation
+    /// bump.
+    func observedFirecrackerMMDSInterfaces() async -> [String: [String]]
     /// Re-adopt an orphaned VM and return its observed status, so the
     /// reconciler can plan the remaining convergence steps toward the desired
     /// status.
@@ -698,6 +703,8 @@ extension ReconcileActuator {
     public func prepareManagedVolumeInventory(
         from _: [DesiredVMState], desiredVolumes _: [DesiredVolumeState]
     ) async {}
+
+    public func observedFirecrackerMMDSInterfaces() async -> [String: [String]] { [:] }
 }
 
 /// Why a volume could not be converged (STR-148). Every case carries a
@@ -1152,7 +1159,8 @@ public actor Reconciler {
             desired: message.vms, present: presentVMs, lastApplied: appliedGenerations(kind: .vm),
             presentSizing: await actuator.observedSizing(), tombstones: tombstones,
             appliedEdges: appliedEdges,
-            presentNetworks: await actuator.observedNetworkSpecs())
+            presentNetworks: await actuator.observedNetworkSpecs(),
+            presentFirecrackerMMDSInterfaces: await actuator.observedFirecrackerMMDSInterfaces())
         var plan = ReconcilePlan(items: [], unrecognized: vmPlan.unrecognized)
 
         var volumePlan = ReconcilePlan()
@@ -1801,7 +1809,8 @@ public actor Reconciler {
         presentSizing: [String: VMSizing] = [:],
         tombstones: [DesiredWorkloadTombstone] = [],
         appliedEdges: [String: AppliedEdgeNonces] = [:],
-        presentNetworks: [String: [NetworkSpec]] = [:]
+        presentNetworks: [String: [NetworkSpec]] = [:],
+        presentFirecrackerMMDSInterfaces: [String: [String]] = [:]
     ) -> ReconcilePlan {
         var plan = planCore(
             desired: desired, tombstones: tombstones, present: present, lastApplied: lastApplied,
@@ -1811,7 +1820,9 @@ public actor Reconciler {
             sizing: presentSizing, appliedEdges: appliedEdges)
         addNetworkChanges(
             to: &plan.items, desired: desired, present: present, lastApplied: lastApplied,
-            presentNetworks: presentNetworks, appliedEdges: appliedEdges)
+            presentNetworks: presentNetworks,
+            presentFirecrackerMMDSInterfaces: presentFirecrackerMMDSInterfaces,
+            appliedEdges: appliedEdges)
         return plan
     }
 
@@ -1821,6 +1832,7 @@ public actor Reconciler {
         present: [String: VMPresence],
         lastApplied: [String: Int64],
         presentNetworks: [String: [NetworkSpec]],
+        presentFirecrackerMMDSInterfaces: [String: [String]],
         appliedEdges: [String: AppliedEdgeNonces]
     ) {
         for entry in desired where !entry.wantsAbsent {
@@ -1840,9 +1852,13 @@ public actor Reconciler {
                 // boot. Other NIC edits remain unsupported post-create, but a
                 // metadata policy edit must rebuild the VMM so a disabled NIC
                 // does not retain access until the VM is manually recreated.
-                needsReconfiguration =
-                    FirecrackerMMDSInterfacePlan.interfaceIDs(for: observed)
-                    != FirecrackerMMDSInterfacePlan.interfaceIDs(for: entry.spec.networks)
+                let observedInterfaces =
+                    presentFirecrackerMMDSInterfaces[id]
+                    ?? FirecrackerMMDSInterfacePlan.interfaceIDs(for: observed)
+                let desiredInterfaces = FirecrackerMMDSInterfacePlan.interfaceIDs(
+                    for: entry.spec.networks,
+                    metadataServiceEnabled: entry.metadata?.isServiceEnabled ?? false)
+                needsReconfiguration = observedInterfaces != desiredInterfaces
             }
             guard needsReconfiguration else { continue }
 

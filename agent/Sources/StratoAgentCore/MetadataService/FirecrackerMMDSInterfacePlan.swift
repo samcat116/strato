@@ -19,9 +19,11 @@ public enum FirecrackerMMDSInterfacePlan {
     public static let payloadLimitBytes = 8 * 1024 * 1024
 
     public static func interfaceIDs(
-        for attachments: [ResolvedNetworkAttachment]
+        for attachments: [ResolvedNetworkAttachment],
+        metadataServiceEnabled: Bool = true
     ) -> [String] {
-        attachments.enumerated().compactMap { index, attachment in
+        guard metadataServiceEnabled else { return [] }
+        return attachments.enumerated().compactMap { index, attachment in
             attachment.metadataEnabled ? "eth\(index)" : nil
         }
     }
@@ -29,8 +31,12 @@ public enum FirecrackerMMDSInterfacePlan {
     /// Adoption has the durable specs rather than resolved attachments. A
     /// Firecracker VM can only have TAP NICs, so their array positions remain
     /// the ids used when its process was configured.
-    public static func interfaceIDs(for networks: [NetworkSpec]) -> [String] {
-        networks.enumerated().compactMap { index, network in
+    public static func interfaceIDs(
+        for networks: [NetworkSpec],
+        metadataServiceEnabled: Bool = true
+    ) -> [String] {
+        guard metadataServiceEnabled else { return [] }
+        return networks.enumerated().compactMap { index, network in
             network.metadataEnabled == true ? "eth\(index)" : nil
         }
     }

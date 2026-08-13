@@ -922,11 +922,15 @@ struct VMController: RouteCollection {
                                 reason:
                                     "'userData' for firecracker VMs requires 'metadataEnabled' to be true")
                         }
-                        guard resolvedInterfaces.contains(where: { $0.network.metadataEnabled }) else {
+                        guard
+                            resolvedInterfaces.contains(where: {
+                                $0.network.metadataEnabled && $0.network.dhcpEnabled
+                            })
+                        else {
                             throw Abort(
                                 .badRequest,
                                 reason: "'userData' for firecracker VMs requires at least one selected network "
-                                    + "with metadata enabled")
+                                    + "with metadata and DHCP enabled")
                         }
                     }
 
