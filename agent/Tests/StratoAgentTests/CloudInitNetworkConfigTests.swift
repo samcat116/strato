@@ -7,7 +7,7 @@ import Testing
 @Suite("Cloud-init network-config generation")
 struct CloudInitNetworkConfigTests {
 
-    @Test("NoCloud-net network-config is byte-identical to the seed ISO renderer")
+    @Test("NoCloud-net network-config is byte-identical to the IMDS bootstrap renderer")
     func noCloudNetGoldenParity() {
         let networkA = UUID(uuidString: "A8B24755-7A5A-4A0C-A541-5BD8258B1CB6")!
         let networkB = UUID(uuidString: "3D192DA8-984F-4EB7-ACD4-067B93A1354D")!
@@ -67,12 +67,14 @@ struct CloudInitNetworkConfigTests {
             ],
             serviceEnabled: true)
 
-        let seedISO = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        let seedISO = CloudInitProvisioner.networkConfigYAML(
+            for: attachments, renameInterfaces: false)
         let noCloudNet = CloudInitProvisioner.networkConfigYAML(for: metadata)
         #expect(seedISO != nil)
         #expect(noCloudNet != nil)
         if let seedISO, let noCloudNet {
             #expect(noCloudNet.utf8.elementsEqual(seedISO.utf8))
+            #expect(!noCloudNet.contains("set-name:"))
         }
     }
 
@@ -82,6 +84,28 @@ struct CloudInitNetworkConfigTests {
             instanceId: UUID(), projectId: UUID(), serviceEnabled: true)
         #expect(CloudInitProvisioner.networkConfigYAML(for: metadata) == nil)
         #expect(CloudInitProvisioner.networkConfigYAML(for: [ResolvedNetworkAttachment]()) == nil)
+    }
+
+    @Test("local IMDS bootstrap keeps the kernel interface name")
+    func localIMDSBootstrapDoesNotRenameNIC() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0123456789ab"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                gateway: "192.168.1.1")
+        ]
+
+        let bootstrap = CloudInitProvisioner.networkConfigYAML(
+            for: attachments, renameInterfaces: false)
+        let fullSeed = CloudInitProvisioner.networkConfigYAML(for: attachments)
+
+        #expect(bootstrap?.contains("set-name:") == false)
+        #expect(fullSeed?.contains("set-name: nic0") == true)
+        #expect(bootstrap?.contains("macaddress: \"52:54:00:aa:bb:cc\"") == true)
+        #expect(bootstrap?.contains("192.168.1.5/24") == true)
     }
 
     @Test("static tap NIC renders a v2 ethernet entry matched by MAC")

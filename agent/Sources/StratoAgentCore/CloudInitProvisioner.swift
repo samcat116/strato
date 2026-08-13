@@ -192,7 +192,15 @@ public struct CloudInitProvisioner {
             ]
         }
 
-        if let networkConfig = networkConfigYAML(for: networkAttachments) {
+        // In IMDS mode this document is applied during init-local solely to
+        // make seedfrom reachable. Leave the kernel name intact: by the time
+        // NoCloudNet consumes the live document during init-network the device
+        // is already active, and cloud-init cannot rename it without finishing
+        // degraded. The live renderer follows the same rule below.
+        if let networkConfig = networkConfigYAML(
+            for: networkAttachments,
+            renameInterfaces: metadataSource == .iso
+        ) {
             documents["network-config"] = networkConfig
         }
         return documents
@@ -614,7 +622,10 @@ public struct CloudInitProvisioner {
     /// Returns nil when no NIC needs configuring — no `network-config` is written
     /// and the guest keeps its default behavior (DHCP), which is also what
     /// user-mode (SLIRP) NICs need.
-    public static func networkConfigYAML(for attachments: [ResolvedNetworkAttachment]) -> String? {
+    public static func networkConfigYAML(
+        for attachments: [ResolvedNetworkAttachment],
+        renameInterfaces: Bool = true
+    ) -> String? {
         var sections: [String] = []
         // Tracked per family, not per NIC: the two routes are delivered by
         // different mechanisms and a NIC can discharge one without the other.
@@ -642,13 +653,18 @@ public struct CloudInitProvisioner {
             guard case .tap = nic.attachment else { continue }
             guard let macAddress = nic.macAddress else { continue }
 
-            // Common header: match the NIC by MAC and give it a stable name.
+            // Common header: always match the NIC by MAC. Full ISO seeds also
+            // give it a stable name; both IMDS documents deliberately retain
+            // the kernel name because NoCloudNet applies after the device is
+            // active (see `seedDocuments`).
             var section = """
                   nic\(index):
                     match:
                       macaddress: "\(macAddress)"
-                    set-name: nic\(index)
                 """
+            if renameInterfaces {
+                section += "\n    set-name: nic\(index)"
+            }
 
             // Dual-stack only when the control plane *allocated* a v6 address —
             // not when the guest merely has a usable one. Every v6 line below
@@ -808,10 +824,11 @@ public struct CloudInitProvisioner {
 
     /// Renders the NoCloud-net `network-config` from the metadata snapshot.
     ///
-    /// The seed ISO and HTTP paths deliberately converge on the existing
-    /// `ResolvedNetworkAttachment` renderer. Keeping one byte-producing path
-    /// is what makes their parity a property of the implementation rather than
-    /// two sets of examples that happen to agree today.
+    /// The IMDS bootstrap ISO and HTTP paths deliberately converge on the
+    /// existing `ResolvedNetworkAttachment` renderer. Keeping one
+    /// byte-producing path is what makes their parity a property of the
+    /// implementation rather than two sets of examples that happen to agree
+    /// today.
     public static func networkConfigYAML(for metadata: InstanceMetadata) -> String? {
         networkConfigYAML(
             for: metadata.nics.map { nic in
@@ -834,7 +851,8 @@ public struct CloudInitProvisioner {
                     domainName: nic.domainName,
                     metadataEnabled: nic.metadataEnabled,
                     resolverAddresses: nic.resolverAddresses)
-            })
+            },
+            renameInterfaces: false)
     }
 
     private static func dottedIPv4Netmask(prefixLength: Int?) -> String? {

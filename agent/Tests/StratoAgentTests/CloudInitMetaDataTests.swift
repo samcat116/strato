@@ -47,6 +47,7 @@ struct CloudInitMetaDataTests {
             documents["meta-data"]
                 == "seedfrom: http://169.254.169.254/latest/nocloud/11111111-2222-4333-8444-555555555555/")
         #expect(documents["network-config"]?.contains("192.168.1.5/24") == true)
+        #expect(documents["network-config"]?.contains("set-name:") == false)
         #expect(documents["user-data"] == "")
         #expect(documents.values.allSatisfy { !$0.contains("packages: [nginx]") })
     }
