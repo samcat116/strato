@@ -556,6 +556,14 @@ bootstrap is deliberately per-backend. Firecracker currently has no cloud-init
 injection path, so VM creation rejects both `imds` and caller-supplied user data
 for that hypervisor instead of accepting configuration it cannot deliver.
 
+Before an existing IMDS-backed QEMU VM boots, the agent refreshes that local
+seed from current desired state and narrowly migrates its inactive libvirt
+definition when the x86 NoCloud network-mode SMBIOS hint is absent. This makes
+the bootstrap repair apply to VMs created by older agents without rebuilding
+their domain XML or changing full-ISO guests. A failed refresh or migration
+keeps the VM stopped; a running QEMU process alone is not evidence that
+cloud-init selected the intended datasource.
+
 VM creation rejects `imds` when the VM-level metadata switch is off or when
 none of its selected logical networks publish metadata. Either configuration
 would create a seed whose hand-off URL has no reachable listener; `iso` remains
