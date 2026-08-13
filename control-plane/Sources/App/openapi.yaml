@@ -14066,6 +14066,12 @@ components:
           description: >-
             Whether this host can attach a virtio-vsock device for this
             hypervisor; null for agents that predate vsock probing.
+        supportsGuestExec:
+          type: boolean
+          nullable: true
+          description: >-
+            Whether this agent can bridge guest-exec sessions to VMs using
+            this hypervisor; null for agents that predate VM guest exec.
         version:
           type: string
           nullable: true

@@ -7946,6 +7946,8 @@ export interface components {
             capabilities: components["schemas"]["AgentHypervisorCapabilities"];
             /** @description Whether this host can attach a virtio-vsock device for this hypervisor; null for agents that predate vsock probing. */
             supportsVsock?: boolean | null;
+            /** @description Whether this agent can bridge guest-exec sessions to VMs using this hypervisor; null for agents that predate VM guest exec. */
+            supportsGuestExec?: boolean | null;
             /** @description The hypervisor binary's probed version; null for agents predating version probing or when the probe failed. */
             version?: string | null;
         };
