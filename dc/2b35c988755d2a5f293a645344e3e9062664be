@@ -1,0 +1,45 @@
+sandbox-guest/build-guest-agent.sh
+  s_d67c324c6e1ac6::t_87d007d2c06c4c 1-56
+.github/workflows/README.md
+  s_d67c324c6e1ac6::t_87d007d2c06c4c 97-98
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_d67c324c6e1ac6::t_87d007d2c06c4c 48-61
+  s_d67c324c6e1ac6::t_27436fee8e89b6 43-47
+.github/workflows/release.yaml
+  s_d67c324c6e1ac6::t_87d007d2c06c4c 795-796,832-833,842
+docs/architecture/agent.md
+  s_d67c324c6e1ac6::t_773808b9270c71 1067-1071
+  s_d67c324c6e1ac6::t_87d007d2c06c4c 1060,1065-1066
+control-plane/Tests/AppResourceTests/DesiredStatePollTests.swift
+  s_d67c324c6e1ac6::t_87d007d2c06c4c 4,39-44,56-59,111-156
+  s_d67c324c6e1ac6::t_303873d85bd50d 157-158
+control-plane/Sources/App/Migrations/AddGuestAgentEnabledToVM.swift
+  s_d67c324c6e1ac6::t_87d007d2c06c4c 1-27
+sandbox-guest/README.md
+  s_d67c324c6e1ac6::t_87d007d2c06c4c 36-39,241-249,274-285
+  s_d67c324c6e1ac6::t_2e62644699cc9a 286
+sandbox-guest/strato-guest-agent.service
+  s_d67c324c6e1ac6::t_87d007d2c06c4c 1-20
+sandbox-guest/init/src/guest_agent.rs
+  s_d67c324c6e1ac6::t_87d007d2c06c4c 5-6
+control-plane/Sources/App/configure.swift
+  s_d67c324c6e1ac6::t_87d007d2c06c4c 419-423
+.github/workflows/sandbox-guest.yaml
+  s_d67c324c6e1ac6::t_87d007d2c06c4c 3-6,47-55,98-103,108-109,112,114-128,137-140,155-160,203-294
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "dc2b35c988755d2a5f293a645344e3e9062664be",
+  "prompts": {},
+  "sessions": {
+    "s_d67c324c6e1ac6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff5f4-f585-7181-8147-316937d752f7",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
