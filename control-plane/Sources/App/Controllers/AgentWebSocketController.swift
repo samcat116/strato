@@ -511,8 +511,7 @@ struct AgentWebSocketController: RouteCollection {
 
     private func sendMessage<T: WebSocketMessage>(ws: WebSocket, message: T, logger: Logger) {
         do {
-            let envelope = try MessageEnvelope(message: message)
-            let data = try WireProtocol.makeEncoder().encode(envelope)
+            let data = try WireProtocol.encodeEnvelope(message)
             ws.send(data)
         } catch {
             Telemetry.agentSendFailed(kind: "message")
@@ -523,8 +522,7 @@ struct AgentWebSocketController: RouteCollection {
     private func sendSuccessResponse(ws: WebSocket, requestId: String, message: String, logger: Logger) {
         do {
             let response = SuccessMessage(requestId: requestId, message: message)
-            let envelope = try MessageEnvelope(message: response)
-            let data = try WireProtocol.makeEncoder().encode(envelope)
+            let data = try WireProtocol.encodeEnvelope(response)
             ws.send(data)
         } catch {
             Telemetry.agentSendFailed(kind: "success")
@@ -541,8 +539,7 @@ struct AgentWebSocketController: RouteCollection {
     {
         do {
             let response = ErrorMessage(requestId: requestId, error: error, code: code)
-            let envelope = try MessageEnvelope(message: response)
-            let data = try WireProtocol.makeEncoder().encode(envelope)
+            let data = try WireProtocol.encodeEnvelope(response)
             ws.send(data)
         } catch {
             Telemetry.agentSendFailed(kind: "error")

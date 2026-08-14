@@ -767,6 +767,13 @@ public struct MessageEnvelope: Codable, Sendable {
     }
 }
 
+extension WireProtocol {
+    /// Encodes a wire message as an envelope-wrapped JSON payload.
+    public static func encodeEnvelope<T: WebSocketMessage>(_ message: T) throws -> Data {
+        try makeEncoder().encode(MessageEnvelope(message: message))
+    }
+}
+
 // MARK: - VM Log Messages
 
 /// Log level for VM log messages
