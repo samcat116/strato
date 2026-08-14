@@ -19,6 +19,7 @@ import {
   Layers,
   LayoutGrid,
   MapPin,
+  Network,
   Rows3,
   Scale,
   ScrollText,
@@ -70,10 +71,12 @@ export const navTree: NavItem[] = [
     icon: Globe,
     children: [
       { label: "Networks", href: "/networks", icon: Globe },
-      { label: "Network Services", href: "/network-services", icon: Globe2 },
+      { label: "Load Balancers", href: "/load-balancers", icon: Scale },
+      { label: "Floating IPs", href: "/floating-ips", icon: Globe2 },
+      { label: "DNS Zones", href: "/dns-zones", icon: Network },
+      { label: "Security Groups", href: "/security-groups", icon: Shield },
     ],
   },
-  { label: "Security Groups", href: "/security-groups", icon: Shield },
   {
     label: "Storage",
     icon: HardDrive,
