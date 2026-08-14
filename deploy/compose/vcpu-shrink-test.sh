@@ -143,6 +143,30 @@ VM_ID="$(json_get "d['resource']['id']" "$TMP_DIR/create.json")"
 target="$(json_get "d['targetGeneration']" "$TMP_DIR/create.json")"
 wait_converged "$VM_ID" "$target" "create"
 
+# This workflow is STR-247 coverage only when the chosen image materializes
+# above the 2 GiB request. Also require the control plane to have admitted that
+# measured size into desired state before it reports VM creation converged.
+request GET "/api/volumes?project_id=${PROJECT_ID}&type=boot" "$TMP_DIR/boot-volumes.json" >/dev/null
+python3 - "$VM_ID" "$TMP_DIR/boot-volumes.json" <<'PY'
+import json, sys
+vm_id = sys.argv[1]
+volumes = json.load(open(sys.argv[2]))["items"]
+boot = next((v for v in volumes if v.get("vmId") == vm_id), None)
+assert boot is not None, f"managed boot volume for VM {vm_id} was not returned"
+requested = 2 * 1024 * 1024 * 1024
+observed = boot.get("observedSize")
+desired = boot.get("size")
+assert observed is not None and observed > requested, (
+    f"image does not exercise STR-247: boot volume observed size {observed!r} "
+    f"must exceed the {requested}-byte request"
+)
+assert desired == observed, (
+    f"boot volume converged without normalizing admitted size: desired={desired}, "
+    f"observed={observed}"
+)
+PY
+echo "  ok: image exceeds 2 GiB and boot-volume size was normalized before convergence"
+
 code="$(request POST "/api/vms/${VM_ID}/start" "$TMP_DIR/start.json")"
 expect_code "start VM" "$code" 202 "$TMP_DIR/start.json"
 target="$(json_get "d['targetGeneration']" "$TMP_DIR/start.json")"

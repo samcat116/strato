@@ -59,6 +59,9 @@ struct ObservedStateApplier {
         /// A teardown was newly authorized (or its generation advanced), so
         /// the agent should get a sync now rather than at the next period.
         var authorizedTeardown = false
+        /// Applying an observation normalized desired state, so the reporting
+        /// agent needs a fresh sync instead of waiting for the periodic one.
+        var desiredStateChanged = false
         /// Held claims bucketed by reason, for a gauge recorded on every
         /// report. Both buckets are always present, including at zero, so the
         /// series falls back to 0 when the condition clears instead of going
@@ -73,14 +76,14 @@ struct ObservedStateApplier {
     /// report can write it. The bulk query is only an index of candidates; the
     /// row lock and refresh establish the authoritative desired state and
     /// placement at the moment this entry is applied.
-    private func withLockedCurrent<R: ConvergingResource>(
+    private func withLockedCurrent<R: ConvergingResource, Result: Sendable>(
         _ resource: R,
         reportedBy agentId: String,
         on db: any Database,
-        applying body: @escaping @Sendable (R, any Database) async throws -> Void
-    ) async throws {
-        try await db.transaction { tx in
-            guard try await resource.lockAndRefresh(on: tx) else { return }
+        applying body: @escaping @Sendable (R, any Database) async throws -> Result
+    ) async throws -> Result? {
+        try await db.transaction { tx -> Result? in
+            guard try await resource.lockAndRefresh(on: tx) else { return nil }
             let resourceID = try resource.requireID()
             let placementAgentIDs = try await resource.placementAgentIDs(on: tx)
             guard placementAgentIDs.contains(agentId) else {
@@ -92,9 +95,9 @@ struct ObservedStateApplier {
                         "reportingAgentId": .string(agentId),
                         "currentAgentId": .string(placementAgentIDs.joined(separator: ",")),
                     ])
-                return
+                return nil
             }
-            try await body(resource, tx)
+            return try await body(resource, tx)
         }
     }
 
@@ -156,7 +159,7 @@ struct ObservedStateApplier {
         // here is what authorizes — or permanently withholds — a teardown, and
         // the loud path below reads whether the same report also observed the
         // workload.
-        let unrecognizedOutcome = try await applyUnrecognizedWorkloads(report, on: db)
+        var unrecognizedOutcome = try await applyUnrecognizedWorkloads(report, on: db)
 
         let dbVMs = try await VM.query(on: db)
             .filter(\.$hypervisorId == report.agentId)
@@ -246,11 +249,15 @@ struct ObservedStateApplier {
             for volume in dbVolumes {
                 guard let volumeID = volume.id else { continue }
                 if let observed = reportedVolumes[volumeID] {
-                    try await withLockedCurrent(volume, reportedBy: report.agentId, on: db) {
+                    let desiredStateChanged = try await withLockedCurrent(
+                        volume, reportedBy: report.agentId, on: db
+                    ) {
                         volume, tx in
-                        try await applyObservedVolumeState(
+                        return try await applyObservedVolumeState(
                             volume: volume, observed: observed, agentId: report.agentId, on: tx)
                     }
+                    unrecognizedOutcome.desiredStateChanged =
+                        unrecognizedOutcome.desiredStateChanged || desiredStateChanged == true
                 } else {
                     try await withLockedCurrent(volume, reportedBy: report.agentId, on: db) {
                         volume, tx in
@@ -934,8 +941,8 @@ struct ObservedStateApplier {
         guard let observedSize = bootVolume.observedSize else {
             return "\(prefix): the agent has not reported its virtual size"
         }
-        guard observedSize >= bootVolume.desiredSize else {
-            return "\(prefix): observed \(observedSize) of \(bootVolume.desiredSize) requested bytes"
+        guard observedSize == bootVolume.desiredSize else {
+            return "\(prefix): observed \(observedSize) of \(bootVolume.desiredSize) admitted bytes"
         }
         guard bootVolume.converged else {
             return "\(prefix) to converge to generation \(bootVolume.generation)"
@@ -1350,7 +1357,7 @@ struct ObservedStateApplier {
         observed: ObservedVolumeState,
         agentId: String,
         on db: Database
-    ) async throws {
+    ) async throws -> Bool {
         let volumeID = try volume.requireID()
         try logSupersededFailureReport(volume, reportedGeneration: observed.failedGeneration)
         // Captured before anything mutates, for exactly the reasons the VM
@@ -1414,6 +1421,71 @@ struct ObservedStateApplier {
             volume.observedSizeBytes = reported
             changed = true
         }
+
+        // A managed boot volume is attached as part of VM creation, so it does
+        // not pass through VolumeController.attachVolume's materialized-size
+        // admission. When an image's native virtual size exceeds the request,
+        // reserve that excess and make the measured size desired state before
+        // either VM convergence gate may treat the disk as bootable. Advancing
+        // the generation makes the agent confirm this normalized contract; its
+        // exact-size boot gate keeps the guest stopped until that confirmation.
+        var normalizedDesiredSize = false
+        if volume.volumeType == .boot,
+            volume.$sourceImage.id != nil || volume.$sourceVolume.id != nil,
+            observed.present,
+            observed.convergencePhase == nil,
+            observed.lastError == nil,
+            let materializedSize = observed.sizeBytes,
+            materializedSize > volume.size
+        {
+            let admissionError: String?
+            if materializedSize > WorkloadSizeLimits.maxDiskBytes {
+                admissionError =
+                    "Cannot admit the materialized boot volume at \(materializedSize) bytes: "
+                    + "it exceeds the maximum supported volume size of "
+                    + "\(WorkloadSizeLimits.maxDiskBytes) bytes."
+            } else {
+                do {
+                    guard let project = try await Project.find(volume.$project.id, on: db) else {
+                        throw Abort(
+                            .internalServerError,
+                            reason: "The boot volume's project no longer exists")
+                    }
+                    try await QuotaEnforcementService.reserveVolumeResize(
+                        for: project,
+                        environment: volume.environment,
+                        sizeDelta: materializedSize - volume.size,
+                        reason: "the materialized boot volume",
+                        on: db)
+                    admissionError = nil
+                } catch let error as any AbortError {
+                    admissionError =
+                        "Cannot admit the materialized boot volume at \(materializedSize) bytes: "
+                        + error.reason
+                }
+            }
+
+            if let admissionError {
+                changed =
+                    volume.recordConvergence(
+                        phase: nil,
+                        lastError: admissionError,
+                        failedGeneration: volume.generation) || changed
+            } else {
+                let expectedGeneration = volume.generation
+                volume.size = materializedSize
+                guard
+                    case .applied = try await volume.advanceDesiredStateGeneration(
+                        expectedGeneration: expectedGeneration, on: db)
+                else {
+                    throw ConvergenceWriteError.unsupportedDatabase
+                }
+                volume.extendConvergenceDeadline(
+                    by: OperationResourceKind.volume.completionBudgetSeconds(for: .resize))
+                changed = true
+                normalizedDesiredSize = true
+            }
+        }
         // The applied I/O ceilings (STR-19) — an echo, not a derivation, and
         // recorded before the converging early-return for the same reason the
         // storage path is: it is a fact about the volume, not a verdict on the
@@ -1446,7 +1518,7 @@ struct ObservedStateApplier {
             if changed {
                 try await volume.save(on: db)
             }
-            return
+            return normalizedDesiredSize
         }
 
         // Where the realized attachment runs. A detached report may clear only
@@ -1491,7 +1563,7 @@ struct ObservedStateApplier {
             if changed {
                 try await volume.save(on: db)
             }
-            return
+            return normalizedDesiredSize
         }
 
         if !wasConverged, volume.isConverged {
@@ -1508,6 +1580,7 @@ struct ObservedStateApplier {
                 try await volume.save(on: db)
             }
         }
+        return normalizedDesiredSize
     }
 
     /// The rows behind one family's reported-unrecognized ids, including rows

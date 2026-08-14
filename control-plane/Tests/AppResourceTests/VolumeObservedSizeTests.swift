@@ -162,13 +162,17 @@ final class VolumeObservedSizeTests {
     /// may report the VM's target generation and `Running` in the same heartbeat
     /// that still shows the image-backed root disk at its 112 MiB source size.
     /// That report must not settle the start. A later report for an Ubuntu Noble
-    /// image whose native 3.5 GiB size exceeds the 2 GiB request is healthy,
-    /// however, and must complete the same VM mutation automatically.
-    @Test("VM start requires at least the requested boot volume size")
-    func vmStartRequiresAtLeastRequestedBootVolumeSize() async throws {
+    /// image whose native 3.5 GiB size exceeds the 2 GiB request must first be
+    /// admitted as desired state, then complete after the agent confirms that
+    /// normalized generation.
+    @Test("VM start admits and confirms a boot volume larger than requested")
+    func vmStartAdmitsAndConfirmsLargerBootVolume() async throws {
         try await withVolumeApp { app, user, project in
             let agentId = try await self.registerAgent(app: app, named: "rapid-start-agent")
             let builder = TestDataBuilder(db: app.db)
+            let quota = try await builder.createResourceQuota(
+                name: "materialized-boot", maxStorageGB: 4, project: project)
+            let image = try await builder.createImage(project: project, uploadedBy: user)
             let vm = try await builder.createVM(name: "rapid-start-vm", project: project)
             vm.hypervisorId = agentId
             vm.setStatus(.created)
@@ -191,6 +195,7 @@ final class VolumeObservedSizeTests {
                 generation: 1,
                 observedGeneration: 0)
             bootVolume.volumeType = .boot
+            bootVolume.$sourceImage.id = try image.requireID()
             bootVolume.$vm.id = try vm.requireID()
             bootVolume.deviceName = "disk0"
             bootVolume.bootOrder = 0
@@ -235,6 +240,36 @@ final class VolumeObservedSizeTests {
                             observedGeneration: 1)
                     ]))
 
+            let admittedVM = try #require(try await VM.find(try vm.requireID(), on: app.db))
+            #expect(admittedVM.observedGeneration == 1)
+            #expect(admittedVM.status == .created)
+            #expect(admittedVM.conditions.converged == false)
+
+            let admittedVolume = try #require(
+                try await Volume.find(try bootVolume.requireID(), on: app.db))
+            #expect(admittedVolume.size == materializedSize)
+            #expect(admittedVolume.observedSizeBytes == materializedSize)
+            #expect(admittedVolume.generation == 2)
+            #expect(admittedVolume.observedGeneration == 1)
+            #expect(admittedVolume.conditions.converged == false)
+            let admittedQuota = try #require(
+                try await ResourceQuota.find(try quota.requireID(), on: app.db))
+            #expect(admittedQuota.reservedStorage == materializedSize)
+
+            _ = try await app.observedStateApplier.apply(
+                self.report(
+                    agentId: agentId,
+                    vms: [vmObservation],
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: try bootVolume.requireID(),
+                            present: true,
+                            storagePath: "/var/lib/strato/volumes/root/volume.qcow2",
+                            sizeBytes: materializedSize,
+                            attachedVMId: try vm.requireID(),
+                            observedGeneration: 2)
+                    ]))
+
             let settled = try #require(try await VM.find(try vm.requireID(), on: app.db))
             #expect(settled.observedGeneration == 2)
             #expect(settled.status == .running)
@@ -243,10 +278,81 @@ final class VolumeObservedSizeTests {
 
             let settledVolume = try #require(
                 try await Volume.find(try bootVolume.requireID(), on: app.db))
-            #expect(settledVolume.size == requestedSize)
+            #expect(settledVolume.size == materializedSize)
             #expect(settledVolume.observedSizeBytes == materializedSize)
+            #expect(settledVolume.generation == 2)
+            #expect(settledVolume.observedGeneration == 2)
             #expect(settledVolume.status == .attached)
             #expect(settledVolume.conditions.converged)
+        }
+    }
+
+    @Test("A larger boot volume cannot bypass quota or supported-size admission")
+    func largerBootVolumeCannotBypassAdmissionLimits() async throws {
+        try await withVolumeApp { app, user, project in
+            let agentId = try await self.registerAgent(app: app, named: "quota-boot-agent")
+            let builder = TestDataBuilder(db: app.db)
+            _ = try await builder.createResourceQuota(
+                name: "requested-only", maxStorageGB: 2, project: project)
+            let image = try await builder.createImage(project: project, uploadedBy: user)
+            let vm = try await builder.createVM(name: "quota-boot-vm", project: project)
+            vm.hypervisorId = agentId
+            try await vm.save(on: app.db)
+
+            let requestedSize: Int64 = 2 << 30
+            let materializedSize: Int64 = 3_758_096_384
+            let bootVolume = try await self.makeVolume(
+                app: app, user: user, project: project, agentId: agentId,
+                size: requestedSize, generation: 1, observedGeneration: 0)
+            bootVolume.volumeType = .boot
+            bootVolume.$sourceImage.id = try image.requireID()
+            bootVolume.$vm.id = try vm.requireID()
+            bootVolume.deviceName = "disk0"
+            bootVolume.bootOrder = 0
+            try await bootVolume.save(on: app.db)
+
+            _ = try await app.observedStateApplier.apply(
+                self.report(
+                    agentId: agentId,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: try bootVolume.requireID(),
+                            present: true,
+                            storagePath: "/var/lib/strato/volumes/quota/volume.qcow2",
+                            sizeBytes: materializedSize,
+                            attachedVMId: try vm.requireID(),
+                            observedGeneration: 1)
+                    ]))
+
+            let refused = try #require(
+                try await Volume.find(try bootVolume.requireID(), on: app.db))
+            #expect(refused.size == requestedSize)
+            #expect(refused.observedSizeBytes == materializedSize)
+            #expect(refused.generation == 1)
+            #expect(refused.conditions.degraded?.reason.contains("Quota 'requested-only' exceeded") == true)
+
+            let unsupportedSize = WorkloadSizeLimits.maxDiskBytes + 1
+            _ = try await app.observedStateApplier.apply(
+                self.report(
+                    agentId: agentId,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: try bootVolume.requireID(),
+                            present: true,
+                            storagePath: "/var/lib/strato/volumes/quota/volume.qcow2",
+                            sizeBytes: unsupportedSize,
+                            attachedVMId: try vm.requireID(),
+                            observedGeneration: 1)
+                    ]))
+
+            let unsupported = try #require(
+                try await Volume.find(try bootVolume.requireID(), on: app.db))
+            #expect(unsupported.size == requestedSize)
+            #expect(unsupported.observedSizeBytes == unsupportedSize)
+            #expect(unsupported.generation == 1)
+            #expect(
+                unsupported.conditions.degraded?.reason.contains(
+                    "exceeds the maximum supported volume size") == true)
         }
     }
 
