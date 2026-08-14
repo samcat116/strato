@@ -361,9 +361,9 @@ enum OperationFacade {
     /// permission check has produced the id.
     ///
     /// Lifecycle history comes from `resource_events`; captured VM commands
-    /// add their dedicated status rows. The command result table is batch
-    /// loaded so its potentially large bytes never sit on the hot status row
-    /// and this list does not become a point query per command.
+    /// add their dedicated status rows. History deliberately omits command
+    /// payloads: callers fetch one operation by id when they need its captured
+    /// output, so a normal list can never materialize 100 MiB of results.
     ///
     /// Every event here names the same resource, so the view the verdicts read
     /// is resolved once rather than per event: this is a list endpoint, and a
@@ -394,20 +394,8 @@ enum OperationFacade {
                 .sort(\.$createdAt, .descending)
                 .limit(limit)
                 .all()
-            let commandIDs = try commands.map { try $0.requireID() }
-            let outputs =
-                commandIDs.isEmpty
-                ? []
-                : try await VMCommandOutput.query(on: db)
-                    .filter(\.$id ~~ commandIDs)
-                    .all()
-            let outputsByID = Dictionary(
-                uniqueKeysWithValues: try outputs.map {
-                    (try $0.requireID(), $0)
-                })
             for command in commands {
-                let commandID = try command.requireID()
-                responses.append(try command.operationResponse(output: outputsByID[commandID]))
+                responses.append(try command.operationResponse(payload: nil))
             }
         }
 

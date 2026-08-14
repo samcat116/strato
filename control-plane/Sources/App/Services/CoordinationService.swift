@@ -941,8 +941,9 @@ actor CoordinationService {
         }
     }
 
-    /// Publish on an arbitrary replica channel. Unlike nudges this throws:
-    /// RPC callers must learn that their request never left the process.
+    /// Publish on an arbitrary replica channel. Unlike nudges this throws, but
+    /// callers must treat an error as ambiguous: the broker may have accepted
+    /// the message before its acknowledgement was lost.
     func publish(channel: String, message: String) async throws {
         try await store.publish(channel: channel, message: message)
     }

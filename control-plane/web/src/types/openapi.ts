@@ -5333,7 +5333,7 @@ export interface components {
         /**
          * @description The operation view of one asynchronous resource lifecycle mutation. Poll it until `status` is terminal.
          *
-         *     Lifecycle operations are synthesized on read from the mutation's audit record and the resource's `conditions`. Captured VM commands use a dedicated status record and may include `result`; their potentially large output lives in a separate result table. `completedAt` is also reported for recorded command completion.
+         *     Lifecycle operations are synthesized on read from the mutation's audit record and the resource's `conditions`. Captured VM commands use a dedicated status record and may include `result`; their invoked argv and potentially large output live in a separate payload table. `completedAt` is also reported for recorded command completion.
          */
         ResourceOperation: {
             /** Format: uuid */

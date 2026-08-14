@@ -370,6 +370,8 @@ final class GuestExecTests {
             }
 
             let operationID = try #require(accepted?.id)
+            let payload = try #require(try await VMCommandPayload.find(operationID, on: app.db))
+            #expect(payload.command == ["/usr/bin/id"])
             try await app.test(.GET, "/api/operations/\(operationID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in

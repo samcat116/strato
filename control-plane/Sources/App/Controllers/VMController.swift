@@ -1859,7 +1859,7 @@ struct VMController: RouteCollection {
             agentKey: agent.identity.key,
             deadline: Date().addingTimeInterval(VMCommandExecutionService.completionBudget))
         try await req.db.transaction { db in
-            try await execution.create(on: db)
+            try await execution.create(command: run.command, on: db)
         }
         let executionID = try execution.requireID()
 
@@ -1874,6 +1874,14 @@ struct VMController: RouteCollection {
                     workingDir: run.workingDir,
                     tty: false),
                 agentKey: agent.identity.key)
+        } catch let error as ReplicaMessageBridge.DeliveryError where !error.isDefinitive {
+            req.logger.warning(
+                "VM command delivery outcome is unknown; leaving operation pending",
+                metadata: [
+                    "executionId": .string(executionID.uuidString),
+                    "agentKey": .string(agent.identity.key),
+                    "error": .string(error.localizedDescription),
+                ])
         } catch {
             await req.vmCommandExecutionService.markDispatchFailed(
                 id: executionID, reason: "Could not dispatch command: \(error.localizedDescription)")

@@ -75,6 +75,14 @@ actor VMCommandExecutionService {
                 try await sendEnvelope(
                     MessageEnvelope(message: GuestExecInputMessage(sessionId: sessionId, eof: true)),
                     agentKey)
+            } catch let error as ReplicaMessageBridge.DeliveryError where !error.isDefinitive {
+                app.logger.warning(
+                    "VM command stdin EOF delivery outcome is unknown; awaiting command stream",
+                    metadata: [
+                        "executionId": .string(id.uuidString),
+                        "agentKey": .string(agentKey),
+                        "error": .string(error.localizedDescription),
+                    ])
             } catch {
                 captures.removeValue(forKey: id)
                 try await fail(id: id, reason: "Could not close command stdin: \(error.localizedDescription)")
@@ -224,10 +232,13 @@ actor VMCommandExecutionService {
                 """
             ).all(decoding: Claimed.self)
             guard !claimed.isEmpty else { return }
-            try await VMCommandOutput(
-                executionID: id, stdout: capture.stdout, stderr: capture.stderr,
-                exitCode: exitCode, truncated: capture.truncated
-            ).create(on: db)
+            guard let payload = try await VMCommandPayload.find(id, on: db) else {
+                throw Abort(.internalServerError, reason: "VM command payload is missing")
+            }
+            payload.recordResult(
+                stdout: capture.stdout, stderr: capture.stderr,
+                exitCode: exitCode, truncated: capture.truncated)
+            try await payload.update(on: db)
         }
     }
 
@@ -262,17 +273,37 @@ extension Request {
 }
 
 extension VMCommandExecution {
-    func operationResponse(on db: any Database) async throws -> OperationResponse {
-        let executionID = try requireID()
-        let output =
-            status == .succeeded
-            ? try await VMCommandOutput.find(executionID, on: db)
-            : nil
-        return try operationResponse(output: output)
+    /// Persist attribution/status and the exact argv in one transaction owned
+    /// by the caller. Keeping argv in the cold payload preserves the audit fact
+    /// without adding it to every operation poll/history row.
+    func create(command: [String], on db: any Database) async throws {
+        try await create(on: db)
+        try await VMCommandPayload(
+            executionID: try requireID(), command: command
+        ).create(on: db)
     }
 
-    func operationResponse(output: VMCommandOutput?) throws -> OperationResponse {
+    func operationResponse(on db: any Database) async throws -> OperationResponse {
         let executionID = try requireID()
+        let payload =
+            status == .succeeded
+            ? try await VMCommandPayload.find(executionID, on: db)
+            : nil
+        return try operationResponse(payload: payload)
+    }
+
+    func operationResponse(payload: VMCommandPayload?) throws -> OperationResponse {
+        let executionID = try requireID()
+        let result = payload.flatMap { payload -> VMCommandResultResponse? in
+            guard let stdout = payload.stdout, let stderr = payload.stderr,
+                let exitCode = payload.exitCode, let truncated = payload.truncated
+            else { return nil }
+            return VMCommandResultResponse(
+                stdout: String(decoding: stdout, as: UTF8.self),
+                stderr: String(decoding: stderr, as: UTF8.self),
+                exitCode: exitCode,
+                truncated: truncated)
+        }
         return OperationResponse(
             id: executionID,
             resourceKind: .virtualMachine,
@@ -282,12 +313,6 @@ extension VMCommandExecution {
             error: error,
             createdAt: createdAt,
             completedAt: completedAt,
-            result: output.map {
-                VMCommandResultResponse(
-                    stdout: String(decoding: $0.stdout, as: UTF8.self),
-                    stderr: String(decoding: $0.stderr, as: UTF8.self),
-                    exitCode: $0.exitCode,
-                    truncated: $0.truncated)
-            })
+            result: result)
     }
 }

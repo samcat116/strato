@@ -48,6 +48,7 @@ protocol ReplicaBridgeDelegate: AnyObject, Sendable {
 /// cannot be delivered.
 actor ReplicaMessageBridge {
     private let app: Application
+    private let deliveryAcknowledgementTimeout: Duration
 
     /// The owner that tracks local parked polls (production: `AgentService`).
     /// Weak so the bridge never keeps its owner alive; a nil delegate means an
@@ -73,8 +74,12 @@ actor ReplicaMessageBridge {
     /// Set at shutdown. Guards subscription (re-)arming from racing teardown.
     private var isShutDown = false
 
-    init(app: Application) {
+    init(
+        app: Application,
+        deliveryAcknowledgementTimeout: Duration = .seconds(10)
+    ) {
         self.app = app
+        self.deliveryAcknowledgementTimeout = deliveryAcknowledgementTimeout
     }
 
     // MARK: - Lifecycle
@@ -126,12 +131,25 @@ actor ReplicaMessageBridge {
     enum DeliveryError: Error, LocalizedError {
         case agentNotConnected(String)
         case timedOut
+        case deliveryUncertain(String)
         case remote(String)
+
+        /// Only a rejection before the target socket accepted the envelope is
+        /// safe to expose as a failed command. A publish/acknowledgement loss
+        /// may mean the command is already running, so its durable operation
+        /// must remain pending for the guest stream or deadline sweep.
+        var isDefinitive: Bool {
+            switch self {
+            case .agentNotConnected, .remote: true
+            case .timedOut, .deliveryUncertain: false
+            }
+        }
 
         var errorDescription: String? {
             switch self {
             case .agentNotConnected(let agentKey): return "Agent not connected: \(agentKey)"
             case .timedOut: return "Timed out forwarding the command to the agent socket replica"
+            case .deliveryUncertain(let reason): return "Agent delivery outcome is unknown: \(reason)"
             case .remote(let reason): return reason
             }
         }
@@ -171,11 +189,13 @@ actor ReplicaMessageBridge {
                     try await self.app.coordination.publish(
                         channel: CoordinationService.rpcChannel(replicaId: replicaId), message: payload)
                 } catch {
-                    self.resolveDelivery(rpcId: rpcId, result: .failure(error))
+                    self.resolveDelivery(
+                        rpcId: rpcId,
+                        result: .failure(DeliveryError.deliveryUncertain(error.localizedDescription)))
                     return
                 }
                 let timeout = Task {
-                    try? await Task.sleep(for: .seconds(10))
+                    try? await Task.sleep(for: self.deliveryAcknowledgementTimeout)
                     guard !Task.isCancelled else { return }
                     self.resolveDelivery(rpcId: rpcId, result: .failure(DeliveryError.timedOut))
                 }

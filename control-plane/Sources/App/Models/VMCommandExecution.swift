@@ -2,8 +2,9 @@ import Fluent
 import Foundation
 import StratoShared
 
-/// Durable, frequently-polled state for one captured VM command. Output lives
-/// in `vm_command_outputs` so normal operation queries never load a large blob.
+/// Durable, frequently-polled state for one captured VM command. The invoked
+/// argv and output live in `vm_command_payloads` so normal operation queries
+/// never load either potentially large payload.
 final class VMCommandExecution: Model, @unchecked Sendable {
     static let schema = "vm_command_executions"
 
@@ -34,20 +35,26 @@ final class VMCommandExecution: Model, @unchecked Sendable {
     }
 }
 
-/// Cold result payload for a completed command. One row at most per execution.
-final class VMCommandOutput: Model, @unchecked Sendable {
-    static let schema = "vm_command_outputs"
+/// Cold invocation and result payload. Created atomically with the execution so
+/// the exact argv survives restarts; result fields remain nil until completion.
+final class VMCommandPayload: Model, @unchecked Sendable {
+    static let schema = "vm_command_payloads"
 
     @ID(custom: "execution_id", generatedBy: .user) var id: UUID?
-    @Field(key: "stdout") var stdout: Data
-    @Field(key: "stderr") var stderr: Data
-    @Field(key: "exit_code") var exitCode: Int
-    @Field(key: "truncated") var truncated: Bool
+    @Field(key: "command") var command: [String]
+    @OptionalField(key: "stdout") var stdout: Data?
+    @OptionalField(key: "stderr") var stderr: Data?
+    @OptionalField(key: "exit_code") var exitCode: Int?
+    @OptionalField(key: "truncated") var truncated: Bool?
 
     init() {}
 
-    init(executionID: UUID, stdout: Data, stderr: Data, exitCode: Int, truncated: Bool) {
+    init(executionID: UUID, command: [String]) {
         self.id = executionID
+        self.command = command
+    }
+
+    func recordResult(stdout: Data, stderr: Data, exitCode: Int, truncated: Bool) {
         self.stdout = stdout
         self.stderr = stderr
         self.exitCode = exitCode

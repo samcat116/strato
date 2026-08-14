@@ -16,15 +16,16 @@ struct CreateVMCommandExecutions: AsyncMigration {
             .field("completed_at", .datetime)
             .create()
 
-        try await database.schema(VMCommandOutput.schema)
+        try await database.schema(VMCommandPayload.schema)
             .field(
                 "execution_id", .uuid, .identifier(auto: false),
                 .references(VMCommandExecution.schema, "id", onDelete: .cascade)
             )
-            .field("stdout", .data, .required)
-            .field("stderr", .data, .required)
-            .field("exit_code", .int, .required)
-            .field("truncated", .bool, .required)
+            .field("command", .array(of: .string), .required)
+            .field("stdout", .data)
+            .field("stderr", .data)
+            .field("exit_code", .int)
+            .field("truncated", .bool)
             .create()
 
         if let sql = database as? any SQLDatabase {
@@ -41,13 +42,25 @@ struct CreateVMCommandExecutions: AsyncMigration {
                 "CREATE INDEX idx_vm_command_executions_pending_deadline ON vm_command_executions (deadline) WHERE status = 'pending'"
             ).run()
             try await sql.raw(
-                "ALTER TABLE vm_command_outputs ADD CONSTRAINT ck_vm_command_outputs_combined_size CHECK (octet_length(stdout) + octet_length(stderr) <= 1048576)"
+                "ALTER TABLE vm_command_payloads ADD CONSTRAINT ck_vm_command_payloads_command CHECK (cardinality(command) > 0)"
+            ).run()
+            try await sql.raw(
+                """
+                ALTER TABLE vm_command_payloads
+                ADD CONSTRAINT ck_vm_command_payloads_result
+                CHECK (
+                    (stdout IS NULL AND stderr IS NULL AND exit_code IS NULL AND truncated IS NULL)
+                    OR
+                    (stdout IS NOT NULL AND stderr IS NOT NULL AND exit_code IS NOT NULL AND truncated IS NOT NULL
+                     AND octet_length(stdout) + octet_length(stderr) <= 1048576)
+                )
+                """
             ).run()
         }
     }
 
     func revert(on database: any Database) async throws {
-        try await database.schema(VMCommandOutput.schema).delete()
+        try await database.schema(VMCommandPayload.schema).delete()
         try await database.schema(VMCommandExecution.schema).delete()
     }
 }

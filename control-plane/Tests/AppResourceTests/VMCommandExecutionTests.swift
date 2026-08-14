@@ -23,7 +23,8 @@ struct VMCommandExecutionTests {
             let service = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
             app.vmCommandExecutionService = service
             let execution = execution()
-            try await execution.create(on: app.db)
+            let command = ["/bin/sh", "-c", "printf test"]
+            try await execution.create(command: command, on: app.db)
             let id = try execution.requireID()
 
             #expect(
@@ -43,16 +44,23 @@ struct VMCommandExecutionTests {
                     sessionId: id.uuidString, fromAgentKey: execution.agentKey, exitCode: 7))
 
             let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
-            let output = try #require(try await VMCommandOutput.find(id, on: app.db))
+            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
             #expect(stored.status == .succeeded)
-            #expect(output.stdout.count == VMCommandExecutionService.outputLimitBytes - 3)
-            #expect(String(decoding: output.stderr, as: UTF8.self) == "abc")
-            #expect(output.exitCode == 7)
-            #expect(output.truncated)
+            #expect(payload.command == command)
+            #expect(payload.stdout?.count == VMCommandExecutionService.outputLimitBytes - 3)
+            #expect(String(decoding: payload.stderr ?? Data(), as: UTF8.self) == "abc")
+            #expect(payload.exitCode == 7)
+            #expect(payload.truncated == true)
 
             let response = try await stored.operationResponse(on: app.db)
             #expect(response.result?.exitCode == 7)
             #expect(response.result?.truncated == true)
+
+            let history = try await OperationFacade.history(
+                resourceKind: .virtualMachine, resourceID: execution.vmID,
+                limit: 100, on: app.db)
+            #expect(history.count == 1)
+            #expect(history[0].result == nil)
         }
     }
 
@@ -62,7 +70,7 @@ struct VMCommandExecutionTests {
             let service = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
             app.vmCommandExecutionService = service
             let execution = execution(deadline: Date().addingTimeInterval(-1))
-            try await execution.create(on: app.db)
+            try await execution.create(command: ["/usr/bin/sleep", "600"], on: app.db)
             let id = try execution.requireID()
 
             #expect(
@@ -76,7 +84,10 @@ struct VMCommandExecutionTests {
             let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
             #expect(stored.status == .failed)
             #expect(stored.error == "Command execution timed out")
-            #expect(try await VMCommandOutput.find(id, on: app.db) == nil)
+            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
+            #expect(payload.command == ["/usr/bin/sleep", "600"])
+            #expect(payload.stdout == nil)
+            #expect(payload.exitCode == nil)
         }
     }
 
@@ -86,7 +97,7 @@ struct VMCommandExecutionTests {
             let service = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
             app.vmCommandExecutionService = service
             let execution = execution()
-            try await execution.create(on: app.db)
+            try await execution.create(command: ["/usr/bin/id"], on: app.db)
             let id = try execution.requireID()
 
             #expect(

@@ -87,6 +87,35 @@ final class ReplicaMessageBridgeTests {
         try await holderApp.asyncShutdown()
     }
 
+    @Test("A lost delivery acknowledgement is ambiguous after the holder queues the message")
+    func lostAcknowledgementIsAmbiguous() async throws {
+        let requesterApp = try await Application.make(.testing)
+        let holderApp = try await Application.make(.testing)
+        let store = InMemoryCoordinationStore()
+        requesterApp.coordination = CoordinationService(store: store, logger: requesterApp.logger)
+        holderApp.coordination = CoordinationService(store: store, logger: holderApp.logger)
+
+        // The requester deliberately does not subscribe to its reply channel,
+        // modeling a reply lost after the holder queued the envelope.
+        let requester = ReplicaMessageBridge(
+            app: requesterApp, deliveryAcknowledgementTimeout: .milliseconds(10))
+        let holder = ReplicaMessageBridge(app: holderApp)
+        let holderDelegate = FakeBridgeDelegate()
+        await holder.start(delegate: holderDelegate)
+        await holder.recordRoute(agentKey: "spiffe://example.test/agent/node-1")
+
+        let error = await #expect(throws: ReplicaMessageBridge.DeliveryError.self) {
+            try await requester.deliver(
+                GuestExecCloseMessage(sessionId: "session-1"),
+                agentKey: "spiffe://example.test/agent/node-1")
+        }
+
+        #expect(error?.isDefinitive == false)
+        #expect(await holderDelegate.deliveredAgentKeys == ["spiffe://example.test/agent/node-1"])
+        try await requesterApp.asyncShutdown()
+        try await holderApp.asyncShutdown()
+    }
+
     @Test("A doorbell from another replica is handed to the delegate")
     func doorbellDispatchedToDelegate() async throws {
         try await withBridge { bridge, delegate, _, _ in
