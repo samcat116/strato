@@ -541,9 +541,11 @@ supported case rather than a stale one.
 QEMU disk-boot VMs consume. `VMSpec.metadataSource` (wire v48) selects its
 shape at creation:
 
-- `iso` is the compatibility default and carries `meta-data`, `user-data`, and
+- `iso` is the compatibility option and carries `meta-data`, `user-data`, and
   — when addressing requires it — a v2 `network-config`.
-- `imds` keeps the required `network-config` and an empty `user-data` on the
+- `imds` is the default for new x86_64 QEMU VMs. ARM64 QEMU defaults to `iso`
+  until it has an equivalent NoCloudNet discovery hint. IMDS keeps the required
+  `network-config` and an empty `user-data` on the
   ISO, then replaces `meta-data` with a `seedfrom` URL under
   `http://169.254.169.254/latest/nocloud/<per-VM capability>/`. NoCloud requires
   both local `meta-data` and `user-data` to accept a filesystem seed. Once the

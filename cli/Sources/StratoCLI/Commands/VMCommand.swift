@@ -105,7 +105,7 @@ struct VMCommand: AsyncParsableCommand {
         @Option(name: .long, help: "Path to an SSH public key to authorize in the guest.")
         var sshKeyFile: String?
 
-        @Option(name: .long, help: "Guest bootstrap source: iso or imds (server default: iso).")
+        @Option(name: .long, help: "Guest bootstrap source: iso or imds (x86 QEMU default: imds).")
         var metadataSource: String?
 
         @Flag(name: .long, help: "Return immediately instead of waiting for the operation.")

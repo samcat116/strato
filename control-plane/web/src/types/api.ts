@@ -226,9 +226,10 @@ export interface VM {
    */
   metadataEnabled?: boolean;
   /**
-   * Where the VM reads first-boot guest configuration. `iso` is the
-   * compatibility default; `imds` keeps only network bootstrap and a seedfrom
-   * stub on the ISO. Optional only because older control planes omit it.
+   * Where the VM reads first-boot guest configuration. `iso` is the legacy
+   * compatibility value; `imds` keeps only network bootstrap and a seedfrom
+   * stub on the ISO. Optional only because older control planes omit it; treat
+   * `undefined` as `iso` for those responses.
    */
   metadataSource?: MetadataSource;
   /** Free-form operator tags published through the VM's instance metadata. */
@@ -1222,8 +1223,9 @@ export interface CreateVMRequest {
    */
   metadataEnabled?: boolean;
   /**
-   * Guest bootstrap source. Omitted means the server's current `iso` default.
-   * `imds` requires QEMU and an OVN-backed agent.
+   * Guest bootstrap source. Omitted x86_64 QEMU creates default to `imds`,
+   * which requires an OVN-backed agent. ARM64 QEMU and Firecracker default to
+   * `iso` because they lack the NoCloudNet discovery hint.
    */
   metadataSource?: MetadataSource;
 }

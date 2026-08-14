@@ -71,7 +71,7 @@ export function CreateVMDialog({
   // On by default: IMDS-backed bootstrap needs the listener, while ISO-backed
   // VMs can still use it as a guest metadata API.
   const [metadataEnabled, setMetadataEnabled] = useState(true);
-  const [metadataSource, setMetadataSource] = useState<MetadataSource>("iso");
+  const [metadataSource, setMetadataSource] = useState<MetadataSource>("imds");
   const [networkInterfaces, setNetworkInterfaces] = useState<NICRow[]>([
     initialNIC(),
   ]);
@@ -119,11 +119,24 @@ export function CreateVMDialog({
   // artifact set when that set is compatible with exactly one, else QEMU.
   // Mirroring that inference here lets the firmware toggles disable themselves
   // instead of letting the create fail with a 400.
+  const selectedImage = useMemo(
+    () => readyImages.find((img) => img.id === formData.imageId),
+    [readyImages, formData.imageId]
+  );
   const isFirecracker = useMemo(() => {
-    const selected = readyImages.find((img) => img.id === formData.imageId);
-    const compatible = selected?.compatibleHypervisors ?? [];
+    const compatible = selectedImage?.compatibleHypervisors ?? [];
     return compatible.length === 1 && compatible[0] === "firecracker";
-  }, [readyImages, formData.imageId]);
+  }, [selectedImage]);
+  const allSelectedNetworksDisableMetadata = useMemo(
+    () =>
+      networkInterfaces.every((nic) => {
+        const network = networks.find((candidate) => candidate.id === nic.networkId);
+        return network !== undefined && !network.metadataEnabled;
+      }),
+    [networkInterfaces, networks]
+  );
+  const metadataSourceForcedToISO =
+    isFirecracker || !metadataEnabled || allSelectedNetworksDisableMetadata;
 
   const hasUserData = formData.userData.trim().length > 0;
   const hasFirecrackerMetadataNetwork = networkInterfaces.some((nic) => {
@@ -134,24 +147,28 @@ export function CreateVMDialog({
   // Handle image selection - applies defaults directly without useEffect
   const handleImageSelect = useCallback(
     (imageId: string) => {
-      const selectedImage = readyImages.find((img) => img.id === imageId);
-      if (selectedImage) {
-        const compatible = selectedImage.compatibleHypervisors ?? [];
-        if (compatible.length === 1 && compatible[0] === "firecracker") {
-          setMetadataSource("iso");
-        }
+      const nextImage = readyImages.find((img) => img.id === imageId);
+      if (nextImage) {
+        const compatible = nextImage.compatibleHypervisors ?? [];
+        setMetadataSource(
+          !metadataEnabled ||
+            nextImage.architecture === "arm64" ||
+            (compatible.length === 1 && compatible[0] === "firecracker")
+            ? "iso"
+            : "imds"
+        );
         setFormData((prev) => ({
           ...prev,
           imageId,
-          cpu: selectedImage.defaultCpu?.toString() || prev.cpu,
-          memory: selectedImage.defaultMemory?.toString() || prev.memory,
-          disk: selectedImage.defaultDisk?.toString() || prev.disk,
+          cpu: nextImage.defaultCpu?.toString() || prev.cpu,
+          memory: nextImage.defaultMemory?.toString() || prev.memory,
+          disk: nextImage.defaultDisk?.toString() || prev.disk,
         }));
       } else {
         setFormData((prev) => ({ ...prev, imageId }));
       }
     },
-    [readyImages]
+    [readyImages, metadataEnabled]
   );
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -245,9 +262,9 @@ export function CreateVMDialog({
           // already assumes, while pinning a pre-STR-185 control plane to a key
           // it does not know.
           metadataEnabled: metadataEnabled ? undefined : false,
-          // The phase-one default is explicit in the form so users can opt a
-          // VM into the IMDS-backed seed without changing the fleet default.
-          metadataSource: isFirecracker ? "iso" : metadataSource,
+          // Keep the selected source explicit so the request matches what the
+          // form showed. Paths that cannot reach IMDS record `iso`.
+          metadataSource: metadataSourceForcedToISO ? "iso" : metadataSource,
         }),
       watch: {
         kind: "create",
@@ -274,7 +291,7 @@ export function CreateVMDialog({
         setTpm(false);
         setGraphicsConsole(false);
         setMetadataEnabled(true);
-        setMetadataSource("iso");
+        setMetadataSource("imds");
         setNetworkInterfaces([initialNIC()]);
         setQuotaError(null);
       },
@@ -610,23 +627,41 @@ export function CreateVMDialog({
               </div>
               <select
                 id="metadataSource"
-                value={metadataSource}
+                value={metadataSourceForcedToISO ? "iso" : metadataSource}
                 onChange={(e) =>
                   setMetadataSource(e.target.value as MetadataSource)
                 }
-                disabled={isLoading || isFirecracker}
+                disabled={isLoading || metadataSourceForcedToISO}
                 className="w-full px-3 py-2 bg-background border border-input text-foreground rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <option value="iso">
-                  {isFirecracker ? "Firecracker MMDS" : "Seed ISO (default)"}
+                <option value="imds">
+                  Instance metadata service (x86 QEMU default)
                 </option>
-                <option value="imds">Instance metadata service</option>
+                <option value="iso">
+                  {isFirecracker ? "Firecracker MMDS" : "Seed ISO"}
+                </option>
               </select>
               {isFirecracker ? (
                 <p className="text-xs text-muted-foreground">
                   Firecracker has no seed disk. It serves EC2-compatible
                   metadata from MMDS on metadata-enabled NICs; the selected
                   network must also provide DHCP so the guest can reach it.
+                </p>
+              ) : !metadataEnabled ? (
+                <p className="text-xs text-muted-foreground">
+                  IMDS bootstrap requires the instance metadata service. Seed
+                  ISO will be used while the service is disabled.
+                </p>
+              ) : allSelectedNetworksDisableMetadata ? (
+                <p className="text-xs text-muted-foreground">
+                  None of the selected networks publish instance metadata. Seed
+                  ISO will be used for this VM.
+                </p>
+              ) : selectedImage?.architecture === "arm64" &&
+                metadataSource === "iso" ? (
+                <p className="text-xs text-muted-foreground">
+                  ARM64 QEMU defaults to Seed ISO until it has an equivalent
+                  NoCloudNet discovery hint.
                 </p>
               ) : metadataSource === "imds" ? (
                 <p className="text-xs text-muted-foreground">
@@ -637,7 +672,7 @@ export function CreateVMDialog({
               ) : (
                 <p className="text-xs text-muted-foreground">
                   The complete, immutable NoCloud payload is written to the ISO.
-                  This preserves today&apos;s behavior.
+                  Use this compatibility path when the guest cannot use IMDS.
                 </p>
               )}
             </div>
@@ -737,7 +772,11 @@ export function CreateVMDialog({
                   id="metadataEnabled"
                   type="checkbox"
                   checked={metadataEnabled}
-                  onChange={(e) => setMetadataEnabled(e.target.checked)}
+                  onChange={(e) => {
+                    const enabled = e.target.checked;
+                    setMetadataEnabled(enabled);
+                    if (!enabled) setMetadataSource("iso");
+                  }}
                   disabled={isLoading}
                   className="h-4 w-4 rounded border-input bg-background accent-blue-600"
                 />

@@ -5427,11 +5427,8 @@ export interface components {
              * @default true
              */
             metadataEnabled: boolean;
-            /**
-             * @description Where cloud-init reads the guest bootstrap. `iso` preserves the complete immutable NoCloud seed. `imds` keeps `network-config` and a `seedfrom` stub on the ISO, then fetches meta-data and user-data from a per-VM capability URL on `169.254.169.254`. An IMDS-backed VM must enable its metadata service and select at least one network that has metadata enabled. It is supported only for QEMU and constrains placement to an OVN-capable agent that advertises a running metadata service. Fixed at VM creation.
-             * @default iso
-             */
-            metadataSource: components["schemas"]["MetadataSource"];
+            /** @description Where cloud-init reads the guest bootstrap. `iso` preserves the complete immutable NoCloud seed. `imds` keeps `network-config` and a `seedfrom` stub on the ISO, then fetches meta-data and user-data from a per-VM capability URL on `169.254.169.254`. An IMDS-backed VM must enable its metadata service and select at least one network that has metadata enabled. When omitted, x86_64 QEMU VMs default to `imds`; ARM64 QEMU and Firecracker VMs default to `iso`. IMDS constrains placement to an OVN-capable agent that advertises a running metadata service. Fixed at VM creation. */
+            metadataSource?: components["schemas"]["MetadataSource"];
         };
         /** @description One VM network interface. Exactly one of `networkId` or `networkName` is required and is resolved inside the VM's project. */
         CreateVMNetworkInterfaceRequest: {

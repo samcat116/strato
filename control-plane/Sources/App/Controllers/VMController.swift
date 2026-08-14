@@ -63,6 +63,16 @@ struct PatchVMMetadataRequest: Content, ValidatedRequestBody {
 }
 
 struct VMController: RouteCollection {
+    static func resolvedMetadataSource(
+        _ requested: MetadataSource?, for hypervisor: HypervisorType,
+        architecture: CPUArchitecture
+    ) -> MetadataSource {
+        if let requested {
+            return requested
+        }
+        return hypervisor == .qemu && architecture == .x86_64 ? .imds : .iso
+    }
+
     struct VMProjectGrantResponse: Content {
         let grant: ProjectMemberController.ProjectWorkloadGrantResponse?
     }
@@ -561,8 +571,10 @@ struct VMController: RouteCollection {
             // this exists for.
             let metadataEnabled: Bool?
             // Where cloud-init reads first-boot guest configuration (STR-64).
-            // Defaults to the historical full ISO and is fixed at create,
-            // because the agent materializes that ISO with the domain.
+            // New x86 QEMU VMs default to IMDS. ARM64 QEMU and Firecracker keep
+            // the ISO enum value because they lack the SMBIOS NoCloudNet hint.
+            // Fixed at create because the agent materializes the QEMU ISO with
+            // the domain.
             let metadataSource: MetadataSource?
 
             mutating func validate() throws {
@@ -740,7 +752,9 @@ struct VMController: RouteCollection {
         }
 
         let metadataEnabled = createRequest.metadataEnabled ?? true
-        let metadataSource = createRequest.metadataSource ?? .iso
+        let metadataSource = Self.resolvedMetadataSource(
+            createRequest.metadataSource, for: chosenHypervisor,
+            architecture: image.architecture)
         if metadataSource == .imds, !metadataEnabled {
             throw Abort(
                 .badRequest,

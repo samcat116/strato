@@ -4,7 +4,7 @@ import Foundation
 
 /// Where a VM reads its first-boot guest configuration.
 ///
-/// The ISO path is the compatibility default: the seed carries the complete
+/// The ISO path is the compatibility fallback: the seed carries the complete
 /// NoCloud payload. The IMDS path keeps only the addressing bootstrap on the
 /// ISO, then follows a NoCloud `seedfrom` URL to the agent's link-local
 /// metadata service for mutable meta-data and user-data.
@@ -83,9 +83,11 @@ public struct VMSpec: Codable, Sendable {
     /// config when it builds the guest-bootstrap media. Nil when the caller
     /// provided none.
     public let userData: String?
-    /// Where cloud-init reads the VM's guest-bootstrap documents. Defaults to
-    /// the historical full seed ISO; `.imds` leaves only `network-config` and
-    /// a `seedfrom` meta-data stub on that ISO.
+    /// Where cloud-init reads the VM's guest-bootstrap documents. The
+    /// initializer retains the historical full seed ISO default for low-level
+    /// compatibility; the control plane explicitly supplies each persisted
+    /// VM's choice. `.imds` leaves only `network-config` and a `seedfrom`
+    /// meta-data stub on that ISO.
     public let metadataSource: MetadataSource
 
     public init(
