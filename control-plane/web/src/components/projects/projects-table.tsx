@@ -6,6 +6,7 @@ import {
   ArrowRightLeft,
   Building2,
   ChevronRight,
+  CircleHelp,
   Folder,
   MoreHorizontal,
   Pencil,
@@ -127,23 +128,30 @@ export function ProjectsTable({
               )}
             </TableCell>
             <TableCell>
-              <div
-                className="flex min-w-44 items-center gap-1 text-sm text-muted-foreground"
-                aria-label={[organizationName, ...folderPath].join(" / ")}
-              >
-                <Building2 className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">{organizationName}</span>
-                {folderPath.map((folder, index) => (
-                  <span
-                    key={`${folder}-${index}`}
-                    className="flex min-w-0 items-center gap-1"
-                  >
-                    <ChevronRight className="h-3 w-3 shrink-0" />
-                    <Folder className="h-3.5 w-3.5 shrink-0" />
-                    <span className="truncate">{folder}</span>
-                  </span>
-                ))}
-              </div>
+              {folderPath === null ? (
+                <div className="flex min-w-44 items-center gap-1.5 text-sm text-muted-foreground">
+                  <CircleHelp className="h-3.5 w-3.5 shrink-0" />
+                  <span>Location unavailable</span>
+                </div>
+              ) : (
+                <div
+                  className="flex min-w-44 items-center gap-1 text-sm text-muted-foreground"
+                  aria-label={[organizationName, ...folderPath].join(" / ")}
+                >
+                  <Building2 className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{organizationName}</span>
+                  {folderPath.map((folder, index) => (
+                    <span
+                      key={`${folder}-${index}`}
+                      className="flex min-w-0 items-center gap-1"
+                    >
+                      <ChevronRight className="h-3 w-3 shrink-0" />
+                      <Folder className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">{folder}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
             </TableCell>
             <TableCell>
               <div className="flex flex-wrap gap-1">

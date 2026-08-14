@@ -3,8 +3,8 @@ import type { FolderNode, OrganizationNode } from "@/types/api";
 
 export interface ProjectTableRow {
   project: Project;
-  /** Folder names from the organization root to the immediate parent. */
-  folderPath: string[];
+  /** Folder names from the organization root, or null when they are unavailable. */
+  folderPath: string[] | null;
 }
 
 export interface ProjectFolderOption {
@@ -56,7 +56,9 @@ export function buildProjectTableRows(
   return projects
     .map((project) => ({
       project,
-      folderPath: projectPaths.get(project.id) ?? [],
+      folderPath:
+        projectPaths.get(project.id) ??
+        (project.organizationalUnitId ? null : []),
     }))
     .filter(({ project, folderPath }) => {
       if (!normalizedQuery) return true;
@@ -64,13 +66,13 @@ export function buildProjectTableRows(
         project.name,
         project.description,
         organization?.name ?? "",
-        ...folderPath,
+        ...(folderPath ?? []),
       ].some((value) => value.toLocaleLowerCase().includes(normalizedQuery));
     })
     .sort((left, right) => {
-      const locationOrder = left.folderPath
-        .join("\u0000")
-        .localeCompare(right.folderPath.join("\u0000"));
+      const leftLocation = left.folderPath?.join("\u0000") ?? "\uffff";
+      const rightLocation = right.folderPath?.join("\u0000") ?? "\uffff";
+      const locationOrder = leftLocation.localeCompare(rightLocation);
       return locationOrder || left.project.name.localeCompare(right.project.name);
     });
 }

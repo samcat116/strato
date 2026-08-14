@@ -13393,7 +13393,11 @@ components:
 
     UpdateProjectRequest:
       type: object
-      description: Every field is optional; omitted fields are left unchanged.
+      description: >-
+        Every field is optional; omitted fields are left unchanged. Supply
+        `organizationalUnitId` to move into a folder, or `organizationId` to
+        move directly under an organization. Metadata and parent changes are
+        applied atomically.
       properties:
         name:
           type: string
@@ -13405,6 +13409,14 @@ components:
           type: array
           items:
             type: string
+        organizationId:
+          type: string
+          format: uuid
+          nullable: true
+        organizationalUnitId:
+          type: string
+          format: uuid
+          nullable: true
 
     TransferProjectRequest:
       type: object

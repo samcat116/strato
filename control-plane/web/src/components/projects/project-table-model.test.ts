@@ -51,7 +51,11 @@ function projectNode(value: Project): ProjectNode {
 }
 
 const rootProject = project("project-root", "Root project");
-const nestedProject = project("project-nested", "Nested project");
+const nestedProject: Project = {
+  ...project("project-nested", "Nested project"),
+  organizationId: undefined,
+  organizationalUnitId: "folder-platform",
+};
 const organization: OrganizationNode = {
   id: "org-1",
   name: "Acme",
@@ -89,6 +93,20 @@ describe("project table hierarchy model", () => {
     );
 
     expect(rows.map(({ project }) => project.id)).toEqual(["project-nested"]);
+  });
+
+  it("does not present a folder project as organization-root when hierarchy is unavailable", () => {
+    const rows = buildProjectTableRows(
+      [rootProject, nestedProject],
+      undefined,
+      ""
+    );
+
+    expect(rows.find(({ project }) => project.id === "project-root")?.folderPath)
+      .toEqual([]);
+    expect(
+      rows.find(({ project }) => project.id === "project-nested")?.folderPath
+    ).toBeNull();
   });
 
   it("builds selectable folder breadcrumbs for project creation", () => {

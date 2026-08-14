@@ -22,7 +22,6 @@ import {
 } from "@/components/ui/select";
 import {
   useCreateProject,
-  useTransferProject,
   useUpdateProject,
 } from "@/lib/hooks";
 import type { Project } from "@/lib/api/projects";
@@ -55,11 +54,7 @@ export function ProjectFormDialog({
   const isEdit = !!project;
   const createProject = useCreateProject(organizationId);
   const updateProject = useUpdateProject();
-  const transferProject = useTransferProject();
-  const isPending =
-    createProject.isPending ||
-    updateProject.isPending ||
-    transferProject.isPending;
+  const isPending = createProject.isPending || updateProject.isPending;
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -148,6 +143,8 @@ export function ProjectFormDialog({
 
     try {
       if (project) {
+        const originalLocation =
+          project.organizationalUnitId ?? ORGANIZATION_ROOT;
         await updateProject.mutateAsync({
           projectId: project.id,
           data: {
@@ -155,19 +152,13 @@ export function ProjectFormDialog({
             description,
             environments,
             defaultEnvironment,
+            ...(location === originalLocation
+              ? {}
+              : location === ORGANIZATION_ROOT
+                ? { organizationId }
+                : { organizationalUnitId: location }),
           },
         });
-        const originalLocation =
-          project.organizationalUnitId ?? ORGANIZATION_ROOT;
-        if (location !== originalLocation) {
-          await transferProject.mutateAsync({
-            projectId: project.id,
-            data:
-              location === ORGANIZATION_ROOT
-                ? { organizationId }
-                : { organizationalUnitId: location },
-          });
-        }
         toast.success("Project updated");
       } else {
         await createProject.mutateAsync({
