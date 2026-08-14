@@ -135,15 +135,11 @@ struct CreateAPIKeyRequest: Content, ValidatedRequestBody {
         case expiresInDays
     }
 
-    private enum LegacyCodingKeys: String, CodingKey {
-        case scopes
-    }
-
     init(from decoder: any Decoder) throws {
-        if try decoder.container(keyedBy: LegacyCodingKeys.self).contains(.scopes) {
-            throw DecodingError.dataCorrupted(
-                .init(codingPath: decoder.codingPath, debugDescription: "API key scopes are no longer supported"))
-        }
+        try decoder.rejectLegacyField(
+            "scopes",
+            throwing: DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "API key scopes are no longer supported")))
         let values = try decoder.container(keyedBy: CodingKeys.self)
         name = try values.decode(String.self, forKey: .name)
         restriction = try values.decodeIfPresent(CredentialRestrictionPayload.self, forKey: .restriction)
@@ -208,15 +204,11 @@ struct UpdateAPIKeyRequest: Content, ValidatedRequestBody {
         case isActive
     }
 
-    private enum LegacyCodingKeys: String, CodingKey {
-        case scopes
-    }
-
     init(from decoder: any Decoder) throws {
-        if try decoder.container(keyedBy: LegacyCodingKeys.self).contains(.scopes) {
-            throw DecodingError.dataCorrupted(
-                .init(codingPath: decoder.codingPath, debugDescription: "API key scopes are no longer supported"))
-        }
+        try decoder.rejectLegacyField(
+            "scopes",
+            throwing: DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "API key scopes are no longer supported")))
         let values = try decoder.container(keyedBy: CodingKeys.self)
         name = try values.decodeIfPresent(String.self, forKey: .name)
         restriction = try values.decodeIfPresent(CredentialRestrictionPayload.self, forKey: .restriction)
