@@ -86,7 +86,7 @@ interface SiteFormState {
   locationLabel: string;
   latitude: string;
   longitude: string;
-  labels: string;
+  labels: Array<{ key: string; value: string }>;
   networkControllerAgentId: string;
 }
 
@@ -98,29 +98,9 @@ const EMPTY_FORM: SiteFormState = {
   locationLabel: "",
   latitude: "",
   longitude: "",
-  labels: "",
+  labels: [],
   networkControllerAgentId: "",
 };
-
-function labelsToInput(labels: Record<string, string>): string {
-  return Object.entries(labels)
-    .map(([key, value]) => `${key}=${value}`)
-    .join(", ");
-}
-
-function parseLabels(input: string): Record<string, string> {
-  const labels: Record<string, string> = {};
-  for (const pair of input.split(",")) {
-    const trimmed = pair.trim();
-    if (!trimmed) continue;
-    const separator = trimmed.indexOf("=");
-    if (separator === -1) continue;
-    const key = trimmed.slice(0, separator).trim();
-    const value = trimmed.slice(separator + 1).trim();
-    if (key) labels[key] = value;
-  }
-  return labels;
-}
 
 function displayStatus(
   site: Site,
@@ -213,17 +193,17 @@ function SiteFootprint({
 
       <div className="relative h-[330px] overflow-hidden bg-background/35 sm:h-[370px]">
         <svg
-          aria-hidden="true"
           className="absolute inset-0 h-full w-full text-slate-300 dark:text-slate-600"
           viewBox="0 0 1000 360"
           preserveAspectRatio="xMidYMid meet"
+          aria-label="Site locations"
         >
           <defs>
             <pattern id="site-map-dots" width="14" height="14" patternUnits="userSpaceOnUse">
               <circle cx="3" cy="3" r="2.2" fill="currentColor" />
             </pattern>
           </defs>
-          <g fill="url(#site-map-dots)" opacity="0.8">
+          <g fill="url(#site-map-dots)" opacity="0.8" aria-hidden="true">
             <path d="M87 92 135 54l94 4 66 37 40 49-27 35-55 7-23 35-49-17-32-45-44-20z" />
             <path d="m253 207 45 15 28 45-13 76-28 11-31-62-18-51z" />
             <path d="m424 75 36-17 35 10-4 21-56 10z" />
@@ -232,9 +212,67 @@ function SiteFootprint({
             <path d="m789 242 56-19 55 31-9 49-65 13-43-31z" />
             <path d="m158 35 45-25 43 14-24 24-56 6z" />
           </g>
+
+          {mappedSites.map((site) => {
+            const members = siteMembers(site.id, agents);
+            const status = displayStatus(site, members, agentsKnown);
+            const x = ((site.longitude! + 180) / 360) * 1000;
+            const y = ((90 - site.latitude!) / 180) * 360;
+            const labelWidth = Math.max(74, site.name.length * 8 + 20);
+            const labelTop = y > 320 ? -38 : 13;
+            const editable = canManage(site);
+            const edit = () => editable && onEdit(site);
+            return (
+              <g
+                key={site.id}
+                transform={`translate(${x} ${y})`}
+                className={cn(editable ? "cursor-pointer" : "cursor-default")}
+                role={editable ? "button" : undefined}
+                tabIndex={editable ? 0 : undefined}
+                aria-label={`${site.name}, ${STATUS_STYLES[status].label}${
+                  editable ? ", edit site" : ""
+                }`}
+                onClick={edit}
+                onKeyDown={(event) => {
+                  if (editable && (event.key === "Enter" || event.key === " ")) {
+                    event.preventDefault();
+                    edit();
+                  }
+                }}
+              >
+                <circle
+                  r="8"
+                  fill={STATUS_STYLES[status].dot}
+                  stroke="var(--card)"
+                  strokeWidth="3"
+                  className="drop-shadow-sm transition-transform"
+                />
+                <rect
+                  x={-labelWidth / 2}
+                  y={labelTop}
+                  width={labelWidth}
+                  height="23"
+                  rx="5"
+                  fill="var(--card)"
+                  fillOpacity="0.9"
+                  stroke="var(--border)"
+                  strokeWidth="0.7"
+                />
+                <text
+                  x="0"
+                  y={labelTop + 16}
+                  textAnchor="middle"
+                  fill="var(--foreground)"
+                  className="font-mono text-[11px] font-semibold"
+                >
+                  {site.name}
+                </text>
+              </g>
+            );
+          })}
         </svg>
 
-        {mappedSites.length === 0 ? (
+        {mappedSites.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center px-6 text-center">
             <div>
               <div className="text-[13.5px] font-semibold">No mapped sites yet</div>
@@ -244,36 +282,6 @@ function SiteFootprint({
               </div>
             </div>
           </div>
-        ) : (
-          mappedSites.map((site) => {
-            const members = siteMembers(site.id, agents);
-            const status = displayStatus(site, members, agentsKnown);
-            const left = ((site.longitude! + 180) / 360) * 100;
-            const top = ((90 - site.latitude!) / 180) * 100;
-            return (
-              <button
-                key={site.id}
-                type="button"
-                className={cn(
-                  "group absolute -translate-x-1/2 -translate-y-1/2 text-left",
-                  !canManage(site) && "cursor-default"
-                )}
-                style={{ left: `${left}%`, top: `${top}%` }}
-                onClick={() => canManage(site) && onEdit(site)}
-                aria-label={`${site.name}, ${STATUS_STYLES[status].label}${
-                  canManage(site) ? ", edit site" : ""
-                }`}
-              >
-                <span
-                  className="mx-auto block h-4 w-4 rounded-full border-[3px] border-card shadow-[0_1px_5px_rgba(0,0,0,0.3)] ring-1 ring-black/5 transition-transform group-hover:scale-110"
-                  style={{ background: STATUS_STYLES[status].dot }}
-                />
-                <span className="mt-1 block whitespace-nowrap rounded bg-card/85 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold shadow-sm backdrop-blur-sm">
-                  {site.name}
-                </span>
-              </button>
-            );
-          })
         )}
 
         {mappedSites.length > 0 && mappedSites.length < sites.length && (
@@ -363,7 +371,10 @@ export default function SitesPage() {
       locationLabel: site.locationLabel ?? "",
       latitude: site.latitude?.toString() ?? "",
       longitude: site.longitude?.toString() ?? "",
-      labels: labelsToInput(site.labels ?? {}),
+      labels: Object.entries(site.labels ?? {}).map(([key, value]) => ({
+        key,
+        value,
+      })),
       networkControllerAgentId: site.networkControllerAgentId ?? "",
     });
     setDialogOpen(true);
@@ -439,7 +450,21 @@ export default function SitesPage() {
       return;
     }
 
-    const labels = parseLabels(form.labels);
+    const populatedLabels = form.labels.filter(
+      ({ key, value }) => key !== "" || value !== ""
+    );
+    if (populatedLabels.some(({ key }) => key === "")) {
+      toast.error("Every label value needs a key");
+      return;
+    }
+    const labelKeys = populatedLabels.map(({ key }) => key);
+    if (new Set(labelKeys).size !== labelKeys.length) {
+      toast.error("Label keys must be unique");
+      return;
+    }
+    const labels = Object.fromEntries(
+      populatedLabels.map(({ key, value }) => [key, value])
+    );
     const details = {
       description: form.description.trim() || undefined,
       status: form.status,
@@ -849,9 +874,91 @@ export default function SitesPage() {
                 </div>
               )}
               <div className="space-y-2">
-                <Label htmlFor="site-labels">Labels</Label>
-                <Input id="site-labels" placeholder="tier=production, provider=equinix" value={form.labels} onChange={(event) => setForm((current) => ({ ...current, labels: event.target.value }))} disabled={mutationPending} />
-                <p className="text-xs text-muted-foreground">Comma-separated key=value pairs.</p>
+                <div className="flex items-center justify-between gap-3">
+                  <Label>Labels</Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setForm((current) => ({
+                        ...current,
+                        labels: [...current.labels, { key: "", value: "" }],
+                      }))
+                    }
+                    disabled={mutationPending}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add label
+                  </Button>
+                </div>
+                {form.labels.length === 0 ? (
+                  <p className="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
+                    No labels configured.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {form.labels.map((label, index) => (
+                      <div
+                        key={index}
+                        className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2"
+                      >
+                        <Input
+                          aria-label={`Label ${index + 1} key`}
+                          placeholder="Key"
+                          value={label.key}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              labels: current.labels.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...item, key: event.target.value }
+                                  : item
+                              ),
+                            }))
+                          }
+                          disabled={mutationPending}
+                        />
+                        <Input
+                          aria-label={`Label ${index + 1} value`}
+                          placeholder="Value"
+                          value={label.value}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              labels: current.labels.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...item, value: event.target.value }
+                                  : item
+                              ),
+                            }))
+                          }
+                          disabled={mutationPending}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Remove label ${index + 1}`}
+                          onClick={() =>
+                            setForm((current) => ({
+                              ...current,
+                              labels: current.labels.filter(
+                                (_, itemIndex) => itemIndex !== index
+                              ),
+                            }))
+                          }
+                          disabled={mutationPending}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Keys and values are saved exactly as entered.
+                </p>
               </div>
             </div>
             <DialogFooter>
