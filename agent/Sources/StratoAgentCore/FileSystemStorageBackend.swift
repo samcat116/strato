@@ -410,29 +410,29 @@ public actor FileSystemStorageBackend: StorageBackend {
 
         let backingFormat = try await detectFormat(of: volumePath)
 
-        try FileManager.default.createDirectory(
-            atPath: (snapshotPath as NSString).deletingLastPathComponent,
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
+        try DurableFileWriter().createDirectory(
+            at: (snapshotPath as NSString).deletingLastPathComponent)
 
-        let result = try await runQemuImg([
-            "create",
-            "-f", "qcow2",
-            "-b", volumePath,
-            "-F", backingFormat,
-            snapshotPath,
-        ])
-        if result.terminationStatus != 0 {
-            let output = result.combinedOutput
-            logger.error(
-                "qemu-img snapshot create failed",
-                metadata: [
-                    "volumeId": .string(volumeId),
-                    "output": .string(output),
-                ])
-            throw qemuImgFailure(
-                output: output, context: "qemu-img create snapshot", fallback: StorageBackendError.snapshotFailed)
+        try await publishAtomically(to: snapshotPath) { stagingPath in
+            let result = try await self.runQemuImg([
+                "create",
+                "-f", "qcow2",
+                "-b", volumePath,
+                "-F", backingFormat,
+                stagingPath,
+            ])
+            if result.terminationStatus != 0 {
+                let output = result.combinedOutput
+                self.logger.error(
+                    "qemu-img snapshot create failed",
+                    metadata: [
+                        "volumeId": .string(volumeId),
+                        "output": .string(output),
+                    ])
+                throw self.qemuImgFailure(
+                    output: output, context: "qemu-img create snapshot",
+                    fallback: StorageBackendError.snapshotFailed)
+            }
         }
 
         logger.info(
@@ -664,11 +664,10 @@ public actor FileSystemStorageBackend: StorageBackend {
     /// publishes it to `path` with a same-directory rename, and synchronizes
     /// the directory entry.
     ///
-    /// This is what makes `listVolumes`' "the file is there" a sound answer for
-    /// volumes published by this build, which the reconciler's whole
-    /// create/no-create decision rests on. Without the file and directory
-    /// synchronization, power loss could leave a canonical name pointing at
-    /// incomplete or stale bytes.
+    /// This makes a canonical file's existence a sound completeness signal for
+    /// volumes and snapshots published by this build. Without the file and
+    /// directory synchronization, power loss could leave a canonical name
+    /// pointing at incomplete or stale bytes.
     private func publishAtomically(to path: String, _ write: (String) async throws -> Void) async throws {
         let stagingPath = path + ".partial"
         try? FileManager.default.removeItem(atPath: stagingPath)

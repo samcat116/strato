@@ -609,7 +609,11 @@ struct FileSystemStorageBackendTests {
         #expect(snapshotPath == "\(root)/vol-1/snapshots/snap-1.qcow2")
         let create = await recorder.invocations.first { $0.arguments.first == "create" }
         // Overlay is qcow2, but the backing format is detected, not assumed.
-        #expect(create?.arguments == ["create", "-f", "qcow2", "-b", volumePath, "-F", "raw", snapshotPath])
+        #expect(
+            create?.arguments
+                == ["create", "-f", "qcow2", "-b", volumePath, "-F", "raw", snapshotPath + ".partial"])
+        #expect(FileManager.default.contents(atPath: snapshotPath) == Data("created-bytes".utf8))
+        #expect(!FileManager.default.fileExists(atPath: snapshotPath + ".partial"))
     }
 
     @Test func deleteSnapshotIsIdempotent() async throws {
@@ -697,7 +701,9 @@ struct FileSystemStorageBackendTests {
 
         #expect(snapshotPath == "\(root)/vol-1/snapshots/snap-1.qcow2")
         let create = try #require(await recorder.invocations.first { $0.arguments.first == "create" })
-        #expect(create.arguments == ["create", "-f", "qcow2", "-b", volumePath, "-F", "raw", snapshotPath])
+        #expect(
+            create.arguments
+                == ["create", "-f", "qcow2", "-b", volumePath, "-F", "raw", snapshotPath + ".partial"])
     }
 
     /// Force-share belongs on inspection alone. On a mutating invocation the

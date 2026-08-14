@@ -306,7 +306,9 @@ private struct POSIXDurableFileSystemCalls: DurableFileSystemCalls {
             #if canImport(Glibc)
             Glibc.fsync(fileDescriptor)
             #else
-            Darwin.fsync(fileDescriptor)
+            // Like file contents, renamed directory entries must be forced
+            // through the drive's volatile write cache on macOS.
+            Darwin.fcntl(fileDescriptor, F_FULLFSYNC)
             #endif
         }
     }
