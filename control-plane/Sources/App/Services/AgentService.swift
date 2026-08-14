@@ -620,12 +620,12 @@ actor AgentService {
         app.websocketManager.removeConnection(agentKey: agentKey)
         // The eventual socket close skips its cleanup once the connection is
         // gone (`removeConnection(ifCurrent:)` no longer matches), so console
-        // and exec sessions must be torn down here for the graceful-unregister
-        // path.
+        // and attached exec sessions must be torn down here for the
+        // graceful-unregister path. Captured commands remain pending because a
+        // terminal frame may already be in flight; their deadline is the safe
+        // failure backstop.
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
         app.guestExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
-        await app.vmCommandExecutionService.failAll(
-            forAgent: agentKey, reason: "Agent disconnected while command was running")
         presenceRefreshedAt.removeValue(forKey: agentKey)
         await app.coordination.clearAgentPresence(agentKey: agentKey)
         await app.replicaBridge.clearRoute(agentKey: agentKey)
@@ -664,11 +664,11 @@ actor AgentService {
 
         app.websocketManager.removeConnection(agentKey: agentKey)
         // Same reasoning as `unregisterAgent`: the socket-close handler will
-        // not run its cleanup once the connection entry is gone.
+        // not run its interactive-session cleanup once the connection entry is
+        // gone. Captured commands keep waiting for a terminal frame or their
+        // deadline.
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
         app.guestExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
-        await app.vmCommandExecutionService.failAll(
-            forAgent: agentKey, reason: "Agent disconnected while command was running")
         // Drop both cluster-visible claims immediately. The route clear is a
         // compare-and-delete, so it cannot remove a successor connection.
         presenceRefreshedAt.removeValue(forKey: agentKey)
@@ -713,8 +713,9 @@ actor AgentService {
     /// signal that says *which connection generation* is current; a replica id
     /// alone is intentionally not treated as that authority.
     func removeAgent(_ agentKey: String) async {
-        await app.vmCommandExecutionService.failAll(
-            forAgent: agentKey, reason: "Agent disconnected while command was running")
+        // For the same reason, do not fail captured commands from this close.
+        // A terminal frame may belong to a successor connection; the durable
+        // command deadline handles executions that are truly abandoned.
         presenceRefreshedAt.removeValue(forKey: agentKey)
         await app.replicaBridge.clearRoute(agentKey: agentKey)
 

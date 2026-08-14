@@ -5,8 +5,8 @@ import StratoShared
 import Vapor
 
 /// Owns the live capture window for durable, non-interactive VM commands.
-/// PostgreSQL owns status; this actor owns only bounded bytes between
-/// `guest_exec_started` and the terminal frame.
+/// PostgreSQL owns status; this actor owns bounded bytes from
+/// `guest_exec_started` until the terminal result is durably committed.
 actor VMCommandExecutionService {
     static let outputLimitBytes = 1_048_576
     static let completionBudget: TimeInterval = 300
@@ -31,6 +31,11 @@ actor VMCommandExecutionService {
         }
     }
 
+    private struct PendingCompletion {
+        let capture: Capture
+        let exitCode: Int
+    }
+
     private struct Claimed: Decodable { let id: UUID }
     private struct TimedOut: Decodable {
         let id: UUID
@@ -43,13 +48,20 @@ actor VMCommandExecutionService {
 
     private let app: Application
     private let sendEnvelope: @Sendable (MessageEnvelope, String) async throws -> Void
+    private let beforePersistResult: (@Sendable () async throws -> Void)?
+    private let completionRetryDelay: Duration
     private var captures: [UUID: Capture] = [:]
+    private var pendingCompletions: [UUID: PendingCompletion] = [:]
 
     init(
         app: Application,
-        sendEnvelope: (@Sendable (MessageEnvelope, String) async throws -> Void)? = nil
+        sendEnvelope: (@Sendable (MessageEnvelope, String) async throws -> Void)? = nil,
+        beforePersistResult: (@Sendable () async throws -> Void)? = nil,
+        completionRetryDelay: Duration = .seconds(1)
     ) {
         self.app = app
+        self.beforePersistResult = beforePersistResult
+        self.completionRetryDelay = completionRetryDelay
         self.sendEnvelope =
             sendEnvelope ?? { [weak app] envelope, agentKey in
                 guard let app else { throw CancellationError() }
@@ -115,11 +127,21 @@ actor VMCommandExecutionService {
             capture.agentKey == agentKey
         else { return false }
         captures.removeValue(forKey: id)
+        let completion = PendingCompletion(capture: capture, exitCode: exitCode)
+        pendingCompletions[id] = completion
         do {
             try await complete(id: id, capture: capture, exitCode: exitCode)
+            pendingCompletions.removeValue(forKey: id)
         } catch {
-            app.logger.error("Could not complete recorded VM command: \(error)")
-            try? await fail(id: id, reason: "Could not persist command result")
+            app.logger.warning(
+                "Could not persist completed VM command; retrying",
+                metadata: [
+                    "executionId": .string(id.uuidString),
+                    "error": .string(error.localizedDescription),
+                ])
+            Task { [weak self] in
+                await self?.retryCompletion(id: id, completion: completion)
+            }
         }
         return true
     }
@@ -166,29 +188,6 @@ actor VMCommandExecutionService {
         }
     }
 
-    /// A disconnected agent cannot complete any command it was running. Fail
-    /// those operations immediately instead of making callers wait for the
-    /// five-minute backstop; the conditional update still lets an exit frame
-    /// that committed first win the race.
-    func failAll(forAgent agentKey: String, reason: String) async {
-        guard let sql = app.db as? any SQLDatabase else { return }
-        do {
-            let failed = try await sql.raw(
-                """
-                UPDATE vm_command_executions
-                SET status = 'failed', error = \(bind: String(reason.prefix(4_096))), completed_at = now()
-                WHERE agent_key = \(bind: agentKey) AND status = 'pending'
-                RETURNING id
-                """
-            ).all(decoding: Claimed.self)
-            for execution in failed {
-                captures.removeValue(forKey: execution.id)
-            }
-        } catch {
-            app.logger.error("Could not fail VM commands for disconnected agent: \(error)")
-        }
-    }
-
     /// Every replica may run this pass. The conditional UPDATE is the claim,
     /// so a command crosses pending -> failed exactly once without a Valkey
     /// sweep lock.
@@ -221,13 +220,14 @@ actor VMCommandExecutionService {
     }
 
     private func complete(id: UUID, capture: Capture, exitCode: Int) async throws {
+        try await beforePersistResult?()
         try await app.db.transaction { db in
             guard let sql = db as? any SQLDatabase else { throw Abort(.internalServerError) }
             let claimed = try await sql.raw(
                 """
                 UPDATE vm_command_executions
                 SET status = 'succeeded', error = NULL, completed_at = now()
-                WHERE id = \(bind: id) AND status = 'pending'
+                WHERE id = \(bind: id) AND status IN ('pending', 'failed')
                 RETURNING id
                 """
             ).all(decoding: Claimed.self)
@@ -239,6 +239,28 @@ actor VMCommandExecutionService {
                 stdout: capture.stdout, stderr: capture.stderr,
                 exitCode: exitCode, truncated: capture.truncated)
             try await payload.update(on: db)
+        }
+    }
+
+    private func retryCompletion(id: UUID, completion: PendingCompletion) async {
+        var retryDelay = completionRetryDelay
+        while pendingCompletions[id] != nil, !app.didShutdown {
+            try? await Task.sleep(for: retryDelay)
+            guard pendingCompletions[id] != nil, !app.didShutdown else { return }
+            do {
+                try await complete(
+                    id: id, capture: completion.capture, exitCode: completion.exitCode)
+                pendingCompletions.removeValue(forKey: id)
+                return
+            } catch {
+                app.logger.warning(
+                    "Could not persist completed VM command; retrying",
+                    metadata: [
+                        "executionId": .string(id.uuidString),
+                        "error": .string(error.localizedDescription),
+                    ])
+                retryDelay = min(retryDelay + retryDelay, .seconds(30))
+            }
         }
     }
 

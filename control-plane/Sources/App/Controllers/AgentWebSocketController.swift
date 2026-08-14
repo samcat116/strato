@@ -665,17 +665,14 @@ struct AgentWebSocketController: RouteCollection {
             // still-open prior socket, its console and guest-exec sessions are
             // now stale (a fresh agent process owns none of their guest-side
             // processes) and the delayed close will skip them — tear them down
-            // here so their browsers don't sit on frozen terminals.
+            // here so their browsers don't sit on frozen terminals. Captured
+            // commands stay pending because this replica cannot tell whether a
+            // terminal frame from either connection generation is in flight.
             if req.application.websocketManager.setConnection(agentKey: agentKey, websocket: ws) != nil {
                 req.application.consoleSessionManager.closeAllSessions(
                     forAgent: agentKey, reason: "agent reconnected")
                 req.application.guestExecSessionManager.closeAllSessions(
                     forAgent: agentKey, reason: "agent reconnected")
-                Task {
-                    await req.vmCommandExecutionService.failAll(
-                        forAgent: agentKey,
-                        reason: "Agent reconnected while command was running")
-                }
             }
 
             // The registration frame associates the persisted agent id and
