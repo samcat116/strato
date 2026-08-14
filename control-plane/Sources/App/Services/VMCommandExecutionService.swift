@@ -13,7 +13,7 @@ actor VMCommandExecutionService {
 
     private struct Capture {
         let agentKey: String
-        let deadline: Date
+        var deadline: Date
         var stdout = Data()
         var stderr = Data()
         var truncated = false
@@ -48,20 +48,23 @@ actor VMCommandExecutionService {
 
     private let app: Application
     private let sendEnvelope: @Sendable (MessageEnvelope, String) async throws -> Void
+    private let beforeClassifyStart: (@Sendable () async throws -> Void)?
     private let beforePersistResult: (@Sendable () async throws -> Void)?
-    private let completionRetryDelay: Duration
+    private let retryDelay: Duration
     private var captures: [UUID: Capture] = [:]
     private var pendingCompletions: [UUID: PendingCompletion] = [:]
 
     init(
         app: Application,
         sendEnvelope: (@Sendable (MessageEnvelope, String) async throws -> Void)? = nil,
+        beforeClassifyStart: (@Sendable () async throws -> Void)? = nil,
         beforePersistResult: (@Sendable () async throws -> Void)? = nil,
-        completionRetryDelay: Duration = .seconds(1)
+        retryDelay: Duration = .seconds(1)
     ) {
         self.app = app
+        self.beforeClassifyStart = beforeClassifyStart
         self.beforePersistResult = beforePersistResult
-        self.completionRetryDelay = completionRetryDelay
+        self.retryDelay = retryDelay
         self.sendEnvelope =
             sendEnvelope ?? { [weak app] envelope, agentKey in
                 guard let app else { throw CancellationError() }
@@ -73,36 +76,40 @@ actor VMCommandExecutionService {
     /// fall through to `GuestExecSessionManager` without changing behavior.
     func handleStarted(sessionId: String, fromAgentKey agentKey: String) async -> Bool {
         guard let id = UUID(uuidString: sessionId) else { return false }
+        guard app.guestExecSessionManager.getSession(sessionId: sessionId) == nil else {
+            return false
+        }
+        if let capture = captures[id] { return capture.agentKey == agentKey }
+        if let completion = pendingCompletions[id] {
+            return completion.capture.agentKey == agentKey
+        }
         do {
-            guard
-                let execution = try await VMCommandExecution.query(on: app.db)
-                    .filter(\.$id == id)
-                    .filter(\.$status == .pending)
-                    .filter(\.$agentKey == agentKey)
-                    .first()
-            else { return false }
+            guard let execution = try await recordedExecution(id: id, agentKey: agentKey) else {
+                return false
+            }
 
             captures[id] = Capture(agentKey: execution.agentKey, deadline: execution.deadline)
-            do {
-                try await sendEnvelope(
-                    MessageEnvelope(message: GuestExecInputMessage(sessionId: sessionId, eof: true)),
-                    agentKey)
-            } catch let error as ReplicaMessageBridge.DeliveryError where !error.isDefinitive {
-                app.logger.warning(
-                    "VM command stdin EOF delivery outcome is unknown; awaiting command stream",
-                    metadata: [
-                        "executionId": .string(id.uuidString),
-                        "agentKey": .string(agentKey),
-                        "error": .string(error.localizedDescription),
-                    ])
-            } catch {
-                captures.removeValue(forKey: id)
-                try await fail(id: id, reason: "Could not close command stdin: \(error.localizedDescription)")
-            }
+            await closeStdin(sessionId: sessionId, id: id, agentKey: agentKey)
             return true
         } catch {
-            app.logger.error("Could not identify recorded VM command start: \(error)")
-            return false
+            // The process has already started, so falling through would lose
+            // all later frames. Install a bounded provisional capture while
+            // the durable classification is retried.
+            captures[id] = Capture(
+                agentKey: agentKey,
+                deadline: Date().addingTimeInterval(Self.completionBudget))
+            app.logger.warning(
+                "Could not classify started VM command; retrying",
+                metadata: [
+                    "executionId": .string(id.uuidString),
+                    "agentKey": .string(agentKey),
+                    "error": .string(error.localizedDescription),
+                ])
+            Task { [weak self] in
+                await self?.retryStartClassification(id: id, agentKey: agentKey)
+            }
+            await closeStdin(sessionId: sessionId, id: id, agentKey: agentKey)
+            return true
         }
     }
 
@@ -242,10 +249,71 @@ actor VMCommandExecutionService {
         }
     }
 
+    private func recordedExecution(id: UUID, agentKey: String) async throws -> VMCommandExecution? {
+        try await beforeClassifyStart?()
+        return try await VMCommandExecution.query(on: app.db)
+            .filter(\.$id == id)
+            .filter(\.$status == .pending)
+            .filter(\.$agentKey == agentKey)
+            .first()
+    }
+
+    private func closeStdin(sessionId: String, id: UUID, agentKey: String) async {
+        do {
+            try await sendEnvelope(
+                MessageEnvelope(message: GuestExecInputMessage(sessionId: sessionId, eof: true)),
+                agentKey)
+        } catch {
+            // `guest_exec_started` proves the process may already have run.
+            // An EOF delivery failure therefore cannot safely become a
+            // retryable command failure; the terminal stream or deadline owns
+            // the outcome from here.
+            app.logger.warning(
+                "Could not deliver VM command stdin EOF; awaiting command stream",
+                metadata: [
+                    "executionId": .string(id.uuidString),
+                    "agentKey": .string(agentKey),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
+
+    private func retryStartClassification(id: UUID, agentKey: String) async {
+        var nextDelay = retryDelay
+        while captures[id]?.agentKey == agentKey, !app.didShutdown {
+            try? await Task.sleep(for: nextDelay)
+            guard captures[id]?.agentKey == agentKey, !app.didShutdown else {
+                return
+            }
+            do {
+                guard let execution = try await recordedExecution(id: id, agentKey: agentKey) else {
+                    captures.removeValue(forKey: id)
+                    return
+                }
+                // The database query suspends this actor. A terminal frame may
+                // have moved the capture into pending completion meanwhile;
+                // never resurrect it after that transition.
+                guard var capture = captures[id], capture.agentKey == agentKey else { return }
+                capture.deadline = execution.deadline
+                captures[id] = capture
+                return
+            } catch {
+                app.logger.warning(
+                    "Could not classify started VM command; retrying",
+                    metadata: [
+                        "executionId": .string(id.uuidString),
+                        "agentKey": .string(agentKey),
+                        "error": .string(error.localizedDescription),
+                    ])
+                nextDelay = min(nextDelay + nextDelay, .seconds(30))
+            }
+        }
+    }
+
     private func retryCompletion(id: UUID, completion: PendingCompletion) async {
-        var retryDelay = completionRetryDelay
+        var nextDelay = retryDelay
         while pendingCompletions[id] != nil, !app.didShutdown {
-            try? await Task.sleep(for: retryDelay)
+            try? await Task.sleep(for: nextDelay)
             guard pendingCompletions[id] != nil, !app.didShutdown else { return }
             do {
                 try await complete(
@@ -259,7 +327,7 @@ actor VMCommandExecutionService {
                         "executionId": .string(id.uuidString),
                         "error": .string(error.localizedDescription),
                     ])
-                retryDelay = min(retryDelay + retryDelay, .seconds(30))
+                nextDelay = min(nextDelay + nextDelay, .seconds(30))
             }
         }
     }

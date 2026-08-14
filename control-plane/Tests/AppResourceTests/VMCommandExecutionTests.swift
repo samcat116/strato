@@ -9,14 +9,15 @@ import AppTestSupport
 
 @Suite("Captured VM command execution", .serialized)
 struct VMCommandExecutionTests {
-    private struct TransientPersistenceFailure: Error {}
+    private struct TransientFailure: Error {}
+    private struct EOFDeliveryFailure: Error {}
 
-    private actor FailFirstPersistenceAttempt {
+    private actor FailFirstAttempt {
         private var attempts = 0
 
         func run() throws {
             attempts += 1
-            if attempts == 1 { throw TransientPersistenceFailure() }
+            if attempts == 1 { throw TransientFailure() }
         }
 
         func count() -> Int { attempts }
@@ -77,15 +78,79 @@ struct VMCommandExecutionTests {
         }
     }
 
+    @Test("a started command stays pending when stdin EOF delivery fails")
+    func eofDeliveryFailureDoesNotFailStartedCommand() async throws {
+        try await withTestApp { app in
+            let service = VMCommandExecutionService(
+                app: app,
+                sendEnvelope: { _, _ in throw EOFDeliveryFailure() })
+            app.vmCommandExecutionService = service
+            let execution = execution()
+            try await execution.create(command: ["/usr/bin/true"], on: app.db)
+            let id = try execution.requireID()
+
+            #expect(
+                await service.handleStarted(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey))
+            let started = try #require(try await VMCommandExecution.find(id, on: app.db))
+            #expect(started.status == .pending)
+            #expect(
+                await service.handleExit(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey, exitCode: 0))
+
+            let completed = try #require(try await VMCommandExecution.find(id, on: app.db))
+            #expect(completed.status == .succeeded)
+        }
+    }
+
+    @Test("a transient start-classification failure retains frames and retries")
+    func retriesStartedCommandClassification() async throws {
+        try await withTestApp { app in
+            let attempts = FailFirstAttempt()
+            let service = VMCommandExecutionService(
+                app: app,
+                sendEnvelope: { _, _ in },
+                beforeClassifyStart: { try await attempts.run() },
+                retryDelay: .milliseconds(10))
+            app.vmCommandExecutionService = service
+            let execution = execution()
+            try await execution.create(command: ["/usr/bin/printf", "retained"], on: app.db)
+            let id = try execution.requireID()
+
+            #expect(
+                await service.handleStarted(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey))
+            #expect(
+                await service.handleOutput(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey,
+                    stream: "stdout", data: Data("retained".utf8)))
+
+            for _ in 0..<100 {
+                if await attempts.count() >= 2 { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(await attempts.count() >= 2)
+            #expect(
+                await service.handleExit(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey, exitCode: 0))
+
+            let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
+            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
+            #expect(stored.status == .succeeded)
+            #expect(String(decoding: payload.stdout ?? Data(), as: UTF8.self) == "retained")
+            #expect(payload.exitCode == 0)
+        }
+    }
+
     @Test("a completed command survives a transient persistence failure and timeout sweep")
     func retriesCompletedResultPersistence() async throws {
         try await withTestApp { app in
-            let attempts = FailFirstPersistenceAttempt()
+            let attempts = FailFirstAttempt()
             let service = VMCommandExecutionService(
                 app: app,
                 sendEnvelope: { _, _ in },
                 beforePersistResult: { try await attempts.run() },
-                completionRetryDelay: .milliseconds(10))
+                retryDelay: .milliseconds(10))
             app.vmCommandExecutionService = service
             let execution = execution(deadline: Date().addingTimeInterval(-1))
             try await execution.create(command: ["/usr/bin/printf", "done"], on: app.db)
