@@ -14,6 +14,7 @@ import {
   registryCredentialsApi,
   serviceAccountsApi,
 } from "@/lib/api/platform-services";
+import { selectedServiceAccountForProject } from "@/lib/service-account-selection";
 import { useProjectContext } from "@/providers";
 
 export default function ProjectIntegrationsPage() {
@@ -56,10 +57,17 @@ export default function ProjectIntegrationsPage() {
     queryFn: ({ signal }) => serviceAccountsApi.list(projectId!, signal),
     enabled: !!projectId,
   });
+  const selectedAccountForProject = selectedServiceAccountForProject(
+    accountsQuery.data,
+    selectedAccount,
+    projectId
+  );
+  const selectedAccountId = selectedAccountForProject?.id ?? "";
   const registrationsQuery = useQuery({
-    queryKey: ["service-account-registrations", selectedAccount],
-    queryFn: ({ signal }) => serviceAccountsApi.listRegistrations(selectedAccount, signal),
-    enabled: !!selectedAccount,
+    queryKey: ["service-account-registrations", selectedAccountId],
+    queryFn: ({ signal }) =>
+      serviceAccountsApi.listRegistrations(selectedAccountId, signal),
+    enabled: !!selectedAccountId,
   });
   const accountPermissions = usePermissions(
     (accountsQuery.data ?? []).map((account) => ({
@@ -186,25 +194,25 @@ export default function ProjectIntegrationsPage() {
             {(accountsQuery.data ?? []).map((account) => (
               <div key={account.id} className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div><p className="font-medium">{account.name}</p><p className="text-sm text-muted-foreground">{account.description || "No description"} · {account.projectRoles.join(", ") || "No project role"}</p></div>
-                <div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => setSelectedAccount(selectedAccount === account.id ? "" : account.id)}>{selectedAccount === account.id ? "Close" : "Manage identity"}</Button>{accountPermissions[`delete:${account.id}`] && <Button variant="ghost" size="icon" aria-label={`Delete ${account.name}`} onClick={() => window.confirm(`Delete service account ${account.name} and all its identity registrations?`) && deleteAccount.mutate(account.id)}><Trash2 className="h-4 w-4" /></Button>}</div>
+                <div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => setSelectedAccount(selectedAccountId === account.id ? "" : account.id)}>{selectedAccountId === account.id ? "Close" : "Manage identity"}</Button>{accountPermissions[`delete:${account.id}`] && <Button variant="ghost" size="icon" aria-label={`Delete ${account.name}`} onClick={() => window.confirm(`Delete service account ${account.name} and all its identity registrations?`) && deleteAccount.mutate(account.id)}><Trash2 className="h-4 w-4" /></Button>}</div>
               </div>
             ))}
             {accountsQuery.data?.length === 0 && <p className="p-4 text-sm text-muted-foreground">No service accounts.</p>}
           </div>
-          {selectedAccount && permissions.manage_credentials && (
+          {selectedAccountId && permissions.manage_credentials && (
             <div className="space-y-4 rounded-lg border p-4">
               <h3 className="font-medium">Role and SPIFFE identities</h3>
               <div className="flex flex-col gap-2 sm:flex-row">
                 <Label className="sr-only" htmlFor="service-account-role">Project role</Label>
                 <select id="service-account-role" value={accountRole} onChange={(event) => setAccountRole(event.target.value as typeof accountRole)} className="h-9 rounded-md border border-input bg-background px-3 text-sm">{["viewer", "operator", "editor", "admin"].map((role) => <option key={role}>{role}</option>)}</select>
-                <Button variant="outline" onClick={() => manageAccount.mutate(() => serviceAccountsApi.setProjectRole(selectedAccount, accountRole))}>Set role</Button>
-                <Button variant="ghost" onClick={() => manageAccount.mutate(() => serviceAccountsApi.clearProjectRole(selectedAccount))}>Clear role</Button>
+                <Button variant="outline" onClick={() => manageAccount.mutate(() => serviceAccountsApi.setProjectRole(selectedAccountId, accountRole))}>Set role</Button>
+                <Button variant="ghost" onClick={() => manageAccount.mutate(() => serviceAccountsApi.clearProjectRole(selectedAccountId))}>Clear role</Button>
               </div>
-              <form className="flex flex-col gap-2 sm:flex-row" onSubmit={(event) => { event.preventDefault(); manageAccount.mutate(() => serviceAccountsApi.createRegistration(selectedAccount, spiffeId)); }}>
+              <form className="flex flex-col gap-2 sm:flex-row" onSubmit={(event) => { event.preventDefault(); manageAccount.mutate(() => serviceAccountsApi.createRegistration(selectedAccountId, spiffeId)); }}>
                 <div className="flex-1"><Label htmlFor="service-account-spiffe">SPIFFE ID</Label><Input id="service-account-spiffe" value={spiffeId} onChange={(event) => setSpiffeId(event.target.value)} placeholder="spiffe://example.org/workload/api" required /></div>
                 <Button className="self-end">Register</Button>
               </form>
-              <div className="divide-y">{(registrationsQuery.data ?? []).map((registration) => <div key={registration.id} className="flex items-center justify-between py-2"><code className="overflow-x-auto text-sm">{registration.spiffeId}</code><Button variant="ghost" size="icon" aria-label={`Remove ${registration.spiffeId}`} onClick={() => window.confirm(`Remove identity ${registration.spiffeId}?`) && manageAccount.mutate(() => serviceAccountsApi.deleteRegistration(selectedAccount, registration.id))}><Trash2 className="h-4 w-4" /></Button></div>)}</div>
+              <div className="divide-y">{(registrationsQuery.data ?? []).map((registration) => <div key={registration.id} className="flex items-center justify-between py-2"><code className="overflow-x-auto text-sm">{registration.spiffeId}</code><Button variant="ghost" size="icon" aria-label={`Remove ${registration.spiffeId}`} onClick={() => window.confirm(`Remove identity ${registration.spiffeId}?`) && manageAccount.mutate(() => serviceAccountsApi.deleteRegistration(selectedAccountId, registration.id))}><Trash2 className="h-4 w-4" /></Button></div>)}</div>
             </div>
           )}
         </CardContent>
