@@ -44,7 +44,7 @@ struct SCIMTokenController: RouteCollection {
         // Verify user is admin of this organization
         try await requireOrganizationAdmin(organizationID: organizationID, on: req)
 
-        let request = try req.content.decode(CreateSCIMTokenRequest.self)
+        let request = try req.content.decodeValidated(CreateSCIMTokenRequest.self)
 
         // Generate token
         let fullToken = SCIMToken.generateToken()
@@ -129,7 +129,7 @@ struct SCIMTokenController: RouteCollection {
             throw Abort(.notFound, reason: "Token not found")
         }
 
-        let request = try req.content.decode(UpdateSCIMTokenRequest.self)
+        let request = try req.content.decodeValidated(UpdateSCIMTokenRequest.self)
 
         if let name = request.name {
             token.name = name

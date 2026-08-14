@@ -121,7 +121,7 @@ struct UpdateSecurityGroupRequest: Content, ValidatedRequestBody {
     }
 }
 
-struct CreateSecurityGroupRuleRequest: Content {
+struct CreateSecurityGroupRuleRequest: Content, ValidatedRequestBody {
     let direction: SecurityGroupRule.Direction
     let ethertype: SecurityGroupRule.Ethertype
     /// "tcp", "udp", or "icmp"; nil matches any protocol.
@@ -157,6 +157,10 @@ struct CreateSecurityGroupRuleRequest: Content {
         self.remoteGroupId = remoteGroupId
         self.log = log
         self.description = description
+    }
+
+    mutating func validate() throws {
+        try Validate.text(description)
     }
 }
 

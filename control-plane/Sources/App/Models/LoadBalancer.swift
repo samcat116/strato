@@ -255,18 +255,26 @@ struct LoadBalancerHealthCheckConfig: Content, Equatable, Sendable {
     }
 }
 
-struct CreateLoadBalancerRequest: Content {
-    let name: String
+struct CreateLoadBalancerRequest: Content, ValidatedRequestBody {
+    var name: String
     let projectId: UUID?
     let logicalNetworkId: UUID
     let `protocol`: LoadBalancerProtocol
     let healthCheck: LoadBalancerHealthCheckConfig?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+    }
 }
 
-struct UpdateLoadBalancerRequest: Content {
-    let name: String?
+struct UpdateLoadBalancerRequest: Content, ValidatedRequestBody {
+    var name: String?
     let `protocol`: LoadBalancerProtocol?
     let healthCheck: LoadBalancerHealthCheckConfig?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+    }
 }
 
 struct CreateLoadBalancerListenerRequest: Content {

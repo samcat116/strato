@@ -69,8 +69,8 @@ struct PolicyController: RouteCollection {
         }
     }
 
-    struct CreatePolicyRequest: Content {
-        let name: String
+    struct CreatePolicyRequest: Content, ValidatedRequestBody {
+        var name: String
         let description: String?
         let ownerType: IAMRoleOwnerType
         let ownerId: UUID
@@ -82,13 +82,23 @@ struct PolicyController: RouteCollection {
         /// Nothing in the policy text references the id, so the server can
         /// allocate it just as well.
         let id: UUID?
+
+        mutating func validate() throws {
+            name = try Validate.name(name)
+            try Validate.text(description)
+        }
     }
 
-    struct UpdatePolicyRequest: Content {
-        let name: String?
+    struct UpdatePolicyRequest: Content, ValidatedRequestBody {
+        var name: String?
         let description: String?
         let cedarText: String?
         let enabled: Bool?
+
+        mutating func validate() throws {
+            name = try Validate.name(name)
+            try Validate.text(description)
+        }
     }
 
     /// `POST /api/iam/policies/validate` — compile and containment-check
@@ -140,7 +150,7 @@ struct PolicyController: RouteCollection {
     /// POST /api/iam/policies
     func create(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let payload = try req.content.decode(CreatePolicyRequest.self)
+        let payload = try req.content.decodeValidated(CreatePolicyRequest.self)
         let owner = try IAMPolicySetOwner(creating: payload.ownerType, id: payload.ownerId, kind: .policy)
         try await owner.requireExists(on: req.db)
         try await owner.requirePolicyAdmin(write: true, req: req)
@@ -187,7 +197,7 @@ struct PolicyController: RouteCollection {
             throw Abort(.internalServerError, reason: "Policy row is missing its id")
         }
 
-        let payload = try req.content.decode(UpdatePolicyRequest.self)
+        let payload = try req.content.decodeValidated(UpdatePolicyRequest.self)
         // Re-preparing only when the text changes: containment and the Cedar
         // compile are about the text, and a labels- or enabled-only edit does
         // not touch it.

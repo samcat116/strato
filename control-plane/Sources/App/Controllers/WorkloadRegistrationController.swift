@@ -23,12 +23,16 @@ struct WorkloadRegistrationController: RouteCollection {
 
     // MARK: - DTOs
 
-    struct CreateWorkloadRegistrationRequest: Content {
+    struct CreateWorkloadRegistrationRequest: Content, ValidatedRequestBody {
         let spiffeId: String
         /// Administrative scoping for the registered workload. Grants
         /// nothing: machine principals hold access only via bindings.
         let organizationId: UUID
-        let displayName: String?
+        var displayName: String?
+
+        mutating func validate() throws {
+            displayName = try Validate.name(displayName, "displayName")
+        }
     }
 
     struct SetWorkloadGrantRequest: Content {
@@ -103,7 +107,7 @@ struct WorkloadRegistrationController: RouteCollection {
     /// *is* the principal (`principal_type = workload`, id = row id).
     func create(req: Request) async throws -> Response {
         let admin = try await req.requireSystemAdmin()
-        let body = try req.content.decode(CreateWorkloadRegistrationRequest.self)
+        let body = try req.content.decodeValidated(CreateWorkloadRegistrationRequest.self)
 
         // Same reserved-namespace rule as the service-account endpoint: even
         // an admin does not hand out platform-owned identities through the registry.

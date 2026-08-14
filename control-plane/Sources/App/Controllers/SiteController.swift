@@ -211,7 +211,7 @@ struct SiteController: RouteCollection {
     }
 
     func createSite(req: Request) async throws -> SiteResponse {
-        let create = try req.content.decode(CreateSiteRequest.self)
+        let create = try req.content.decodeValidated(CreateSiteRequest.self)
 
         guard
             let scope = try OrganizationScope.from(
@@ -222,18 +222,13 @@ struct SiteController: RouteCollection {
         try await scope.validateExists(on: req.db)
         try await requireManageAgents(req, scope: scope)
 
-        let name = create.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, name.count <= 100 else {
-            throw Abort(.badRequest, reason: "Site name must be 1-100 characters")
-        }
-
         let labels = Self.normalizedLabels(create.labels)
         try Self.validateMetadata(
             latitude: create.latitude, longitude: create.longitude,
             locationLabel: create.locationLabel, regionCode: create.regionCode, labels: labels)
 
         let site = Site(
-            name: name,
+            name: create.name,
             description: create.description,
             status: create.status ?? .active,
             latitude: create.latitude,
@@ -247,7 +242,7 @@ struct SiteController: RouteCollection {
         } catch {
             // Surface the unique-name violation as a client error, matching
             // the registration-token conflict behavior.
-            throw Abort(.conflict, reason: "A site named '\(name)' already exists")
+            throw Abort(.conflict, reason: "A site named '\(create.name)' already exists")
         }
 
         // A freshly created site designates nobody yet.
@@ -257,7 +252,7 @@ struct SiteController: RouteCollection {
     func updateSite(req: Request) async throws -> SiteResponse {
         let site = try await findSite(req)
         try await requireSiteAction(req, site: site, action: "site:manage")
-        let update = try req.content.decode(UpdateSiteRequest.self)
+        let update = try req.content.decodeValidated(UpdateSiteRequest.self)
 
         if let controllerId = update.networkControllerAgentId {
             guard let agent = try await Agent.find(controllerId, on: req.db) else {

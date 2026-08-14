@@ -421,6 +421,10 @@ public func configure(
     // query can select the required field.
     app.migrations.add(AddGuestAgentEnabledToVM())
 
+    // STR-256: reject oversized IAM names before their unique btree indexes
+    // turn caller input into PostgreSQL 54000 and an API 500.
+    app.migrations.add(AddAdministrativeTextLengthConstraints())
+
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
     // that records it, so concurrent replica boots race the same migration and a

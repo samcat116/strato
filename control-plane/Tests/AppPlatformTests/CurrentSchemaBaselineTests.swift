@@ -9,13 +9,14 @@ import Vapor
 
 @Suite("Current schema baseline", .serialized)
 struct CurrentSchemaBaselineTests {
-    private static let expectedCatalogMD5 = "79bd505a06c0e20e36d670eb8302201c"
+    private static let expectedCatalogMD5 = "e8e7f8ac62839a58de3ee45b6a0041d5"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
         let app = try await Application.makeForBareDatabaseTesting()
         do {
-            try await configure(app)
+            app.migrations.add(CurrentSchemaBaseline())
+            try await app.autoMigrate()
 
             let logs = try await MigrationLog.query(on: app.db).all()
             #expect(logs.map(\.name) == [CurrentSchemaBaseline().name])
@@ -29,8 +30,8 @@ struct CurrentSchemaBaselineTests {
 
             let counts = try await catalogCounts(on: app.db)
             #expect(counts.tables == 64)
-            #expect(counts.columns == 841)
-            #expect(counts.constraints == 286)
+            #expect(counts.columns == 842)
+            #expect(counts.constraints == 292)
             #expect(counts.indexes == 190)
             #expect(counts.enums == 3)
             #expect(counts.triggers == 1)
@@ -57,6 +58,79 @@ struct CurrentSchemaBaselineTests {
             try await migration.prepare(on: app.db)
 
             #expect(try await catalogMD5(on: app.db) == catalogBeforeUpgrade)
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
+    @Test("The administrative text-bound upgrade is idempotent and restores missing checks")
+    func administrativeTextUpgradeIsIdempotentOnFreshSchema() async throws {
+        let app = try await Application.makeForBareDatabaseTesting()
+        do {
+            try await CurrentSchemaBaseline().prepare(on: app.db)
+            let sql = try #require(app.db as? any SQLDatabase)
+            let catalogBeforeUpgrade = try await catalogMD5(on: app.db)
+
+            let migration = AddAdministrativeTextLengthConstraints()
+            try await migration.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == catalogBeforeUpgrade)
+
+            for statement in [
+                "ALTER TABLE iam_guardrails DROP CONSTRAINT ck_iam_guardrails_name_length",
+                "ALTER TABLE iam_guardrails DROP CONSTRAINT ck_iam_guardrails_description_length",
+                "ALTER TABLE iam_policies DROP CONSTRAINT ck_iam_policies_name_length",
+                "ALTER TABLE iam_policies DROP CONSTRAINT ck_iam_policies_description_length",
+                "ALTER TABLE iam_roles DROP CONSTRAINT ck_iam_roles_name_length",
+                "ALTER TABLE iam_roles DROP CONSTRAINT ck_iam_roles_description_length",
+            ] {
+                try await sql.raw("\(unsafeRaw: statement)").run()
+            }
+
+            #expect(try await catalogMD5(on: app.db) != catalogBeforeUpgrade)
+            try await migration.prepare(on: app.db)
+            try await migration.prepare(on: app.db)
+
+            #expect(catalogBeforeUpgrade == Self.expectedCatalogMD5)
+            #expect(try await catalogMD5(on: app.db) == catalogBeforeUpgrade)
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
+    @Test("The administrative text-bound upgrade reports incompatible existing rows")
+    func administrativeTextUpgradeRejectsOversizedExistingRows() async throws {
+        let app = try await Application.makeForBareDatabaseTesting()
+        do {
+            try await CurrentSchemaBaseline().prepare(on: app.db)
+            let sql = try #require(app.db as? any SQLDatabase)
+            try await sql.raw(
+                "ALTER TABLE iam_policies DROP CONSTRAINT ck_iam_policies_name_length"
+            ).run()
+            try await sql.raw(
+                """
+                INSERT INTO iam_policies (
+                    id, name, owner_type, owner_id, cedar_text, effect, enabled
+                ) VALUES (
+                    \(bind: UUID()), \(bind: String(repeating: "n", count: Validate.nameLength + 1)),
+                    'organization', \(bind: UUID()), 'forbid(principal, action, resource);',
+                    'forbid', true
+                )
+                """
+            ).run()
+
+            var thrown: (any Error)?
+            do {
+                try await AddAdministrativeTextLengthConstraints().prepare(on: app.db)
+            } catch {
+                thrown = error
+            }
+            let error = try #require(thrown)
+            #expect(String(describing: error).contains("iam_policies"))
+            #expect(String(describing: error).contains("existing rows exceed"))
         } catch {
             try? await app.shutdownForTesting()
             throw error

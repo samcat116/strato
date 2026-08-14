@@ -40,13 +40,22 @@ struct ServiceAccountController: RouteCollection {
         let updatedAt: Date?
     }
 
-    struct CreateServiceAccountRequest: Content {
-        let name: String
+    struct CreateServiceAccountRequest: Content, ValidatedRequestBody {
+        var name: String
         let description: String?
+
+        mutating func validate() throws {
+            name = try Validate.name(name)
+            try Validate.text(description)
+        }
     }
 
-    struct UpdateServiceAccountRequest: Content {
+    struct UpdateServiceAccountRequest: Content, ValidatedRequestBody {
         let description: String?
+
+        mutating func validate() throws {
+            try Validate.text(description)
+        }
     }
 
     struct SetProjectRoleRequest: Content {
@@ -113,11 +122,8 @@ struct ServiceAccountController: RouteCollection {
         let projectID = try project.requireID()
         try await req.authorize("serviceaccount:create", on: IAMNode(type: .project, id: projectID))
 
-        let body = try req.content.decode(CreateServiceAccountRequest.self)
-        let name = body.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, name.count <= 128 else {
-            throw Abort(.badRequest, reason: "Service account name must be 1-128 characters")
-        }
+        let body = try req.content.decodeValidated(CreateServiceAccountRequest.self)
+        let name = body.name
 
         let existing = try await ServiceAccount.query(on: req.db)
             .filter(\.$project.$id == projectID)
@@ -176,7 +182,7 @@ struct ServiceAccountController: RouteCollection {
         let accountID = try account.requireID()
         try await req.authorize("serviceaccount:update", on: IAMNode(type: .serviceAccount, id: accountID))
 
-        let body = try req.content.decode(UpdateServiceAccountRequest.self)
+        let body = try req.content.decodeValidated(UpdateServiceAccountRequest.self)
         if let description = body.description {
             account.accountDescription = description
         }

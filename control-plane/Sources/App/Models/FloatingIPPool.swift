@@ -92,8 +92,8 @@ extension FloatingIPPool: Content {}
 
 // MARK: - DTOs
 
-struct CreateFloatingIPPoolRequest: Content {
-    let name: String
+struct CreateFloatingIPPoolRequest: Content, ValidatedRequestBody {
+    var name: String
     /// External range in CIDR notation; prefix must be within /8–/30.
     let cidr: String
     /// Gateway inside the range, excluded from allocation.
@@ -103,6 +103,10 @@ struct CreateFloatingIPPoolRequest: Content {
     /// Owning scope; exactly one of the two is required.
     let organizationId: UUID?
     let organizationalUnitId: UUID?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+    }
 }
 
 /// Full-replace (PUT) semantics for the mutable fields, matching

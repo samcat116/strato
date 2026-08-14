@@ -148,7 +148,7 @@ struct FloatingIPController: RouteCollection {
     /// POST /api/floating-ip-pools
     @Sendable
     func createPool(req: Request) async throws -> FloatingIPPoolResponse {
-        let create = try req.content.decode(CreateFloatingIPPoolRequest.self)
+        let create = try req.content.decodeValidated(CreateFloatingIPPoolRequest.self)
 
         guard
             let scope = try OrganizationScope.from(
@@ -159,10 +159,6 @@ struct FloatingIPController: RouteCollection {
         try await scope.validateExists(on: req.db)
         try await requireManageAgents(req, scope: scope)
 
-        let name = create.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, name.count <= 100 else {
-            throw Abort(.badRequest, reason: "Pool name must be 1-100 characters")
-        }
         let (cidr, gateway) = try Self.validatePoolAddressing(cidr: create.cidr, gateway: create.gateway)
 
         let siteId = create.siteId
@@ -173,7 +169,7 @@ struct FloatingIPController: RouteCollection {
         try await Self.assertNoPoolOverlap(cidr: cidr, siteId: siteId, excluding: nil, on: req.db)
 
         let pool = FloatingIPPool(
-            name: name, cidr: cidr, gateway: gateway, siteID: siteId, organizationScope: scope)
+            name: create.name, cidr: cidr, gateway: gateway, siteID: siteId, organizationScope: scope)
         do {
             try await pool.save(on: req.db)
         } catch let error as any DatabaseError where error.isConstraintFailure {
@@ -182,7 +178,7 @@ struct FloatingIPController: RouteCollection {
             // probe another tenant's pool names.
             throw Abort(
                 .conflict,
-                reason: "A floating IP pool named '\(name)' already exists in this organization scope")
+                reason: "A floating IP pool named '\(create.name)' already exists in this organization scope")
         }
 
         return try FloatingIPPoolResponse(from: pool, allocatedCount: 0)

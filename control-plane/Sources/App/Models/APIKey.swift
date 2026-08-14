@@ -122,8 +122,8 @@ extension String {
 
 // MARK: - DTOs
 
-struct CreateAPIKeyRequest: Content {
-    let name: String
+struct CreateAPIKeyRequest: Content, ValidatedRequestBody {
+    var name: String
     /// What the key may do, in the IAM action and node vocabulary. Absent means
     /// "everything its owner can".
     let restriction: CredentialRestrictionPayload?
@@ -148,6 +148,10 @@ struct CreateAPIKeyRequest: Content {
         name = try values.decode(String.self, forKey: .name)
         restriction = try values.decodeIfPresent(CredentialRestrictionPayload.self, forKey: .restriction)
         expiresInDays = try values.decodeIfPresent(Int.self, forKey: .expiresInDays)
+    }
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
     }
 }
 
@@ -193,8 +197,8 @@ struct APIKeyResponse: Content {
     }
 }
 
-struct UpdateAPIKeyRequest: Content {
-    let name: String?
+struct UpdateAPIKeyRequest: Content, ValidatedRequestBody {
+    var name: String?
     let restriction: CredentialRestrictionPayload?
     let isActive: Bool?
 
@@ -217,5 +221,9 @@ struct UpdateAPIKeyRequest: Content {
         name = try values.decodeIfPresent(String.self, forKey: .name)
         restriction = try values.decodeIfPresent(CredentialRestrictionPayload.self, forKey: .restriction)
         isActive = try values.decodeIfPresent(Bool.self, forKey: .isActive)
+    }
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
     }
 }
