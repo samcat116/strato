@@ -150,8 +150,9 @@ public struct ObservedVolumeFacts: Equatable, Sendable {
 /// no new VM mutation and no attempt burned.
 public enum VMBootVolumeDependency {
     /// Returns why `spec` is not safe to boot, or nil once its one canonical
-    /// boot volume is present, attached to `vmId`, and exactly the requested
-    /// virtual size.
+    /// boot volume is present, attached to `vmId`, and at least the requested
+    /// virtual size. A source image's native size may be larger than the
+    /// request, and that is already safe to boot.
     public static func pendingReason(
         vmId: String,
         spec: VMSpec,
@@ -174,7 +175,7 @@ public enum VMBootVolumeDependency {
         guard let observedSize = observed.sizeBytes else {
             return "managed boot volume \(volumeId) for VM \(vmId) has no readable virtual size yet"
         }
-        guard observedSize == requestedSize else {
+        guard observedSize >= requestedSize else {
             return
                 "managed boot volume \(volumeId) for VM \(vmId) is \(observedSize) bytes; waiting for the requested \(requestedSize) bytes"
         }

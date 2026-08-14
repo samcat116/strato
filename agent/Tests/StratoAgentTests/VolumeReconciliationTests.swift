@@ -535,11 +535,12 @@ struct VolumeReconciliationTests {
         #expect(performed.map(\.id) == [volumeId.uuidString, vmId.uuidString])
     }
 
-    @Test("VM boot-volume readiness requires the requested observed size and attachment")
-    func bootVolumeReadinessChecksSizeAndAttachment() {
+    @Test("VM boot-volume readiness requires at least the requested size and attachment")
+    func bootVolumeReadinessChecksMinimumSizeAndAttachment() {
         let volumeId = UUID()
         let vmId = UUID()
-        let requestedSize: Int64 = 1 << 30
+        let requestedSize: Int64 = 2 << 30
+        let materializedSize: Int64 = 3_758_096_384
         let spec = VMSpec(
             cpus: 1,
             memoryBytes: 1 << 30,
@@ -562,7 +563,7 @@ struct VolumeReconciliationTests {
             observedVolumes: [volumeId.uuidString: undersized])
         #expect(reason?.contains("waiting for the requested \(requestedSize) bytes") == true)
 
-        let ready = ObservedVolumeFacts(
+        let readyAtRequestedSize = ObservedVolumeFacts(
             path: "/volumes/root.qcow2", format: .qcow2, sizeBytes: requestedSize,
             attachedVMId: vmId.uuidString, deviceName: "disk0")
         #expect(
@@ -572,7 +573,19 @@ struct VolumeReconciliationTests {
                 desiredVolumes: [
                     volumeId.uuidString: Self.desired(volumeId, sizeBytes: requestedSize)
                 ],
-                observedVolumes: [volumeId.uuidString: ready]) == nil)
+                observedVolumes: [volumeId.uuidString: readyAtRequestedSize]) == nil)
+
+        let readyAboveRequestedSize = ObservedVolumeFacts(
+            path: "/volumes/root.qcow2", format: .qcow2, sizeBytes: materializedSize,
+            attachedVMId: vmId.uuidString, deviceName: "disk0")
+        #expect(
+            VMBootVolumeDependency.pendingReason(
+                vmId: vmId.uuidString,
+                spec: spec,
+                desiredVolumes: [
+                    volumeId.uuidString: Self.desired(volumeId, sizeBytes: requestedSize)
+                ],
+                observedVolumes: [volumeId.uuidString: readyAboveRequestedSize]) == nil)
     }
 
     /// An agent that cannot read its own workload manifest converges no volumes
