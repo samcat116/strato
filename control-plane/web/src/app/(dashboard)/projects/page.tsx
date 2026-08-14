@@ -1,96 +1,73 @@
 "use client";
 
-import { useState } from "react";
-import Link from "next/link";
-import { FolderKanban, Plus, Search, Loader2, X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { FolderKanban, Plus, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { QueryErrorNotice } from "@/components/ui/query-error-notice";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Badge } from "@/components/ui/badge";
-import { HierarchyTree } from "@/components/hierarchy";
 import {
   ProjectsTable,
   ProjectFormDialog,
   TransferProjectDialog,
 } from "@/components/projects";
 import {
-  useProjectsForOrganization,
-  useHierarchy,
-  useHierarchySearch,
-} from "@/lib/hooks";
+  buildProjectFolderOptions,
+  buildProjectTableRows,
+} from "@/components/projects/project-table-model";
+import { useHierarchy, useProjectsForOrganization } from "@/lib/hooks";
 import { useOrganization } from "@/providers";
 import type { Project } from "@/lib/api/projects";
-import type { HierarchySearchResult } from "@/types/api";
-
-function resultHref(result: HierarchySearchResult): string | undefined {
-  if (result.type === "vm") return `/vms/${result.id}`;
-  return undefined;
-}
-
-function Stat({ label, value }: { label: string; value: number | string }) {
-  return (
-    <div className="rounded-lg border border-border bg-muted/50 px-4 py-3">
-      <div className="text-2xl font-semibold text-foreground tabular-nums">
-        {value}
-      </div>
-      <div className="text-xs text-muted-foreground">{label}</div>
-    </div>
-  );
-}
 
 export default function ProjectsPage() {
   const { currentOrg } = useOrganization();
   const orgId = currentOrg?.id;
 
   const projectsQuery = useProjectsForOrganization(orgId);
-  const { data: projects = [], isLoading } = projectsQuery;
+  const { data: projects = [], isLoading: projectsLoading } = projectsQuery;
+  const hierarchyQuery = useHierarchy(orgId);
   const canManage = currentOrg?.userRole === "admin";
 
-  const {
-    data: hierarchy,
-    isLoading: hierarchyLoading,
-    error: hierarchyError,
-  } = useHierarchy(orgId);
   const [query, setQuery] = useState("");
-  const { data: search, isFetching: searching } = useHierarchySearch(
-    orgId,
-    query
-  );
-  const isSearching = query.trim().length > 0;
-
   const [createOpen, setCreateOpen] = useState(false);
   const [editProject, setEditProject] = useState<Project | null>(null);
   const [transferProject, setTransferProject] = useState<Project | null>(null);
 
+  const organizationHierarchy = hierarchyQuery.data?.organization;
+  const rows = useMemo(
+    () => buildProjectTableRows(projects, organizationHierarchy, query),
+    [projects, organizationHierarchy, query]
+  );
+  const folderOptions = useMemo(
+    () => buildProjectFolderOptions(organizationHierarchy),
+    [organizationHierarchy]
+  );
+
   if (!currentOrg) {
     return (
-      <div className="max-w-5xl mx-auto py-12 text-center text-muted-foreground">
+      <div className="max-w-6xl mx-auto py-12 text-center text-muted-foreground">
         Select an organization to manage its projects.
       </div>
     );
   }
 
-  const stats = hierarchy?.stats;
+  const isSearching = query.trim().length > 0;
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <FolderKanban className="h-8 w-8 text-blue-600" />
-          <div>
+    <div className="max-w-6xl mx-auto space-y-6">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <FolderKanban className="h-8 w-8 shrink-0 text-blue-600" />
+          <div className="min-w-0">
             <h1 className="text-2xl font-semibold text-foreground">Projects</h1>
-            <p className="text-sm text-muted-foreground">
-              Browse and manage projects, folders, and resources in{" "}
-              {currentOrg.name}
+            <p className="truncate text-sm text-muted-foreground">
+              All projects in {currentOrg.name}, organized by their place in the
+              hierarchy
             </p>
           </div>
         </div>
         {canManage && (
           <Button
-            className="bg-primary hover:bg-primary/90"
+            className="shrink-0 bg-primary hover:bg-primary/90"
             onClick={() => setCreateOpen(true)}
           >
             <Plus className="h-4 w-4 mr-2" />
@@ -105,162 +82,78 @@ export default function ProjectsPage() {
         hasData={projectsQuery.data !== undefined}
         onRetry={() => void projectsQuery.refetch()}
       />
+      <QueryErrorNotice
+        resource="project hierarchy"
+        error={hierarchyQuery.error}
+        hasData={hierarchyQuery.data !== undefined}
+        onRetry={() => void hierarchyQuery.refetch()}
+      />
 
-      {/* Stats */}
-      {stats && !isSearching && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Stat label="Folders" value={stats.totalOUs} />
-          <Stat label="Projects" value={stats.totalProjects} />
-          <Stat label="VMs" value={stats.totalVMs} />
-          <Stat label="Quotas" value={stats.totalQuotas} />
+      <div className="overflow-hidden rounded-lg border border-border bg-card">
+        <div className="flex flex-col gap-3 border-b border-border px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="font-semibold text-foreground">
+              All Projects ({projects.length})
+            </h2>
+            {!canManage && (
+              <p className="text-xs text-muted-foreground">
+                You need admin rights to create or edit projects.
+              </p>
+            )}
+          </div>
+          <div className="relative w-full sm:w-80">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search projects or locations..."
+              className="bg-background border-border text-foreground pl-9 pr-9"
+            />
+            {isSearching && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label="Clear search"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
         </div>
-      )}
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search folders, projects, and VMs..."
-          className="bg-background border-border text-foreground pl-9 pr-9"
+        <ProjectsTable
+          rows={rows}
+          organizationName={currentOrg.name}
+          isLoading={projectsLoading || hierarchyQuery.isLoading}
+          canManage={canManage}
+          onEdit={setEditProject}
+          onTransfer={setTransferProject}
+          emptyMessage={
+            isSearching
+              ? `No projects match "${query.trim()}".`
+              : "No projects yet. Create one to organize your VMs and images."
+          }
         />
-        {isSearching && (
-          <button
-            onClick={() => setQuery("")}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-            aria-label="Clear search"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        )}
       </div>
 
-      {isSearching ? (
-        <Card className="bg-card border-border">
-          <CardHeader>
-            <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
-              Search Results
-              {searching && (
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-              )}
-              {search && (
-                <span className="text-sm font-normal text-muted-foreground">
-                  ({search.totalResults})
-                </span>
-              )}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {search && search.results.length === 0 && !searching ? (
-              <p className="text-sm text-muted-foreground">
-                No results for &quot;{query}&quot;.
-              </p>
-            ) : (
-              <div className="space-y-1">
-                {search?.results.map((result) => {
-                  const href = resultHref(result);
-                  const row = (
-                    <div className="flex items-center justify-between gap-2 rounded-md px-3 py-2 hover:bg-accent/60 transition-colors">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm text-foreground truncate">
-                            {result.name}
-                          </span>
-                          <Badge
-                            variant="outline"
-                            className="border-input text-muted-foreground uppercase text-[10px]"
-                          >
-                            {result.type}
-                          </Badge>
-                        </div>
-                        {result.path && (
-                          <p className="text-xs text-muted-foreground truncate">
-                            {result.path}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                  return href ? (
-                    <Link key={`${result.type}-${result.id}`} href={href}>
-                      {row}
-                    </Link>
-                  ) : (
-                    <div key={`${result.type}-${result.id}`}>{row}</div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      ) : (
-        <>
-          {/* Hierarchy tree */}
-          <Card className="bg-card border-border">
-            <CardHeader>
-              <CardTitle className="text-lg font-semibold text-foreground">
-                Organization Hierarchy
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="py-4">
-              {hierarchyLoading ? (
-                <div className="space-y-2">
-                  <Skeleton className="h-6 w-1/2 bg-muted" />
-                  <Skeleton className="h-6 w-2/3 bg-muted" />
-                  <Skeleton className="h-6 w-1/3 bg-muted" />
-                </div>
-              ) : hierarchyError || !hierarchy ? (
-                <p className="text-sm text-muted-foreground py-6 text-center">
-                  Failed to load the organization hierarchy.
-                </p>
-              ) : (
-                <HierarchyTree org={hierarchy.organization} />
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Projects table */}
-          <Card className="bg-card border-border">
-            <CardHeader>
-              <CardTitle className="text-lg font-semibold text-foreground">
-                All Projects ({projects.length})
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {!canManage && (
-                <p className="text-sm text-muted-foreground mb-4">
-                  You need admin rights to edit, transfer, or delete projects.
-                </p>
-              )}
-              <ProjectsTable
-                projects={projects}
-                isLoading={isLoading}
-                canManage={canManage}
-                onEdit={setEditProject}
-                onTransfer={setTransferProject}
-              />
-            </CardContent>
-          </Card>
-        </>
-      )}
-
-      {/* Create */}
       <ProjectFormDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
         organizationId={currentOrg.id}
+        organizationName={currentOrg.name}
+        folderOptions={folderOptions}
       />
 
-      {/* Edit */}
       <ProjectFormDialog
         open={!!editProject}
         onOpenChange={(open) => !open && setEditProject(null)}
         organizationId={currentOrg.id}
+        organizationName={currentOrg.name}
+        folderOptions={folderOptions}
         project={editProject}
       />
 
-      {/* Transfer */}
       <TransferProjectDialog
         open={!!transferProject}
         onOpenChange={(open) => !open && setTransferProject(null)}

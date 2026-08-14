@@ -6,6 +6,12 @@ import NIOHTTP1
 import AppTestSupport
 @testable import App
 
+private struct AtomicProjectUpdateRequest: Content {
+    let name: String
+    let description: String
+    let organizationalUnitId: UUID
+}
+
 @Suite("Project API Tests", .serialized)
 final class ProjectTests {
 
@@ -664,6 +670,53 @@ final class ProjectTests {
                 #expect(response.description == "Updated description")
                 #expect(response.defaultEnvironment == "production")
             }
+        }
+    }
+
+    @Test("Update project rolls metadata back when its move is refused")
+    func testUpdateProjectAndMoveAreAtomic() async throws {
+        try await withProjectTestApp { app, _, testOrganization, sourceOU, authToken in
+            let builder = TestDataBuilder(db: app.db)
+            let destinationOU = try await builder.createOU(
+                name: "Atomic Update Destination",
+                description: "Rejects the incoming project",
+                organization: testOrganization)
+            let destinationOUID = try #require(destinationOU.id)
+            let project = try await builder.createProject(
+                name: "Original Atomic Project",
+                description: "Original description",
+                ou: sourceOU)
+            _ = try await builder.createNetwork(
+                name: "moving-network", project: project)
+            let destinationProject = try await builder.createProject(
+                name: "Destination Consumer",
+                description: "Consumes the destination quota",
+                ou: destinationOU)
+            _ = try await builder.createNetwork(
+                name: "destination-network", project: destinationProject)
+            let destinationQuota = try await builder.createResourceQuota(
+                name: "atomic-destination-networks", maxNetworks: 1, ou: destinationOU)
+            try await QuotaEnforcementService.resyncReservations(destinationQuota, on: app.db)
+            try await destinationQuota.save(on: app.db)
+
+            try await app.test(.PUT, "/api/projects/\(try project.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    AtomicProjectUpdateRequest(
+                        name: "Partially Applied Name",
+                        description: "Partially applied description",
+                        organizationalUnitId: destinationOUID
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+                #expect(res.body.string.contains("atomic-destination-networks"))
+            }
+
+            let persisted = try #require(
+                try await Project.find(project.id, on: app.db))
+            #expect(persisted.name == "Original Atomic Project")
+            #expect(persisted.description == "Original description")
+            #expect(persisted.$organizationalUnit.id == sourceOU.id)
         }
     }
 

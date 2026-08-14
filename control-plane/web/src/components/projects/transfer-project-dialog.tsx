@@ -35,7 +35,7 @@ export function TransferProjectDialog({
   onOpenChange,
   project,
 }: TransferProjectDialogProps) {
-  const { organizations } = useOrganization();
+  const { organizations, currentOrg } = useOrganization();
   const transferProject = useTransferProject();
   const [destinationOrgId, setDestinationOrgId] = useState("");
 
@@ -43,7 +43,7 @@ export function TransferProjectDialog({
   // requires admin on the destination, so offering member-only orgs would just
   // produce a 403 on submit.
   const destinations = organizations.filter(
-    (org) => org.id !== project?.organizationId && org.userRole === "admin"
+    (org) => org.id !== currentOrg?.id && org.userRole === "admin"
   );
 
   // Clear the selection each time the dialog (re)opens, derived during render.

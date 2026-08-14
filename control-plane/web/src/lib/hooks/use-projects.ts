@@ -36,6 +36,9 @@ function invalidateAllProjects(
   queryClient: ReturnType<typeof useQueryClient>
 ) {
   queryClient.invalidateQueries({ queryKey: ["projects"] });
+  // Project names and parent folders are duplicated in hierarchy responses.
+  // Keep table breadcrumbs current after create, update, transfer, or delete.
+  queryClient.invalidateQueries({ queryKey: ["hierarchy"] });
 }
 
 export function useCreateProject(organizationId: string) {

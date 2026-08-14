@@ -7634,12 +7634,16 @@ export interface components {
             /** @description Defaults to the standard environment set. */
             environments?: string[];
         };
-        /** @description Every field is optional; omitted fields are left unchanged. */
+        /** @description Every field is optional; omitted fields are left unchanged. Supply `organizationalUnitId` to move into a folder, or `organizationId` to move directly under an organization. Metadata and parent changes are applied atomically. */
         UpdateProjectRequest: {
             name?: string;
             description?: string;
             defaultEnvironment?: string;
             environments?: string[];
+            /** Format: uuid */
+            organizationId?: string | null;
+            /** Format: uuid */
+            organizationalUnitId?: string | null;
         };
         /** @description The destination. Supply `organizationalUnitId` to move into a folder, or `organizationId` to move directly under an organization. */
         TransferProjectRequest: {

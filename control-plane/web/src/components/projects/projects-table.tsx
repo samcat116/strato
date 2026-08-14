@@ -2,7 +2,16 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { MoreHorizontal, Pencil, ArrowRightLeft, Trash2 } from "lucide-react";
+import {
+  ArrowRightLeft,
+  Building2,
+  ChevronRight,
+  CircleHelp,
+  Folder,
+  MoreHorizontal,
+  Pencil,
+  Trash2,
+} from "lucide-react";
 import {
   Table,
   TableBody,
@@ -22,23 +31,28 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useDeleteProject } from "@/lib/hooks";
 import type { Project } from "@/lib/api/projects";
+import type { ProjectTableRow } from "./project-table-model";
 import { toast } from "sonner";
 
 interface ProjectsTableProps {
-  projects: Project[];
+  rows: ProjectTableRow[];
+  organizationName: string;
   isLoading?: boolean;
   /** Whether the current user can edit/transfer/delete projects (org admin). */
   canManage: boolean;
   onEdit: (project: Project) => void;
   onTransfer: (project: Project) => void;
+  emptyMessage?: string;
 }
 
 export function ProjectsTable({
-  projects,
+  rows,
+  organizationName,
   isLoading,
   canManage,
   onEdit,
   onTransfer,
+  emptyMessage = "No projects yet. Create one to organize your VMs and images.",
 }: ProjectsTableProps) {
   const deleteProject = useDeleteProject();
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -74,10 +88,10 @@ export function ProjectsTable({
     );
   }
 
-  if (projects.length === 0) {
+  if (rows.length === 0) {
     return (
       <div className="py-12 text-center text-muted-foreground">
-        No projects yet. Create one to organize your VMs and images.
+        {emptyMessage}
       </div>
     );
   }
@@ -86,18 +100,19 @@ export function ProjectsTable({
     <Table>
       <TableHeader>
         <TableRow className="border-border hover:bg-transparent">
-          <TableHead className="text-muted-foreground">Name</TableHead>
+          <TableHead className="text-muted-foreground">Project</TableHead>
+          <TableHead className="text-muted-foreground">Location</TableHead>
           <TableHead className="text-muted-foreground">Environments</TableHead>
           <TableHead className="text-muted-foreground text-right">VMs</TableHead>
           {canManage && (
-            <TableHead className="text-muted-foreground w-12 text-right">
+            <TableHead className="text-muted-foreground w-32 text-right">
               Actions
             </TableHead>
           )}
         </TableRow>
       </TableHeader>
       <TableBody>
-        {projects.map((project) => (
+        {rows.map(({ project, folderPath }) => (
           <TableRow key={project.id} className="border-border">
             <TableCell>
               <Link
@@ -109,6 +124,32 @@ export function ProjectsTable({
               {project.description && (
                 <div className="text-sm text-muted-foreground">
                   {project.description}
+                </div>
+              )}
+            </TableCell>
+            <TableCell>
+              {folderPath === null ? (
+                <div className="flex min-w-44 items-center gap-1.5 text-sm text-muted-foreground">
+                  <CircleHelp className="h-3.5 w-3.5 shrink-0" />
+                  <span>Location unavailable</span>
+                </div>
+              ) : (
+                <div
+                  className="flex min-w-44 items-center gap-1 text-sm text-muted-foreground"
+                  aria-label={[organizationName, ...folderPath].join(" / ")}
+                >
+                  <Building2 className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{organizationName}</span>
+                  {folderPath.map((folder, index) => (
+                    <span
+                      key={`${folder}-${index}`}
+                      className="flex min-w-0 items-center gap-1"
+                    >
+                      <ChevronRight className="h-3 w-3 shrink-0" />
+                      <Folder className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">{folder}</span>
+                    </span>
+                  ))}
                 </div>
               )}
             </TableCell>
@@ -135,41 +176,50 @@ export function ProjectsTable({
             </TableCell>
             {canManage && (
               <TableCell className="text-right">
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-muted-foreground hover:text-foreground"
-                      disabled={pendingId === project.id}
+                <div className="flex items-center justify-end gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground hover:text-foreground"
+                    onClick={() => onEdit(project)}
+                    disabled={pendingId === project.id}
+                  >
+                    <Pencil className="h-4 w-4" />
+                    Edit
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                        disabled={pendingId === project.id}
+                        aria-label={`More actions for ${project.name}`}
+                      >
+                        <MoreHorizontal className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      className="bg-card border-border"
+                      align="end"
                     >
-                      <MoreHorizontal className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="bg-card border-border">
-                    <DropdownMenuItem
-                      onClick={() => onEdit(project)}
-                      className="text-foreground focus:bg-accent focus:text-accent-foreground cursor-pointer"
-                    >
-                      <Pencil className="h-4 w-4 mr-2" />
-                      Edit
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => onTransfer(project)}
-                      className="text-foreground focus:bg-accent focus:text-accent-foreground cursor-pointer"
-                    >
-                      <ArrowRightLeft className="h-4 w-4 mr-2" />
-                      Transfer
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => handleDelete(project)}
-                      className="text-red-600 focus:bg-accent focus:text-red-700 cursor-pointer"
-                    >
-                      <Trash2 className="h-4 w-4 mr-2" />
-                      Delete
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                      <DropdownMenuItem
+                        onClick={() => onTransfer(project)}
+                        className="text-foreground focus:bg-accent focus:text-accent-foreground cursor-pointer"
+                      >
+                        <ArrowRightLeft className="h-4 w-4 mr-2" />
+                        Transfer
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => handleDelete(project)}
+                        className="text-red-600 focus:bg-accent focus:text-red-700 cursor-pointer"
+                      >
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
               </TableCell>
             )}
           </TableRow>

@@ -40,10 +40,15 @@ export const projectsApi = {
     organizationId: string,
     data: CreateProjectData
   ): Promise<Project> {
+    const { organizationalUnitId, ...request } = data;
+    const endpoint = organizationalUnitId
+      ? `/api/organizations/${organizationId}/ous/${organizationalUnitId}/projects`
+      : `/api/organizations/${organizationId}/projects`;
+
     // The backend requires a non-optional description; default to an empty string.
-    return api.post<Project>(`/api/organizations/${organizationId}/projects`, {
-      ...data,
-      description: data.description ?? "",
+    return api.post<Project>(endpoint, {
+      ...request,
+      description: request.description ?? "",
     });
   },
 
