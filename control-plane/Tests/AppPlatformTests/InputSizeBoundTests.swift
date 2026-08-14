@@ -34,6 +34,17 @@ final class InputSizeBoundTests {
         String(repeating: character, count: count)
     }
 
+    private func expectBoundary<Body: ValidatedRequestBody>(
+        _ limit: Int, make: (String) throws -> Body
+    ) throws {
+        var atLimit = try make(string(limit))
+        try atLimit.validate()
+
+        var overLimit = try make(string(limit + 1))
+        let error = #expect(throws: Abort.self) { try overLimit.validate() }
+        #expect(error?.status == .badRequest)
+    }
+
     // MARK: - The helper
 
     @Test("A name at the ceiling is accepted; one character past it is not")
@@ -191,6 +202,167 @@ final class InputSizeBoundTests {
 
     // MARK: - Endpoints
 
+    @Test("Administrative name DTOs share the 128-character boundary")
+    func administrativeNameDTOCeilings() throws {
+        let id = UUID()
+        try expectBoundary(Validate.nameLength) {
+            PolicyController.CreatePolicyRequest(
+                name: $0, description: nil, ownerType: .organization, ownerId: id,
+                cedarText: "forbid(principal, action, resource);", enabled: nil, id: nil)
+        }
+        try expectBoundary(Validate.nameLength) {
+            PolicyController.UpdatePolicyRequest(name: $0, description: nil, cedarText: nil, enabled: nil)
+        }
+        try expectBoundary(Validate.nameLength) {
+            RoleController.CreateRoleRequest(
+                name: $0, description: nil, ownerType: .organization, ownerId: id,
+                actions: ["vm:read"], cedarText: nil, id: nil)
+        }
+        try expectBoundary(Validate.nameLength) {
+            RoleController.UpdateRoleRequest(name: $0, description: nil, actions: nil, cedarText: nil)
+        }
+        try expectBoundary(Validate.nameLength) {
+            GuardrailController.CreateGuardrailRequest(
+                name: $0, description: nil, effect: nil, nodeType: "organization",
+                nodeId: id.uuidString, actions: [], principalMatch: nil, resourceMatch: nil,
+                cedarText: nil, enabled: nil)
+        }
+        try expectBoundary(Validate.nameLength) {
+            CreateSCIMTokenRequest(name: $0, expiresInDays: nil)
+        }
+        try expectBoundary(Validate.nameLength) {
+            UpdateSCIMTokenRequest(name: $0, isActive: nil)
+        }
+        try expectBoundary(Validate.nameLength) {
+            CreateSSFStreamRequest(
+                name: $0, description: nil, transmitterURL: "https://example.com",
+                authToken: nil, expectedIssuer: nil, expectedAudience: nil,
+                deliveryMethod: .push, eventsRequested: nil)
+        }
+        try expectBoundary(Validate.nameLength) {
+            UpdateSSFStreamRequest(
+                name: $0, description: nil, authToken: nil, expectedIssuer: nil,
+                expectedAudience: nil, eventsRequested: nil, enabled: nil)
+        }
+        try expectBoundary(Validate.nameLength) { value in
+            try JSONDecoder().decode(
+                CreateAPIKeyRequest.self, from: Data("{\"name\":\"\(value)\"}".utf8))
+        }
+        try expectBoundary(Validate.nameLength) { value in
+            try JSONDecoder().decode(
+                UpdateAPIKeyRequest.self, from: Data("{\"name\":\"\(value)\"}".utf8))
+        }
+        try expectBoundary(Validate.nameLength) {
+            CreateWebhookSubscriptionRequest(
+                name: $0, url: "https://example.com/hook", projectId: nil, eventTypes: nil)
+        }
+        try expectBoundary(Validate.nameLength) {
+            UpdateWebhookSubscriptionRequest(name: $0, url: nil, eventTypes: nil, isActive: nil)
+        }
+        try expectBoundary(Validate.nameLength) {
+            RegistryPullSecretController.CreateRegistryPullSecretRequest(
+                registry: "ghcr.io", username: $0, secret: "secret")
+        }
+        try expectBoundary(Validate.nameLength) {
+            RegistryPullSecretController.UpdateRegistryPullSecretRequest(username: $0, secret: nil)
+        }
+        try expectBoundary(Validate.nameLength) {
+            ServiceAccountController.CreateServiceAccountRequest(name: $0, description: nil)
+        }
+        try expectBoundary(Validate.nameLength) {
+            WorkloadRegistrationController.CreateWorkloadRegistrationRequest(
+                spiffeId: "spiffe://example.com/workload", organizationId: id, displayName: $0)
+        }
+        try expectBoundary(Validate.nameLength) {
+            CreateSiteRequest(name: $0, organizationId: id)
+        }
+        try expectBoundary(Validate.nameLength) {
+            CreateLoadBalancerRequest(
+                name: $0, projectId: id, logicalNetworkId: id, protocol: .tcp,
+                healthCheck: nil)
+        }
+        try expectBoundary(Validate.nameLength) {
+            UpdateLoadBalancerRequest(name: $0, protocol: nil, healthCheck: nil)
+        }
+        try expectBoundary(Validate.nameLength) {
+            CreateFloatingIPPoolRequest(
+                name: $0, cidr: "203.0.113.0/24", gateway: nil, siteId: id,
+                organizationId: id, organizationalUnitId: nil)
+        }
+    }
+
+    @Test("Administrative free-text DTOs share the 4096-character boundary")
+    func administrativeTextDTOCeilings() throws {
+        let id = UUID()
+        try expectBoundary(Validate.textLength) {
+            PolicyController.CreatePolicyRequest(
+                name: "policy", description: $0, ownerType: .organization, ownerId: id,
+                cedarText: "forbid(principal, action, resource);", enabled: nil, id: nil)
+        }
+        try expectBoundary(Validate.textLength) {
+            PolicyController.UpdatePolicyRequest(name: nil, description: $0, cedarText: nil, enabled: nil)
+        }
+        try expectBoundary(Validate.textLength) {
+            RoleController.CreateRoleRequest(
+                name: "role", description: $0, ownerType: .organization, ownerId: id,
+                actions: ["vm:read"], cedarText: nil, id: nil)
+        }
+        try expectBoundary(Validate.textLength) {
+            RoleController.UpdateRoleRequest(name: nil, description: $0, actions: nil, cedarText: nil)
+        }
+        try expectBoundary(Validate.textLength) {
+            GuardrailController.CreateGuardrailRequest(
+                name: "guardrail", description: $0, effect: nil, nodeType: "organization",
+                nodeId: id.uuidString, actions: [], principalMatch: nil, resourceMatch: nil,
+                cedarText: nil, enabled: nil)
+        }
+        try expectBoundary(Validate.textLength) {
+            GuardrailController.UpdateGuardrailRequest(
+                description: $0, actions: nil, principalMatch: nil, resourceMatch: nil,
+                cedarText: nil, enabled: nil)
+        }
+        try expectBoundary(Validate.textLength) {
+            CreateSSFStreamRequest(
+                name: "stream", description: $0, transmitterURL: "https://example.com",
+                authToken: nil, expectedIssuer: nil, expectedAudience: nil,
+                deliveryMethod: .push, eventsRequested: nil)
+        }
+        try expectBoundary(Validate.textLength) {
+            UpdateSSFStreamRequest(
+                name: nil, description: $0, authToken: nil, expectedIssuer: nil,
+                expectedAudience: nil, eventsRequested: nil, enabled: nil)
+        }
+        try expectBoundary(Validate.textLength) {
+            CreateSSFStreamRequest(
+                name: "stream", description: nil, transmitterURL: "https://example.com",
+                authToken: nil, expectedIssuer: $0, expectedAudience: nil,
+                deliveryMethod: .push, eventsRequested: nil)
+        }
+        try expectBoundary(Validate.textLength) {
+            RegistryPullSecretController.CreateRegistryPullSecretRequest(
+                registry: "ghcr.io", username: "user", secret: $0)
+        }
+        try expectBoundary(Validate.textLength) {
+            RegistryPullSecretController.UpdateRegistryPullSecretRequest(username: nil, secret: $0)
+        }
+        try expectBoundary(Validate.textLength) {
+            ServiceAccountController.CreateServiceAccountRequest(name: "account", description: $0)
+        }
+        try expectBoundary(Validate.textLength) {
+            ServiceAccountController.UpdateServiceAccountRequest(description: $0)
+        }
+        try expectBoundary(Validate.textLength) {
+            CreateSiteRequest(name: "site", description: $0, organizationId: id)
+        }
+        try expectBoundary(Validate.textLength) {
+            UpdateSiteRequest(description: $0)
+        }
+        try expectBoundary(Validate.textLength) {
+            CreateSecurityGroupRuleRequest(
+                direction: .ingress, ethertype: .ipv4, description: $0)
+        }
+    }
+
     private func withApp(
         _ test: (Application, User, Project, Image, String) async throws -> Void
     ) async throws {
@@ -230,6 +402,122 @@ final class InputSizeBoundTests {
             throw error
         }
         try await app.shutdownForTesting()
+    }
+
+    @Test("IAM writes reject empty and oversized names before PostgreSQL")
+    func iamWriteBoundaries() async throws {
+        try await withApp { app, _, org, _, _, token in
+            app.guardrailAnalyzer = PermissiveGuardrailAnalyzer()
+            let orgID = try org.requireID()
+            let cedarText =
+                """
+                forbid (
+                    principal,
+                    action,
+                    resource in Organization::"\(orgID.uuidString.lowercased())"
+                );
+                """
+
+            func post<Body: Content>(_ path: String, _ body: Body) async throws -> HTTPStatus {
+                var status = HTTPStatus.internalServerError
+                try await app.test(.POST, path) { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(body)
+                } afterResponse: { res in
+                    status = res.status
+                }
+                return status
+            }
+
+            func policy(_ name: String, description: String? = nil) -> PolicyController.CreatePolicyRequest {
+                PolicyController.CreatePolicyRequest(
+                    name: name, description: description, ownerType: .organization,
+                    ownerId: orgID, cedarText: cedarText, enabled: nil, id: nil)
+            }
+            func role(_ name: String, description: String? = nil) -> RoleController.CreateRoleRequest {
+                RoleController.CreateRoleRequest(
+                    name: name, description: description, ownerType: .organization,
+                    ownerId: orgID, actions: ["vm:read"], cedarText: nil, id: nil)
+            }
+            func guardrail(
+                _ name: String, description: String? = nil
+            ) -> GuardrailController.CreateGuardrailRequest {
+                GuardrailController.CreateGuardrailRequest(
+                    name: name, description: description, effect: nil,
+                    nodeType: "organization", nodeId: orgID.uuidString,
+                    actions: ["vm:delete"], principalMatch: nil, resourceMatch: nil,
+                    cedarText: nil, enabled: nil)
+            }
+
+            #expect(
+                try await post(
+                    "/api/iam/policies", policy(self.string(Validate.nameLength)))
+                    == .created)
+            #expect(
+                try await post(
+                    "/api/iam/policies", policy(self.string(Validate.nameLength + 1)))
+                    == .badRequest)
+            #expect(try await post("/api/iam/policies", policy("   ")) == .badRequest)
+            #expect(
+                try await post("/api/iam/policies", policy(self.string(4_000)))
+                    == .badRequest)
+            #expect(
+                try await post(
+                    "/api/iam/policies",
+                    policy("policy-description-at-limit", description: self.string(Validate.textLength)))
+                    == .created)
+            #expect(
+                try await post(
+                    "/api/iam/policies",
+                    policy("policy-description-over-limit", description: self.string(Validate.textLength + 1)))
+                    == .badRequest)
+
+            #expect(
+                try await post(
+                    "/api/iam/roles", role(self.string(Validate.nameLength)))
+                    == .created)
+            #expect(
+                try await post(
+                    "/api/iam/roles", role(self.string(Validate.nameLength + 1)))
+                    == .badRequest)
+            #expect(try await post("/api/iam/roles", role("")) == .badRequest)
+            #expect(
+                try await post(
+                    "/api/iam/roles",
+                    role("role-description-at-limit", description: self.string(Validate.textLength)))
+                    == .created)
+            #expect(
+                try await post(
+                    "/api/iam/roles",
+                    role("role-description-over-limit", description: self.string(Validate.textLength + 1)))
+                    == .badRequest)
+
+            #expect(
+                try await post(
+                    "/api/iam/guardrails", guardrail(self.string(Validate.nameLength)))
+                    == .created)
+            #expect(
+                try await post(
+                    "/api/iam/guardrails", guardrail(self.string(Validate.nameLength + 1)))
+                    == .badRequest)
+            #expect(try await post("/api/iam/guardrails", guardrail("   ")) == .badRequest)
+            #expect(
+                try await post(
+                    "/api/iam/guardrails",
+                    guardrail("guardrail-description-at-limit", description: self.string(Validate.textLength)))
+                    == .created)
+            #expect(
+                try await post(
+                    "/api/iam/guardrails",
+                    guardrail(
+                        "guardrail-description-over-limit",
+                        description: self.string(Validate.textLength + 1)))
+                    == .badRequest)
+
+            #expect(try await IAMPolicy.query(on: app.db).count() == 2)
+            #expect(try await IAMRoleDefinition.query(on: app.db).filter(\.$managed == false).count() == 2)
+            #expect(try await Guardrail.query(on: app.db).count() == 2)
+        }
     }
 
     /// Mirrors `VMController`'s private `CreateVMRequest` closely enough to

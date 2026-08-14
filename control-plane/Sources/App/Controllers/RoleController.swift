@@ -74,8 +74,8 @@ struct RoleController: RouteCollection {
         }
     }
 
-    struct CreateRoleRequest: Content {
-        let name: String
+    struct CreateRoleRequest: Content, ValidatedRequestBody {
+        var name: String
         let description: String?
         let ownerType: IAMRoleOwnerType
         let ownerId: UUID
@@ -90,13 +90,23 @@ struct RoleController: RouteCollection {
         /// is the only one that can be used.
         let cedarText: String?
         let id: UUID?
+
+        mutating func validate() throws {
+            name = try Validate.name(name)
+            try Validate.text(description)
+        }
     }
 
-    struct UpdateRoleRequest: Content {
-        let name: String?
+    struct UpdateRoleRequest: Content, ValidatedRequestBody {
+        var name: String?
         let description: String?
         let actions: [String]?
         let cedarText: String?
+
+        mutating func validate() throws {
+            name = try Validate.name(name)
+            try Validate.text(description)
+        }
     }
 
     /// `POST /api/iam/roles/validate` — compile without saving.
@@ -227,7 +237,7 @@ struct RoleController: RouteCollection {
     /// POST /api/iam/roles
     func create(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let payload = try req.content.decode(CreateRoleRequest.self)
+        let payload = try req.content.decodeValidated(CreateRoleRequest.self)
         let owner = try IAMPolicySetOwner(creating: payload.ownerType, id: payload.ownerId, kind: .role)
         try await owner.requireExists(on: req.db)
         try await owner.requirePolicyAdmin(write: true, req: req)
@@ -268,7 +278,7 @@ struct RoleController: RouteCollection {
         }
         try await owner.requirePolicyAdmin(write: true, req: req)
 
-        let payload = try req.content.decode(UpdateRoleRequest.self)
+        let payload = try req.content.decodeValidated(UpdateRoleRequest.self)
         // A body that touches neither the permit nor the labels is a no-op
         // request, not a version bump.
         let rewritesPermit = payload.actions != nil || payload.cedarText != nil

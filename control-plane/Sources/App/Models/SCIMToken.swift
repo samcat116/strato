@@ -117,9 +117,13 @@ extension SCIMToken: Content {}
 
 // MARK: - DTOs
 
-struct CreateSCIMTokenRequest: Content {
-    let name: String
+struct CreateSCIMTokenRequest: Content, ValidatedRequestBody {
+    var name: String
     let expiresInDays: Int?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+    }
 }
 
 struct CreateSCIMTokenResponse: Content {
@@ -164,7 +168,11 @@ struct SCIMTokenResponse: Content {
     }
 }
 
-struct UpdateSCIMTokenRequest: Content {
-    let name: String?
+struct UpdateSCIMTokenRequest: Content, ValidatedRequestBody {
+    var name: String?
     let isActive: Bool?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+    }
 }

@@ -56,7 +56,7 @@ struct APIKeyController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        let createRequest = try req.content.decode(CreateAPIKeyRequest.self)
+        let createRequest = try req.content.decodeValidated(CreateAPIKeyRequest.self)
 
         // `issuedUnder` is defense in depth: `CredentialRestrictionMiddleware`
         // already refuses a restricted credential this route, and this refuses
@@ -131,7 +131,7 @@ struct APIKeyController: RouteCollection {
             throw Abort(.notFound)
         }
 
-        let updateRequest = try req.content.decode(UpdateAPIKeyRequest.self)
+        let updateRequest = try req.content.decodeValidated(UpdateAPIKeyRequest.self)
 
         // Update fields
         if let name = updateRequest.name {

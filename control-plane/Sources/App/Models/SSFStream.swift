@@ -197,8 +197,8 @@ extension SSFStream {
 
 // MARK: - DTOs
 
-struct CreateSSFStreamRequest: Content {
-    let name: String
+struct CreateSSFStreamRequest: Content, ValidatedRequestBody {
+    var name: String
     let description: String?
     let transmitterURL: String
     let authToken: String?
@@ -206,16 +206,28 @@ struct CreateSSFStreamRequest: Content {
     let expectedAudience: [String]?
     let deliveryMethod: SSFDeliveryMethod
     let eventsRequested: [String]?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+        try Validate.text(expectedIssuer, "expectedIssuer")
+    }
 }
 
-struct UpdateSSFStreamRequest: Content {
-    let name: String?
+struct UpdateSSFStreamRequest: Content, ValidatedRequestBody {
+    var name: String?
     let description: String?
     let authToken: String?
     let expectedIssuer: String?
     let expectedAudience: [String]?
     let eventsRequested: [String]?
     let enabled: Bool?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+        try Validate.text(expectedIssuer, "expectedIssuer")
+    }
 }
 
 struct SSFStreamResponse: Content {

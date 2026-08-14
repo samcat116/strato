@@ -10780,6 +10780,8 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 128
         cidr:
           type: string
         gateway:
@@ -11011,6 +11013,7 @@ components:
           description: Log the packets this rule matches. Defaults to false.
         description:
           type: string
+          maxLength: 4096
     AttachSecurityGroupRequest:
       type: object
       description: >-
@@ -11664,6 +11667,8 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 128
         restriction:
           $ref: "#/components/schemas/CredentialRestriction"
         expiresInDays:
@@ -11702,6 +11707,8 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 128
         restriction:
           $ref: "#/components/schemas/CredentialRestriction"
         isActive:
@@ -13223,14 +13230,18 @@ components:
         name:
           type: string
           description: Unique within the project. 1-128 characters.
+          minLength: 1
+          maxLength: 128
         description:
           type: string
+          maxLength: 4096
 
     UpdateServiceAccountRequest:
       type: object
       properties:
         description:
           type: string
+          maxLength: 4096
 
     SetSeededRoleRequest:
       type: object
@@ -13333,6 +13344,8 @@ components:
           format: uuid
         displayName:
           type: string
+          minLength: 1
+          maxLength: 128
 
     RegistryPullSecret:
       type: object
@@ -13368,9 +13381,13 @@ components:
           description: Registry host, e.g. `ghcr.io`. Normalized before storage.
         username:
           type: string
+          minLength: 1
+          maxLength: 128
         secret:
           type: string
           description: Write-only; encrypted at rest.
+          minLength: 1
+          maxLength: 4096
 
     UpdateRegistryPullSecretRequest:
       type: object
@@ -13378,9 +13395,13 @@ components:
       properties:
         username:
           type: string
+          minLength: 1
+          maxLength: 128
         secret:
           type: string
           description: Write-only replacement secret.
+          minLength: 1
+          maxLength: 4096
 
     ResourceQuota:
       type: object
@@ -14439,9 +14460,10 @@ components:
         name:
           type: string
           minLength: 1
-          maxLength: 100
+          maxLength: 128
         description:
           type: string
+          maxLength: 4096
           nullable: true
         organizationId:
           type: string
@@ -14484,6 +14506,7 @@ components:
       properties:
         description:
           type: string
+          maxLength: 4096
           nullable: true
         networkControllerAgentId:
           type: string
@@ -16349,6 +16372,8 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 128
         expiresInDays:
           type: integer
           description: Days until expiry; omit or use a non-positive value for no expiry.
@@ -16386,6 +16411,8 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 128
         isActive:
           type: boolean
 
@@ -16781,8 +16808,11 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 128
         description:
           type: string
+          maxLength: 4096
         transmitterURL:
           type: string
           description: The transmitter's base or configuration URL (validated).
@@ -16791,6 +16821,7 @@ components:
           description: Bearer token for outbound calls to the transmitter; stored encrypted.
         expectedIssuer:
           type: string
+          maxLength: 4096
         expectedAudience:
           type: array
           items:
@@ -16808,12 +16839,16 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 128
         description:
           type: string
+          maxLength: 4096
         authToken:
           type: string
         expectedIssuer:
           type: string
+          maxLength: 4096
         expectedAudience:
           type: array
           items:
@@ -16930,6 +16965,8 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 128
         url:
           type: string
           description: The https/http endpoint to POST events to.
@@ -16948,6 +16985,8 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 128
         url:
           type: string
         eventTypes:

@@ -65,8 +65,8 @@ struct LoadBalancerController: RouteCollection {
     @Sendable
     func create(req: Request) async throws -> LoadBalancerResponse {
         let user = try req.auth.require(User.self)
-        let request = try req.content.decode(CreateLoadBalancerRequest.self)
-        let name = try Self.validatedName(request.name)
+        let request = try req.content.decodeValidated(CreateLoadBalancerRequest.self)
+        let name = request.name
         let healthCheck = request.healthCheck ?? .disabled
         try healthCheck.validate()
 
@@ -125,13 +125,13 @@ struct LoadBalancerController: RouteCollection {
     @Sendable
     func update(req: Request) async throws -> LoadBalancerResponse {
         let loadBalancer = try await find(req, action: "loadbalancer:update")
-        let request = try req.content.decode(UpdateLoadBalancerRequest.self)
+        let request = try req.content.decodeValidated(UpdateLoadBalancerRequest.self)
         let id = try loadBalancer.requireID()
 
         if request.name == nil, request.protocol == nil, request.healthCheck == nil {
             return try await response(for: loadBalancer, on: req.db)
         }
-        let name = try request.name.map(Self.validatedName)
+        let name = request.name
         try request.healthCheck?.validate()
 
         do {
@@ -424,14 +424,6 @@ struct LoadBalancerController: RouteCollection {
             result.append((backend, interface))
         }
         return result
-    }
-
-    private static func validatedName(_ raw: String) throws -> String {
-        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, name.count <= 100 else {
-            throw Abort(.badRequest, reason: "Load balancer name must be 1-100 characters")
-        }
-        return name
     }
 
     private static func validatePort(_ port: Int, name: String) throws {

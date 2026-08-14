@@ -430,6 +430,8 @@ CREATE TABLE public.iam_guardrails (
     updated_at timestamp with time zone,
     cedar_text text,
     authored boolean DEFAULT false NOT NULL,
+    CONSTRAINT ck_iam_guardrails_description_length CHECK ((char_length(description) <= 4096)),
+    CONSTRAINT ck_iam_guardrails_name_length CHECK ((char_length(name) <= 128)),
     CONSTRAINT iam_guardrails_forbid_only CHECK ((effect = 'forbid'::text))
 );
 
@@ -450,6 +452,8 @@ CREATE TABLE public.iam_policies (
     created_by uuid,
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
+    CONSTRAINT ck_iam_policies_description_length CHECK ((char_length(description) <= 4096)),
+    CONSTRAINT ck_iam_policies_name_length CHECK ((char_length(name) <= 128)),
     CONSTRAINT iam_policies_effect_check CHECK ((effect = ANY (ARRAY['permit'::text, 'forbid'::text])))
 );
 
@@ -482,7 +486,9 @@ CREATE TABLE public.iam_roles (
     managed boolean NOT NULL,
     created_by uuid,
     created_at timestamp with time zone,
-    updated_at timestamp with time zone
+    updated_at timestamp with time zone,
+    CONSTRAINT ck_iam_roles_description_length CHECK ((char_length(description) <= 4096)),
+    CONSTRAINT ck_iam_roles_name_length CHECK ((char_length(name) <= 128))
 );
 
 

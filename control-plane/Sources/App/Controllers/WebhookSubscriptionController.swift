@@ -47,11 +47,7 @@ struct WebhookSubscriptionController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        let request = try req.content.decode(CreateWebhookSubscriptionRequest.self)
-        let name = request.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else {
-            throw Abort(.badRequest, reason: "Webhook name must not be empty")
-        }
+        let request = try req.content.decodeValidated(CreateWebhookSubscriptionRequest.self)
         try await validateTargetURL(request.url, on: req)
         let eventTypes = try parseEventTypes(request.eventTypes)
         if let projectID = request.projectId {
@@ -62,7 +58,7 @@ struct WebhookSubscriptionController: RouteCollection {
         let subscription = WebhookSubscription(
             organizationID: organizationID,
             projectID: request.projectId,
-            name: name,
+            name: request.name,
             url: request.url,
             eventTypes: eventTypes,
             signingSecret: try req.secretsEncryption.encrypt(secret),
@@ -90,13 +86,9 @@ struct WebhookSubscriptionController: RouteCollection {
         try await OrganizationAccessService.requireAdmin(
             organizationID: subscription.$organization.id, on: req)
 
-        let request = try req.content.decode(UpdateWebhookSubscriptionRequest.self)
+        let request = try req.content.decodeValidated(UpdateWebhookSubscriptionRequest.self)
         if let name = request.name {
-            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                throw Abort(.badRequest, reason: "Webhook name must not be empty")
-            }
-            subscription.name = trimmed
+            subscription.name = name
         }
         if let url = request.url {
             try await validateTargetURL(url, on: req)

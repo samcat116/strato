@@ -19,19 +19,37 @@ struct RegistryPullSecretController: RouteCollection {
 
     // MARK: - DTOs
 
-    struct CreateRegistryPullSecretRequest: Content {
+    struct CreateRegistryPullSecretRequest: Content, ValidatedRequestBody {
         /// Registry host, e.g. `ghcr.io` — normalized like image references,
         /// so `https://index.docker.io/` and `docker.io` are the same entry.
         let registry: String
-        let username: String
+        var username: String
         let secret: String
+
+        mutating func validate() throws {
+            username = try Validate.name(username, "username")
+            guard !secret.isEmpty else {
+                throw Abort(.badRequest, reason: "'secret' must not be empty")
+            }
+            try Validate.text(secret, "secret")
+        }
     }
 
-    struct UpdateRegistryPullSecretRequest: Content {
-        let username: String?
+    struct UpdateRegistryPullSecretRequest: Content, ValidatedRequestBody {
+        var username: String?
         /// Replacement secret. Omitted means keep the stored one — there is
         /// no way to read a secret back out through the API.
         let secret: String?
+
+        mutating func validate() throws {
+            username = try Validate.name(username, "username")
+            if let secret {
+                guard !secret.isEmpty else {
+                    throw Abort(.badRequest, reason: "'secret' must not be empty")
+                }
+                try Validate.text(secret, "secret")
+            }
+        }
     }
 
     // MARK: - Handlers
@@ -54,15 +72,8 @@ struct RegistryPullSecretController: RouteCollection {
         try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
         let projectID = try project.requireID()
 
-        let createRequest = try req.content.decode(CreateRegistryPullSecretRequest.self)
+        let createRequest = try req.content.decodeValidated(CreateRegistryPullSecretRequest.self)
         let registry = try Self.normalizeRegistry(createRequest.registry)
-        let username = createRequest.username.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !username.isEmpty else {
-            throw Abort(.badRequest, reason: "'username' must not be empty")
-        }
-        guard !createRequest.secret.isEmpty else {
-            throw Abort(.badRequest, reason: "'secret' must not be empty")
-        }
 
         let existing = try await RegistryPullSecret.query(on: req.db)
             .filter(\.$project.$id == projectID)
@@ -77,7 +88,7 @@ struct RegistryPullSecretController: RouteCollection {
         let pullSecret = RegistryPullSecret(
             projectID: projectID,
             registry: registry,
-            username: username,
+            username: createRequest.username,
             secret: try req.secretsEncryption.encrypt(createRequest.secret)
         )
         try await pullSecret.save(on: req.db)
@@ -102,18 +113,11 @@ struct RegistryPullSecretController: RouteCollection {
         try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
         let pullSecret = try await loadSecret(req, in: project)
 
-        let updateRequest = try req.content.decode(UpdateRegistryPullSecretRequest.self)
+        let updateRequest = try req.content.decodeValidated(UpdateRegistryPullSecretRequest.self)
         if let username = updateRequest.username {
-            let trimmed = username.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                throw Abort(.badRequest, reason: "'username' must not be empty")
-            }
-            pullSecret.username = trimmed
+            pullSecret.username = username
         }
         if let secret = updateRequest.secret {
-            guard !secret.isEmpty else {
-                throw Abort(.badRequest, reason: "'secret' must not be empty")
-            }
             pullSecret.secret = try req.secretsEncryption.encrypt(secret)
         }
 

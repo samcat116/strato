@@ -239,8 +239,8 @@ struct SiteResponse: Content {
     }
 }
 
-struct CreateSiteRequest: Content {
-    let name: String
+struct CreateSiteRequest: Content, ValidatedRequestBody {
+    var name: String
     let description: String?
     /// Owning scope; exactly one of the two is required.
     let organizationId: UUID?
@@ -276,6 +276,11 @@ struct CreateSiteRequest: Content {
         self.regionCode = regionCode
         self.labels = labels
     }
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+    }
 }
 
 /// Full-replace (PUT) semantics for descriptive fields: `description`,
@@ -287,7 +292,7 @@ struct CreateSiteRequest: Content {
 /// resetting a drained/maintenance site to `active` on an unrelated edit would
 /// be a real footgun, so an omitted `status` leaves the current value
 /// unchanged. Send it explicitly to change it.
-struct UpdateSiteRequest: Content {
+struct UpdateSiteRequest: Content, ValidatedRequestBody {
     let description: String?
     let networkControllerAgentId: UUID?
     let status: SiteStatus?
@@ -315,5 +320,9 @@ struct UpdateSiteRequest: Content {
         self.locationLabel = locationLabel
         self.regionCode = regionCode
         self.labels = labels
+    }
+
+    mutating func validate() throws {
+        try Validate.text(description)
     }
 }

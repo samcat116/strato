@@ -107,8 +107,8 @@ struct GuardrailController: RouteCollection {
         }
     }
 
-    struct CreateGuardrailRequest: Content {
-        let name: String
+    struct CreateGuardrailRequest: Content, ValidatedRequestBody {
+        var name: String
         let description: String?
         /// Optional, and only ever `forbid`. A request naming anything else is
         /// rejected rather than silently coerced.
@@ -125,9 +125,14 @@ struct GuardrailController: RouteCollection {
         /// a `400`.
         let cedarText: String?
         let enabled: Bool?
+
+        mutating func validate() throws {
+            name = try Validate.name(name)
+            try Validate.text(description)
+        }
     }
 
-    struct UpdateGuardrailRequest: Content {
+    struct UpdateGuardrailRequest: Content, ValidatedRequestBody {
         let description: String?
         let actions: [String]?
         let principalMatch: PrincipalMatchDTO?
@@ -136,6 +141,10 @@ struct GuardrailController: RouteCollection {
         /// a matcher-built guardrail — edit its matchers instead.
         let cedarText: String?
         let enabled: Bool?
+
+        mutating func validate() throws {
+            try Validate.text(description)
+        }
     }
 
     /// A guardrail write's response: the row, plus the grants it just
@@ -215,7 +224,7 @@ struct GuardrailController: RouteCollection {
     /// POST /api/iam/guardrails
     func create(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let payload = try req.content.decode(CreateGuardrailRequest.self)
+        let payload = try req.content.decodeValidated(CreateGuardrailRequest.self)
         let node = try IAMNode(resourceType: payload.nodeType, resourceId: payload.nodeId)
         try await requirePolicyAdmin(on: node, write: true, req: req)
 
@@ -282,7 +291,7 @@ struct GuardrailController: RouteCollection {
         let existing = try await find(req)
         try await requirePolicyAdmin(on: try nodeOf(existing), write: true, req: req)
 
-        let payload = try req.content.decode(UpdateGuardrailRequest.self)
+        let payload = try req.content.decodeValidated(UpdateGuardrailRequest.self)
         let principalMatch = try payload.principalMatch?.toMatch()
         let resourceMatch = try payload.resourceMatch?.toMatch()
         let name = existing.name

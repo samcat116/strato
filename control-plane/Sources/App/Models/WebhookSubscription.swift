@@ -135,18 +135,26 @@ extension WebhookSubscription {
 
 // MARK: - DTOs
 
-struct CreateWebhookSubscriptionRequest: Content {
-    let name: String
+struct CreateWebhookSubscriptionRequest: Content, ValidatedRequestBody {
+    var name: String
     let url: String
     let projectId: UUID?
     let eventTypes: [String]?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+    }
 }
 
-struct UpdateWebhookSubscriptionRequest: Content {
-    let name: String?
+struct UpdateWebhookSubscriptionRequest: Content, ValidatedRequestBody {
+    var name: String?
     let url: String?
     let eventTypes: [String]?
     let isActive: Bool?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+    }
 }
 
 struct WebhookSubscriptionResponse: Content {

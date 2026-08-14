@@ -58,7 +58,7 @@ struct SSFStreamController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        let request = try req.content.decode(CreateSSFStreamRequest.self)
+        let request = try req.content.decodeValidated(CreateSSFStreamRequest.self)
         try SSFValidation.validateTransmitterURL(
             request.transmitterURL, configuration: req.controlPlaneConfiguration)
 
@@ -94,7 +94,7 @@ struct SSFStreamController: RouteCollection {
         try await OrganizationAccessService.requireAdmin(
             organizationID: stream.$organization.id, on: req)
 
-        let request = try req.content.decode(UpdateSSFStreamRequest.self)
+        let request = try req.content.decodeValidated(UpdateSSFStreamRequest.self)
         if let name = request.name { stream.name = name }
         if let description = request.description { stream.description = description }
         if let authToken = request.authToken {

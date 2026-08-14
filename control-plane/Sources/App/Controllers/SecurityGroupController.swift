@@ -249,7 +249,7 @@ struct SecurityGroupController: RouteCollection {
     func createRule(req: Request) async throws -> SecurityGroupRuleResponse {
         let group = try await fetchGroupWithAction(req: req, action: "securitygroup:update")
         let groupId = try group.requireID()
-        let request = try req.content.decode(CreateSecurityGroupRuleRequest.self)
+        let request = try req.content.decodeValidated(CreateSecurityGroupRuleRequest.self)
 
         let protocolName = try await SecurityGroupService.validateRule(
             request, groupProjectID: group.$project.id, on: req.db)
