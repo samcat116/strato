@@ -3,7 +3,16 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChevronRight, CircleUser, LogOut, Monitor, Moon, Sun } from "lucide-react";
+import {
+  Check,
+  ChevronRight,
+  CircleUser,
+  LogOut,
+  Monitor,
+  Moon,
+  Plus,
+  Sun,
+} from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -19,7 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { UserAvatar } from "@/components/ui/user-avatar";
-import { OrganizationSwitcher } from "./organization-switcher";
+import { CreateOrganizationDialog } from "./create-organization-dialog";
 import { ProjectSwitcher } from "./project-switcher";
 import { isNavActive, isSectionActive, navTree, type NavItem } from "./nav";
 import { versionLabel, versionTitle } from "@/lib/version";
@@ -144,15 +153,31 @@ function ThemeToggle() {
 
 function UserCard({ onNavigate }: { onNavigate?: () => void }) {
   const { user, logout } = useAuth();
-  const { currentOrg } = useOrganization();
+  const { currentOrg, organizations, switchOrg, refresh } = useOrganization();
+  const [createOrganizationOpen, setCreateOrganizationOpen] = useState(false);
 
   const role = user?.isSystemAdmin ? "Admin" : (currentOrg?.userRole ?? "Member");
+
+  const handleOrganizationSwitch = async (organizationId: string) => {
+    try {
+      await switchOrg(organizationId);
+      onNavigate?.();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Organization switch failed"
+      );
+    }
+  };
 
   return (
     <div className="mt-1.5 border-t border-border/60 pt-1.5">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button className="flex w-full items-center gap-2.5 rounded-[7px] px-2 py-2 text-left transition-colors hover:bg-muted">
+          <button
+            type="button"
+            aria-label="Open user menu"
+            className="flex w-full items-center gap-2.5 rounded-[7px] px-2 py-2 text-left transition-colors hover:bg-muted"
+          >
             <UserAvatar email={user?.email} name={user?.displayName || user?.username} size={28} />
             <div className="min-w-0 leading-snug">
               <div className="truncate text-xs font-semibold">
@@ -168,6 +193,28 @@ function UserCard({ onNavigate }: { onNavigate?: () => void }) {
           <DropdownMenuLabel className="truncate text-xs font-normal text-muted-foreground">
             {user?.email}
           </DropdownMenuLabel>
+          {organizations.length > 1 && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-[0.6px] text-muted-foreground">
+                Organization
+              </DropdownMenuLabel>
+              <div className="max-h-48 overflow-y-auto">
+                {organizations.map((organization) => (
+                  <DropdownMenuItem
+                    key={organization.id}
+                    onClick={() => void handleOrganizationSwitch(organization.id)}
+                    className="cursor-pointer"
+                  >
+                    <span className="flex-1 truncate">{organization.name}</span>
+                    {currentOrg?.id === organization.id && (
+                      <Check className="h-4 w-4" />
+                    )}
+                  </DropdownMenuItem>
+                ))}
+              </div>
+            </>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-[0.6px] text-muted-foreground">
             Theme
@@ -179,6 +226,13 @@ function UserCard({ onNavigate }: { onNavigate?: () => void }) {
               <CircleUser className="mr-2 h-4 w-4" />
               Profile &amp; passkeys
             </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={() => setCreateOrganizationOpen(true)}
+            className="cursor-pointer"
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            Create organization
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
@@ -194,6 +248,11 @@ function UserCard({ onNavigate }: { onNavigate?: () => void }) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <CreateOrganizationDialog
+        open={createOrganizationOpen}
+        onOpenChange={setCreateOrganizationOpen}
+        onCreated={refresh}
+      />
     </div>
   );
 }
@@ -219,8 +278,7 @@ export function Sidebar({
         <span className="font-mono text-[15px] font-bold tracking-tight">Strato</span>
       </div>
 
-      <OrganizationSwitcher />
-      <div className="mb-3.5 lg:hidden">
+      <div className="mb-3.5">
         <ProjectSwitcher onSelection={onNavigate} />
       </div>
 

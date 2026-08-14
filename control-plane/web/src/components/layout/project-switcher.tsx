@@ -32,13 +32,17 @@ export function ProjectSwitcher({ onSelection }: { onSelection?: () => void }) {
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <button className="flex h-8 items-center gap-1.5 rounded-[7px] border border-border bg-background px-2.5 text-[12.5px] font-medium transition-colors hover:bg-accent">
+        <button
+          type="button"
+          aria-label="Switch project"
+          className="flex w-full items-center gap-2 rounded-[7px] border border-border bg-background px-[9px] py-[7px] text-[12.5px] font-semibold transition-colors hover:bg-accent"
+        >
           <FolderKanban className="h-3.5 w-3.5 text-muted-foreground" strokeWidth={1.6} />
-          <span className="max-w-40 truncate">{label}</span>
-          <ChevronDown className="h-3 w-3 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+          <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
+      <DropdownMenuContent align="start" className="w-56">
         <DropdownMenuLabel className="text-xs font-medium uppercase text-muted-foreground">
           Switch Project
         </DropdownMenuLabel>

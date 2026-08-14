@@ -6,7 +6,6 @@ import { Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { CommandPalette } from "./command-palette";
-import { ProjectSwitcher } from "./project-switcher";
 import { Sidebar } from "./sidebar";
 import { pageTitle } from "./nav";
 
@@ -36,9 +35,6 @@ export function Header() {
       </Dialog>
       <span className="text-[13px] font-semibold">{pageTitle(pathname)}</span>
       <div className="flex-1" />
-      <div className="hidden sm:block">
-        <ProjectSwitcher />
-      </div>
       <CommandPalette />
     </header>
   );
