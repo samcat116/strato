@@ -5317,9 +5317,10 @@ export interface components {
             id?: string;
             /**
              * Format: uuid
-             * @description Legacy field equal to `resourceId`; retained for existing clients. New clients should read `resourceKind`/`resourceId`.
+             * @deprecated
+             * @description Deprecated compatibility alias equal to `resourceId`; it remains populated during its deprecation cycle, but clients must use `resourceKind`/`resourceId` instead.
              */
-            vmId: string;
+            vmId?: string;
             resourceKind: components["schemas"]["OperationResourceKind"];
             /** Format: uuid */
             resourceId: string;
