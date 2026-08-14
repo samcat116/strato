@@ -1,11 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Plus, Trash2 } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+} from "lucide-react";
+import { toast } from "sonner";
+import { KpiCard, reservedPercent } from "@/components/overview";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -14,8 +23,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
+import { useResourceList } from "@/components/ui/resource-list-controls";
 import {
   Select,
   SelectContent,
@@ -23,6 +41,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -31,14 +50,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Skeleton } from "@/components/ui/skeleton";
-import { QueryErrorNotice } from "@/components/ui/query-error-notice";
-import { ResourceListControls, useResourceList } from "@/components/ui/resource-list-controls";
 import { sitesApi } from "@/lib/api/sites";
-import { useAgents, useSites, usePermissions } from "@/lib/hooks";
+import {
+  isAgentsForbidden,
+  useAgents,
+  usePermissions,
+  useSites,
+  useVMs,
+} from "@/lib/hooks";
+import { cn } from "@/lib/utils";
 import { useOrganization } from "@/providers";
-import type { Site, SiteStatus } from "@/types/api";
-import { toast } from "sonner";
+import type { Agent, Site, SiteStatus, UpdateSiteRequest, VM } from "@/types/api";
 
 const SITE_STATUSES: SiteStatus[] = [
   "active",
@@ -47,593 +69,796 @@ const SITE_STATUSES: SiteStatus[] = [
   "decommissioned",
 ];
 
-const statusBadgeVariant = (
-  status: SiteStatus
-): "default" | "secondary" | "outline" => {
-  switch (status) {
-    case "active":
-      return "default";
-    case "decommissioned":
-      return "outline";
-    default:
-      return "secondary";
-  }
+type DisplayStatus = "healthy" | "degraded" | "provisioning";
+type StatusFilter = "all" | DisplayStatus;
+
+const STATUS_STYLES: Record<DisplayStatus, { label: string; dot: string }> = {
+  healthy: { label: "Healthy", dot: "#16a34a" },
+  degraded: { label: "Degraded", dot: "#d97706" },
+  provisioning: { label: "Provisioning", dot: "#94a3b8" },
 };
 
-/** Parse a `key=value, key2=value2` string into a labels map (blank → {}). */
-const parseLabels = (input: string): Record<string, string> => {
+interface SiteFormState {
+  name: string;
+  description: string;
+  status: SiteStatus;
+  regionCode: string;
+  locationLabel: string;
+  latitude: string;
+  longitude: string;
+  labels: string;
+  networkControllerAgentId: string;
+}
+
+const EMPTY_FORM: SiteFormState = {
+  name: "",
+  description: "",
+  status: "active",
+  regionCode: "",
+  locationLabel: "",
+  latitude: "",
+  longitude: "",
+  labels: "",
+  networkControllerAgentId: "",
+};
+
+function labelsToInput(labels: Record<string, string>): string {
+  return Object.entries(labels)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(", ");
+}
+
+function parseLabels(input: string): Record<string, string> {
   const labels: Record<string, string> = {};
   for (const pair of input.split(",")) {
     const trimmed = pair.trim();
     if (!trimmed) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq === -1) continue;
-    const key = trimmed.slice(0, eq).trim();
-    const value = trimmed.slice(eq + 1).trim();
+    const separator = trimmed.indexOf("=");
+    if (separator === -1) continue;
+    const key = trimmed.slice(0, separator).trim();
+    const value = trimmed.slice(separator + 1).trim();
     if (key) labels[key] = value;
   }
   return labels;
-};
+}
+
+function displayStatus(
+  site: Site,
+  members: Agent[],
+  agentsKnown: boolean
+): DisplayStatus {
+  if (agentsKnown && members.length === 0 && site.status === "active") {
+    return "provisioning";
+  }
+  if (
+    site.status === "active" &&
+    site.networkControllerAgentId &&
+    !site.networkControllerIssue &&
+    (!site.networkControllerStatus || site.networkControllerStatus === "online")
+  ) {
+    return "healthy";
+  }
+  return "degraded";
+}
+
+function siteMembers(siteId: string, agents: Agent[]): Agent[] {
+  return agents.filter((agent) => agent.siteId === siteId);
+}
+
+function siteInstances(siteId: string, agents: Agent[], vms: VM[]): VM[] {
+  const agentIds = new Set(
+    agents
+      .filter((agent) => agent.siteId === siteId)
+      .map((agent) => agent.id.toLowerCase())
+  );
+  return vms.filter(
+    (vm) => vm.hypervisorId && agentIds.has(vm.hypervisorId.toLowerCase())
+  );
+}
+
+function siteCapacity(members: Agent[]): number {
+  const online = members.filter((agent) => agent.isOnline);
+  const total = online.reduce((sum, agent) => sum + agent.resources.totalCPU, 0);
+  const available = online.reduce(
+    (sum, agent) => sum + agent.resources.availableCPU,
+    0
+  );
+  return reservedPercent(total, available);
+}
+
+function SiteFootprint({
+  sites,
+  agents,
+  agentsKnown,
+  canManage,
+  onEdit,
+}: {
+  sites: Site[];
+  agents: Agent[];
+  agentsKnown: boolean;
+  canManage: (site: Site) => boolean;
+  onEdit: (site: Site) => void;
+}) {
+  const mappedSites = sites.filter(
+    (site) =>
+      typeof site.latitude === "number" && typeof site.longitude === "number"
+  );
+  const regionCount = new Set(
+    sites.map((site) => site.regionCode).filter((region): region is string => !!region)
+  ).size;
+
+  return (
+    <section className="overflow-hidden rounded-[11px] border border-border bg-card">
+      <div className="flex flex-col gap-3 border-b border-border px-[18px] py-3.5 sm:flex-row sm:items-center">
+        <div className="flex items-baseline gap-3">
+          <h2 className="text-[13.5px] font-semibold">Global footprint</h2>
+          <span className="font-mono text-[11.5px] text-muted-foreground">
+            {sites.length} {sites.length === 1 ? "site" : "sites"} · {regionCount}{" "}
+            {regionCount === 1 ? "region" : "regions"}
+          </span>
+        </div>
+        <div className="flex-1" />
+        <div className="flex flex-wrap gap-4 font-mono text-[11.5px] text-muted-foreground">
+          {(Object.keys(STATUS_STYLES) as DisplayStatus[]).map((status) => (
+            <span key={status} className="flex items-center gap-1.5">
+              <span
+                className="h-2.5 w-2.5 rounded-full"
+                style={{ background: STATUS_STYLES[status].dot }}
+              />
+              {STATUS_STYLES[status].label}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div className="relative h-[330px] overflow-hidden bg-background/35 sm:h-[370px]">
+        <svg
+          aria-hidden="true"
+          className="absolute inset-0 h-full w-full text-slate-300 dark:text-slate-600"
+          viewBox="0 0 1000 360"
+          preserveAspectRatio="xMidYMid meet"
+        >
+          <defs>
+            <pattern id="site-map-dots" width="14" height="14" patternUnits="userSpaceOnUse">
+              <circle cx="3" cy="3" r="2.2" fill="currentColor" />
+            </pattern>
+          </defs>
+          <g fill="url(#site-map-dots)" opacity="0.8">
+            <path d="M87 92 135 54l94 4 66 37 40 49-27 35-55 7-23 35-49-17-32-45-44-20z" />
+            <path d="m253 207 45 15 28 45-13 76-28 11-31-62-18-51z" />
+            <path d="m424 75 36-17 35 10-4 21-56 10z" />
+            <path d="m459 111 65-13 48 31 6 62-31 98-38 35-34-57 15-56-37-51z" />
+            <path d="m515 79 79-31 156 9 104 51-24 48-81 14-63-34-64 21-55-28z" />
+            <path d="m789 242 56-19 55 31-9 49-65 13-43-31z" />
+            <path d="m158 35 45-25 43 14-24 24-56 6z" />
+          </g>
+        </svg>
+
+        {mappedSites.length === 0 ? (
+          <div className="absolute inset-0 flex items-center justify-center px-6 text-center">
+            <div>
+              <div className="text-[13.5px] font-semibold">No mapped sites yet</div>
+              <div className="mt-1 max-w-sm font-mono text-[11.5px] text-muted-foreground">
+                Add latitude and longitude when editing a site to place it on the
+                footprint.
+              </div>
+            </div>
+          </div>
+        ) : (
+          mappedSites.map((site) => {
+            const members = siteMembers(site.id, agents);
+            const status = displayStatus(site, members, agentsKnown);
+            const left = ((site.longitude! + 180) / 360) * 100;
+            const top = ((90 - site.latitude!) / 180) * 100;
+            return (
+              <button
+                key={site.id}
+                type="button"
+                className={cn(
+                  "group absolute -translate-x-1/2 -translate-y-1/2 text-left",
+                  !canManage(site) && "cursor-default"
+                )}
+                style={{ left: `${left}%`, top: `${top}%` }}
+                onClick={() => canManage(site) && onEdit(site)}
+                aria-label={`${site.name}, ${STATUS_STYLES[status].label}${
+                  canManage(site) ? ", edit site" : ""
+                }`}
+              >
+                <span
+                  className="mx-auto block h-4 w-4 rounded-full border-[3px] border-card shadow-[0_1px_5px_rgba(0,0,0,0.3)] ring-1 ring-black/5 transition-transform group-hover:scale-110"
+                  style={{ background: STATUS_STYLES[status].dot }}
+                />
+                <span className="mt-1 block whitespace-nowrap rounded bg-card/85 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold shadow-sm backdrop-blur-sm">
+                  {site.name}
+                </span>
+              </button>
+            );
+          })
+        )}
+
+        {mappedSites.length > 0 && mappedSites.length < sites.length && (
+          <div className="absolute bottom-3 right-4 rounded-md bg-card/90 px-2 py-1 font-mono text-[10.5px] text-muted-foreground shadow-sm">
+            {sites.length - mappedSites.length} without coordinates
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
 
 export default function SitesPage() {
   const queryClient = useQueryClient();
-  // Sites are listed and created in the org selected in the sidebar switcher.
   const { currentOrg } = useOrganization();
-  const agentsQuery = useAgents();
   const sitesQuery = useSites();
-  const { data: agents = [] } = agentsQuery;
-  const { data: sites = [], isLoading } = sitesQuery;
+  const agentsQuery = useAgents();
+  const vmsQuery = useVMs();
+  const sites = useMemo(() => sitesQuery.data ?? [], [sitesQuery.data]);
+  const agents = useMemo(() => agentsQuery.data ?? [], [agentsQuery.data]);
+  const vms = useMemo(() => vmsQuery.data ?? [], [vmsQuery.data]);
+  const agentsKnown = agentsQuery.data !== undefined;
+  const vmsKnown = vmsQuery.data !== undefined;
+  const agentsForbidden = isAgentsForbidden(agentsQuery.error);
   const { permissions } = usePermissions([
-    ...(currentOrg ? [{ key: "create", action: "agent:manage", node: { type: "organization" as const, id: currentOrg.id } }] : []),
-    ...sites.map((site) => ({ key: `manage:${site.id}`, action: "site:manage", node: { type: "site" as const, id: site.id } })),
+    ...(currentOrg
+      ? [
+          {
+            key: "create",
+            action: "agent:manage",
+            node: { type: "organization" as const, id: currentOrg.id },
+          },
+        ]
+      : []),
+    ...sites.map((site) => ({
+      key: `manage:${site.id}`,
+      action: "site:manage",
+      node: { type: "site" as const, id: site.id },
+    })),
   ]);
-  const list = useResourceList(sites, (site) => `${site.name} ${site.description ?? ""} ${site.regionCode ?? ""} ${site.locationLabel ?? ""} ${site.status}`);
 
-  const [createOpen, setCreateOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [status, setStatus] = useState<SiteStatus>("active");
-  const [regionCode, setRegionCode] = useState("");
-  const [locationLabel, setLocationLabel] = useState("");
-  const [latitude, setLatitude] = useState("");
-  const [longitude, setLongitude] = useState("");
-  const [labelsInput, setLabelsInput] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const filteredByStatus = useMemo(
+    () =>
+      statusFilter === "all"
+        ? sites
+        : sites.filter(
+            (site) =>
+              displayStatus(site, siteMembers(site.id, agents), agentsKnown) ===
+              statusFilter
+          ),
+    [agents, agentsKnown, sites, statusFilter]
+  );
+  const list = useResourceList(
+    filteredByStatus,
+    (site) =>
+      `${site.name} ${site.description ?? ""} ${site.regionCode ?? ""} ${
+        site.locationLabel ?? ""
+      } ${site.status}`
+  );
+
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingSite, setEditingSite] = useState<Site | null>(null);
+  const [form, setForm] = useState<SiteFormState>(EMPTY_FORM);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["sites"] });
 
-  const resetForm = () => {
-    setName("");
-    setDescription("");
-    setStatus("active");
-    setRegionCode("");
-    setLocationLabel("");
-    setLatitude("");
-    setLongitude("");
-    setLabelsInput("");
+  const closeDialog = () => {
+    setDialogOpen(false);
+    setEditingSite(null);
+    setForm(EMPTY_FORM);
+  };
+
+  const openCreate = () => {
+    setEditingSite(null);
+    setForm(EMPTY_FORM);
+    setDialogOpen(true);
+  };
+
+  const openEdit = (site: Site) => {
+    setEditingSite(site);
+    setForm({
+      name: site.name,
+      description: site.description ?? "",
+      status: site.status,
+      regionCode: site.regionCode ?? "",
+      locationLabel: site.locationLabel ?? "",
+      latitude: site.latitude?.toString() ?? "",
+      longitude: site.longitude?.toString() ?? "",
+      labels: labelsToInput(site.labels ?? {}),
+      networkControllerAgentId: site.networkControllerAgentId ?? "",
+    });
+    setDialogOpen(true);
   };
 
   const createSite = useMutation({
     mutationFn: sitesApi.create,
     onSuccess: () => {
-      invalidate();
-      setCreateOpen(false);
-      resetForm();
+      void invalidate();
+      closeDialog();
       toast.success("Site created");
     },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : "Failed to create site"),
   });
 
-  // Changing lifecycle is a full-replace PUT, so echo the site's other
-  // descriptive fields to preserve them and send only the new status.
-  const updateStatus = useMutation({
-    mutationFn: ({ site, next }: { site: Site; next: SiteStatus }) =>
-      sitesApi.update(site.id, {
-        description: site.description,
-        networkControllerAgentId: site.networkControllerAgentId,
-        status: next,
-        latitude: site.latitude,
-        longitude: site.longitude,
-        locationLabel: site.locationLabel,
-        regionCode: site.regionCode,
-        labels: site.labels,
-      }),
+  const updateSite = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdateSiteRequest }) =>
+      sitesApi.update(id, data),
     onSuccess: () => {
-      invalidate();
-      toast.success("Site status updated");
+      void invalidate();
+      closeDialog();
+      toast.success("Site updated");
     },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : "Failed to update site"),
   });
 
-  // Same full-replace echo as the status change. A site with no controller
-  // reconciles no network topology at all, so this is the one-click fix for
-  // the badge the table shows in that state (issue #743).
-  const setController = useMutation({
-    mutationFn: ({ site, agentId }: { site: Site; agentId: string }) =>
-      sitesApi.update(site.id, {
-        description: site.description,
-        networkControllerAgentId: agentId,
-        status: site.status,
-        latitude: site.latitude,
-        longitude: site.longitude,
-        locationLabel: site.locationLabel,
-        regionCode: site.regionCode,
-        labels: site.labels,
-      }),
-    onSuccess: () => {
-      invalidate();
-      toast.success("Network controller designated");
-    },
-    onError: (error) =>
-      toast.error(
-        error instanceof Error ? error.message : "Failed to designate a network controller"
-      ),
-  });
-
   const deleteSite = useMutation({
     mutationFn: sitesApi.delete,
     onSuccess: () => {
-      invalidate();
+      void invalidate();
       toast.success("Site deleted");
     },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : "Failed to delete site"),
   });
 
-  const controllerName = (id?: string) =>
-    id ? (agents.find((a) => a.id === id)?.name ?? `${id.slice(0, 8)}…`) : "None";
-
-  const memberCount = (siteId: string) => agents.filter((a) => a.siteId === siteId).length;
-
-  // Members that can actually author the site's OVN topology — the only ones
-  // the API accepts as a controller.
-  const eligibleControllers = (siteId: string) =>
-    agents.filter(
-      (a) =>
-        a.siteId === siteId &&
-        a.networkCapability === "overlay"
-    );
-
-  // The designate-a-controller picker, shared by the "none designated" and
-  // "designated but unable to author" states — one PUT fixes both.
-  const designateSelect = (site: Site, placeholder: string) => (
-    <Select
-      onValueChange={(agentId) => setController.mutate({ site, agentId })}
-      disabled={!permissions[`manage:${site.id}`] || (setController.isPending && setController.variables?.site.id === site.id)}
-    >
-      <SelectTrigger className="h-8 w-[180px] border-border bg-background">
-        <SelectValue placeholder={placeholder} />
-      </SelectTrigger>
-      <SelectContent>
-        {eligibleControllers(site.id).map((agent) => (
-          <SelectItem key={agent.id} value={agent.id}>
-            {agent.name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-
-  const locationSummary = (site: Site) => {
-    const parts: string[] = [];
-    if (site.locationLabel) parts.push(site.locationLabel);
+  const handleDelete = (site: Site) => {
     if (
-      typeof site.latitude === "number" &&
-      typeof site.longitude === "number"
+      window.confirm(
+        `Delete site "${site.name}"? This cannot be undone, and sites with agents cannot be deleted.`
+      )
     ) {
-      parts.push(`${site.latitude.toFixed(4)}, ${site.longitude.toFixed(4)}`);
+      deleteSite.mutate(site.id);
     }
-    return parts;
   };
 
-  const handleCreate = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name.trim()) {
+  const handleSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!form.name.trim()) {
       toast.error("Please enter a site name");
       return;
     }
-    if (!currentOrg) {
+    if (!editingSite && !currentOrg) {
       toast.error("Select an organization before creating a site");
       return;
     }
-    const lat = latitude.trim() ? Number(latitude) : undefined;
-    const lon = longitude.trim() ? Number(longitude) : undefined;
-    if ((lat === undefined) !== (lon === undefined)) {
+
+    const latitude = form.latitude.trim() ? Number(form.latitude) : undefined;
+    const longitude = form.longitude.trim() ? Number(form.longitude) : undefined;
+    if ((latitude === undefined) !== (longitude === undefined)) {
       toast.error("Provide both latitude and longitude, or neither");
       return;
     }
     if (
-      (lat !== undefined && Number.isNaN(lat)) ||
-      (lon !== undefined && Number.isNaN(lon))
+      (latitude !== undefined &&
+        (Number.isNaN(latitude) || latitude < -90 || latitude > 90)) ||
+      (longitude !== undefined &&
+        (Number.isNaN(longitude) || longitude < -180 || longitude > 180))
     ) {
-      toast.error("Latitude and longitude must be numbers");
+      toast.error("Latitude must be -90 to 90 and longitude must be -180 to 180");
       return;
     }
-    const labels = parseLabels(labelsInput);
-    createSite.mutate({
-      name: name.trim(),
-      description: description.trim() || undefined,
-      organizationId: currentOrg.id,
-      status,
-      regionCode: regionCode.trim() || undefined,
-      locationLabel: locationLabel.trim() || undefined,
-      latitude: lat,
-      longitude: lon,
-      labels: Object.keys(labels).length ? labels : undefined,
-    });
+
+    const labels = parseLabels(form.labels);
+    const details = {
+      description: form.description.trim() || undefined,
+      status: form.status,
+      regionCode: form.regionCode.trim() || undefined,
+      locationLabel: form.locationLabel.trim() || undefined,
+      latitude,
+      longitude,
+      labels,
+    };
+
+    if (editingSite) {
+      updateSite.mutate({
+        id: editingSite.id,
+        data: {
+          ...details,
+          networkControllerAgentId:
+            form.networkControllerAgentId || editingSite.networkControllerAgentId,
+        },
+      });
+    } else {
+      createSite.mutate({
+        name: form.name.trim(),
+        organizationId: currentOrg!.id,
+        ...details,
+      });
+    }
   };
 
+  const stats = useMemo(() => {
+    const onlineAgents = agents.filter((agent) => agent.isOnline);
+    const totalCPU = onlineAgents.reduce(
+      (sum, agent) => sum + agent.resources.totalCPU,
+      0
+    );
+    const availableCPU = onlineAgents.reduce(
+      (sum, agent) => sum + agent.resources.availableCPU,
+      0
+    );
+    const provisioning = sites.filter(
+      (site) =>
+        displayStatus(site, siteMembers(site.id, agents), agentsKnown) ===
+        "provisioning"
+    ).length;
+    const usableControllers = sites.filter(
+      (site) =>
+        !!site.networkControllerAgentId &&
+        !site.networkControllerIssue &&
+        (!site.networkControllerStatus || site.networkControllerStatus === "online")
+    ).length;
+    return {
+      onlineAgents,
+      provisioning,
+      live: sites.length - provisioning,
+      fleetCapacity: reservedPercent(totalCPU, availableCPU),
+      runningVMs: vms.filter((vm) => vm.status === "Running").length,
+      controllerCoverage:
+        sites.length === 0 ? 0 : Math.round((usableControllers / sites.length) * 100),
+      usableControllers,
+    };
+  }, [agents, agentsKnown, sites, vms]);
+
+  const loading = sitesQuery.isLoading || (agentsQuery.isLoading && !agentsForbidden);
+  const mutationPending = createSite.isPending || updateSite.isPending;
+  const editableAgents = editingSite
+    ? agents.filter(
+        (agent) =>
+          agent.siteId === editingSite.id && agent.networkCapability === "overlay"
+      )
+    : [];
+  const currentControllerMissing =
+    editingSite?.networkControllerAgentId &&
+    !editableAgents.some((agent) => agent.id === editingSite.networkControllerAgentId);
+
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="mx-auto max-w-[1360px] space-y-3.5">
+      <header className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
         <div>
-          <h2 className="text-2xl font-semibold text-foreground">Sites</h2>
-          <p className="text-muted-foreground">
-            Availability zones — groups of agents sharing one network fabric
-          </p>
+          <h1 className="text-[22px] font-bold tracking-tight">Sites</h1>
+          <div className="mt-0.5 font-mono text-[12.5px] text-muted-foreground">
+            availability zones
+            {agentsKnown &&
+              ` · ${stats.live} live · ${stats.provisioning} provisioning`}
+          </div>
         </div>
-        {permissions.create && <Button
-          className="bg-primary hover:bg-primary/90"
-          onClick={() => setCreateOpen(true)}
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          Add Site
-        </Button>}
-      </div>
+        <div className="flex-1" />
+        {permissions.create && (
+          <Button
+            onClick={openCreate}
+            className="h-[34px] rounded-lg px-4 text-[12.5px] font-semibold"
+          >
+            <Plus className="h-3.5 w-3.5" strokeWidth={2.2} />
+            New site
+          </Button>
+        )}
+      </header>
 
       <QueryErrorNotice
         resource="sites"
-        error={sitesQuery.error ?? agentsQuery.error}
+        error={
+          sitesQuery.error ??
+          vmsQuery.error ??
+          (agentsForbidden ? null : agentsQuery.error)
+        }
         hasData={sitesQuery.data !== undefined}
         onRetry={() => {
           void sitesQuery.refetch();
-          void agentsQuery.refetch();
+          void vmsQuery.refetch();
+          if (!agentsForbidden) void agentsQuery.refetch();
         }}
       />
 
-      <Card className="bg-card border-border">
-        <CardHeader>
-          <CardTitle className="text-lg font-semibold text-foreground">
-            Registered Sites
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ResourceListControls label="sites" query={list.query} onQueryChange={list.setQuery} page={list.page} onPageChange={list.setPage} totalPages={list.totalPages} filteredCount={list.filteredCount} totalCount={list.totalCount} pageSize={list.pageSize} />
-          {isLoading ? (
-            <div className="space-y-2">
-              {[...Array(3)].map((_, i) => (
-                <Skeleton key={i} className="h-12 w-full bg-muted" />
-              ))}
-            </div>
-          ) : sites.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              No sites yet. A site groups agents that share one OVN deployment;
-              networks pinned to a site span its nodes.
-            </div>
-          ) : (
-            <Table>
-              <TableHeader className="bg-background">
-                <TableRow className="border-border hover:bg-transparent">
-                  <TableHead className="text-muted-foreground font-medium">Name</TableHead>
-                  <TableHead className="text-muted-foreground font-medium">Status</TableHead>
-                  <TableHead className="text-muted-foreground font-medium">Location</TableHead>
-                  <TableHead className="text-muted-foreground font-medium">Labels</TableHead>
-                  <TableHead className="text-muted-foreground font-medium">Agents</TableHead>
-                  <TableHead className="text-muted-foreground font-medium">
-                    Network Controller
-                  </TableHead>
-                  <TableHead className="text-muted-foreground font-medium w-12" />
-                </TableRow>
-              </TableHeader>
-              <TableBody className="divide-y divide-border">
-                {list.pageItems.map((site) => {
-                  const location = locationSummary(site);
-                  const labelEntries = Object.entries(site.labels ?? {});
-                  return (
-                    <TableRow key={site.id} className="border-border hover:bg-accent/60">
-                      <TableCell>
-                        <span className="font-medium text-foreground">{site.name}</span>
-                        {site.regionCode && (
-                          <span className="ml-2 font-mono text-xs text-muted-foreground">
-                            {site.regionCode}
-                          </span>
-                        )}
-                        {site.description && (
-                          <p className="text-sm text-muted-foreground">{site.description}</p>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Select
-                          value={site.status}
-                          onValueChange={(next) =>
-                            updateStatus.mutate({ site, next: next as SiteStatus })
-                          }
-                          // Disable only the row being updated, not every row.
-                          disabled={
-                            !permissions[`manage:${site.id}`] ||
-                            (updateStatus.isPending &&
-                            updateStatus.variables?.site.id === site.id)
-                          }
-                        >
-                          <SelectTrigger className="h-8 w-[150px] border-border bg-background">
-                            <SelectValue>
-                              <Badge variant={statusBadgeVariant(site.status)}>
-                                {site.status}
-                              </Badge>
-                            </SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            {SITE_STATUSES.map((s) => (
-                              <SelectItem key={s} value={s}>
-                                {s}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </TableCell>
-                      <TableCell className="text-foreground/80">
-                        {location.length ? (
-                          <div className="text-sm">
-                            {location.map((part, i) => (
-                              <div
-                                key={i}
-                                className={i === 0 ? "" : "text-xs text-muted-foreground"}
-                              >
-                                {part}
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {labelEntries.length ? (
-                          <div className="flex flex-wrap gap-1">
-                            {labelEntries.map(([k, v]) => (
-                              <Badge key={k} variant="outline" className="font-mono text-xs">
-                                {k}={v}
-                              </Badge>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-foreground/80">
-                        {memberCount(site.id)}
-                      </TableCell>
-                      <TableCell className="text-foreground/80">
-                        {!site.networkControllerAgentId ? (
-                          <div className="space-y-1">
-                            <Badge variant="destructive">No network controller</Badge>
-                            <p className="text-xs text-muted-foreground">
-                              This site&apos;s networks are not reconciled.
-                            </p>
-                            {eligibleControllers(site.id).length ? (
-                              designateSelect(site, "Designate an agent")
-                            ) : (
-                              <p className="text-xs text-muted-foreground">
-                                Enroll an OVN-capable agent here — the first one
-                                becomes the controller automatically.
-                              </p>
-                            )}
-                          </div>
-                        ) : site.networkControllerIssue ? (
-                          // Designated, but nothing is authoring this site's
-                          // topology: new networked workloads, site-pinned
-                          // networks and floating-IP attaches here are refused
-                          // until it recovers or is replaced.
-                          <div className="space-y-1">
-                            <div>{controllerName(site.networkControllerAgentId)}</div>
-                            <Badge variant="destructive">Controller unavailable</Badge>
-                            <p className="text-xs text-muted-foreground">
-                              {site.networkControllerIssue}
-                            </p>
-                            {eligibleControllers(site.id).length
-                              ? designateSelect(site, "Designate a replacement")
-                              : null}
-                          </div>
-                        ) : site.networkControllerStatus &&
-                          site.networkControllerStatus !== "online" ? (
-                          // Gone quiet, but still inside the grace window:
-                          // level-triggered syncs converge when it returns, so
-                          // nothing is being refused yet.
-                          <div className="space-y-1">
-                            <div>{controllerName(site.networkControllerAgentId)}</div>
-                            <Badge variant="outline">
-                              {site.networkControllerStatus}
-                            </Badge>
-                          </div>
-                        ) : (
-                          controllerName(site.networkControllerAgentId)
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {permissions[`manage:${site.id}`] && <Button
-                          size="sm"
-                          variant="ghost"
-                          className="text-muted-foreground hover:text-red-600"
-                          onClick={() => deleteSite.mutate(site.id)}
-                          disabled={deleteSite.isPending}
-                          aria-label={`Delete ${site.name}`}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+      {sitesQuery.isLoading ? (
+        <Skeleton className="h-[425px] rounded-[11px]" />
+      ) : (
+        <SiteFootprint
+          sites={sites}
+          agents={agents}
+          agentsKnown={agentsKnown}
+          canManage={(site) => !!permissions[`manage:${site.id}`]}
+          onEdit={openEdit}
+        />
+      )}
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="bg-card border-border text-foreground">
+      {loading ? (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          {Array.from({ length: 5 }).map((_, index) => (
+            <Skeleton key={index} className="h-[104px] rounded-[11px]" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <KpiCard
+            label="Sites"
+            value={String(sites.length)}
+            sub={
+              agentsKnown
+                ? `${stats.live} live · ${stats.provisioning} provisioning`
+                : "fleet status unavailable"
+            }
+          />
+          <KpiCard
+            label="Fleet capacity"
+            value={agentsKnown ? String(stats.fleetCapacity) : "—"}
+            unit={agentsKnown ? "%" : undefined}
+            sub={agentsKnown ? "vCPU reserved" : "agent data unavailable"}
+          />
+          <KpiCard
+            label="Agents online"
+            value={agentsKnown ? String(stats.onlineAgents.length) : "—"}
+            unit={agentsKnown ? `/${agents.length}` : undefined}
+            sub={
+              agentsKnown && agents.length > 0 && stats.onlineAgents.length === agents.length
+                ? "all reporting"
+                : agentsKnown
+                  ? `${agents.length - stats.onlineAgents.length} unavailable`
+                  : "requires fleet access"
+            }
+            tone={
+              agentsKnown && agents.length > stats.onlineAgents.length
+                ? "negative"
+                : agentsKnown && agents.length > 0
+                  ? "positive"
+                  : "neutral"
+            }
+          />
+          <KpiCard
+            label="Instances"
+            value={vmsKnown ? String(vms.length) : "—"}
+            sub={vmsKnown ? `${stats.runningVMs} running` : "instance data unavailable"}
+          />
+          <KpiCard
+            label="Controller coverage"
+            value={String(stats.controllerCoverage)}
+            unit="%"
+            sub={`${stats.usableControllers} of ${sites.length} usable`}
+            tone={
+              sites.length > 0 && stats.usableControllers < sites.length
+                ? "warning"
+                : sites.length > 0
+                  ? "positive"
+                  : "neutral"
+            }
+          />
+        </div>
+      )}
+
+      <section className="overflow-hidden rounded-[11px] border border-border bg-card">
+        <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center">
+          <div className="flex items-baseline gap-2">
+            <h2 className="text-[13.5px] font-semibold">All sites</h2>
+            <span className="font-mono text-[11.5px] text-muted-foreground">
+              {sites.length}
+            </span>
+          </div>
+          <div className="flex-1" />
+          <div className="relative w-full sm:w-52">
+            <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              type="search"
+              aria-label="Search sites"
+              placeholder="Search sites…"
+              value={list.query}
+              onChange={(event) => list.setQuery(event.target.value)}
+              className="h-8 pl-8 text-[12px]"
+            />
+          </div>
+          <div className="flex gap-1.5 overflow-x-auto">
+            {(["all", "healthy", "degraded", "provisioning"] as StatusFilter[]).map(
+              (filter) => (
+                <Button
+                  key={filter}
+                  type="button"
+                  size="sm"
+                  variant={statusFilter === filter ? "default" : "outline"}
+                  className="h-8 rounded-full px-3 text-[11.5px] capitalize"
+                  onClick={() => setStatusFilter(filter)}
+                >
+                  {filter}
+                </Button>
+              )
+            )}
+          </div>
+        </div>
+
+        {sitesQuery.isLoading ? (
+          <div className="space-y-2 p-4">
+            {Array.from({ length: 4 }).map((_, index) => (
+              <Skeleton key={index} className="h-14 w-full" />
+            ))}
+          </div>
+        ) : sites.length === 0 ? (
+          <div className="px-4 py-12 text-center">
+            <div className="text-[13.5px] font-semibold">No sites yet</div>
+            <p className="mx-auto mt-1 max-w-md text-[12.5px] text-muted-foreground">
+              Sites are availability zones whose agents share one network fabric.
+            </p>
+            {permissions.create && (
+              <Button size="sm" className="mt-4" onClick={openCreate}>
+                <Plus className="h-3.5 w-3.5" />
+                Create the first site
+              </Button>
+            )}
+          </div>
+        ) : list.pageItems.length === 0 ? (
+          <div className="px-4 py-10 text-center text-[12.5px] text-muted-foreground">
+            No sites match the current search and filter.
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow className="border-border hover:bg-transparent">
+                <TableHead className="w-10 px-4" />
+                <TableHead className="text-[10.5px] font-semibold uppercase tracking-[0.4px] text-muted-foreground">Site</TableHead>
+                <TableHead className="text-[10.5px] font-semibold uppercase tracking-[0.4px] text-muted-foreground">Region</TableHead>
+                <TableHead className="text-[10.5px] font-semibold uppercase tracking-[0.4px] text-muted-foreground">Agents</TableHead>
+                <TableHead className="text-[10.5px] font-semibold uppercase tracking-[0.4px] text-muted-foreground">Instances</TableHead>
+                <TableHead className="min-w-52 text-[10.5px] font-semibold uppercase tracking-[0.4px] text-muted-foreground">Capacity</TableHead>
+                <TableHead className="text-[10.5px] font-semibold uppercase tracking-[0.4px] text-muted-foreground">Controller</TableHead>
+                <TableHead className="text-[10.5px] font-semibold uppercase tracking-[0.4px] text-muted-foreground">Lifecycle</TableHead>
+                <TableHead className="w-12" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {list.pageItems.map((site) => {
+                const members = siteMembers(site.id, agents);
+                const instances = siteInstances(site.id, agents, vms);
+                const capacity = siteCapacity(members);
+                const status = displayStatus(site, members, agentsKnown);
+                const controller = site.networkControllerAgentId
+                  ? agents.find(
+                      (agent) =>
+                        agent.id.toLowerCase() ===
+                        site.networkControllerAgentId!.toLowerCase()
+                    )
+                  : undefined;
+                return (
+                  <TableRow key={site.id} className="border-border hover:bg-background/60">
+                    <TableCell className="px-4">
+                      <span className="block h-2.5 w-2.5 rounded-full" style={{ background: STATUS_STYLES[status].dot }} title={STATUS_STYLES[status].label} />
+                    </TableCell>
+                    <TableCell>
+                      <div className="font-mono text-[13px] font-semibold">{site.name}</div>
+                      <div className="max-w-48 truncate font-mono text-[11px] text-muted-foreground">
+                        {site.locationLabel || site.description || "No location set"}
+                      </div>
+                    </TableCell>
+                    <TableCell className="font-mono text-[12.5px] text-muted-foreground">{site.regionCode || "—"}</TableCell>
+                    <TableCell className="font-mono text-[12.5px] text-muted-foreground">{agentsKnown ? members.length : "—"}</TableCell>
+                    <TableCell className="font-mono text-[12.5px] text-muted-foreground">{vmsKnown && agentsKnown ? instances.length : "—"}</TableCell>
+                    <TableCell>
+                      {agentsKnown ? (
+                        <div className="flex min-w-44 items-center gap-2">
+                          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted" role="progressbar" aria-label={`${site.name} reserved vCPU`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={capacity}>
+                            <div className="h-full rounded-full bg-foreground" style={{ width: `${capacity}%` }} />
+                          </div>
+                          <span className="w-9 font-mono text-[11.5px] text-muted-foreground">{members.some((agent) => agent.isOnline) ? `${capacity}%` : "—"}</span>
+                        </div>
+                      ) : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell>
+                      <div className="max-w-44 truncate font-mono text-[11.5px] text-muted-foreground">
+                        {site.networkControllerIssue
+                          ? "Unavailable"
+                          : controller?.name ?? (site.networkControllerAgentId ? `${site.networkControllerAgentId.slice(0, 8)}…` : "Not designated")}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <span className="rounded-full bg-muted px-2 py-1 font-mono text-[10.5px] capitalize text-foreground/75">{site.status}</span>
+                    </TableCell>
+                    <TableCell className="pr-3 text-right">
+                      {permissions[`manage:${site.id}`] && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${site.name}`} disabled={deleteSite.isPending && deleteSite.variables === site.id}>
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => openEdit(site)}>
+                              <Pencil className="mr-2 h-4 w-4" />Edit site
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem variant="destructive" onClick={() => handleDelete(site)}>
+                              <Trash2 className="mr-2 h-4 w-4" />Delete site
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+
+        {list.totalPages > 1 && (
+          <div className="flex items-center justify-between border-t border-border px-4 py-3 font-mono text-[11.5px] text-muted-foreground">
+            <span>Page {list.page} of {list.totalPages} · {list.filteredCount} results</span>
+            <div className="flex gap-1">
+              <Button variant="outline" size="icon-sm" aria-label="Previous page" disabled={list.page <= 1} onClick={() => list.setPage(list.page - 1)}><ChevronLeft className="h-4 w-4" /></Button>
+              <Button variant="outline" size="icon-sm" aria-label="Next page" disabled={list.page >= list.totalPages} onClick={() => list.setPage(list.page + 1)}><ChevronRight className="h-4 w-4" /></Button>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <Dialog open={dialogOpen} onOpenChange={(open) => (open ? setDialogOpen(true) : closeDialog())}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto bg-card sm:max-w-[620px]">
           <DialogHeader>
-            <DialogTitle>Add Site</DialogTitle>
-            <DialogDescription className="text-muted-foreground">
-              A site is an availability zone: agents in it share one OVN
-              deployment, so networks pinned to the site span its nodes.
-              {currentOrg
-                ? ` The site is created in ${currentOrg.name}, and all its agents must belong to that organization.`
-                : ""}
+            <DialogTitle>{editingSite ? `Edit ${editingSite.name}` : "New site"}</DialogTitle>
+            <DialogDescription>
+              {editingSite
+                ? "Update this availability zone. Changes affect where agents and site-pinned networks operate."
+                : `Create an availability zone${currentOrg ? ` in ${currentOrg.name}` : ""} for agents that share one network fabric.`}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleCreate}>
+          <form onSubmit={handleSubmit}>
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <Label htmlFor="siteName" className="text-foreground">
-                  Name
-                </Label>
-                <Input
-                  id="siteName"
-                  placeholder="dc-east-1"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="bg-background border-border text-foreground"
-                  disabled={createSite.isPending}
-                />
+                <Label htmlFor="site-name">Name</Label>
+                <Input id="site-name" placeholder="us-east-1" value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} disabled={mutationPending || !!editingSite} />
+                {editingSite && <p className="text-xs text-muted-foreground">Site names cannot be changed after creation.</p>}
               </div>
               <div className="space-y-2">
-                <Label htmlFor="siteDescription" className="text-foreground">
-                  Description (optional)
-                </Label>
-                <Input
-                  id="siteDescription"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  className="bg-background border-border text-foreground"
-                  disabled={createSite.isPending}
-                />
+                <Label htmlFor="site-description">Description</Label>
+                <Input id="site-description" placeholder="Primary east coast availability zone" value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} disabled={mutationPending} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="siteStatus" className="text-foreground">
-                    Status
-                  </Label>
-                  <Select
-                    value={status}
-                    onValueChange={(v) => setStatus(v as SiteStatus)}
-                    disabled={createSite.isPending}
-                  >
-                    <SelectTrigger
-                      id="siteStatus"
-                      className="bg-background border-border text-foreground"
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {SITE_STATUSES.map((s) => (
-                        <SelectItem key={s} value={s}>
-                          {s}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
+                  <Label htmlFor="site-status">Lifecycle</Label>
+                  <Select value={form.status} onValueChange={(value) => setForm((current) => ({ ...current, status: value as SiteStatus }))} disabled={mutationPending}>
+                    <SelectTrigger id="site-status"><SelectValue /></SelectTrigger>
+                    <SelectContent>{SITE_STATUSES.map((status) => <SelectItem key={status} value={status}>{status}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="siteRegion" className="text-foreground">
-                    Region code (optional)
-                  </Label>
-                  <Input
-                    id="siteRegion"
-                    placeholder="us-east-1"
-                    value={regionCode}
-                    onChange={(e) => setRegionCode(e.target.value)}
-                    className="bg-background border-border text-foreground"
-                    disabled={createSite.isPending}
-                  />
+                  <Label htmlFor="site-region">Region code</Label>
+                  <Input id="site-region" placeholder="americas" value={form.regionCode} onChange={(event) => setForm((current) => ({ ...current, regionCode: event.target.value }))} disabled={mutationPending} />
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="siteLocation" className="text-foreground">
-                  Location label (optional)
-                </Label>
-                <Input
-                  id="siteLocation"
-                  placeholder="Equinix DC1, Ashburn VA"
-                  value={locationLabel}
-                  onChange={(e) => setLocationLabel(e.target.value)}
-                  className="bg-background border-border text-foreground"
-                  disabled={createSite.isPending}
-                />
+                <Label htmlFor="site-location">Location label</Label>
+                <Input id="site-location" placeholder="Ashburn, VA" value={form.locationLabel} onChange={(event) => setForm((current) => ({ ...current, locationLabel: event.target.value }))} disabled={mutationPending} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="siteLat" className="text-foreground">
-                    Latitude (optional)
-                  </Label>
-                  <Input
-                    id="siteLat"
-                    type="number"
-                    step="any"
-                    placeholder="38.9445"
-                    value={latitude}
-                    onChange={(e) => setLatitude(e.target.value)}
-                    className="bg-background border-border text-foreground"
-                    disabled={createSite.isPending}
-                  />
+                  <Label htmlFor="site-latitude">Latitude</Label>
+                  <Input id="site-latitude" type="number" step="any" min={-90} max={90} placeholder="38.9445" value={form.latitude} onChange={(event) => setForm((current) => ({ ...current, latitude: event.target.value }))} disabled={mutationPending} />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="siteLon" className="text-foreground">
-                    Longitude (optional)
-                  </Label>
-                  <Input
-                    id="siteLon"
-                    type="number"
-                    step="any"
-                    placeholder="-77.4558"
-                    value={longitude}
-                    onChange={(e) => setLongitude(e.target.value)}
-                    className="bg-background border-border text-foreground"
-                    disabled={createSite.isPending}
-                  />
+                  <Label htmlFor="site-longitude">Longitude</Label>
+                  <Input id="site-longitude" type="number" step="any" min={-180} max={180} placeholder="-77.4558" value={form.longitude} onChange={(event) => setForm((current) => ({ ...current, longitude: event.target.value }))} disabled={mutationPending} />
                 </div>
               </div>
+              {editingSite && (
+                <div className="space-y-2">
+                  <Label htmlFor="site-controller">Network controller</Label>
+                  <Select value={form.networkControllerAgentId || undefined} onValueChange={(value) => setForm((current) => ({ ...current, networkControllerAgentId: value }))} disabled={mutationPending || editableAgents.length === 0}>
+                    <SelectTrigger id="site-controller"><SelectValue placeholder="No eligible agents" /></SelectTrigger>
+                    <SelectContent>
+                      {currentControllerMissing && editingSite.networkControllerAgentId && <SelectItem value={editingSite.networkControllerAgentId}>Current controller ({editingSite.networkControllerAgentId.slice(0, 8)}…)</SelectItem>}
+                      {editableAgents.map((agent) => <SelectItem key={agent.id} value={agent.id}>{agent.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">Only overlay-network agents assigned to this site are eligible.</p>
+                </div>
+              )}
               <div className="space-y-2">
-                <Label htmlFor="siteLabels" className="text-foreground">
-                  Labels (optional)
-                </Label>
-                <Input
-                  id="siteLabels"
-                  placeholder="tier=production, provider=equinix"
-                  value={labelsInput}
-                  onChange={(e) => setLabelsInput(e.target.value)}
-                  className="bg-background border-border text-foreground"
-                  disabled={createSite.isPending}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Comma-separated key=value pairs.
-                </p>
+                <Label htmlFor="site-labels">Labels</Label>
+                <Input id="site-labels" placeholder="tier=production, provider=equinix" value={form.labels} onChange={(event) => setForm((current) => ({ ...current, labels: event.target.value }))} disabled={mutationPending} />
+                <p className="text-xs text-muted-foreground">Comma-separated key=value pairs.</p>
               </div>
             </div>
             <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setCreateOpen(false)}
-                className="border-input text-foreground/80 hover:bg-accent"
-                disabled={createSite.isPending}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                className="bg-primary hover:bg-primary/90"
-                disabled={createSite.isPending}
-              >
-                {createSite.isPending ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Creating...
-                  </>
-                ) : (
-                  "Create Site"
-                )}
+              <Button type="button" variant="outline" onClick={closeDialog} disabled={mutationPending}>Cancel</Button>
+              <Button type="submit" disabled={mutationPending}>
+                {mutationPending && <Loader2 className="h-4 w-4 animate-spin" />}
+                {editingSite ? "Save changes" : "Create site"}
               </Button>
             </DialogFooter>
           </form>
