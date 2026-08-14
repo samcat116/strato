@@ -1,0 +1,35 @@
+control-plane/Sources/App/openapi.yaml
+  s_94b693d0eb6d6a::t_2103a4aa4845a0 9105-9107,9109-9111
+control-plane/web/src/types/api.ts
+  s_94b693d0eb6d6a::t_2103a4aa4845a0 1183-1185
+control-plane/web/src/types/openapi.ts
+  s_94b693d0eb6d6a::t_2103a4aa4845a0 5400
+docs/api-reference.md
+  s_94b693d0eb6d6a::t_2103a4aa4845a0 74-79
+control-plane/Sources/App/Controllers/VMController.swift
+  s_94b693d0eb6d6a::t_2103a4aa4845a0 811-813
+docs/architecture/agent.md
+  s_94b693d0eb6d6a::t_2103a4aa4845a0 555,557-571,612-613
+control-plane/Tests/AppPlatformTests/VMNetworkSelectionTests.swift
+  s_94b693d0eb6d6a::t_2103a4aa4845a0 6,488-514
+  s_94b693d0eb6d6a::t_e16b4b223cc3a9 515-517
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_94b693d0eb6d6a::t_2103a4aa4845a0 141-146,209-225,623-625,640,642,646-648,813-824
+  s_94b693d0eb6d6a::t_ae3159c880d392 641
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "5e258275091eaae3b95336f522bc749f5084f7f9",
+  "prompts": {},
+  "sessions": {
+    "s_94b693d0eb6d6a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff5f3-149c-7b23-8032-f2fefbae7e6d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
