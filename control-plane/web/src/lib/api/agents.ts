@@ -1,28 +1,25 @@
 // Agent API endpoints
 
 import { api } from "./client";
+import { listAllPages } from "./pagination";
 import type {
   AdoptWorkloadsResult,
   Agent,
   AgentEnrollment,
   AgentUpdateResult,
   CreateAgentEnrollmentRequest,
-  Page,
 } from "@/types/api";
-import { LIST_PAGE_LIMIT } from "@/types/api";
 
 export const agentsApi = {
-  list(organizationId?: string): Promise<Agent[]> {
-    return api
-      .get<Page<Agent>>("/api/agents", {
-        limit: LIST_PAGE_LIMIT,
-        ...(organizationId ? { organization_id: organizationId } : {}),
-      })
-      .then((page) => page.items);
+  list(organizationId?: string, signal?: AbortSignal): Promise<Agent[]> {
+    return listAllPages<Agent>(
+      "/api/agents",
+      organizationId ? { organization_id: organizationId } : {}, signal
+    );
   },
 
-  get(id: string): Promise<Agent> {
-    return api.get<Agent>(`/api/agents/${id}`);
+  get(id: string, signal?: AbortSignal): Promise<Agent> {
+    return api.get<Agent>(`/api/agents/${id}`, undefined, signal);
   },
 
   // Assigns the target version as desired state and returns 202 immediately
@@ -41,6 +38,10 @@ export const agentsApi = {
 
   patch(id: string, data: { autoUpdate?: boolean }): Promise<Agent> {
     return api.patch<Agent>(`/api/agents/${id}`, data);
+  },
+
+  forceOffline(id: string): Promise<Agent> {
+    return api.post<Agent>(`/api/agents/${id}/actions/force-offline`);
   },
 
   // Moves the workloads this agent is demonstrably running off the agent

@@ -88,7 +88,7 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
       successMessage: `Forking sandbox "${name.trim()}"`,
       onSuccess: (accepted) => {
         setSelected(null);
-        router.push(`/sandboxes/detail?id=${accepted.resource.id}`);
+        router.push(`/sandboxes/${accepted.resource.id}`);
       },
     });
   };

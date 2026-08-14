@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import {
   Table,
   TableBody,
@@ -80,7 +82,7 @@ export function AgentTable({ agents, isLoading }: AgentTableProps) {
             className="border-border hover:bg-accent/60"
           >
             <TableCell>
-              <span className="font-medium text-foreground">{agent.name}</span>
+              <Link href={`/agents/${agent.id}`} className="font-medium text-foreground hover:text-blue-700">{agent.name}</Link>
               <p className="text-sm text-muted-foreground flex items-center gap-1.5">
                 {agent.version}
                 {agent.updateAvailable && (

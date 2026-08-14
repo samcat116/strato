@@ -6,7 +6,7 @@ import { webAuthnClient } from "@/lib/webauthn";
 export function usePasskeys() {
   return useQuery({
     queryKey: ["passkeys"],
-    queryFn: () => passkeysApi.list(),
+    queryFn: ({ signal }) => passkeysApi.list(signal),
   });
 }
 

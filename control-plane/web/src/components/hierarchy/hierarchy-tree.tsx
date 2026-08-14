@@ -96,7 +96,7 @@ function VMRow({ vm, depth }: { vm: VMSummaryNode; depth: number }) {
   return (
     <TreeRow
       depth={depth}
-      href={`/vms/detail?id=${vm.id}`}
+      href={`/vms/${vm.id}`}
       icon={<Monitor className="h-4 w-4 text-muted-foreground" />}
       label={vm.name}
       meta={

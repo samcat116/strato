@@ -8,7 +8,7 @@ import { api } from "./client";
 import type { RegistrationPolicy } from "@/types/api";
 
 export const registrationApi = {
-  policy(): Promise<RegistrationPolicy> {
-    return api.get<RegistrationPolicy>("/api/public/registration");
+  policy(signal?: AbortSignal): Promise<RegistrationPolicy> {
+    return api.get<RegistrationPolicy>("/api/public/registration", undefined, signal);
   },
 };

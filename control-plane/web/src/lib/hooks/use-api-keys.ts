@@ -5,7 +5,7 @@ import type { CreateAPIKeyRequest } from "@/types/api";
 export function useAPIKeys() {
   return useQuery({
     queryKey: ["api-keys"],
-    queryFn: () => apiKeysApi.list(),
+    queryFn: ({ signal }) => apiKeysApi.list(signal),
   });
 }
 

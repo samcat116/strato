@@ -6,7 +6,7 @@ import type { CreateWebhookRequest, UpdateWebhookRequest } from "@/types/api";
 export function useWebhooks(orgId: string, enabled = true) {
   return useQuery({
     queryKey: ["webhooks", orgId],
-    queryFn: () => webhooksApi.list(orgId),
+    queryFn: ({ signal }) => webhooksApi.list(orgId, signal),
     enabled: enabled && !!orgId,
   });
 }
@@ -76,7 +76,7 @@ export function useWebhookDeliveries(
 ) {
   return useQuery({
     queryKey: ["webhook-deliveries", orgId, webhookId],
-    queryFn: () => webhooksApi.listDeliveries(orgId, webhookId!),
+    queryFn: ({ signal }) => webhooksApi.listDeliveries(orgId, webhookId!, 50, signal),
     enabled: enabled && !!orgId && !!webhookId,
     refetchInterval: 5000,
   });

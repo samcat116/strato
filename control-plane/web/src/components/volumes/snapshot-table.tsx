@@ -22,6 +22,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { volumesApi } from "@/lib/api/volumes";
 import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
+import { usePermissions } from "@/lib/hooks/use-permissions";
 import type { Volume, VolumeSnapshot } from "@/types/api";
 import { SnapshotStatusBadge } from "./snapshot-status-badge";
 
@@ -43,6 +44,11 @@ export function SnapshotTable({
 }: SnapshotTableProps) {
   const [deleteTarget, setDeleteTarget] = useState<VolumeSnapshot | null>(null);
   const { isLoading: isDeleting, run } = useAcceptedMutation();
+  const { permissions } = usePermissions(snapshots.filter((snapshot) => snapshot.id).map((snapshot) => ({
+    key: `delete:${snapshot.id}`,
+    action: "volume:snapshot",
+    node: { type: "volume_snapshot" as const, id: snapshot.id! },
+  })));
 
   const volumesById = useMemo(
     () => new Map(volumes.filter((v) => v.id).map((v) => [v.id!, v])),
@@ -167,6 +173,8 @@ export function SnapshotTable({
                     className="text-red-600 hover:text-red-700 hover:bg-red-500/10"
                     onClick={() => setDeleteTarget(snapshot)}
                     disabled={!canDelete(snapshot)}
+                    aria-label={`Delete ${snapshot.name}`}
+                    hidden={!permissions[`delete:${snapshot.id}`]}
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>

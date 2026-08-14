@@ -14,7 +14,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { VolumeStatusBadge } from "./volume-status-badge";
 import { VolumeSize } from "./volume-size";
 import { VolumeActions } from "./volume-actions";
-import type { VM, Volume } from "@/types/api";
+import { usePermissions } from "@/lib/hooks/use-permissions";
+import type { ActionCheckItem, VM, Volume } from "@/types/api";
 
 interface VolumeTableProps {
   volumes: Volume[];
@@ -29,6 +30,17 @@ export function VolumeTable({
   isLoading,
   onRefresh,
 }: VolumeTableProps) {
+  const actionChecks = [
+    ["attach", "volume:attach"],
+    ["detach", "volume:detach"],
+    ["resize", "volume:update"],
+    ["snapshot", "volume:snapshot"],
+    ["clone", "volume:clone"],
+    ["delete", "volume:delete"],
+  ] as const;
+  const { permissions } = usePermissions(volumes.flatMap((volume): ActionCheckItem[] =>
+    volume.id ? actionChecks.map(([key, action]) => ({ key: `${volume.id}:${key}`, action, node: { type: "volume", id: volume.id! } })) : []
+  ));
   const vmsById = useMemo(
     () => new Map(vms.map((vm) => [vm.id, vm])),
     [vms]
@@ -102,7 +114,7 @@ export function VolumeTable({
               <TableCell>
                 {attachedVM ? (
                   <Link
-                    href={`/vms/detail?id=${attachedVM.id}`}
+                    href={`/vms/${attachedVM.id}`}
                     className="text-blue-600 hover:text-blue-700 hover:underline"
                   >
                     {attachedVM.name}
@@ -122,7 +134,7 @@ export function VolumeTable({
                 )}
               </TableCell>
               <TableCell className="text-right">
-                <VolumeActions volume={volume} onActionComplete={onRefresh} />
+                <VolumeActions volume={volume} onActionComplete={onRefresh} allowedActions={Object.fromEntries(actionChecks.map(([key]) => [key, permissions[`${volume.id}:${key}`]]))} />
               </TableCell>
             </TableRow>
           );

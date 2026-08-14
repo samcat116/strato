@@ -5,7 +5,7 @@ import type { AttachSecurityGroupRequest } from "@/types/api";
 export function useSecurityGroups(projectId?: string) {
   return useQuery({
     queryKey: ["security-groups", { projectId: projectId ?? null }],
-    queryFn: () => securityGroupsApi.list(projectId),
+    queryFn: ({ signal }) => securityGroupsApi.list(projectId, signal),
   });
 }
 

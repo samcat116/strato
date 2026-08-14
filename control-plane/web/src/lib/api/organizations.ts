@@ -10,17 +10,17 @@ import type {
 } from "@/types/api";
 
 export const organizationsApi = {
-  list(): Promise<Organization[]> {
-    return api.get<Organization[]>("/api/organizations");
+  list(signal?: AbortSignal): Promise<Organization[]> {
+    return api.get<Organization[]>("/api/organizations", undefined, signal);
   },
 
   // System-admin only: every organization, regardless of membership.
-  listAll(): Promise<Organization[]> {
-    return api.get<Organization[]>("/api/organizations/all");
+  listAll(signal?: AbortSignal): Promise<Organization[]> {
+    return api.get<Organization[]>("/api/organizations/all", undefined, signal);
   },
 
-  get(id: string): Promise<Organization> {
-    return api.get<Organization>(`/api/organizations/${id}`);
+  get(id: string, signal?: AbortSignal): Promise<Organization> {
+    return api.get<Organization>(`/api/organizations/${id}`, undefined, signal);
   },
 
   create(data: CreateOrganizationRequest): Promise<Organization> {
@@ -36,8 +36,8 @@ export const organizationsApi = {
   },
 
   // Members
-  listMembers(orgId: string): Promise<OrganizationMember[]> {
-    return api.get<OrganizationMember[]>(`/api/organizations/${orgId}/members`);
+  listMembers(orgId: string, signal?: AbortSignal): Promise<OrganizationMember[]> {
+    return api.get<OrganizationMember[]>(`/api/organizations/${orgId}/members`, undefined, signal);
   },
 
   addMember(

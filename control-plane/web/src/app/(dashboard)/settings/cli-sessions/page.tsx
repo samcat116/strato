@@ -2,10 +2,11 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CLISessionTable } from "@/components/cli-sessions";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import { useCLISessions } from "@/lib/hooks";
 
 export default function CLISessionsPage() {
-  const { data: sessions = [], isLoading } = useCLISessions();
+  const { data: sessions = [], isLoading, error, refetch } = useCLISessions();
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -16,6 +17,13 @@ export default function CLISessionsPage() {
           Revoking a session signs that device out immediately.
         </p>
       </div>
+
+      <QueryErrorNotice
+        resource="CLI sessions"
+        error={error}
+        hasData={sessions.length > 0}
+        onRetry={() => void refetch()}
+      />
 
       <Card className="bg-card border-border">
         <CardHeader>

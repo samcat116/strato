@@ -9,11 +9,7 @@ export interface Page<T> {
   offset: number;
 }
 
-/**
- * The server-side page-size cap. List wrappers that still want "everything"
- * request one max-size page; adopting real pagination per view is follow-up
- * work.
- */
+/** The server-side page-size cap used while draining complete lists. */
 export const LIST_PAGE_LIMIT = "500";
 
 /** How a user account came into existence (see backend UserSource). */
@@ -436,7 +432,11 @@ export type IAMNodeType =
   | "sandbox_snapshot"
   | "site"
   | "agent"
-  | "security_group";
+  | "security_group"
+  | "service_account"
+  | "load_balancer"
+  | "dns_zone"
+  | "dns_record";
 
 export interface IAMNode {
   type: IAMNodeType;

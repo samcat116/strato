@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import {
   Card,
   CardContent,
@@ -26,7 +27,12 @@ export function PoliciesSection({
   ownerId,
   canManage,
 }: PoliciesSectionProps) {
-  const { data: policies = [], isLoading } = usePolicies(ownerType, ownerId);
+  const {
+    data: policies = [],
+    isLoading,
+    error,
+    refetch,
+  } = usePolicies(ownerType, ownerId);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<IAMPolicy | null>(null);
@@ -66,6 +72,12 @@ export function PoliciesSection({
             {!canManage &&
               " You need admin rights on this owner to create, edit, or delete them."}
           </p>
+          <QueryErrorNotice
+            resource="policies"
+            error={error}
+            hasData={policies.length > 0}
+            onRetry={() => void refetch()}
+          />
           <PoliciesTable
             ownerType={ownerType}
             ownerId={ownerId}

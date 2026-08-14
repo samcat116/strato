@@ -9,9 +9,9 @@ import {
 export function useProjectsForOrganization(organizationId: string | undefined) {
   return useQuery({
     queryKey: ["projects", "organization", organizationId],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       organizationId
-        ? projectsApi.listForOrganization(organizationId)
+        ? projectsApi.listForOrganization(organizationId, signal)
         : Promise.resolve([]),
     enabled: !!organizationId,
   });
@@ -20,8 +20,8 @@ export function useProjectsForOrganization(organizationId: string | undefined) {
 export function useProject(projectId: string | undefined) {
   return useQuery({
     queryKey: ["projects", projectId],
-    queryFn: () =>
-      projectId ? projectsApi.get(projectId) : Promise.reject("No project ID"),
+    queryFn: ({ signal }) =>
+      projectId ? projectsApi.get(projectId, signal) : Promise.reject("No project ID"),
     enabled: !!projectId,
   });
 }

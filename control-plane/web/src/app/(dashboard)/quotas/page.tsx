@@ -106,7 +106,7 @@ export default function QuotasPage() {
   // Fetch org detail for the caller's role (list responses omit it).
   const { data: orgDetail } = useQuery({
     queryKey: ["organization", orgId],
-    queryFn: () => organizationsApi.get(orgId!),
+    queryFn: ({ signal }) => organizationsApi.get(orgId!, signal),
     enabled: !!orgId,
   });
   const canManage = orgDetail?.userRole === "admin";

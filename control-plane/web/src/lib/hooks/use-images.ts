@@ -9,7 +9,7 @@ import type {
 export function useImages(projectId: string | undefined) {
   return useQuery({
     queryKey: ["images", projectId],
-    queryFn: () => (projectId ? imagesApi.list(projectId) : Promise.resolve([])),
+    queryFn: ({ signal }) => (projectId ? imagesApi.list(projectId, signal) : Promise.resolve([])),
     enabled: !!projectId,
     refetchInterval: 5000, // Poll for status updates
   });
@@ -18,9 +18,9 @@ export function useImages(projectId: string | undefined) {
 export function useImage(projectId: string | undefined, imageId: string | undefined) {
   return useQuery({
     queryKey: ["images", projectId, imageId],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       projectId && imageId
-        ? imagesApi.get(projectId, imageId)
+        ? imagesApi.get(projectId, imageId, signal)
         : Promise.reject("Missing projectId or imageId"),
     enabled: !!projectId && !!imageId,
     // Poll while the image or any artifact is still settling (e.g. a URL fetch

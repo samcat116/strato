@@ -167,6 +167,8 @@ tags:
     description: Persistent block volumes and their snapshots.
   - name: Networks
     description: Logical (SDN) networks.
+  - name: Load Balancers
+    description: Project-scoped native L4 load balancers.
   - name: Floating IPs
     description: External address pools and VM NIC attachments.
   - name: DNS
@@ -1320,6 +1322,36 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/volume-snapshots:
+    get:
+      operationId: listProjectVolumeSnapshots
+      summary: List a project's volume snapshots
+      description: >-
+        Returns volume snapshots across all volumes in one project. This is the
+        collection endpoint for project-wide inventory views; it avoids one
+        request per parent volume.
+      tags: [Volumes]
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          description: Project whose volume snapshots to list.
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
+      responses:
+        "200":
+          description: A page of the project's volume snapshots.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolumeSnapshotListPage"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /api/volumes:
     get:
       operationId: listVolumes
@@ -1725,6 +1757,217 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/load-balancers:
+    get:
+      operationId: listLoadBalancers
+      summary: List load balancers
+      tags: [Load Balancers]
+      parameters:
+        - $ref: "#/components/parameters/ProjectIdQuery"
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
+      responses:
+        "200":
+          description: A page of visible load balancers.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoadBalancerListPage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createLoadBalancer
+      summary: Create a load balancer
+      tags: [Load Balancers]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateLoadBalancerRequest" }
+      responses:
+        "200":
+          description: The created load balancer.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoadBalancer" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/load-balancers/{loadBalancerId}:
+    parameters:
+      - $ref: "#/components/parameters/LoadBalancerID"
+    get:
+      operationId: getLoadBalancer
+      summary: Get a load balancer
+      tags: [Load Balancers]
+      responses:
+        "200":
+          description: The load balancer.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoadBalancer" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateLoadBalancer
+      summary: Update a load balancer
+      tags: [Load Balancers]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateLoadBalancerRequest" }
+      responses:
+        "200":
+          description: The updated load balancer.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoadBalancer" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteLoadBalancer
+      summary: Delete a load balancer
+      tags: [Load Balancers]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/load-balancers/{loadBalancerId}/listeners:
+    parameters:
+      - $ref: "#/components/parameters/LoadBalancerID"
+    get:
+      operationId: listLoadBalancerListeners
+      summary: List load balancer listeners
+      tags: [Load Balancers]
+      responses:
+        "200":
+          description: The listeners.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/LoadBalancerListener" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createLoadBalancerListener
+      summary: Add a load balancer listener
+      tags: [Load Balancers]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoadBalancerListenerRequest" }
+      responses:
+        "200":
+          description: The created listener.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoadBalancerListener" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/load-balancers/{loadBalancerId}/listeners/{listenerId}:
+    parameters:
+      - $ref: "#/components/parameters/LoadBalancerID"
+      - $ref: "#/components/parameters/LoadBalancerListenerID"
+    put:
+      operationId: updateLoadBalancerListener
+      summary: Update a load balancer listener
+      tags: [Load Balancers]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoadBalancerListenerRequest" }
+      responses:
+        "200":
+          description: The updated listener.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoadBalancerListener" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteLoadBalancerListener
+      summary: Delete a load balancer listener
+      tags: [Load Balancers]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/load-balancers/{loadBalancerId}/backends:
+    parameters:
+      - $ref: "#/components/parameters/LoadBalancerID"
+    get:
+      operationId: listLoadBalancerBackends
+      summary: List load balancer backends
+      tags: [Load Balancers]
+      responses:
+        "200":
+          description: The backends.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/LoadBalancerBackend" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createLoadBalancerBackend
+      summary: Add a load balancer backend
+      tags: [Load Balancers]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateLoadBalancerBackendRequest" }
+      responses:
+        "200":
+          description: The created backend.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoadBalancerBackend" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/load-balancers/{loadBalancerId}/backends/{backendId}:
+    parameters:
+      - $ref: "#/components/parameters/LoadBalancerID"
+      - $ref: "#/components/parameters/LoadBalancerBackendID"
+    delete:
+      operationId: deleteLoadBalancerBackend
+      summary: Delete a load balancer backend
+      tags: [Load Balancers]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /api/floating-ip-pools:
     get:
@@ -8064,6 +8307,30 @@ components:
       schema:
         type: string
         format: uuid
+    LoadBalancerID:
+      name: loadBalancerId
+      in: path
+      required: true
+      description: The load balancer's id.
+      schema:
+        type: string
+        format: uuid
+    LoadBalancerListenerID:
+      name: listenerId
+      in: path
+      required: true
+      description: The load balancer listener's id.
+      schema:
+        type: string
+        format: uuid
+    LoadBalancerBackendID:
+      name: backendId
+      in: path
+      required: true
+      description: The load balancer backend's id.
+      schema:
+        type: string
+        format: uuid
     PoolID:
       name: poolId
       in: path
@@ -10784,6 +11051,194 @@ components:
         updatedAt:
           type: string
           format: date-time
+
+    LoadBalancerHealthCheck:
+      type: object
+      required: [enabled, intervalSeconds, timeoutSeconds, successThreshold, failureThreshold]
+      properties:
+        enabled:
+          type: boolean
+        intervalSeconds:
+          type: integer
+          minimum: 1
+          maximum: 300
+        timeoutSeconds:
+          type: integer
+          minimum: 1
+          maximum: 60
+        successThreshold:
+          type: integer
+          minimum: 1
+          maximum: 10
+        failureThreshold:
+          type: integer
+          minimum: 1
+          maximum: 10
+    CreateLoadBalancerRequest:
+      type: object
+      required: [name, logicalNetworkId, protocol]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        projectId:
+          type: string
+          format: uuid
+        logicalNetworkId:
+          type: string
+          format: uuid
+        protocol:
+          type: string
+          enum: [tcp, udp]
+        healthCheck:
+          $ref: "#/components/schemas/LoadBalancerHealthCheck"
+    UpdateLoadBalancerRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        protocol:
+          type: string
+          enum: [tcp, udp]
+        healthCheck:
+          $ref: "#/components/schemas/LoadBalancerHealthCheck"
+    LoadBalancerListenerRequest:
+      type: object
+      required: [port, backendPort]
+      properties:
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        backendPort:
+          type: integer
+          minimum: 1
+          maximum: 65535
+    CreateLoadBalancerBackendRequest:
+      type: object
+      description: Specify either vmId with nicIndex, or ipAddress.
+      properties:
+        vmId:
+          type: string
+          format: uuid
+        nicIndex:
+          type: integer
+          minimum: 0
+        ipAddress:
+          type: string
+    LoadBalancerListener:
+      type: object
+      required: [id, port, backendPort]
+      properties:
+        id:
+          type: string
+          format: uuid
+        port:
+          type: integer
+        backendPort:
+          type: integer
+    LoadBalancerBackend:
+      type: object
+      required: [id, healthStatus]
+      properties:
+        id:
+          type: string
+          format: uuid
+        interfaceId:
+          type: string
+          format: uuid
+        vmId:
+          type: string
+          format: uuid
+        nicIndex:
+          type: integer
+        ipAddress:
+          type: string
+        healthStatus:
+          type: string
+          enum: [unknown, online, offline, error]
+        lastHealthCheckAt:
+          type: string
+          format: date-time
+    LoadBalancer:
+      type: object
+      required:
+        - id
+        - name
+        - projectId
+        - logicalNetworkId
+        - vip
+        - protocol
+        - desiredState
+        - observedState
+        - generation
+        - observedGeneration
+        - healthCheck
+        - listeners
+        - backends
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+        logicalNetworkId:
+          type: string
+          format: uuid
+        logicalNetworkName:
+          type: string
+        vip:
+          type: string
+        protocol:
+          type: string
+          enum: [tcp, udp]
+        desiredState:
+          type: string
+          enum: [active]
+        observedState:
+          type: string
+          enum: [pending, active, error]
+        generation:
+          type: integer
+          format: int64
+        observedGeneration:
+          type: integer
+          format: int64
+        lastError:
+          type: string
+        healthCheck:
+          $ref: "#/components/schemas/LoadBalancerHealthCheck"
+        listeners:
+          type: array
+          items: { $ref: "#/components/schemas/LoadBalancerListener" }
+        backends:
+          type: array
+          items: { $ref: "#/components/schemas/LoadBalancerBackend" }
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    LoadBalancerListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/LoadBalancer" }
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
 
     CreateFloatingIPPoolRequest:
       type: object
@@ -14720,11 +15175,16 @@ components:
         - image
         - network
         - floating_ip
+        - load_balancer
+        - security_group
+        - dns_zone
+        - dns_record
         - volume
         - volume_snapshot
         - sandbox_snapshot
         - site
         - agent
+        - service_account
 
     IAMNode:
       type: object

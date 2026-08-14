@@ -5,9 +5,11 @@ import StratoShared
 struct VolumeController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let volumes = routes.grouped("api", "volumes")
+        let volumeSnapshots = routes.grouped("api", "volume-snapshots")
 
         // All routes require authentication
         let protected = volumes.grouped(User.guardMiddleware())
+        let protectedSnapshots = volumeSnapshots.grouped(User.guardMiddleware())
 
         // Volume CRUD operations
         protected.get(use: listVolumes)
@@ -27,6 +29,7 @@ struct VolumeController: RouteCollection {
         // Snapshot operations
         protected.get(":volumeId", "snapshots", use: listSnapshots)
         protected.delete(":volumeId", "snapshots", ":snapshotId", use: deleteSnapshot)
+        protectedSnapshots.get(use: listProjectSnapshots)
     }
 
     // MARK: - List Volumes
@@ -1047,6 +1050,28 @@ struct VolumeController: RouteCollection {
     }
 
     // MARK: - List Snapshots
+
+    /// List snapshots in one project without requiring clients to fan out over
+    /// every parent volume.
+    /// GET /api/volume-snapshots?project_id=...
+    @Sendable
+    func listProjectSnapshots(req: Request) async throws -> PagedResponse<SnapshotResponse> {
+        let paging = try ListPaging.decode(from: req)
+        guard let projectID = req.query[UUID.self, at: "project_id"] else {
+            throw Abort(.badRequest, reason: "'project_id' is required")
+        }
+        guard try await req.can("project:read", on: IAMNode(type: .project, id: projectID)) else {
+            throw Abort(.forbidden, reason: "You don't have access to this project")
+        }
+
+        let snapshots = try await VolumeSnapshot.query(on: req.db)
+            .filter(\.$project.$id == projectID)
+            .sort(\.$createdAt, .descending)
+            .sort(\.$id, .descending)
+            .all()
+
+        return paging.page(snapshots.map { SnapshotResponse(from: $0) })
+    }
 
     /// List all snapshots for a volume
     /// GET /api/volumes/:volumeId/snapshots

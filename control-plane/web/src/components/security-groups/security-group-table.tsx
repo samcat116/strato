@@ -15,7 +15,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { securityGroupsApi } from "@/lib/api/security-groups";
 import { toast } from "sonner";
-import type { SecurityGroup } from "@/types/api";
+import { usePermissions } from "@/lib/hooks/use-permissions";
+import type { ActionCheckItem, SecurityGroup } from "@/types/api";
 
 interface SecurityGroupTableProps {
   groups: SecurityGroup[];
@@ -33,6 +34,10 @@ export function SecurityGroupTable({
   onManageRules,
 }: SecurityGroupTableProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
+  const { permissions } = usePermissions(groups.flatMap((group): ActionCheckItem[] => [
+    { key: `update:${group.id}`, action: "securitygroup:update", node: { type: "security_group", id: group.id } },
+    { key: `delete:${group.id}`, action: "securitygroup:delete", node: { type: "security_group", id: group.id } },
+  ]));
 
   const handleDelete = async (group: SecurityGroup) => {
     if (
@@ -130,6 +135,8 @@ export function SecurityGroupTable({
                   onClick={() => onManageRules?.(group)}
                   disabled={busyId === group.id}
                   title="Manage rules"
+                  aria-label={`Manage rules for ${group.name}`}
+                  hidden={!permissions[`update:${group.id}`]}
                 >
                   <ListChecks className="h-4 w-4" />
                 </Button>
@@ -140,6 +147,8 @@ export function SecurityGroupTable({
                   onClick={() => onEdit?.(group)}
                   disabled={busyId === group.id}
                   title="Edit name and description"
+                  aria-label={`Edit ${group.name}`}
+                  hidden={!permissions[`update:${group.id}`]}
                 >
                   <Pencil className="h-4 w-4" />
                 </Button>
@@ -150,7 +159,8 @@ export function SecurityGroupTable({
                   onClick={() => handleDelete(group)}
                   disabled={!deletable || busyId === group.id}
                   title={disabledReason ?? "Delete security group"}
-                  aria-label="Delete security group"
+                  aria-label={`Delete ${group.name}`}
+                  hidden={!permissions[`delete:${group.id}`]}
                 >
                   {busyId === group.id ? (
                     <Loader2 className="h-4 w-4 animate-spin" />

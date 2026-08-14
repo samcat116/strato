@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronRight, CircleUser, LogOut, Monitor, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useAuth, useOrganization } from "@/providers";
 import {
@@ -159,7 +160,14 @@ function UserCard() {
             </Link>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={logout} className="cursor-pointer">
+          <DropdownMenuItem
+            onClick={() => {
+              void logout().catch((error) =>
+                toast.error(error instanceof Error ? error.message : "Sign out failed")
+              );
+            }}
+            className="cursor-pointer"
+          >
             <LogOut className="mr-2 h-4 w-4" />
             Log out
           </DropdownMenuItem>
@@ -169,9 +177,14 @@ function UserCard() {
   );
 }
 
-export function Sidebar() {
+export function Sidebar({ className }: { className?: string }) {
   return (
-    <aside className="flex w-[236px] shrink-0 flex-col overflow-y-auto border-r border-border bg-card px-3 py-3.5">
+    <aside
+      className={cn(
+        "flex w-[236px] shrink-0 flex-col overflow-y-auto border-r border-border bg-card px-3 py-3.5",
+        className
+      )}
+    >
       <div className="flex items-center gap-2 px-2 pb-3.5 pt-1">
         <div className="flex h-6 w-6 items-center justify-center rounded-md bg-foreground font-mono text-[13px] font-bold text-background">
           S

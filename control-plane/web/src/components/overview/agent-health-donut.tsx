@@ -17,8 +17,12 @@ export function AgentHealthDonut({ segments, total }: AgentHealthDonutProps) {
   let offset = 0;
 
   return (
-    <div className="relative h-[110px] w-[110px] shrink-0">
-      <svg width={110} height={110} viewBox="0 0 110 110">
+    <div
+      className="relative h-[110px] w-[110px] shrink-0"
+      role="img"
+      aria-label={`Agent health: ${total} agents; segment counts ${segments.map((segment) => segment.value).join(", ")}`}
+    >
+      <svg aria-hidden="true" width={110} height={110} viewBox="0 0 110 110">
         <circle
           cx={55}
           cy={55}

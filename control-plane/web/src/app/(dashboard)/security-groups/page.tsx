@@ -4,13 +4,15 @@ import { useState } from "react";
 import { Plus, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
+import { ResourceListControls, useResourceList } from "@/components/ui/resource-list-controls";
 import {
   SecurityGroupTable,
   CreateSecurityGroupDialog,
   EditSecurityGroupDialog,
   SecurityGroupRulesDialog,
 } from "@/components/security-groups";
-import { useSecurityGroups, useInvalidateSecurityGroups } from "@/lib/hooks";
+import { useSecurityGroups, useInvalidateSecurityGroups, usePermissions } from "@/lib/hooks";
 import { useProjectContext } from "@/providers";
 import type { SecurityGroup } from "@/types/api";
 
@@ -24,9 +26,11 @@ export default function SecurityGroupsPage() {
   const {
     data: groups = [],
     isLoading,
-    isError,
+    error,
   } = useSecurityGroups(currentProject?.id);
   const invalidateSecurityGroups = useInvalidateSecurityGroups();
+  const { permissions } = usePermissions(currentProject ? [{ key: "create", action: "securitygroup:create", node: { type: "project", id: currentProject.id } }] : []);
+  const list = useResourceList(groups, (group) => `${group.name} ${group.description ?? ""}`);
 
   const rulesGroup = groups.find((group) => group.id === rulesGroupId) ?? null;
 
@@ -46,14 +50,16 @@ export default function SecurityGroupsPage() {
             </p>
           </div>
         </div>
-        <Button
+        {permissions.create && <Button
           className="bg-primary hover:bg-primary/90"
           onClick={() => setCreateOpen(true)}
         >
           <Plus className="h-4 w-4 mr-2" />
           Create Security Group
-        </Button>
+        </Button>}
       </div>
+
+      <QueryErrorNotice resource="security groups" error={error} hasData={groups.length > 0} onRetry={() => void invalidateSecurityGroups()} />
 
       <Card className="bg-card border-border">
         <CardHeader>
@@ -63,20 +69,14 @@ export default function SecurityGroupsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {isError ? (
-            // A failed fetch must not read as "no groups exist".
-            <p className="text-sm text-red-600 py-4">
-              Failed to load security groups. Refresh to try again.
-            </p>
-          ) : (
-            <SecurityGroupTable
-              groups={groups}
+          <ResourceListControls label="security groups" query={list.query} onQueryChange={list.setQuery} page={list.page} onPageChange={list.setPage} totalPages={list.totalPages} filteredCount={list.filteredCount} totalCount={list.totalCount} pageSize={list.pageSize} />
+          <SecurityGroupTable
+              groups={list.pageItems}
               isLoading={isLoading}
               onRefresh={invalidateSecurityGroups}
               onEdit={setEditing}
               onManageRules={(group) => setRulesGroupId(group.id)}
             />
-          )}
         </CardContent>
       </Card>
 

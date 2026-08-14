@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, FolderKanban } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import { ProjectMembersSection } from "@/components/project-members";
 import { RolesSection, PoliciesSection } from "@/components/iam";
 import { useProject, usePermissions } from "@/lib/hooks";
@@ -15,10 +16,19 @@ export default function ProjectDetailPage() {
   const projectId = params.projectId as string;
   const { currentOrg } = useOrganization();
 
-  const { data: project, isLoading } = useProject(projectId);
+  const {
+    data: project,
+    isLoading,
+    error: projectError,
+    refetch: refetchProject,
+  } = useProject(projectId);
   const organizationId = project?.organizationId ?? currentOrg?.id ?? "";
 
-  const { permissions } = usePermissions([
+  const {
+    permissions,
+    error: permissionsError,
+    refetch: refetchPermissions,
+  } = usePermissions([
     {
       key: "set_policy",
       action: "iam:setPolicy",
@@ -53,13 +63,22 @@ export default function ProjectDetailPage() {
         </div>
       </div>
 
+      <QueryErrorNotice
+        resource="project"
+        error={projectError ?? permissionsError}
+        hasData={project !== undefined}
+        onRetry={() => {
+          void Promise.all([refetchProject(), refetchPermissions()]);
+        }}
+      />
+
       {isLoading ? (
         <Card className="bg-card border-border">
           <CardContent className="py-8">
             <Skeleton className="h-24 w-full bg-muted" />
           </CardContent>
         </Card>
-      ) : (
+      ) : project ? (
         <>
           <ProjectMembersSection
             projectId={projectId}
@@ -76,7 +95,7 @@ export default function ProjectDetailPage() {
             canManage={canManage}
           />
         </>
-      )}
+      ) : null}
     </div>
   );
 }

@@ -957,6 +957,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/volume-snapshots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a project's volume snapshots
+         * @description Returns volume snapshots across all volumes in one project. This is the collection endpoint for project-wide inventory views; it avoids one request per parent volume.
+         */
+        get: operations["listProjectVolumeSnapshots"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/volumes": {
         parameters: {
             query?: never;
@@ -1224,6 +1244,133 @@ export interface paths {
         post?: never;
         /** Delete a logical network */
         delete: operations["deleteNetwork"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/load-balancers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List load balancers */
+        get: operations["listLoadBalancers"];
+        put?: never;
+        /** Create a load balancer */
+        post: operations["createLoadBalancer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/load-balancers/{loadBalancerId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The load balancer's id. */
+                loadBalancerId: components["parameters"]["LoadBalancerID"];
+            };
+            cookie?: never;
+        };
+        /** Get a load balancer */
+        get: operations["getLoadBalancer"];
+        /** Update a load balancer */
+        put: operations["updateLoadBalancer"];
+        post?: never;
+        /** Delete a load balancer */
+        delete: operations["deleteLoadBalancer"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/load-balancers/{loadBalancerId}/listeners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The load balancer's id. */
+                loadBalancerId: components["parameters"]["LoadBalancerID"];
+            };
+            cookie?: never;
+        };
+        /** List load balancer listeners */
+        get: operations["listLoadBalancerListeners"];
+        put?: never;
+        /** Add a load balancer listener */
+        post: operations["createLoadBalancerListener"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/load-balancers/{loadBalancerId}/listeners/{listenerId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The load balancer's id. */
+                loadBalancerId: components["parameters"]["LoadBalancerID"];
+                /** @description The load balancer listener's id. */
+                listenerId: components["parameters"]["LoadBalancerListenerID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** Update a load balancer listener */
+        put: operations["updateLoadBalancerListener"];
+        post?: never;
+        /** Delete a load balancer listener */
+        delete: operations["deleteLoadBalancerListener"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/load-balancers/{loadBalancerId}/backends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The load balancer's id. */
+                loadBalancerId: components["parameters"]["LoadBalancerID"];
+            };
+            cookie?: never;
+        };
+        /** List load balancer backends */
+        get: operations["listLoadBalancerBackends"];
+        put?: never;
+        /** Add a load balancer backend */
+        post: operations["createLoadBalancerBackend"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/load-balancers/{loadBalancerId}/backends/{backendId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The load balancer's id. */
+                loadBalancerId: components["parameters"]["LoadBalancerID"];
+                /** @description The load balancer backend's id. */
+                backendId: components["parameters"]["LoadBalancerBackendID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a load balancer backend */
+        delete: operations["deleteLoadBalancerBackend"];
         options?: never;
         head?: never;
         patch?: never;
@@ -6236,6 +6383,95 @@ export interface components {
             /** Format: date-time */
             updatedAt?: string;
         };
+        LoadBalancerHealthCheck: {
+            enabled: boolean;
+            intervalSeconds: number;
+            timeoutSeconds: number;
+            successThreshold: number;
+            failureThreshold: number;
+        };
+        CreateLoadBalancerRequest: {
+            name: string;
+            /** Format: uuid */
+            projectId?: string;
+            /** Format: uuid */
+            logicalNetworkId: string;
+            /** @enum {string} */
+            protocol: "tcp" | "udp";
+            healthCheck?: components["schemas"]["LoadBalancerHealthCheck"];
+        };
+        UpdateLoadBalancerRequest: {
+            name?: string;
+            /** @enum {string} */
+            protocol?: "tcp" | "udp";
+            healthCheck?: components["schemas"]["LoadBalancerHealthCheck"];
+        };
+        LoadBalancerListenerRequest: {
+            port: number;
+            backendPort: number;
+        };
+        /** @description Specify either vmId with nicIndex, or ipAddress. */
+        CreateLoadBalancerBackendRequest: {
+            /** Format: uuid */
+            vmId?: string;
+            nicIndex?: number;
+            ipAddress?: string;
+        };
+        LoadBalancerListener: {
+            /** Format: uuid */
+            id: string;
+            port: number;
+            backendPort: number;
+        };
+        LoadBalancerBackend: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            interfaceId?: string;
+            /** Format: uuid */
+            vmId?: string;
+            nicIndex?: number;
+            ipAddress?: string;
+            /** @enum {string} */
+            healthStatus: "unknown" | "online" | "offline" | "error";
+            /** Format: date-time */
+            lastHealthCheckAt?: string;
+        };
+        LoadBalancer: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: uuid */
+            projectId: string;
+            /** Format: uuid */
+            logicalNetworkId: string;
+            logicalNetworkName?: string;
+            vip: string;
+            /** @enum {string} */
+            protocol: "tcp" | "udp";
+            /** @enum {string} */
+            desiredState: "active";
+            /** @enum {string} */
+            observedState: "pending" | "active" | "error";
+            /** Format: int64 */
+            generation: number;
+            /** Format: int64 */
+            observedGeneration: number;
+            lastError?: string;
+            healthCheck: components["schemas"]["LoadBalancerHealthCheck"];
+            listeners: components["schemas"]["LoadBalancerListener"][];
+            backends: components["schemas"]["LoadBalancerBackend"][];
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        LoadBalancerListPage: {
+            items: components["schemas"]["LoadBalancer"][];
+            total: number;
+            limit: number;
+            offset: number;
+        };
         /** @description Exactly one of organizationId / organizationalUnitId must be present. */
         CreateFloatingIPPoolRequest: {
             name: string;
@@ -8243,7 +8479,7 @@ export interface components {
          * @description The tree nodes a role binding or guardrail can attach to: the org hierarchy plus any individual resource.
          * @enum {string}
          */
-        IAMNodeType: "organization" | "organizational_unit" | "project" | "virtual_machine" | "sandbox" | "image" | "network" | "floating_ip" | "volume" | "volume_snapshot" | "sandbox_snapshot" | "site" | "agent";
+        IAMNodeType: "organization" | "organizational_unit" | "project" | "virtual_machine" | "sandbox" | "image" | "network" | "floating_ip" | "load_balancer" | "security_group" | "dns_zone" | "dns_record" | "volume" | "volume_snapshot" | "sandbox_snapshot" | "site" | "agent" | "service_account";
         /** @description A node in the org/resource tree — the `(type, id)` pair policy attaches to. */
         IAMNode: {
             type: components["schemas"]["IAMNodeType"];
@@ -9568,6 +9804,12 @@ export interface components {
         VolumeSnapshotID: string;
         /** @description The network's id. */
         NetworkID: string;
+        /** @description The load balancer's id. */
+        LoadBalancerID: string;
+        /** @description The load balancer listener's id. */
+        LoadBalancerListenerID: string;
+        /** @description The load balancer backend's id. */
+        LoadBalancerBackendID: string;
         /** @description The floating IP pool's id. */
         PoolID: string;
         /** @description The floating IP's id. */
@@ -11138,6 +11380,36 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    listProjectVolumeSnapshots: {
+        parameters: {
+            query: {
+                /** @description Project whose volume snapshots to list. */
+                project_id: string;
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the project's volume snapshots. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumeSnapshotListPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
     listVolumes: {
         parameters: {
             query?: {
@@ -11594,6 +11866,336 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    listLoadBalancers: {
+        parameters: {
+            query?: {
+                /** @description Scope results to one project. */
+                project_id?: components["parameters"]["ProjectIdQuery"];
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of visible load balancers. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoadBalancerListPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createLoadBalancer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateLoadBalancerRequest"];
+            };
+        };
+        responses: {
+            /** @description The created load balancer. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoadBalancer"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getLoadBalancer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The load balancer's id. */
+                loadBalancerId: components["parameters"]["LoadBalancerID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The load balancer. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoadBalancer"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateLoadBalancer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The load balancer's id. */
+                loadBalancerId: components["parameters"]["LoadBalancerID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateLoadBalancerRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated load balancer. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoadBalancer"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteLoadBalancer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The load balancer's id. */
+                loadBalancerId: components["parameters"]["LoadBalancerID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listLoadBalancerListeners: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The load balancer's id. */
+                loadBalancerId: components["parameters"]["LoadBalancerID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The listeners. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoadBalancerListener"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createLoadBalancerListener: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The load balancer's id. */
+                loadBalancerId: components["parameters"]["LoadBalancerID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoadBalancerListenerRequest"];
+            };
+        };
+        responses: {
+            /** @description The created listener. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoadBalancerListener"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateLoadBalancerListener: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The load balancer's id. */
+                loadBalancerId: components["parameters"]["LoadBalancerID"];
+                /** @description The load balancer listener's id. */
+                listenerId: components["parameters"]["LoadBalancerListenerID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoadBalancerListenerRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated listener. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoadBalancerListener"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteLoadBalancerListener: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The load balancer's id. */
+                loadBalancerId: components["parameters"]["LoadBalancerID"];
+                /** @description The load balancer listener's id. */
+                listenerId: components["parameters"]["LoadBalancerListenerID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listLoadBalancerBackends: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The load balancer's id. */
+                loadBalancerId: components["parameters"]["LoadBalancerID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The backends. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoadBalancerBackend"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createLoadBalancerBackend: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The load balancer's id. */
+                loadBalancerId: components["parameters"]["LoadBalancerID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateLoadBalancerBackendRequest"];
+            };
+        };
+        responses: {
+            /** @description The created backend. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoadBalancerBackend"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteLoadBalancerBackend: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The load balancer's id. */
+                loadBalancerId: components["parameters"]["LoadBalancerID"];
+                /** @description The load balancer backend's id. */
+                backendId: components["parameters"]["LoadBalancerBackendID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     listFloatingIPPools: {

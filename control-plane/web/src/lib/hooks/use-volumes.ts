@@ -1,6 +1,5 @@
-import { useQueries } from "@tanstack/react-query";
 import { volumesApi } from "@/lib/api/volumes";
-import type { Volume } from "@/types/api";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { makeResourceQueryHooks } from "./use-resource-queries";
 
 const hooks = makeResourceQueryHooks({
@@ -20,26 +19,21 @@ export function useVolumes(projectId?: string) {
   return hooks.useList(projectId);
 }
 
-/**
- * Aggregates snapshots across many volumes. The backend only exposes
- * per-volume snapshot listing, so the global snapshots page fans out one
- * query per volume and flattens the results. (The per-volume keys match the
- * factory's `useSnapshots` keys, so invalidation covers both.)
- */
-export function useSnapshotsForVolumes(volumes: Volume[]) {
-  return useQueries({
-    queries: volumes
-      .filter((v) => v.id)
-      .map((v) => ({
-        queryKey: ["volumes", v.id!, "snapshots"],
-        queryFn: () => volumesApi.listSnapshots(v.id!),
-        refetchInterval: 5000,
-      })),
-    combine: (results) => ({
-      data: results.flatMap((r) => r.data ?? []),
-      isLoading: results.some((r) => r.isLoading),
-    }),
+export function useProjectVolumeSnapshots(projectId?: string) {
+  return useQuery({
+    queryKey: ["volume-snapshots", { projectId }],
+    queryFn: ({ signal }) => volumesApi.listProjectSnapshots(projectId!, signal),
+    enabled: !!projectId,
+    refetchInterval: 5000,
   });
 }
 
-export const useInvalidateVolumes = hooks.useInvalidate;
+export function useInvalidateVolumes() {
+  const invalidateVolumes = hooks.useInvalidate();
+  const queryClient = useQueryClient();
+
+  return () => {
+    invalidateVolumes();
+    queryClient.invalidateQueries({ queryKey: ["volume-snapshots"] });
+  };
+}

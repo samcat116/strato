@@ -1,11 +1,12 @@
 "use client";
 
 import { Skeleton } from "@/components/ui/skeleton";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import { GroupsSection } from "@/components/organization-groups";
 import { useCurrentOrgAccess } from "@/lib/hooks";
 
 export default function GroupsPage() {
-  const { orgId, canManage, isLoading } = useCurrentOrgAccess();
+  const { orgId, canManage, isLoading, error, retry } = useCurrentOrgAccess();
 
   if (isLoading) {
     return (
@@ -16,7 +17,7 @@ export default function GroupsPage() {
     );
   }
 
-  if (!orgId) {
+  if (!orgId && !error) {
     return (
       <div className="max-w-4xl mx-auto">
         <div className="text-center py-12">
@@ -34,7 +35,13 @@ export default function GroupsPage() {
           Manage groups and the members that belong to them.
         </p>
       </div>
-      <GroupsSection orgId={orgId} canManage={canManage} />
+      <QueryErrorNotice
+        resource="organization access"
+        error={error}
+        hasData={!!orgId}
+        onRetry={() => void retry()}
+      />
+      {orgId && <GroupsSection orgId={orgId} canManage={canManage} />}
     </div>
   );
 }

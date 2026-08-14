@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { KeyRound, Loader2, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
@@ -49,8 +50,17 @@ export function WebhooksSection({ orgId, canManage }: WebhooksSectionProps) {
   } | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
 
-  const { data: webhooks = [], isLoading } = useWebhooks(orgId);
-  const { data: projects = [] } = useProjectsForOrganization(orgId);
+  const {
+    data: webhooks = [],
+    isLoading,
+    error: webhooksError,
+    refetch: refetchWebhooks,
+  } = useWebhooks(orgId);
+  const {
+    data: projects = [],
+    error: projectsError,
+    refetch: refetchProjects,
+  } = useProjectsForOrganization(orgId);
   const deleteWebhook = useDeleteWebhook(orgId);
   const rotateSecret = useRotateWebhookSecret(orgId);
   const sendTest = useSendTestWebhook(orgId);
@@ -127,6 +137,15 @@ export function WebhooksSection({ orgId, canManage }: WebhooksSectionProps) {
           {!canManage &&
             " You need admin rights on this organization to create, edit, or delete them."}
         </p>
+
+        <QueryErrorNotice
+          resource="webhooks"
+          error={webhooksError ?? projectsError}
+          hasData={webhooks.length > 0 || projects.length > 0}
+          onRetry={() => {
+            void Promise.all([refetchWebhooks(), refetchProjects()]);
+          }}
+        />
 
         <WebhooksTable
           webhooks={webhooks}

@@ -9,7 +9,7 @@ import type {
 export function useSCIMTokens(orgId: string, enabled: boolean = true) {
   return useQuery({
     queryKey: ["scim-tokens", orgId],
-    queryFn: () => scimTokensApi.list(orgId),
+    queryFn: ({ signal }) => scimTokensApi.list(orgId, signal),
     enabled: enabled && !!orgId,
   });
 }

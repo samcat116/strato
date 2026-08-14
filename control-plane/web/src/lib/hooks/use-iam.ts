@@ -17,7 +17,7 @@ import type {
 export function useRoles(ownerType: IAMRoleOwnerType, ownerId: string) {
   return useQuery({
     queryKey: ["iam-roles", ownerType, ownerId],
-    queryFn: () => iamApi.listRoles(ownerType, ownerId),
+    queryFn: ({ signal }) => iamApi.listRoles(ownerType, ownerId, signal),
     enabled: !!ownerId,
     select: (data) => data.roles,
   });
@@ -26,7 +26,7 @@ export function useRoles(ownerType: IAMRoleOwnerType, ownerId: string) {
 export function useBindableRoles(nodeType: IAMNodeType, nodeId: string) {
   return useQuery({
     queryKey: ["iam-bindable-roles", nodeType, nodeId],
-    queryFn: () => iamApi.listBindableRoles(nodeType, nodeId),
+    queryFn: ({ signal }) => iamApi.listBindableRoles(nodeType, nodeId, signal),
     enabled: !!nodeId,
     select: (data) => data.roles,
   });
@@ -85,7 +85,7 @@ export function useValidateRole() {
 export function useActionCatalog() {
   return useQuery({
     queryKey: ["iam-actions"],
-    queryFn: () => iamApi.listActions(),
+    queryFn: ({ signal }) => iamApi.listActions(signal),
     select: (data) => data.services,
     // The catalog describes the software, not any deployment's policy, so it
     // never changes within a session.
@@ -98,7 +98,7 @@ export function useActionCatalog() {
 export function usePolicies(ownerType: IAMRoleOwnerType, ownerId: string) {
   return useQuery({
     queryKey: ["iam-policies", ownerType, ownerId],
-    queryFn: () => iamApi.listPolicies(ownerType, ownerId),
+    queryFn: ({ signal }) => iamApi.listPolicies(ownerType, ownerId, signal),
     enabled: !!ownerId,
     select: (data) => data.policies,
   });

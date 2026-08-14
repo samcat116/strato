@@ -9,8 +9,8 @@ import type {
 } from "@/types/api";
 
 export const groupsApi = {
-  list(orgId: string): Promise<Group[]> {
-    return api.get<Group[]>(`/api/organizations/${orgId}/groups`);
+  list(orgId: string, signal?: AbortSignal): Promise<Group[]> {
+    return api.get<Group[]>(`/api/organizations/${orgId}/groups`, undefined, signal);
   },
 
   create(orgId: string, data: CreateGroupRequest): Promise<Group> {
@@ -33,9 +33,9 @@ export const groupsApi = {
   },
 
   // Members
-  listMembers(orgId: string, groupId: string): Promise<GroupMember[]> {
+  listMembers(orgId: string, groupId: string, signal?: AbortSignal): Promise<GroupMember[]> {
     return api.get<GroupMember[]>(
-      `/api/organizations/${orgId}/groups/${groupId}/members`
+      `/api/organizations/${orgId}/groups/${groupId}/members`, undefined, signal
     );
   },
 

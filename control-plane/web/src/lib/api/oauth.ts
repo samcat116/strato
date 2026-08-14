@@ -8,9 +8,9 @@ import type {
 } from "@/types/api";
 
 export const oauthApi = {
-  getPendingDevice(userCode: string): Promise<PendingDeviceAuthorization> {
+  getPendingDevice(userCode: string, signal?: AbortSignal): Promise<PendingDeviceAuthorization> {
     return api.get<PendingDeviceAuthorization>(
-      `/api/oauth/device/${encodeURIComponent(userCode)}`
+      `/api/oauth/device/${encodeURIComponent(userCode)}`, undefined, signal
     );
   },
 
@@ -33,8 +33,8 @@ export const oauthApi = {
     return api.post(`/api/oauth/device/${encodeURIComponent(userCode)}/deny`);
   },
 
-  listSessions(): Promise<CLISession[]> {
-    return api.get<CLISession[]>("/api/oauth/sessions");
+  listSessions(signal?: AbortSignal): Promise<CLISession[]> {
+    return api.get<CLISession[]>("/api/oauth/sessions", undefined, signal);
   },
 
   revokeSession(id: string): Promise<void> {

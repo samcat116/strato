@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import {
   Card,
   CardContent,
@@ -26,7 +27,7 @@ export function RolesSection({
   ownerId,
   canManage,
 }: RolesSectionProps) {
-  const { data: roles = [], isLoading } = useRoles(ownerType, ownerId);
+  const { data: roles = [], isLoading, error, refetch } = useRoles(ownerType, ownerId);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingRole, setEditingRole] = useState<IAMRole | null>(null);
@@ -68,6 +69,12 @@ export function RolesSection({
             {!canManage &&
               " You need admin rights on this owner to create, edit, or delete them."}
           </p>
+          <QueryErrorNotice
+            resource="roles"
+            error={error}
+            hasData={roles.length > 0}
+            onRetry={() => void refetch()}
+          />
           <RolesTable
             ownerType={ownerType}
             ownerId={ownerId}

@@ -11,8 +11,10 @@ import {
   FolderKanban,
   Gauge,
   Globe,
+  Globe2,
   HardDrive,
   Key,
+  KeyRound,
   TerminalSquare,
   Layers,
   LayoutGrid,
@@ -23,6 +25,7 @@ import {
   Server,
   Settings,
   Shield,
+  ShieldAlert,
   ShieldCheck,
   Users,
   UsersRound,
@@ -62,7 +65,14 @@ export const navTree: NavItem[] = [
       { label: "Sites", href: "/sites", icon: MapPin },
     ],
   },
-  { label: "Networking", href: "/networks", icon: Globe },
+  {
+    label: "Networking",
+    icon: Globe,
+    children: [
+      { label: "Networks", href: "/networks", icon: Globe },
+      { label: "Network Services", href: "/network-services", icon: Globe2 },
+    ],
+  },
   { label: "Security Groups", href: "/security-groups", icon: Shield },
   {
     label: "Storage",
@@ -85,6 +95,11 @@ export const navTree: NavItem[] = [
       { label: "API Keys", href: "/settings/api-keys", icon: Key },
       { label: "CLI Sessions", href: "/settings/cli-sessions", icon: TerminalSquare },
       {
+        label: "Project Integrations",
+        href: "/settings/project-integrations",
+        icon: KeyRound,
+      },
+      {
         label: "Workload Identity",
         href: "/workload-identity",
         icon: Fingerprint,
@@ -103,6 +118,12 @@ export const navTree: NavItem[] = [
       { label: "Organization", href: "/settings/organization", icon: Building2 },
       { label: "Webhooks", href: "/settings/webhooks", icon: Webhook },
       { label: "Audit Log", href: "/admin/audit", icon: ScrollText, adminOnly: true },
+      {
+        label: "Governance",
+        href: "/admin/governance",
+        icon: ShieldAlert,
+        adminOnly: true,
+      },
     ],
   },
 ];

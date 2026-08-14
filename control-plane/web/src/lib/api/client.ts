@@ -94,32 +94,35 @@ export async function apiClient<T>(
 
 // Convenience methods
 export const api = {
-  get<T>(endpoint: string, params?: Record<string, string>): Promise<T> {
-    return apiClient<T>(endpoint, { method: "GET", params });
+  get<T>(endpoint: string, params?: Record<string, string>, signal?: AbortSignal): Promise<T> {
+    return apiClient<T>(endpoint, { method: "GET", params, signal });
   },
 
-  post<T>(endpoint: string, data?: unknown): Promise<T> {
+  post<T>(endpoint: string, data?: unknown, signal?: AbortSignal): Promise<T> {
     return apiClient<T>(endpoint, {
       method: "POST",
       body: data ? JSON.stringify(data) : undefined,
+      signal,
     });
   },
 
-  put<T>(endpoint: string, data?: unknown): Promise<T> {
+  put<T>(endpoint: string, data?: unknown, signal?: AbortSignal): Promise<T> {
     return apiClient<T>(endpoint, {
       method: "PUT",
       body: data ? JSON.stringify(data) : undefined,
+      signal,
     });
   },
 
-  patch<T>(endpoint: string, data?: unknown): Promise<T> {
+  patch<T>(endpoint: string, data?: unknown, signal?: AbortSignal): Promise<T> {
     return apiClient<T>(endpoint, {
       method: "PATCH",
       body: data ? JSON.stringify(data) : undefined,
+      signal,
     });
   },
 
-  delete<T>(endpoint: string): Promise<T> {
-    return apiClient<T>(endpoint, { method: "DELETE" });
+  delete<T>(endpoint: string, signal?: AbortSignal): Promise<T> {
+    return apiClient<T>(endpoint, { method: "DELETE", signal });
   },
 };

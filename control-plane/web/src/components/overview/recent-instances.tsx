@@ -10,7 +10,7 @@ interface RecentInstancesProps {
 }
 
 export function RecentInstances({ vms, agents, showAgent = true }: RecentInstancesProps) {
-  const grid = `grid items-center gap-3.5 ${
+  const grid = `grid min-w-[720px] items-center gap-3.5 ${
     showAgent
       ? "grid-cols-[12px_1.6fr_1fr_1fr_1fr_0.6fr_0.8fr]"
       : "grid-cols-[12px_1.6fr_1.2fr_1fr_0.6fr_0.8fr]"
@@ -25,7 +25,7 @@ export function RecentInstances({ vms, agents, showAgent = true }: RecentInstanc
     .slice(0, 6);
 
   return (
-    <div className="overflow-hidden rounded-[11px] border border-border bg-card">
+    <div className="overflow-x-auto rounded-[11px] border border-border bg-card">
       <div className="flex items-center border-b border-muted px-4 py-3">
         <span className="text-[13.5px] font-semibold">Recent instances</span>
         <div className="flex-1" />
@@ -62,7 +62,7 @@ export function RecentInstances({ vms, agents, showAgent = true }: RecentInstanc
             return (
               <Link
                 key={vm.id}
-                href={`/vms/detail?id=${vm.id}`}
+                href={`/vms/${vm.id}`}
                 className={`${grid} border-b border-muted px-4 py-2.5 transition-colors last:border-b-0 hover:bg-background/60`}
               >
                 <span

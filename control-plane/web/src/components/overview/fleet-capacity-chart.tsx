@@ -22,7 +22,11 @@ export function FleetCapacityChart({ agents }: FleetCapacityChartProps) {
   const sorted = [...agents].sort((a, b) => a.name.localeCompare(b.name));
 
   return (
-    <div className="overflow-x-auto">
+    <div
+      className="overflow-x-auto"
+      role="img"
+      aria-label={`Reserved capacity. ${sorted.map((agent) => agent.isOnline ? `${agent.name}: CPU ${reservedPercent(agent.resources.totalCPU, agent.resources.availableCPU)}%, memory ${reservedPercent(agent.resources.totalMemory, agent.resources.availableMemory)}%` : `${agent.name}: offline`).join(". ")}`}
+    >
       <div className="relative h-[150px] min-w-full">
         {/* grid lines at 25/50/75% */}
         {[25, 50, 75].map((line) => (
@@ -32,7 +36,7 @@ export function FleetCapacityChart({ agents }: FleetCapacityChartProps) {
             style={{ bottom: `${line}%` }}
           />
         ))}
-        <div className="absolute inset-0 flex items-end justify-around gap-4 px-2">
+        <div aria-hidden="true" className="absolute inset-0 flex items-end justify-around gap-4 px-2">
           {sorted.map((agent) => {
             const cpu = reservedPercent(
               agent.resources.totalCPU,
@@ -71,7 +75,7 @@ export function FleetCapacityChart({ agents }: FleetCapacityChartProps) {
           })}
         </div>
       </div>
-      <div className="mt-2 flex items-start justify-around gap-4 px-2">
+      <div aria-hidden="true" className="mt-2 flex items-start justify-around gap-4 px-2">
         {sorted.map((agent) => (
           <span
             key={agent.id}

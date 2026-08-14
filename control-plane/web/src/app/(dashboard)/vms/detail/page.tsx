@@ -60,9 +60,9 @@ const ConsoleTerminal = dynamic(
   }
 );
 
-export default function VMDetailPage() {
+export default function VMDetailPage({ id: suppliedId }: { id?: string } = {}) {
   const searchParams = useSearchParams();
-  const id = searchParams.get("id") || "";
+  const id = suppliedId ?? searchParams.get("id") ?? "";
   const { data: vm, isLoading, error } = useVM(id);
   const invalidateVMs = useInvalidateVMs();
 
@@ -301,7 +301,7 @@ export default function VMDetailPage() {
                   <p className="text-muted-foreground">Image</p>
                   {vm.imageId && vm.projectId ? (
                     <Link
-                      href={`/images/detail?id=${vm.imageId}&projectId=${vm.projectId}`}
+                      href={`/images/${vm.projectId}/${vm.imageId}`}
                       className="text-blue-600 hover:text-blue-700 hover:underline"
                     >
                       {vm.image}
@@ -314,7 +314,7 @@ export default function VMDetailPage() {
                   <p className="text-muted-foreground">Hypervisor</p>
                   {vm.hypervisorId ? (
                     <Link
-                      href={`/agents/detail?id=${vm.hypervisorId}`}
+                      href={`/agents/${vm.hypervisorId}`}
                       className="text-blue-600 hover:text-blue-700 hover:underline font-mono"
                     >
                       {vm.hypervisorId}

@@ -24,22 +24,24 @@ export const iamApi = {
   // Roles
   listRoles(
     ownerType: IAMRoleOwnerType,
-    ownerId: string
+    ownerId: string,
+    signal?: AbortSignal
   ): Promise<IAMRoleListResponse> {
     return api.get<IAMRoleListResponse>("/api/iam/roles", {
       ownerType,
       ownerId,
-    });
+    }, signal);
   },
 
   listBindableRoles(
     nodeType: IAMNodeType,
-    nodeId: string
+    nodeId: string,
+    signal?: AbortSignal
   ): Promise<IAMBindableRolesResponse> {
     return api.get<IAMBindableRolesResponse>("/api/iam/roles/bindable", {
       nodeType,
       nodeId,
-    });
+    }, signal);
   },
 
   createRole(data: IAMRoleCreateRequest): Promise<IAMRole> {
@@ -61,19 +63,20 @@ export const iamApi = {
   },
 
   // Action catalog
-  listActions(): Promise<IAMActionCatalogResponse> {
-    return api.get<IAMActionCatalogResponse>("/api/iam/actions");
+  listActions(signal?: AbortSignal): Promise<IAMActionCatalogResponse> {
+    return api.get<IAMActionCatalogResponse>("/api/iam/actions", undefined, signal);
   },
 
   // Authored policies
   listPolicies(
     ownerType: IAMRoleOwnerType,
-    ownerId: string
+    ownerId: string,
+    signal?: AbortSignal
   ): Promise<IAMPolicyListResponse> {
     return api.get<IAMPolicyListResponse>("/api/iam/policies", {
       ownerType,
       ownerId,
-    });
+    }, signal);
   },
 
   createPolicy(data: IAMPolicyCreateRequest): Promise<IAMPolicy> {

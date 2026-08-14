@@ -31,7 +31,7 @@ function toParams(filters: AuditEventFilters): Record<string, string> {
 
 export const auditEventsApi = {
   // System-admin only: the full, cross-organization trail.
-  list(filters: AuditEventFilters = {}): Promise<AuditEventListResponse> {
-    return api.get<AuditEventListResponse>("/api/audit-events", toParams(filters));
+  list(filters: AuditEventFilters = {}, signal?: AbortSignal): Promise<AuditEventListResponse> {
+    return api.get<AuditEventListResponse>("/api/audit-events", toParams(filters), signal);
   },
 };

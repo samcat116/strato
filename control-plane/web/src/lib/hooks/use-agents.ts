@@ -17,7 +17,7 @@ export function useAgents() {
     // switch refetch on its own, rather than relying on switchOrg remembering
     // to invalidate this query.
     queryKey: ["agents", { orgId: organizationId ?? null }],
-    queryFn: () => agentsApi.list(organizationId),
+    queryFn: ({ signal }) => agentsApi.list(organizationId, signal),
     // Wait for org resolution so the first fetch is already scoped — an
     // unscoped fetch would flash the whole fleet before narrowing.
     enabled: !orgLoading,
@@ -33,7 +33,7 @@ export function useAgents() {
 export function useAgent(id: string) {
   return useQuery({
     queryKey: ["agents", id],
-    queryFn: () => agentsApi.get(id),
+    queryFn: ({ signal }) => agentsApi.get(id, signal),
     enabled: !!id,
   });
 }
@@ -89,6 +89,17 @@ export function useAdoptAgentWorkloads() {
       queryClient.invalidateQueries({ queryKey: ["agents"] });
       queryClient.invalidateQueries({ queryKey: ["agents", id] });
       queryClient.invalidateQueries({ queryKey: ["vms"] });
+    },
+  });
+}
+
+export function useForceAgentOffline() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => agentsApi.forceOffline(id),
+    onSuccess: (_result, id) => {
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      queryClient.invalidateQueries({ queryKey: ["agents", id] });
     },
   });
 }

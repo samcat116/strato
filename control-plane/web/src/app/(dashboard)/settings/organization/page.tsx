@@ -39,7 +39,7 @@ export default function OrganizationSettingsPage() {
     refetch,
   } = useQuery({
     queryKey: ["organization", id],
-    queryFn: () => organizationsApi.get(id),
+    queryFn: ({ signal }) => organizationsApi.get(id, signal),
     enabled: !!id,
   });
 

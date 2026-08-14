@@ -28,12 +28,14 @@ import {
 import { sandboxesApi } from "@/lib/api/sandboxes";
 import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { usePendingMutation } from "@/lib/stores/mutations-store";
+import { usePermissions } from "@/lib/hooks/use-permissions";
 import { toast } from "sonner";
 import type { Sandbox, OperationKind } from "@/types/api";
 
 interface SandboxActionsProps {
   sandbox: Sandbox;
   onActionComplete?: () => void;
+  allowedActions?: Partial<Record<SandboxAction, boolean>>;
 }
 
 type SandboxAction = "start" | "stop" | "restart" | "delete";
@@ -78,6 +80,7 @@ const kindToAction: Record<OperationKind, SandboxAction | null> = {
 export function SandboxActions({
   sandbox,
   onActionComplete,
+  allowedActions,
 }: SandboxActionsProps) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const {
@@ -86,6 +89,14 @@ export function SandboxActions({
     run,
   } = useAcceptedMutation();
   const pendingMutation = usePendingMutation(sandbox.id);
+  const { permissions: queriedPermissions } = usePermissions(
+    allowedActions ? [] : (["start", "stop", "restart", "delete"] as SandboxAction[]).map((action) => ({
+      key: action,
+      action: `sandbox:${action}`,
+      node: { type: "sandbox", id: sandbox.id },
+    }))
+  );
+  const permissions = allowedActions ?? queriedPermissions;
 
   // Busy while the request is in flight OR while an accepted mutation is still
   // converging on the server — mutations no longer resolve synchronously.
@@ -141,13 +152,14 @@ export function SandboxActions({
   return (
     <div className="flex items-center space-x-2">
       {/* Quick actions */}
-      {canStart && (
+      {canStart && permissions.start && (
         <Button
           size="sm"
           variant="ghost"
           className="text-green-600 hover:text-green-700 hover:bg-green-500/10"
           onClick={() => handleAction("start")}
           disabled={isLoading}
+          aria-label={`Start ${sandbox.name}`}
         >
           {activeAction === "start" ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -156,13 +168,14 @@ export function SandboxActions({
           )}
         </Button>
       )}
-      {canStop && (
+      {canStop && permissions.stop && (
         <Button
           size="sm"
           variant="ghost"
           className="text-red-600 hover:text-red-700 hover:bg-red-500/10"
           onClick={() => handleAction("stop")}
           disabled={isLoading}
+          aria-label={`Stop ${sandbox.name}`}
         >
           {activeAction === "stop" ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -180,12 +193,13 @@ export function SandboxActions({
             variant="ghost"
             className="text-muted-foreground hover:text-foreground"
             disabled={isLoading}
+            aria-label={`More actions for ${sandbox.name}`}
           >
             <MoreHorizontal className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="bg-card border-border">
-          {canStart && (
+          {canStart && permissions.start && (
             <DropdownMenuItem
               onClick={() => handleAction("start")}
               className="text-foreground hover:bg-accent cursor-pointer"
@@ -194,7 +208,7 @@ export function SandboxActions({
               Start
             </DropdownMenuItem>
           )}
-          {canStop && (
+          {canStop && permissions.stop && (
             <DropdownMenuItem
               onClick={() => handleAction("stop")}
               className="text-foreground hover:bg-accent cursor-pointer"
@@ -203,22 +217,22 @@ export function SandboxActions({
               Stop
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem
+          {permissions.restart && <DropdownMenuItem
             onClick={() => handleAction("restart")}
             className="text-foreground hover:bg-accent cursor-pointer"
             disabled={sandbox.status !== "Running"}
           >
             <RotateCcw className="h-4 w-4 mr-2 text-blue-600" />
             Restart
-          </DropdownMenuItem>
-          <DropdownMenuSeparator className="bg-muted" />
-          <DropdownMenuItem
+          </DropdownMenuItem>}
+          {permissions.delete && <DropdownMenuSeparator className="bg-muted" />}
+          {permissions.delete && <DropdownMenuItem
             onClick={() => setShowDeleteConfirm(true)}
             className="text-red-600 hover:bg-red-500/10 cursor-pointer"
           >
             <Trash2 className="h-4 w-4 mr-2" />
             Delete
-          </DropdownMenuItem>
+          </DropdownMenuItem>}
         </DropdownMenuContent>
       </DropdownMenu>
 

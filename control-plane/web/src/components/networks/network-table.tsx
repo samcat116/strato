@@ -15,7 +15,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { networksApi } from "@/lib/api/networks";
 import { toast } from "sonner";
-import type { Network } from "@/types/api";
+import { usePermissions } from "@/lib/hooks/use-permissions";
+import type { ActionCheckItem, Network } from "@/types/api";
 
 interface NetworkTableProps {
   networks: Network[];
@@ -31,6 +32,16 @@ export function NetworkTable({
   onEdit,
 }: NetworkTableProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
+  const { permissions } = usePermissions(
+    networks.flatMap((network): ActionCheckItem[] =>
+      network.id
+        ? [
+            { key: `update:${network.id}`, action: "network:update", node: { type: "network", id: network.id } },
+            { key: `delete:${network.id}`, action: "network:delete", node: { type: "network", id: network.id } },
+          ]
+        : []
+    )
+  );
 
   const handleDelete = async (network: Network) => {
     if (!network.id) return;
@@ -171,6 +182,8 @@ export function NetworkTable({
                   onClick={() => onEdit?.(network)}
                   disabled={busyId === network.id}
                   title="Edit gateway and DHCP settings"
+                  aria-label={`Edit ${network.name}`}
+                  hidden={!permissions[`update:${network.id}`]}
                 >
                   <Pencil className="h-4 w-4" />
                 </Button>
@@ -181,6 +194,8 @@ export function NetworkTable({
                   onClick={() => handleDelete(network)}
                   disabled={!deletable || busyId === network.id}
                   title={disabledReason}
+                  aria-label={`Delete ${network.name}`}
+                  hidden={!permissions[`delete:${network.id}`]}
                 >
                   {busyId === network.id ? (
                     <Loader2 className="h-4 w-4 animate-spin" />

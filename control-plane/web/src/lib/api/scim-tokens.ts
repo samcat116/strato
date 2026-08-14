@@ -13,9 +13,9 @@ import type {
 } from "@/types/api";
 
 export const scimTokensApi = {
-  list(orgId: string): Promise<SCIMToken[]> {
+  list(orgId: string, signal?: AbortSignal): Promise<SCIMToken[]> {
     return api.get<SCIMToken[]>(
-      `/organizations/${orgId}/settings/scim-tokens`
+      `/organizations/${orgId}/settings/scim-tokens`, undefined, signal
     );
   },
 

@@ -32,10 +32,16 @@ function formatDefault(bytes: number | undefined, format: (bytes: number) => str
   return bytes ? format(bytes) : "Not set";
 }
 
-export default function ImageDetailPage() {
+export default function ImageDetailPage({
+  imageId,
+  projectId: suppliedProjectId,
+}: {
+  imageId?: string;
+  projectId?: string;
+} = {}) {
   const searchParams = useSearchParams();
-  const id = searchParams.get("id") || "";
-  const projectId = searchParams.get("projectId") || "";
+  const id = imageId ?? searchParams.get("id") ?? "";
+  const projectId = suppliedProjectId ?? searchParams.get("projectId") ?? "";
   const { data: image, isLoading, error } = useImage(projectId, id);
   const [editOpen, setEditOpen] = useState(false);
   const deleteArtifact = useDeleteArtifact(projectId);

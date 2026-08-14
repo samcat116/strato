@@ -7,10 +7,20 @@ import { usePermissions } from "./use-permissions";
  * dedicated Access pages so each one doesn't re-derive the org id + can-i check.
  */
 export function useCurrentOrgAccess() {
-  const { currentOrg, isLoading: isOrgLoading } = useOrganization();
+  const {
+    currentOrg,
+    isLoading: isOrgLoading,
+    error: organizationError,
+    refresh: refreshOrganizations,
+  } = useOrganization();
   const orgId = currentOrg?.id ?? "";
 
-  const { permissions, isLoading: isPermissionsLoading } = usePermissions(
+  const {
+    permissions,
+    isLoading: isPermissionsLoading,
+    error: permissionsError,
+    refetch: refetchPermissions,
+  } = usePermissions(
     orgId
       ? [
           {
@@ -26,5 +36,10 @@ export function useCurrentOrgAccess() {
     orgId,
     canManage: permissions.update_org ?? false,
     isLoading: isOrgLoading || (!!orgId && isPermissionsLoading),
+    error: organizationError ?? permissionsError,
+    retry: async () => {
+      await refreshOrganizations();
+      if (orgId) await refetchPermissions();
+    },
   };
 }

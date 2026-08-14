@@ -16,8 +16,8 @@ import type {
 const base = (orgId: string) => `/api/organizations/${orgId}/oidc-providers`;
 
 export const oidcProvidersApi = {
-  list(orgId: string): Promise<OIDCProvider[]> {
-    return api.get<OIDCProvider[]>(base(orgId));
+  list(orgId: string, signal?: AbortSignal): Promise<OIDCProvider[]> {
+    return api.get<OIDCProvider[]>(base(orgId), undefined, signal);
   },
 
   create(orgId: string, data: CreateOIDCProviderRequest): Promise<OIDCProvider> {

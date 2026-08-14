@@ -1,26 +1,21 @@
 // Image API endpoints
 
 import { api } from "./client";
+import { listAllPages } from "./pagination";
 import type {
   Image,
   ArtifactKind,
   CreateImageRequest,
   UpdateImageRequest,
-  Page,
 } from "@/types/api";
-import { LIST_PAGE_LIMIT } from "@/types/api";
 
 export const imagesApi = {
-  list(projectId: string): Promise<Image[]> {
-    return api
-      .get<Page<Image>>(`/api/projects/${projectId}/images`, {
-        limit: LIST_PAGE_LIMIT,
-      })
-      .then((page) => page.items);
+  list(projectId: string, signal?: AbortSignal): Promise<Image[]> {
+    return listAllPages<Image>(`/api/projects/${projectId}/images`, {}, signal);
   },
 
-  get(projectId: string, imageId: string): Promise<Image> {
-    return api.get<Image>(`/api/projects/${projectId}/images/${imageId}`);
+  get(projectId: string, imageId: string, signal?: AbortSignal): Promise<Image> {
+    return api.get<Image>(`/api/projects/${projectId}/images/${imageId}`, undefined, signal);
   },
 
   createFromURL(projectId: string, data: CreateImageRequest): Promise<Image> {

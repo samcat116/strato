@@ -32,8 +32,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
+import { ResourceListControls, useResourceList } from "@/components/ui/resource-list-controls";
 import { sitesApi } from "@/lib/api/sites";
-import { useAgents, useSites } from "@/lib/hooks";
+import { useAgents, useSites, usePermissions } from "@/lib/hooks";
 import { useOrganization } from "@/providers";
 import type { Site, SiteStatus } from "@/types/api";
 import { toast } from "sonner";
@@ -77,8 +79,15 @@ export default function SitesPage() {
   const queryClient = useQueryClient();
   // Sites are listed and created in the org selected in the sidebar switcher.
   const { currentOrg } = useOrganization();
-  const { data: agents = [] } = useAgents();
-  const { data: sites = [], isLoading } = useSites();
+  const agentsQuery = useAgents();
+  const sitesQuery = useSites();
+  const { data: agents = [] } = agentsQuery;
+  const { data: sites = [], isLoading } = sitesQuery;
+  const { permissions } = usePermissions([
+    ...(currentOrg ? [{ key: "create", action: "agent:manage", node: { type: "organization" as const, id: currentOrg.id } }] : []),
+    ...sites.map((site) => ({ key: `manage:${site.id}`, action: "site:manage", node: { type: "site" as const, id: site.id } })),
+  ]);
+  const list = useResourceList(sites, (site) => `${site.name} ${site.description ?? ""} ${site.regionCode ?? ""} ${site.locationLabel ?? ""} ${site.status}`);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
@@ -191,7 +200,7 @@ export default function SitesPage() {
   const designateSelect = (site: Site, placeholder: string) => (
     <Select
       onValueChange={(agentId) => setController.mutate({ site, agentId })}
-      disabled={setController.isPending && setController.variables?.site.id === site.id}
+      disabled={!permissions[`manage:${site.id}`] || (setController.isPending && setController.variables?.site.id === site.id)}
     >
       <SelectTrigger className="h-8 w-[180px] border-border bg-background">
         <SelectValue placeholder={placeholder} />
@@ -264,14 +273,24 @@ export default function SitesPage() {
             Availability zones — groups of agents sharing one network fabric
           </p>
         </div>
-        <Button
+        {permissions.create && <Button
           className="bg-primary hover:bg-primary/90"
           onClick={() => setCreateOpen(true)}
         >
           <Plus className="h-4 w-4 mr-2" />
           Add Site
-        </Button>
+        </Button>}
       </div>
+
+      <QueryErrorNotice
+        resource="sites"
+        error={sitesQuery.error ?? agentsQuery.error}
+        hasData={sitesQuery.data !== undefined}
+        onRetry={() => {
+          void sitesQuery.refetch();
+          void agentsQuery.refetch();
+        }}
+      />
 
       <Card className="bg-card border-border">
         <CardHeader>
@@ -280,6 +299,7 @@ export default function SitesPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
+          <ResourceListControls label="sites" query={list.query} onQueryChange={list.setQuery} page={list.page} onPageChange={list.setPage} totalPages={list.totalPages} filteredCount={list.filteredCount} totalCount={list.totalCount} pageSize={list.pageSize} />
           {isLoading ? (
             <div className="space-y-2">
               {[...Array(3)].map((_, i) => (
@@ -307,7 +327,7 @@ export default function SitesPage() {
                 </TableRow>
               </TableHeader>
               <TableBody className="divide-y divide-border">
-                {sites.map((site) => {
+                {list.pageItems.map((site) => {
                   const location = locationSummary(site);
                   const labelEntries = Object.entries(site.labels ?? {});
                   return (
@@ -331,8 +351,9 @@ export default function SitesPage() {
                           }
                           // Disable only the row being updated, not every row.
                           disabled={
-                            updateStatus.isPending &&
-                            updateStatus.variables?.site.id === site.id
+                            !permissions[`manage:${site.id}`] ||
+                            (updateStatus.isPending &&
+                            updateStatus.variables?.site.id === site.id)
                           }
                         >
                           <SelectTrigger className="h-8 w-[150px] border-border bg-background">
@@ -430,15 +451,16 @@ export default function SitesPage() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <Button
+                        {permissions[`manage:${site.id}`] && <Button
                           size="sm"
                           variant="ghost"
                           className="text-muted-foreground hover:text-red-600"
                           onClick={() => deleteSite.mutate(site.id)}
                           disabled={deleteSite.isPending}
+                          aria-label={`Delete ${site.name}`}
                         >
                           <Trash2 className="h-4 w-4" />
-                        </Button>
+                        </Button>}
                       </TableCell>
                     </TableRow>
                   );

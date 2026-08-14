@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import {
   Table,
   TableBody,
@@ -11,7 +13,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { ImageStatusBadge } from "./image-status-badge";
 import { ImageActions } from "./image-actions";
-import type { Image } from "@/types/api";
+import { usePermissions } from "@/lib/hooks/use-permissions";
+import type { ActionCheckItem, Image } from "@/types/api";
 
 interface ImageTableProps {
   images: Image[];
@@ -26,6 +29,10 @@ export function ImageTable({
   isLoading,
   onRefresh,
 }: ImageTableProps) {
+  const { permissions } = usePermissions(images.flatMap((image): ActionCheckItem[] => image.id ? [
+    { key: `${image.id}:update`, action: "image:update", node: { type: "image", id: image.id } },
+    { key: `${image.id}:delete`, action: "image:delete", node: { type: "image", id: image.id } },
+  ] : []));
   if (isLoading) {
     return (
       <div className="space-y-2">
@@ -71,7 +78,7 @@ export function ImageTable({
             className="border-border hover:bg-accent/60"
           >
             <TableCell>
-              <div className="font-medium text-foreground">{image.name}</div>
+              <Link href={`/images/${projectId}/${image.id}`} className="font-medium text-foreground hover:text-blue-700">{image.name}</Link>
               {image.description && (
                 <p className="text-sm text-muted-foreground truncate max-w-xs">
                   {image.description}
@@ -130,6 +137,7 @@ export function ImageTable({
                 image={image}
                 projectId={projectId}
                 onActionComplete={onRefresh}
+                allowedActions={{ update: permissions[`${image.id}:update`], delete: permissions[`${image.id}:delete`] }}
               />
             </TableCell>
           </TableRow>

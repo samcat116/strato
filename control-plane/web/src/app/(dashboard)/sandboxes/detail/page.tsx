@@ -45,9 +45,11 @@ const SandboxTerminal = dynamic(
   }
 );
 
-export default function SandboxDetailPage() {
+export default function SandboxDetailPage({
+  id: suppliedId,
+}: { id?: string } = {}) {
   const searchParams = useSearchParams();
-  const id = searchParams.get("id") || "";
+  const id = suppliedId ?? searchParams.get("id") ?? "";
   const { data: sandbox, isLoading, error } = useSandbox(id);
   const invalidateSandboxes = useInvalidateSandboxes();
 
@@ -260,7 +262,7 @@ export default function SandboxDetailPage() {
                   <p className="text-muted-foreground">Hypervisor</p>
                   {sandbox.hypervisorId ? (
                     <Link
-                      href={`/agents/detail?id=${sandbox.hypervisorId}`}
+                      href={`/agents/${sandbox.hypervisorId}`}
                       className="text-blue-600 hover:text-blue-700 hover:underline font-mono"
                     >
                       {sandbox.hypervisorId}

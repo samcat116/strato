@@ -8,7 +8,7 @@ import { ApiError } from "@/lib/api/client";
 export function useWorkloadIdentity(enabled: boolean = true) {
   return useQuery({
     queryKey: ["workload-identity"],
-    queryFn: () => workloadIdentityApi.overview(),
+    queryFn: ({ signal }) => workloadIdentityApi.overview(signal),
     enabled,
     refetchInterval: (query) =>
       isWorkloadIdentityForbidden(query.state.error) ? false : 30000,

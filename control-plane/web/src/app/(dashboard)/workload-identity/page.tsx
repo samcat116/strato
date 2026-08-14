@@ -3,6 +3,7 @@
 import { ShieldAlert } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WorkloadIdentityView } from "@/components/workload-identity";
+import { WorkloadRegistrationManager } from "@/components/workload-identity/workload-registration-manager";
 import {
   useWorkloadIdentity,
   workloadIdentityErrorMessage,
@@ -37,14 +38,17 @@ export default function WorkloadIdentityPage() {
   }
 
   return (
-    <WorkloadIdentityView
-      data={data}
-      isLoading={isLoading}
-      errorMessage={
-        error
-          ? workloadIdentityErrorMessage(error, "Failed to load workload identity data")
-          : undefined
-      }
-    />
+    <div className="space-y-6">
+      <WorkloadIdentityView
+        data={data}
+        isLoading={isLoading}
+        errorMessage={
+          error
+            ? workloadIdentityErrorMessage(error, "Failed to load workload identity data")
+            : undefined
+        }
+      />
+      <div className="mx-auto max-w-7xl"><WorkloadRegistrationManager /></div>
+    </div>
   );
 }

@@ -6,6 +6,7 @@ import { FolderKanban, Plus, Search, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { HierarchyTree } from "@/components/hierarchy";
@@ -24,7 +25,7 @@ import type { Project } from "@/lib/api/projects";
 import type { HierarchySearchResult } from "@/types/api";
 
 function resultHref(result: HierarchySearchResult): string | undefined {
-  if (result.type === "vm") return `/vms/detail?id=${result.id}`;
+  if (result.type === "vm") return `/vms/${result.id}`;
   return undefined;
 }
 
@@ -43,7 +44,8 @@ export default function ProjectsPage() {
   const { currentOrg } = useOrganization();
   const orgId = currentOrg?.id;
 
-  const { data: projects = [], isLoading } = useProjectsForOrganization(orgId);
+  const projectsQuery = useProjectsForOrganization(orgId);
+  const { data: projects = [], isLoading } = projectsQuery;
   const canManage = currentOrg?.userRole === "admin";
 
   const {
@@ -96,6 +98,13 @@ export default function ProjectsPage() {
           </Button>
         )}
       </div>
+
+      <QueryErrorNotice
+        resource="projects"
+        error={projectsQuery.error}
+        hasData={projectsQuery.data !== undefined}
+        onRetry={() => void projectsQuery.refetch()}
+      />
 
       {/* Stats */}
       {stats && !isSearching && (

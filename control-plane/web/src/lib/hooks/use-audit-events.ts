@@ -8,7 +8,7 @@ import { ApiError } from "@/lib/api/client";
 export function useAuditEvents(filters: AuditEventFilters, enabled: boolean = true) {
   return useQuery({
     queryKey: ["audit-events", filters],
-    queryFn: () => auditEventsApi.list(filters),
+    queryFn: ({ signal }) => auditEventsApi.list(filters, signal),
     enabled,
     placeholderData: keepPreviousData,
   });

@@ -29,21 +29,33 @@ import { useDeleteImage } from "@/lib/hooks/use-images";
 import { imagesApi } from "@/lib/api/images";
 import { toast } from "sonner";
 import type { Image } from "@/types/api";
+import { usePermissions } from "@/lib/hooks/use-permissions";
 
 interface ImageActionsProps {
   image: Image;
   projectId: string;
   onActionComplete?: () => void;
+  allowedActions?: { update: boolean; delete: boolean };
 }
 
 export function ImageActions({
   image,
   projectId,
   onActionComplete,
+  allowedActions,
 }: ImageActionsProps) {
   const [editOpen, setEditOpen] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const deleteImage = useDeleteImage(projectId);
+  const { permissions: queriedPermissions } = usePermissions(
+    image.id && !allowedActions
+      ? [
+          { key: "update", action: "image:update", node: { type: "image", id: image.id } },
+          { key: "delete", action: "image:delete", node: { type: "image", id: image.id } },
+        ]
+      : []
+  );
+  const permissions = allowedActions ?? queriedPermissions;
   const diskArtifact = image.artifacts.find(
     (artifact) =>
       artifact.kind === "disk-image" && artifact.status === "ready"
@@ -106,22 +118,22 @@ export function ImageActions({
             <Download className="mr-2 h-4 w-4" />
             Download
           </DropdownMenuItem>
-          <DropdownMenuItem
+          {permissions.update && <DropdownMenuItem
             onClick={() => setEditOpen(true)}
             className="hover:bg-accent cursor-pointer"
           >
             <Pencil className="mr-2 h-4 w-4" />
             Edit
-          </DropdownMenuItem>
-          <DropdownMenuSeparator className="bg-muted" />
-          <DropdownMenuItem
+          </DropdownMenuItem>}
+          {permissions.delete && <DropdownMenuSeparator className="bg-muted" />}
+          {permissions.delete && <DropdownMenuItem
             onClick={() => setShowDeleteConfirm(true)}
             disabled={deleteImage.isPending}
             className="hover:bg-accent cursor-pointer text-red-600"
           >
             <Trash2 className="mr-2 h-4 w-4" />
             Delete
-          </DropdownMenuItem>
+          </DropdownMenuItem>}
         </DropdownMenuContent>
       </DropdownMenu>
 

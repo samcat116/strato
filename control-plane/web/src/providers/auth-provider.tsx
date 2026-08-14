@@ -4,11 +4,13 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   useCallback,
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { authApi } from "@/lib/api/auth";
 import { webAuthnClient, WebAuthnClient } from "@/lib/webauthn";
 import type { CreateUserRequest, User } from "@/types/api";
@@ -17,6 +19,7 @@ interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  sessionError: Error | null;
   isWebAuthnSupported: boolean;
   login: (username?: string | null) => Promise<void>;
   register: (data: CreateUserRequest) => Promise<void>;
@@ -29,19 +32,37 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [sessionError, setSessionError] = useState<Error | null>(null);
   const [isWebAuthnSupported, setIsWebAuthnSupported] = useState(false);
+  const userIdRef = useRef<string | null>(null);
   const router = useRouter();
+  const queryClient = useQueryClient();
+
+  const adoptUser = useCallback(
+    (nextUser: User | null) => {
+      const nextUserId = nextUser?.id ?? null;
+      if (userIdRef.current !== nextUserId) {
+        queryClient.clear();
+        userIdRef.current = nextUserId;
+      }
+      setUser(nextUser);
+    },
+    [queryClient]
+  );
 
   const refresh = useCallback(async () => {
     try {
       const session = await authApi.getSession();
-      setUser(session?.user || null);
-    } catch {
-      setUser(null);
+      adoptUser(session?.user ?? null);
+      setSessionError(null);
+    } catch (error) {
+      setSessionError(
+        error instanceof Error ? error : new Error("Unable to verify your session")
+      );
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [adoptUser]);
 
   useEffect(() => {
     refresh();
@@ -51,7 +72,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (username?: string | null) => {
     const result = await webAuthnClient.authenticate(username);
     if (result.success) {
-      setUser(result.user);
+      adoptUser(result.user);
+      setSessionError(null);
       router.push("/dashboard");
     } else {
       throw new Error("Authentication failed");
@@ -61,7 +83,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = async (data: CreateUserRequest) => {
     const result = await webAuthnClient.register(data);
     if (result.success) {
-      setUser(result.user);
+      adoptUser(result.user);
+      setSessionError(null);
       router.push("/dashboard");
     } else {
       throw new Error("Registration failed");
@@ -70,14 +93,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = async () => {
     const { sloUrl } = await authApi.logout();
-    setUser(null);
+    adoptUser(null);
     if (sloUrl) {
       // OIDC single logout: a full navigation to the IdP ends its session;
       // the IdP redirects back to /login afterwards.
       window.location.assign(sloUrl);
       return;
     }
-    router.push("/login");
+    window.location.assign("/login");
   };
 
   return (
@@ -86,6 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         isLoading,
         isAuthenticated: !!user,
+        sessionError,
         isWebAuthnSupported,
         login,
         register,
