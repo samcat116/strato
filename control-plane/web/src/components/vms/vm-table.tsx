@@ -12,7 +12,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { VMStatusBadge } from "./vm-status-badge";
 import { VMActions } from "./vm-actions";
-import type { VM } from "@/types/api";
+import { usePermissions } from "@/lib/hooks/use-permissions";
+import type { ActionCheckItem, VM } from "@/types/api";
 
 interface VMTableProps {
   vms: VM[];
@@ -21,6 +22,10 @@ interface VMTableProps {
 }
 
 export function VMTable({ vms, isLoading, onRefresh }: VMTableProps) {
+  const actions = ["start", "stop", "restart", "pause", "resume", "delete"] as const;
+  const { permissions } = usePermissions(vms.flatMap((vm): ActionCheckItem[] =>
+    actions.map((action) => ({ key: `${vm.id}:${action}`, action: `vm:${action}`, node: { type: "virtual_machine", id: vm.id } }))
+  ));
   if (isLoading) {
     return (
       <div className="space-y-2">
@@ -61,7 +66,7 @@ export function VMTable({ vms, isLoading, onRefresh }: VMTableProps) {
           >
             <TableCell>
               <Link
-                href={`/vms/detail?id=${vm.id}`}
+                href={`/vms/${vm.id}`}
                 className="font-medium text-foreground hover:text-blue-700"
               >
                 {vm.name}
@@ -81,7 +86,7 @@ export function VMTable({ vms, isLoading, onRefresh }: VMTableProps) {
             <TableCell className="text-foreground/80">{vm.memoryFormatted}</TableCell>
             <TableCell className="text-foreground/80">{vm.diskFormatted}</TableCell>
             <TableCell className="text-right">
-              <VMActions vm={vm} onActionComplete={onRefresh} />
+              <VMActions vm={vm} onActionComplete={onRefresh} allowedActions={Object.fromEntries(actions.map((action) => [action, permissions[`${vm.id}:${action}`]]))} />
             </TableCell>
           </TableRow>
         ))}

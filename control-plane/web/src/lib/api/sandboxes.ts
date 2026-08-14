@@ -1,6 +1,7 @@
 // Sandbox API endpoints (backend issue #413).
 
 import { api } from "./client";
+import { listAllPages } from "./pagination";
 import { buildLogQueryString } from "./logs";
 import type {
   Sandbox,
@@ -10,11 +11,9 @@ import type {
   SandboxLogEntry,
   SandboxLogsQueryParams,
   AcceptedMutation,
-  Page,
   SandboxSnapshot,
   CreateSandboxSnapshotRequest,
 } from "@/types/api";
-import { LIST_PAGE_LIMIT } from "@/types/api";
 
 // Like VMs, sandbox lifecycle mutations are asynchronous: the server responds
 // 202 Accepted with the sandbox, the generation it has to converge on, and the
@@ -24,17 +23,15 @@ import { LIST_PAGE_LIMIT } from "@/types/api";
 // endpoints; restart rides the desired-state sync, so unlike a VM's it is a
 // generation-backed mutation too.
 export const sandboxesApi = {
-  list(organizationId?: string): Promise<Sandbox[]> {
-    return api
-      .get<Page<Sandbox>>("/api/sandboxes", {
-        limit: LIST_PAGE_LIMIT,
-        ...(organizationId ? { organization_id: organizationId } : {}),
-      })
-      .then((page) => page.items);
+  list(organizationId?: string, signal?: AbortSignal): Promise<Sandbox[]> {
+    return listAllPages<Sandbox>(
+      "/api/sandboxes",
+      organizationId ? { organization_id: organizationId } : {}, signal
+    );
   },
 
-  get(id: string): Promise<Sandbox> {
-    return api.get<Sandbox>(`/api/sandboxes/${id}`);
+  get(id: string, signal?: AbortSignal): Promise<Sandbox> {
+    return api.get<Sandbox>(`/api/sandboxes/${id}`, undefined, signal);
   },
 
   create(data: CreateSandboxRequest): Promise<AcceptedMutation<Sandbox>> {
@@ -57,12 +54,8 @@ export const sandboxesApi = {
     return api.post<AcceptedMutation<Sandbox>>(`/api/sandboxes/${id}/restart`);
   },
 
-  listSnapshots(id: string): Promise<SandboxSnapshot[]> {
-    return api
-      .get<Page<SandboxSnapshot>>(`/api/sandboxes/${id}/snapshots`, {
-        limit: LIST_PAGE_LIMIT,
-      })
-      .then((page) => page.items);
+  listSnapshots(id: string, signal?: AbortSignal): Promise<SandboxSnapshot[]> {
+    return listAllPages<SandboxSnapshot>(`/api/sandboxes/${id}/snapshots`, {}, signal);
   },
 
   createSnapshot(
@@ -106,10 +99,11 @@ export const sandboxesApi = {
 
   getLogs(
     id: string,
-    params?: SandboxLogsQueryParams
+    params?: SandboxLogsQueryParams,
+    signal?: AbortSignal
   ): Promise<SandboxLogEntry[]> {
     return api.get<SandboxLogEntry[]>(
-      `/api/sandboxes/${id}/logs${buildLogQueryString(params)}`
+      `/api/sandboxes/${id}/logs${buildLogQueryString(params)}`, undefined, signal
     );
   },
 };

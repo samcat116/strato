@@ -5,7 +5,7 @@ import type { CredentialRestriction } from "@/types/api";
 export function useCLISessions() {
   return useQuery({
     queryKey: ["cli-sessions"],
-    queryFn: () => oauthApi.listSessions(),
+    queryFn: ({ signal }) => oauthApi.listSessions(signal),
   });
 }
 
@@ -23,7 +23,7 @@ export function useRevokeCLISession() {
 export function usePendingDeviceAuthorization(userCode: string | null) {
   return useQuery({
     queryKey: ["device-authorization", userCode],
-    queryFn: () => oauthApi.getPendingDevice(userCode!),
+    queryFn: ({ signal }) => oauthApi.getPendingDevice(userCode!, signal),
     enabled: !!userCode,
     retry: false,
   });

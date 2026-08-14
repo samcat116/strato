@@ -21,18 +21,18 @@ export type TransferProjectData = Schemas["TransferProjectRequest"];
 
 export const projectsApi = {
   // Get all projects for the current user
-  list(): Promise<Project[]> {
-    return api.get<Project[]>("/api/projects");
+  list(signal?: AbortSignal): Promise<Project[]> {
+    return api.get<Project[]>("/api/projects", undefined, signal);
   },
 
   // Get projects for a specific organization
-  listForOrganization(organizationId: string): Promise<Project[]> {
-    return api.get<Project[]>(`/api/organizations/${organizationId}/projects`);
+  listForOrganization(organizationId: string, signal?: AbortSignal): Promise<Project[]> {
+    return api.get<Project[]>(`/api/organizations/${organizationId}/projects`, undefined, signal);
   },
 
   // Get a specific project
-  get(projectId: string): Promise<ProjectDetail> {
-    return api.get<ProjectDetail>(`/api/projects/${projectId}`);
+  get(projectId: string, signal?: AbortSignal): Promise<ProjectDetail> {
+    return api.get<ProjectDetail>(`/api/projects/${projectId}`, undefined, signal);
   },
 
   // Create a project in an organization

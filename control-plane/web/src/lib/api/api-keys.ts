@@ -8,8 +8,8 @@ import type {
 } from "@/types/api";
 
 export const apiKeysApi = {
-  list(): Promise<APIKey[]> {
-    return api.get<APIKey[]>("/api/api-keys");
+  list(signal?: AbortSignal): Promise<APIKey[]> {
+    return api.get<APIKey[]>("/api/api-keys", undefined, signal);
   },
 
   create(data: CreateAPIKeyRequest): Promise<CreateAPIKeyResponse> {

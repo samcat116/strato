@@ -1,15 +1,14 @@
 // User API endpoints
 
 import { api } from "./client";
+import { listAllPages } from "./pagination";
 import type {
   AdminCreateUserRequest,
   AdminCreateUserResponse,
   CreateUserRequest,
-  Page,
   UpdateUserRequest,
   User,
 } from "@/types/api";
-import { LIST_PAGE_LIMIT } from "@/types/api";
 
 export const usersApi = {
   // Create the account record before starting the passkey ceremony.
@@ -23,10 +22,8 @@ export const usersApi = {
   },
 
   // System-admin only.
-  list(): Promise<User[]> {
-    return api
-      .get<Page<User>>("/api/users", { limit: LIST_PAGE_LIMIT })
-      .then((page) => page.items);
+  list(signal?: AbortSignal): Promise<User[]> {
+    return listAllPages<User>("/api/users", {}, signal);
   },
 
   update(id: string, data: UpdateUserRequest): Promise<User> {

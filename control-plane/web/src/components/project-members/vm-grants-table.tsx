@@ -145,7 +145,7 @@ export function VMGrantsTable({
             <TableRow key={vm.id} className="border-border hover:bg-accent/60">
               <TableCell>
                 <Link
-                  href={`/vms/detail?id=${vm.id}`}
+                  href={`/vms/${vm.id}`}
                   className="font-medium text-blue-600 hover:text-blue-700 hover:underline"
                 >
                   {vm.name}

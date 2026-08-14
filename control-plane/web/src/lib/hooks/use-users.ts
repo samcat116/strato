@@ -10,7 +10,7 @@ import type { AdminCreateUserRequest, UpdateUserRequest } from "@/types/api";
 export function useUsers(enabled: boolean = true) {
   return useQuery({
     queryKey: ["users"],
-    queryFn: () => usersApi.list(),
+    queryFn: ({ signal }) => usersApi.list(signal),
     enabled,
   });
 }

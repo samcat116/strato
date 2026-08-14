@@ -10,18 +10,18 @@ import type {
 } from "@/types/api";
 
 export const projectMembersApi = {
-  list(projectId: string): Promise<ProjectMembers> {
-    return api.get<ProjectMembers>(`/api/projects/${projectId}/members`);
+  list(projectId: string, signal?: AbortSignal): Promise<ProjectMembers> {
+    return api.get<ProjectMembers>(`/api/projects/${projectId}/members`, undefined, signal);
   },
 
-  listVMPrincipals(projectId: string): Promise<ProjectVMPrincipal[]> {
+  listVMPrincipals(projectId: string, signal?: AbortSignal): Promise<ProjectVMPrincipal[]> {
     return api.get<ProjectVMPrincipal[]>(
-      `/api/projects/${projectId}/vm-principals`
+      `/api/projects/${projectId}/vm-principals`, undefined, signal
     );
   },
 
-  getVMProjectGrant(vmId: string): Promise<VMProjectGrantResponse> {
-    return api.get<VMProjectGrantResponse>(`/api/vms/${vmId}/project-grant`);
+  getVMProjectGrant(vmId: string, signal?: AbortSignal): Promise<VMProjectGrantResponse> {
+    return api.get<VMProjectGrantResponse>(`/api/vms/${vmId}/project-grant`, undefined, signal);
   },
 
   grant(

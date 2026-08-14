@@ -324,9 +324,9 @@ export function CreateVMDialog({
       ) : readyImages.length === 0 ? (
         <div className="text-sm text-muted-foreground py-2">
           No images available.{" "}
-          <a href="/images" className="text-blue-600 hover:underline">
+          <Link href="/images" className="text-blue-600 hover:underline">
             Upload an image
-          </a>{" "}
+          </Link>{" "}
           first.
         </div>
       ) : (

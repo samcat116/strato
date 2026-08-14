@@ -5,7 +5,7 @@ import { ApiError } from "@/lib/api/client";
 export function useOrganizationMembers(orgId: string) {
   return useQuery({
     queryKey: ["organization-members", orgId],
-    queryFn: () => organizationsApi.listMembers(orgId),
+    queryFn: ({ signal }) => organizationsApi.listMembers(orgId, signal),
     enabled: !!orgId,
   });
 }

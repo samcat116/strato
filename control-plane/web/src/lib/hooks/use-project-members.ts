@@ -6,7 +6,7 @@ import type { ProjectRole } from "@/types/api";
 export function useProjectMembers(projectId: string) {
   return useQuery({
     queryKey: ["project-members", projectId],
-    queryFn: () => projectMembersApi.list(projectId),
+    queryFn: ({ signal }) => projectMembersApi.list(projectId, signal),
     enabled: !!projectId,
   });
 }
@@ -19,7 +19,7 @@ export function useProjectMembers(projectId: string) {
 export function useProjectVMPrincipals(projectId: string) {
   return useQuery({
     queryKey: ["vms", "project-principals", projectId],
-    queryFn: () => projectMembersApi.listVMPrincipals(projectId),
+    queryFn: ({ signal }) => projectMembersApi.listVMPrincipals(projectId, signal),
     enabled: !!projectId,
   });
 }
@@ -28,7 +28,7 @@ export function useProjectVMPrincipals(projectId: string) {
 export function useVMProjectGrant(vmId: string, enabled = true) {
   return useQuery({
     queryKey: ["vm-project-grant", vmId],
-    queryFn: () => projectMembersApi.getVMProjectGrant(vmId),
+    queryFn: ({ signal }) => projectMembersApi.getVMProjectGrant(vmId, signal),
     select: (response) => response.grant,
     enabled: enabled && !!vmId,
   });

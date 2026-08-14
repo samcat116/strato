@@ -8,9 +8,9 @@ import type {
 
 export const hierarchyApi = {
   // Full hierarchy tree for an organization
-  get(organizationId: string): Promise<OrganizationHierarchy> {
+  get(organizationId: string, signal?: AbortSignal): Promise<OrganizationHierarchy> {
     return api.get<OrganizationHierarchy>(
-      `/api/organizations/${organizationId}/hierarchy`
+      `/api/organizations/${organizationId}/hierarchy`, undefined, signal
     );
   },
 
@@ -18,13 +18,15 @@ export const hierarchyApi = {
   search(
     organizationId: string,
     query: string,
-    type?: string
+    type?: string,
+    signal?: AbortSignal
   ): Promise<HierarchySearchResponse> {
     const params: Record<string, string> = { q: query };
     if (type) params.type = type;
     return api.get<HierarchySearchResponse>(
       `/api/organizations/${organizationId}/search`,
-      params
+      params,
+      signal
     );
   },
 };

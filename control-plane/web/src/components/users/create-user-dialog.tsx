@@ -58,7 +58,7 @@ function CreateUserForm({ onClose }: { onClose: () => void }) {
   // switcher's ["organizations"] so the two caches don't collide.
   const { data: organizations = [], isLoading: orgsLoading } = useQuery({
     queryKey: ["organizations", "all"],
-    queryFn: organizationsApi.listAll,
+    queryFn: ({ signal }) => organizationsApi.listAll(signal),
   });
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");

@@ -32,7 +32,14 @@ export function BusiestAgents({ agents }: BusiestAgentsProps) {
           >
             {agent.name}
           </span>
-          <div className="h-1.5 flex-1 overflow-hidden rounded bg-muted">
+          <div
+            className="h-1.5 flex-1 overflow-hidden rounded bg-muted"
+            role="progressbar"
+            aria-label={`${agent.name} reserved CPU`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={agent.pct}
+          >
             <div
               className="h-full rounded"
               style={{

@@ -18,12 +18,13 @@ import { AgentUpdateAction } from "@/components/agents/agent-update-action";
 import { AgentAutoUpdateCard } from "@/components/agents/agent-auto-update";
 import { AgentWorkloadSafetyCard } from "@/components/agents/agent-workload-safety";
 import { AgentHostInfoCard } from "@/components/agents/agent-host-info-card";
+import { AgentForceOfflineAction } from "@/components/agents/agent-force-offline-action";
 import { formatCapacity } from "@/lib/format-bytes";
 import { useAgent, useVMs } from "@/lib/hooks";
 
-export default function AgentDetailPage() {
+export default function AgentDetailPage({ agentId }: { agentId?: string } = {}) {
   const searchParams = useSearchParams();
-  const id = searchParams.get("id") || "";
+  const id = agentId ?? searchParams.get("id") ?? "";
   const { data: agent, isLoading, error } = useAgent(id);
   // Guest-reported memory usage (virtio-balloon, issue #567), aggregated over
   // this agent's VMs that are visible in the current org and reporting stats.
@@ -121,7 +122,10 @@ export default function AgentDetailPage() {
           </div>
           <p className="text-muted-foreground mt-1">{agent.hostname}</p>
         </div>
-        <AgentUpdateAction agent={agent} />
+        <div className="flex items-center gap-2">
+          <AgentForceOfflineAction agent={agent} />
+          <AgentUpdateAction agent={agent} />
+        </div>
       </div>
 
       {/* Resources */}

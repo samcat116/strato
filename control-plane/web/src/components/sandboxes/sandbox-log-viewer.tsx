@@ -49,7 +49,12 @@ export function SandboxLogViewer({
   className,
 }: SandboxLogViewerProps) {
   const [limit, setLimit] = useState(100);
-  const query = useSandboxLogs(sandboxId, { limit, direction: "backward" });
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const query = useSandboxLogs(
+    sandboxId,
+    { limit, direction: "backward" },
+    autoRefresh
+  );
 
   return (
     <LogViewerShell
@@ -67,6 +72,8 @@ export function SandboxLogViewer({
         </>
       }
       downloadFilename={`sandbox-${sandboxId}-logs.txt`}
+      autoRefresh={autoRefresh}
+      onAutoRefreshChange={setAutoRefresh}
       className={className}
     />
   );

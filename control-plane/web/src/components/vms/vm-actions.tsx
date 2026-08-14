@@ -29,12 +29,14 @@ import {
 import { vmsApi } from "@/lib/api/vms";
 import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { usePendingMutation } from "@/lib/stores/mutations-store";
+import { usePermissions } from "@/lib/hooks/use-permissions";
 import { toast } from "sonner";
 import type { VM, OperationKind } from "@/types/api";
 
 interface VMActionsProps {
   vm: VM;
   onActionComplete?: () => void;
+  allowedActions?: Partial<Record<VMAction, boolean>>;
 }
 
 type VMAction = "start" | "stop" | "restart" | "pause" | "resume" | "delete";
@@ -77,7 +79,7 @@ const kindToAction: Record<OperationKind, VMAction | null> = {
   throttle: null,
 };
 
-export function VMActions({ vm, onActionComplete }: VMActionsProps) {
+export function VMActions({ vm, onActionComplete, allowedActions }: VMActionsProps) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const {
     isLoading: isSubmitting,
@@ -85,6 +87,16 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
     run,
   } = useAcceptedMutation();
   const pendingMutation = usePendingMutation(vm.id);
+  const { permissions: queriedPermissions } = usePermissions(
+    allowedActions ? [] : (["start", "stop", "restart", "pause", "resume", "delete"] as VMAction[]).map(
+      (action) => ({
+        key: action,
+        action: `vm:${action}`,
+        node: { type: "virtual_machine", id: vm.id },
+      })
+    )
+  );
+  const permissions = allowedActions ?? queriedPermissions;
 
   // Busy while the request is in flight OR while an accepted mutation is still
   // converging on the server — mutations no longer resolve synchronously.
@@ -144,13 +156,14 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
   return (
     <div className="flex items-center space-x-2">
       {/* Quick actions */}
-      {canStart && (
+      {canStart && permissions.start && (
         <Button
           size="sm"
           variant="ghost"
           className="text-green-600 hover:text-green-700 hover:bg-green-500/10"
           onClick={() => handleAction("start")}
           disabled={isLoading}
+          aria-label={`Start ${vm.name}`}
         >
           {activeAction === "start" ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -159,13 +172,14 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
           )}
         </Button>
       )}
-      {canStop && (
+      {canStop && permissions.stop && (
         <Button
           size="sm"
           variant="ghost"
           className="text-red-600 hover:text-red-700 hover:bg-red-500/10"
           onClick={() => handleAction("stop")}
           disabled={isLoading}
+          aria-label={`Stop ${vm.name}`}
         >
           {activeAction === "stop" ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -183,12 +197,13 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
             variant="ghost"
             className="text-muted-foreground hover:text-foreground"
             disabled={isLoading}
+            aria-label={`More actions for ${vm.name}`}
           >
             <MoreHorizontal className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="bg-card border-border">
-          {canStart && (
+          {canStart && permissions.start && (
             <DropdownMenuItem
               onClick={() => handleAction("start")}
               className="text-foreground hover:bg-accent cursor-pointer"
@@ -197,7 +212,7 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
               Start
             </DropdownMenuItem>
           )}
-          {canStop && (
+          {canStop && permissions.stop && (
             <DropdownMenuItem
               onClick={() => handleAction("stop")}
               className="text-foreground hover:bg-accent cursor-pointer"
@@ -206,15 +221,15 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
               Stop
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem
+          {permissions.restart && <DropdownMenuItem
             onClick={() => handleAction("restart")}
             className="text-foreground hover:bg-accent cursor-pointer"
             disabled={vm.status !== "Running"}
           >
             <RotateCcw className="h-4 w-4 mr-2 text-blue-600" />
             Restart
-          </DropdownMenuItem>
-          {canPause && (
+          </DropdownMenuItem>}
+          {canPause && permissions.pause && (
             <DropdownMenuItem
               onClick={() => handleAction("pause")}
               className="text-foreground hover:bg-accent cursor-pointer"
@@ -223,7 +238,7 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
               Pause
             </DropdownMenuItem>
           )}
-          {canResume && (
+          {canResume && permissions.resume && (
             <DropdownMenuItem
               onClick={() => handleAction("resume")}
               className="text-foreground hover:bg-accent cursor-pointer"
@@ -232,14 +247,14 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
               Resume
             </DropdownMenuItem>
           )}
-          <DropdownMenuSeparator className="bg-muted" />
-          <DropdownMenuItem
+          {permissions.delete && <DropdownMenuSeparator className="bg-muted" />}
+          {permissions.delete && <DropdownMenuItem
             onClick={() => setShowDeleteConfirm(true)}
             className="text-red-600 hover:bg-red-500/10 cursor-pointer"
           >
             <Trash2 className="h-4 w-4 mr-2" />
             Delete
-          </DropdownMenuItem>
+          </DropdownMenuItem>}
         </DropdownMenuContent>
       </DropdownMenu>
 

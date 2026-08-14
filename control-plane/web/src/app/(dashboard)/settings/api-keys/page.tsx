@@ -5,11 +5,12 @@ import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { APIKeyTable, CreateAPIKeyDialog } from "@/components/api-keys";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import { useAPIKeys } from "@/lib/hooks";
 
 export default function APIKeysPage() {
   const [createOpen, setCreateOpen] = useState(false);
-  const { data: apiKeys = [], isLoading } = useAPIKeys();
+  const { data: apiKeys = [], isLoading, error, refetch } = useAPIKeys();
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -29,6 +30,13 @@ export default function APIKeysPage() {
           Create API Key
         </Button>
       </div>
+
+      <QueryErrorNotice
+        resource="API keys"
+        error={error}
+        hasData={apiKeys.length > 0}
+        onRetry={() => void refetch()}
+      />
 
       {/* Key List */}
       <Card className="bg-card border-border">

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronRight, CircleUser, LogOut, Monitor, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useAuth, useOrganization } from "@/providers";
 import {
@@ -19,10 +20,19 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { OrganizationSwitcher } from "./organization-switcher";
+import { ProjectSwitcher } from "./project-switcher";
 import { isNavActive, isSectionActive, navTree, type NavItem } from "./nav";
 import { versionLabel, versionTitle } from "@/lib/version";
 
-function SidebarLink({ item, nested = false }: { item: NavItem; nested?: boolean }) {
+function SidebarLink({
+  item,
+  nested = false,
+  onNavigate,
+}: {
+  item: NavItem;
+  nested?: boolean;
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
   const active = item.href ? isNavActive(pathname, item.href) : false;
   const Icon = item.icon;
@@ -30,6 +40,7 @@ function SidebarLink({ item, nested = false }: { item: NavItem; nested?: boolean
   return (
     <Link
       href={item.href ?? "#"}
+      onClick={onNavigate}
       className={cn(
         "flex items-center gap-2.5 rounded-[7px] py-[7px] text-[13px] transition-colors",
         nested ? "pl-[34px] pr-[9px]" : "px-[9px]",
@@ -49,7 +60,13 @@ function SidebarLink({ item, nested = false }: { item: NavItem; nested?: boolean
  * toggles the group open/closed; navigation lives entirely in the nested items.
  * The section auto-expands whenever the active route falls inside it.
  */
-function SidebarSection({ item }: { item: NavItem }) {
+function SidebarSection({
+  item,
+  onNavigate,
+}: {
+  item: NavItem;
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
   const { user } = useAuth();
   const sectionActive = isSectionActive(pathname, item);
@@ -87,7 +104,12 @@ function SidebarSection({ item }: { item: NavItem }) {
       {open && (
         <div className="mt-0.5 space-y-0.5">
           {children.map((child) => (
-            <SidebarLink key={child.href ?? child.label} item={child} nested />
+            <SidebarLink
+              key={child.href ?? child.label}
+              item={child}
+              nested
+              onNavigate={onNavigate}
+            />
           ))}
         </div>
       )}
@@ -120,7 +142,7 @@ function ThemeToggle() {
   );
 }
 
-function UserCard() {
+function UserCard({ onNavigate }: { onNavigate?: () => void }) {
   const { user, logout } = useAuth();
   const { currentOrg } = useOrganization();
 
@@ -153,13 +175,20 @@ function UserCard() {
           <ThemeToggle />
           <DropdownMenuSeparator />
           <DropdownMenuItem asChild className="cursor-pointer">
-            <Link href="/settings/profile">
+            <Link href="/settings/profile" onClick={onNavigate}>
               <CircleUser className="mr-2 h-4 w-4" />
               Profile &amp; passkeys
             </Link>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={logout} className="cursor-pointer">
+          <DropdownMenuItem
+            onClick={() => {
+              void logout().catch((error) =>
+                toast.error(error instanceof Error ? error.message : "Sign out failed")
+              );
+            }}
+            className="cursor-pointer"
+          >
             <LogOut className="mr-2 h-4 w-4" />
             Log out
           </DropdownMenuItem>
@@ -169,9 +198,20 @@ function UserCard() {
   );
 }
 
-export function Sidebar() {
+export function Sidebar({
+  className,
+  onNavigate,
+}: {
+  className?: string;
+  onNavigate?: () => void;
+}) {
   return (
-    <aside className="flex w-[236px] shrink-0 flex-col overflow-y-auto border-r border-border bg-card px-3 py-3.5">
+    <aside
+      className={cn(
+        "flex w-[236px] shrink-0 flex-col overflow-y-auto border-r border-border bg-card px-3 py-3.5",
+        className
+      )}
+    >
       <div className="flex items-center gap-2 px-2 pb-3.5 pt-1">
         <div className="flex h-6 w-6 items-center justify-center rounded-md bg-foreground font-mono text-[13px] font-bold text-background">
           S
@@ -180,21 +220,32 @@ export function Sidebar() {
       </div>
 
       <OrganizationSwitcher />
+      <div className="mb-3.5 lg:hidden">
+        <ProjectSwitcher onSelection={onNavigate} />
+      </div>
 
       <nav className="flex flex-1 flex-col">
         <div className="space-y-0.5">
           {navTree.map((item) =>
             item.children?.length ? (
-              <SidebarSection key={item.label} item={item} />
+              <SidebarSection
+                key={item.label}
+                item={item}
+                onNavigate={onNavigate}
+              />
             ) : (
-              <SidebarLink key={item.label} item={item} />
+              <SidebarLink
+                key={item.label}
+                item={item}
+                onNavigate={onNavigate}
+              />
             )
           )}
         </div>
 
         <div className="flex-1" />
 
-        <UserCard />
+        <UserCard onNavigate={onNavigate} />
         <div
           title={versionTitle || undefined}
           className="px-2 pt-2 font-mono text-[10px] text-muted-foreground/70"

@@ -9,7 +9,7 @@ import type {
 export function useSSFStreams(orgId: string, enabled = true) {
   return useQuery({
     queryKey: ["ssf-streams", orgId],
-    queryFn: () => ssfStreamsApi.list(orgId),
+    queryFn: ({ signal }) => ssfStreamsApi.list(orgId, signal),
     enabled: enabled && !!orgId,
   });
 }

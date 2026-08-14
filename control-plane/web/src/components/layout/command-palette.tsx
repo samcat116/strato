@@ -3,11 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Cpu, Rows3, Search, type LucideIcon } from "lucide-react";
+import { FolderKanban, Rows3, Search, type LucideIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { agentsApi } from "@/lib/api/agents";
-import { vmsApi } from "@/lib/api/vms";
+import { hierarchyApi } from "@/lib/api/hierarchy";
 import { useAuth, useOrganization } from "@/providers";
 import { flattenNav } from "./nav";
 
@@ -37,21 +36,17 @@ export function CommandPalette() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // Shares the query cache with useVMs()/useAgents(); only fetches while open.
-  // The keys must stay in step with those hooks — including the org id — or the
-  // palette silently fetches its own unscoped copy.
+  // Search through the bounded, permission-filtered server endpoint instead of
+  // downloading every VM and agent whenever the palette opens.
   const { currentOrg, isLoading: orgLoading } = useOrganization();
   const organizationId = currentOrg?.id;
 
-  const { data: vms = [] } = useQuery({
-    queryKey: ["vms", { orgId: organizationId ?? null }],
-    queryFn: () => vmsApi.list(organizationId),
-    enabled: open && !orgLoading,
-  });
-  const { data: agents = [] } = useQuery({
-    queryKey: ["agents", { orgId: organizationId ?? null }],
-    queryFn: () => agentsApi.list(organizationId),
-    enabled: open && !orgLoading,
+  const normalizedQuery = query.trim();
+  const { data: hierarchySearch } = useQuery({
+    queryKey: ["hierarchy-search", organizationId, normalizedQuery],
+    queryFn: ({ signal }) => hierarchyApi.search(organizationId!, normalizedQuery, undefined, signal),
+    enabled: open && !orgLoading && !!organizationId && normalizedQuery.length >= 2,
+    staleTime: 30_000,
   });
 
   const isAdmin = user?.isSystemAdmin ?? false;
@@ -66,22 +61,15 @@ export function CommandPalette() {
         href: item.href!,
         icon: item.icon,
       }));
-    const vmEntries = vms.map((vm) => ({
-      key: `vm:${vm.id}`,
-      label: vm.name,
-      hint: "Instance",
-      href: `/vms/detail?id=${vm.id}`,
-      icon: Rows3,
+    const results = (hierarchySearch?.results ?? []).map((result) => ({
+      key: `${result.type}:${result.id}`,
+      label: result.name,
+      hint: result.type === "vm" ? "Instance" : result.type === "project" ? "Project" : "Folder",
+      href: result.type === "vm" ? `/vms/${result.id}` : result.type === "project" ? `/projects/${result.id}` : "/hierarchy",
+      icon: result.type === "vm" ? Rows3 : FolderKanban,
     }));
-    const agentEntries = agents.map((agent) => ({
-      key: `agent:${agent.id}`,
-      label: agent.name,
-      hint: "Agent",
-      href: `/agents/detail?id=${agent.id}`,
-      icon: Cpu,
-    }));
-    return [...pages, ...vmEntries, ...agentEntries];
-  }, [vms, agents, isAdmin]);
+    return [...pages, ...results];
+  }, [hierarchySearch, isAdmin]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -109,11 +97,12 @@ export function CommandPalette() {
     <>
       <button
         onClick={() => setOpen(true)}
-        className="flex h-8 w-64 items-center gap-2 rounded-[7px] border border-border bg-background px-2.5 text-[12.5px] text-muted-foreground transition-colors hover:bg-accent"
+        aria-label="Open search"
+        className="flex h-8 w-9 items-center justify-center gap-2 rounded-[7px] border border-border bg-background px-2.5 text-[12.5px] text-muted-foreground transition-colors hover:bg-accent sm:w-64 sm:justify-start"
       >
         <Search className="h-3.5 w-3.5" strokeWidth={1.6} />
-        <span className="flex-1 text-left">Search…</span>
-        <span className="rounded border border-border bg-card px-1.5 py-px text-[10.5px]">
+        <span className="hidden flex-1 text-left sm:block">Search…</span>
+        <span className="hidden rounded border border-border bg-card px-1.5 py-px text-[10.5px] sm:block">
           ⌘K
         </span>
       </button>
@@ -141,7 +130,7 @@ export function CommandPalette() {
                   openEntry(filtered[selected]);
                 }
               }}
-              placeholder="Search pages, instances, agents…"
+              placeholder="Search pages, instances, projects…"
               className="h-11 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
           </div>

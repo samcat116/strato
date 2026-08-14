@@ -13,7 +13,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { SandboxStatusBadge } from "./sandbox-status-badge";
 import { SandboxActions } from "./sandbox-actions";
 import { formatMemory } from "@/lib/format-bytes";
-import type { Sandbox } from "@/types/api";
+import { usePermissions } from "@/lib/hooks/use-permissions";
+import type { ActionCheckItem, Sandbox } from "@/types/api";
 
 interface SandboxTableProps {
   sandboxes: Sandbox[];
@@ -26,6 +27,10 @@ export function SandboxTable({
   isLoading,
   onRefresh,
 }: SandboxTableProps) {
+  const actions = ["start", "stop", "restart", "delete"] as const;
+  const { permissions } = usePermissions(sandboxes.flatMap((sandbox): ActionCheckItem[] =>
+    actions.map((action) => ({ key: `${sandbox.id}:${action}`, action: `sandbox:${action}`, node: { type: "sandbox", id: sandbox.id } }))
+  ));
   if (isLoading) {
     return (
       <div className="space-y-2">
@@ -66,7 +71,7 @@ export function SandboxTable({
           >
             <TableCell>
               <Link
-                href={`/sandboxes/detail?id=${sandbox.id}`}
+                href={`/sandboxes/${sandbox.id}`}
                 className="font-medium text-foreground hover:text-blue-700"
               >
                 {sandbox.name}
@@ -87,7 +92,7 @@ export function SandboxTable({
               {formatMemory(sandbox.memory)}
             </TableCell>
             <TableCell className="text-right">
-              <SandboxActions sandbox={sandbox} onActionComplete={onRefresh} />
+              <SandboxActions sandbox={sandbox} onActionComplete={onRefresh} allowedActions={Object.fromEntries(actions.map((action) => [action, permissions[`${sandbox.id}:${action}`]]))} />
             </TableCell>
           </TableRow>
         ))}

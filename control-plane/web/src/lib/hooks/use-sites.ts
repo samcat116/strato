@@ -8,7 +8,7 @@ export function useSites() {
 
   return useQuery({
     queryKey: ["sites", { orgId: organizationId ?? null }],
-    queryFn: () => sitesApi.list(organizationId),
+    queryFn: ({ signal }) => sitesApi.list(organizationId, signal),
     enabled: !orgLoading,
   });
 }

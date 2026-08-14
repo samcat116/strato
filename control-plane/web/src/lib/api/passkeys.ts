@@ -11,8 +11,8 @@ import type { Passkey } from "@/types/api";
 import type { PublicKeyCredentialCreationOptionsJSON } from "@/lib/webauthn/types";
 
 export const passkeysApi = {
-  list(): Promise<Passkey[]> {
-    return api.get<Passkey[]>("/api/users/me/passkeys");
+  list(signal?: AbortSignal): Promise<Passkey[]> {
+    return api.get<Passkey[]>("/api/users/me/passkeys", undefined, signal);
   },
 
   addBegin(): Promise<{ options: PublicKeyCredentialCreationOptionsJSON }> {

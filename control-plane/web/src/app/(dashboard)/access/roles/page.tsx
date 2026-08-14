@@ -1,11 +1,12 @@
 "use client";
 
 import { Skeleton } from "@/components/ui/skeleton";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import { RolesSection } from "@/components/iam";
 import { useCurrentOrgAccess } from "@/lib/hooks";
 
 export default function RolesPage() {
-  const { orgId, canManage, isLoading } = useCurrentOrgAccess();
+  const { orgId, canManage, isLoading, error, retry } = useCurrentOrgAccess();
 
   if (isLoading) {
     return (
@@ -16,7 +17,7 @@ export default function RolesPage() {
     );
   }
 
-  if (!orgId) {
+  if (!orgId && !error) {
     return (
       <div className="max-w-4xl mx-auto">
         <div className="text-center py-12">
@@ -34,7 +35,15 @@ export default function RolesPage() {
           Define roles and the permissions they grant.
         </p>
       </div>
-      <RolesSection ownerType="organization" ownerId={orgId} canManage={canManage} />
+      <QueryErrorNotice
+        resource="organization access"
+        error={error}
+        hasData={!!orgId}
+        onRetry={() => void retry()}
+      />
+      {orgId && (
+        <RolesSection ownerType="organization" ownerId={orgId} canManage={canManage} />
+      )}
     </div>
   );
 }

@@ -16,8 +16,8 @@ import type {
 const base = (orgId: string) => `/api/organizations/${orgId}/ssf-streams`;
 
 export const ssfStreamsApi = {
-  list(orgId: string): Promise<SSFStream[]> {
-    return api.get<SSFStream[]>(base(orgId));
+  list(orgId: string, signal?: AbortSignal): Promise<SSFStream[]> {
+    return api.get<SSFStream[]>(base(orgId), undefined, signal);
   },
 
   create(orgId: string, data: CreateSSFStreamRequest): Promise<SSFStream> {

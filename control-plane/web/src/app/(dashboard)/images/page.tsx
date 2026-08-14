@@ -1,10 +1,13 @@
 "use client";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ResourceListControls, useResourceList } from "@/components/ui/resource-list-controls";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import { ImageTable, UploadImageDialog } from "@/components/images";
 import { useImages, useInvalidateImages } from "@/lib/hooks/use-images";
 import { useProjectContext } from "@/providers";
 import { HardDrive, Loader2, FolderPlus } from "lucide-react";
+import { usePermissions } from "@/lib/hooks";
 
 export default function ImagesPage() {
   // Images are scoped to the project selected in the header switcher.
@@ -15,10 +18,11 @@ export default function ImagesPage() {
   } = useProjectContext();
 
   const projectId = currentProject?.id || "";
-  const { data: images, isLoading: imagesLoading } = useImages(
-    projectId || undefined
-  );
+  const imagesQuery = useImages(projectId || undefined);
+  const { data: images, isLoading: imagesLoading } = imagesQuery;
   const invalidateImages = useInvalidateImages(projectId);
+  const { permissions } = usePermissions(projectId ? [{ key: "create", action: "image:create", node: { type: "project", id: projectId } }] : []);
+  const list = useResourceList(images ?? [], (image) => `${image.name} ${image.description ?? ""} ${image.filename ?? ""} ${image.status}`);
 
   // Loading state
   if (projectsLoading) {
@@ -76,10 +80,17 @@ export default function ImagesPage() {
             </p>
           </div>
         </div>
-        {projectId && (
+        {projectId && permissions.create && (
           <UploadImageDialog projectId={projectId} onSuccess={invalidateImages} />
         )}
       </div>
+
+      <QueryErrorNotice
+        resource="images"
+        error={imagesQuery.error}
+        hasData={imagesQuery.data !== undefined}
+        onRetry={() => void imagesQuery.refetch()}
+      />
 
       <Card className="bg-card border-border">
         <CardHeader>
@@ -90,8 +101,9 @@ export default function ImagesPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
+          <ResourceListControls label="images" query={list.query} onQueryChange={list.setQuery} page={list.page} onPageChange={list.setPage} totalPages={list.totalPages} filteredCount={list.filteredCount} totalCount={list.totalCount} pageSize={list.pageSize} />
           <ImageTable
-            images={images || []}
+            images={list.pageItems}
             projectId={projectId}
             isLoading={imagesLoading}
             onRefresh={invalidateImages}

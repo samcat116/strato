@@ -15,8 +15,8 @@ import type {
 const base = (orgId: string) => `/api/organizations/${orgId}/webhooks`;
 
 export const webhooksApi = {
-  list(orgId: string): Promise<WebhookSubscription[]> {
-    return api.get<WebhookSubscription[]>(base(orgId));
+  list(orgId: string, signal?: AbortSignal): Promise<WebhookSubscription[]> {
+    return api.get<WebhookSubscription[]>(base(orgId), undefined, signal);
   },
 
   /** The response carries the signing secret — shown once, stored hashed. */
@@ -52,11 +52,12 @@ export const webhooksApi = {
   listDeliveries(
     orgId: string,
     webhookId: string,
-    limit = 50
+    limit = 50,
+    signal?: AbortSignal
   ): Promise<WebhookDelivery[]> {
     return api.get<WebhookDelivery[]>(`${base(orgId)}/${webhookId}/deliveries`, {
       limit: String(limit),
-    });
+    }, signal);
   },
 
   /** 409 if the delivery is still pending or the subscription is disabled. */

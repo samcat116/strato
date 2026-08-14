@@ -1,6 +1,7 @@
 // Volume API endpoints
 
 import { api } from "./client";
+import { listAllPages } from "./pagination";
 import type {
   AcceptedMutation,
   Volume,
@@ -10,9 +11,7 @@ import type {
   ResizeVolumeRequest,
   CloneVolumeRequest,
   CreateVolumeSnapshotRequest,
-  Page,
 } from "@/types/api";
-import { LIST_PAGE_LIMIT } from "@/types/api";
 
 // Volume lifecycle mutations are asynchronous since backend STR-148: the
 // server responds 202 Accepted with the volume, the generation it now has to
@@ -25,17 +24,15 @@ import { LIST_PAGE_LIMIT } from "@/types/api";
 // backend ADR 0001 stage 8 (STR-150), so capture and delete answer 202 like
 // every other mutation.
 export const volumesApi = {
-  list(projectId?: string): Promise<Volume[]> {
-    return api
-      .get<Page<Volume>>("/api/volumes", {
-        limit: LIST_PAGE_LIMIT,
-        ...(projectId ? { project_id: projectId } : {}),
-      })
-      .then((page) => page.items);
+  list(projectId?: string, signal?: AbortSignal): Promise<Volume[]> {
+    return listAllPages<Volume>(
+      "/api/volumes",
+      projectId ? { project_id: projectId } : {}, signal
+    );
   },
 
-  get(id: string): Promise<Volume> {
-    return api.get<Volume>(`/api/volumes/${id}`);
+  get(id: string, signal?: AbortSignal): Promise<Volume> {
+    return api.get<Volume>(`/api/volumes/${id}`, undefined, signal);
   },
 
   create(data: CreateVolumeRequest): Promise<AcceptedMutation<Volume>> {
@@ -78,12 +75,14 @@ export const volumesApi = {
     return api.post<AcceptedMutation<Volume>>(`/api/volumes/${id}/clone`, data);
   },
 
-  listSnapshots(id: string): Promise<VolumeSnapshot[]> {
-    return api
-      .get<Page<VolumeSnapshot>>(`/api/volumes/${id}/snapshots`, {
-        limit: LIST_PAGE_LIMIT,
-      })
-      .then((page) => page.items);
+  listSnapshots(id: string, signal?: AbortSignal): Promise<VolumeSnapshot[]> {
+    return listAllPages<VolumeSnapshot>(`/api/volumes/${id}/snapshots`, {}, signal);
+  },
+
+  listProjectSnapshots(projectId: string, signal?: AbortSignal): Promise<VolumeSnapshot[]> {
+    return listAllPages<VolumeSnapshot>("/api/volume-snapshots", {
+      project_id: projectId,
+    }, signal);
   },
 
   deleteSnapshot(

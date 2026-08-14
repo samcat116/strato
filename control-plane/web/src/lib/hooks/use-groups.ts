@@ -6,7 +6,7 @@ import type { CreateGroupRequest, UpdateGroupRequest } from "@/types/api";
 export function useGroups(orgId: string) {
   return useQuery({
     queryKey: ["organization-groups", orgId],
-    queryFn: () => groupsApi.list(orgId),
+    queryFn: ({ signal }) => groupsApi.list(orgId, signal),
     enabled: !!orgId,
   });
 }
@@ -14,8 +14,8 @@ export function useGroups(orgId: string) {
 export function useGroupMembers(orgId: string, groupId: string | undefined) {
   return useQuery({
     queryKey: ["group-members", orgId, groupId],
-    queryFn: () =>
-      groupId ? groupsApi.listMembers(orgId, groupId) : Promise.resolve([]),
+    queryFn: ({ signal }) =>
+      groupId ? groupsApi.listMembers(orgId, groupId, signal) : Promise.resolve([]),
     enabled: !!orgId && !!groupId,
   });
 }

@@ -1,11 +1,12 @@
 "use client";
 
 import { Skeleton } from "@/components/ui/skeleton";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import { WebhooksSection } from "@/components/webhooks";
 import { useCurrentOrgAccess } from "@/lib/hooks";
 
 export default function WebhooksPage() {
-  const { orgId, canManage, isLoading } = useCurrentOrgAccess();
+  const { orgId, canManage, isLoading, error, retry } = useCurrentOrgAccess();
 
   if (isLoading) {
     return (
@@ -16,7 +17,7 @@ export default function WebhooksPage() {
     );
   }
 
-  if (!orgId) {
+  if (!orgId && !error) {
     return (
       <div className="max-w-4xl mx-auto">
         <div className="text-center py-12">
@@ -34,7 +35,13 @@ export default function WebhooksPage() {
           Send signed event notifications to your own services.
         </p>
       </div>
-      <WebhooksSection orgId={orgId} canManage={canManage} />
+      <QueryErrorNotice
+        resource="organization access"
+        error={error}
+        hasData={!!orgId}
+        onRetry={() => void retry()}
+      />
+      {orgId && <WebhooksSection orgId={orgId} canManage={canManage} />}
     </div>
   );
 }

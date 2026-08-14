@@ -12,7 +12,7 @@ import { registrationApi } from "@/lib/api/registration";
 export function useRegistrationPolicy() {
   return useQuery({
     queryKey: ["registration-policy"],
-    queryFn: () => registrationApi.policy(),
+    queryFn: ({ signal }) => registrationApi.policy(signal),
     staleTime: 5 * 60 * 1000,
     retry: false,
   });

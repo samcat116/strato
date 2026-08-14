@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Clock, Download, Info, Pause, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -32,6 +32,8 @@ interface LogViewerShellProps<Entry extends LogEntry> {
   formatDownloadLine: (entry: Entry) => string;
   emptyStateMessage: ReactNode;
   downloadFilename: string;
+  autoRefresh: boolean;
+  onAutoRefreshChange: (enabled: boolean) => void;
   className?: string;
 }
 
@@ -44,9 +46,10 @@ export function LogViewerShell<Entry extends LogEntry>({
   formatDownloadLine,
   emptyStateMessage,
   downloadFilename,
+  autoRefresh,
+  onAutoRefreshChange,
   className,
 }: LogViewerShellProps<Entry>) {
-  const [autoRefresh, setAutoRefresh] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new logs arrive
@@ -105,7 +108,7 @@ export function LogViewerShell<Entry extends LogEntry>({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setAutoRefresh(!autoRefresh)}
+            onClick={() => onAutoRefreshChange(!autoRefresh)}
             className={`border-input ${
               autoRefresh ? "bg-green-900/20 border-green-700" : ""
             }`}
@@ -129,6 +132,7 @@ export function LogViewerShell<Entry extends LogEntry>({
             size="sm"
             onClick={() => refetch()}
             disabled={isFetching}
+            aria-label="Refresh logs"
             className="border-input"
           >
             <RefreshCw
@@ -142,6 +146,7 @@ export function LogViewerShell<Entry extends LogEntry>({
             size="sm"
             onClick={downloadLogs}
             disabled={!logs || logs.length === 0}
+            aria-label="Download logs"
             className="border-input"
           >
             <Download className="h-4 w-4" />

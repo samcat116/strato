@@ -31,6 +31,7 @@ import { volumesApi } from "@/lib/api/volumes";
 import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { volumeBytesAtRest } from "@/lib/volume-guards";
 import { usePendingMutation } from "@/lib/stores/mutations-store";
+import { usePermissions } from "@/lib/hooks/use-permissions";
 import type { Volume } from "@/types/api";
 import { AttachVolumeDialog } from "./attach-volume-dialog";
 import { ResizeVolumeDialog } from "./resize-volume-dialog";
@@ -40,14 +41,29 @@ import { CloneVolumeDialog } from "./clone-volume-dialog";
 interface VolumeActionsProps {
   volume: Volume;
   onActionComplete?: () => void;
+  allowedActions?: Partial<Record<VolumeActionPermission, boolean>>;
 }
 
 type VolumeDialog = "attach" | "resize" | "snapshot" | "clone" | "delete";
+type VolumeActionPermission = VolumeDialog | "detach";
 
-export function VolumeActions({ volume, onActionComplete }: VolumeActionsProps) {
+export function VolumeActions({ volume, onActionComplete, allowedActions }: VolumeActionsProps) {
   const [openDialog, setOpenDialog] = useState<VolumeDialog | null>(null);
   const { isLoading, run } = useAcceptedMutation();
   const pendingMutation = usePendingMutation(volume.id);
+  const { permissions: queriedPermissions } = usePermissions(
+    volume.id && !allowedActions
+      ? [
+          { key: "attach", action: "volume:attach", node: { type: "volume", id: volume.id } },
+          { key: "detach", action: "volume:detach", node: { type: "volume", id: volume.id } },
+          { key: "resize", action: "volume:update", node: { type: "volume", id: volume.id } },
+          { key: "snapshot", action: "volume:snapshot", node: { type: "volume", id: volume.id } },
+          { key: "clone", action: "volume:clone", node: { type: "volume", id: volume.id } },
+          { key: "delete", action: "volume:delete", node: { type: "volume", id: volume.id } },
+        ]
+      : []
+  );
+  const permissions = allowedActions ?? queriedPermissions;
 
   // Detach and delete are accepted, not performed (backend STR-148): the toast
   // comes from MutationWatcher once the volume's `conditions` say the agent
@@ -112,6 +128,7 @@ export function VolumeActions({ volume, onActionComplete }: VolumeActionsProps) 
             variant="ghost"
             className="text-muted-foreground hover:text-foreground"
             disabled={isLoading || !!pendingMutation}
+            aria-label={`Actions for ${volume.name}`}
           >
             {isLoading || pendingMutation ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -124,7 +141,7 @@ export function VolumeActions({ volume, onActionComplete }: VolumeActionsProps) 
           <DropdownMenuItem
             onClick={() => setOpenDialog("attach")}
             className="text-foreground hover:bg-accent cursor-pointer"
-            disabled={!canAttach}
+            disabled={!canAttach || !permissions.attach}
           >
             <Link2 className="h-4 w-4 mr-2 text-blue-600" />
             Attach to VM
@@ -132,7 +149,7 @@ export function VolumeActions({ volume, onActionComplete }: VolumeActionsProps) 
           <DropdownMenuItem
             onClick={handleDetach}
             className="text-foreground hover:bg-accent cursor-pointer"
-            disabled={!canDetach}
+            disabled={!canDetach || !permissions.detach}
           >
             <Unlink className="h-4 w-4 mr-2 text-yellow-700" />
             Detach
@@ -140,7 +157,7 @@ export function VolumeActions({ volume, onActionComplete }: VolumeActionsProps) 
           <DropdownMenuItem
             onClick={() => setOpenDialog("resize")}
             className="text-foreground hover:bg-accent cursor-pointer"
-            disabled={!canResize}
+            disabled={!canResize || !permissions.resize}
           >
             <Expand className="h-4 w-4 mr-2 text-blue-600" />
             Resize
@@ -148,7 +165,7 @@ export function VolumeActions({ volume, onActionComplete }: VolumeActionsProps) 
           <DropdownMenuItem
             onClick={() => setOpenDialog("snapshot")}
             className="text-foreground hover:bg-accent cursor-pointer"
-            disabled={!canSnapshot}
+            disabled={!canSnapshot || !permissions.snapshot}
           >
             <Camera className="h-4 w-4 mr-2 text-purple-600" />
             Snapshot
@@ -156,7 +173,7 @@ export function VolumeActions({ volume, onActionComplete }: VolumeActionsProps) 
           <DropdownMenuItem
             onClick={() => setOpenDialog("clone")}
             className="text-foreground hover:bg-accent cursor-pointer"
-            disabled={!canClone}
+            disabled={!canClone || !permissions.clone}
           >
             <Copy className="h-4 w-4 mr-2 text-purple-600" />
             Clone
@@ -165,7 +182,7 @@ export function VolumeActions({ volume, onActionComplete }: VolumeActionsProps) 
           <DropdownMenuItem
             onClick={() => setOpenDialog("delete")}
             className="text-red-600 hover:bg-red-500/10 cursor-pointer"
-            disabled={!canDelete}
+            disabled={!canDelete || !permissions.delete}
           >
             <Trash2 className="h-4 w-4 mr-2" />
             Delete

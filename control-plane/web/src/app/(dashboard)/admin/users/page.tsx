@@ -5,6 +5,8 @@ import { ShieldAlert, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
+import { ResourceListControls, useResourceList } from "@/components/ui/resource-list-controls";
 import { UserTable } from "@/components/users/user-table";
 import { CreateUserDialog } from "@/components/users/create-user-dialog";
 import { useUsers } from "@/lib/hooks/use-users";
@@ -13,8 +15,10 @@ import { useAuth } from "@/providers";
 export default function AdminUsersPage() {
   const { user, isLoading: isAuthLoading } = useAuth();
   const isSystemAdmin = !!user?.isSystemAdmin;
-  const { data: users = [], isLoading } = useUsers(isSystemAdmin);
+  const usersQuery = useUsers(isSystemAdmin);
+  const { data: users = [], isLoading } = usersQuery;
   const [createOpen, setCreateOpen] = useState(false);
+  const list = useResourceList(users, (entry) => `${entry.displayName} ${entry.username} ${entry.email}`);
 
   if (isAuthLoading) {
     return (
@@ -59,6 +63,13 @@ export default function AdminUsersPage() {
 
       <CreateUserDialog open={createOpen} onOpenChange={setCreateOpen} />
 
+      <QueryErrorNotice
+        resource="users"
+        error={usersQuery.error}
+        hasData={usersQuery.data !== undefined}
+        onRetry={() => void usersQuery.refetch()}
+      />
+
       <Card className="bg-card border-border">
         <CardHeader>
           <CardTitle className="text-lg font-semibold text-foreground">
@@ -66,8 +77,9 @@ export default function AdminUsersPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
+          <ResourceListControls label="users" query={list.query} onQueryChange={list.setQuery} page={list.page} onPageChange={list.setPage} totalPages={list.totalPages} filteredCount={list.filteredCount} totalCount={list.totalCount} pageSize={list.pageSize} />
           <UserTable
-            users={users}
+            users={list.pageItems}
             isLoading={isLoading}
             currentUserId={user?.id}
           />

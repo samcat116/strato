@@ -1,6 +1,7 @@
 // Security group API endpoints
 
 import { api } from "./client";
+import { listAllPages } from "./pagination";
 import type {
   SecurityGroup,
   SecurityGroupRule,
@@ -8,18 +9,14 @@ import type {
   UpdateSecurityGroupRequest,
   CreateSecurityGroupRuleRequest,
   AttachSecurityGroupRequest,
-  Page,
 } from "@/types/api";
-import { LIST_PAGE_LIMIT } from "@/types/api";
 
 export const securityGroupsApi = {
-  list(projectId?: string): Promise<SecurityGroup[]> {
-    return api
-      .get<Page<SecurityGroup>>("/api/security-groups", {
-        limit: LIST_PAGE_LIMIT,
-        ...(projectId ? { project_id: projectId } : {}),
-      })
-      .then((page) => page.items);
+  list(projectId?: string, signal?: AbortSignal): Promise<SecurityGroup[]> {
+    return listAllPages<SecurityGroup>(
+      "/api/security-groups",
+      projectId ? { project_id: projectId } : {}, signal
+    );
   },
 
   create(data: CreateSecurityGroupRequest): Promise<SecurityGroup> {

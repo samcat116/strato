@@ -19,7 +19,7 @@ export function usePermissions(checks: ActionCheckItem[]) {
 
   const query = useQuery({
     queryKey: ["permissions", key],
-    queryFn: () => authorizationApi.check(checks),
+    queryFn: ({ signal }) => authorizationApi.checkMany(checks, signal),
     enabled: checks.length > 0 && checks.every((c) => !!c.node.id),
     staleTime: 30_000,
   });
@@ -29,5 +29,10 @@ export function usePermissions(checks: ActionCheckItem[]) {
     permissions[check.key] = query.data?.results[check.key] ?? false;
   }
 
-  return { permissions, isLoading: query.isLoading };
+  return {
+    permissions,
+    isLoading: query.isLoading,
+    error: query.error,
+    refetch: query.refetch,
+  };
 }

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import { CreateVMDialog } from "@/components/vms";
 import {
   AgentHealthDonut,
@@ -19,7 +20,7 @@ import {
 } from "@/components/overview";
 import { friendlyErrorMessage } from "@/lib/errors";
 import { formatCapacity } from "@/lib/format-bytes";
-import { isAgentsForbidden, useAgents, useInvalidateVMs, useVMs } from "@/lib/hooks";
+import { isAgentsForbidden, useAgents, useInvalidateVMs, usePermissions, useVMs } from "@/lib/hooks";
 import { useOrganization, useProjectContext } from "@/providers";
 import type { AgentStatus } from "@/types/api";
 
@@ -32,7 +33,8 @@ const AGENT_STATUS_ROWS: { status: AgentStatus; label: string }[] = [
 
 export default function OverviewPage() {
   const [createVMOpen, setCreateVMOpen] = useState(false);
-  const { data: vms = [], isLoading: vmsLoading } = useVMs();
+  const vmsQuery = useVMs();
+  const { data: vms = [], isLoading: vmsLoading } = vmsQuery;
   const {
     data: agentsData,
     isLoading: agentsLoading,
@@ -40,7 +42,8 @@ export default function OverviewPage() {
     refetch: refetchAgents,
   } = useAgents();
   const { currentOrg } = useOrganization();
-  const { projects } = useProjectContext();
+  const { projects, currentProject } = useProjectContext();
+  const { permissions } = usePermissions(currentProject ? [{ key: "create_vm", action: "vm:create", node: { type: "project", id: currentProject.id } }] : []);
   const invalidateVMs = useInvalidateVMs();
 
   const agents = useMemo(() => agentsData ?? [], [agentsData]);
@@ -147,14 +150,21 @@ export default function OverviewPage() {
           </div>
         </div>
         <div className="flex-1" />
-        <Button
+        {permissions.create_vm && <Button
           onClick={() => setCreateVMOpen(true)}
           className="h-[34px] rounded-lg px-4 text-[12.5px] font-semibold"
         >
           <Plus className="h-3.5 w-3.5" strokeWidth={2.2} />
           New Instance
-        </Button>
+        </Button>}
       </div>
+
+      <QueryErrorNotice
+        resource="virtual machines"
+        error={vmsQuery.error}
+        hasData={vmsQuery.data !== undefined}
+        onRetry={() => void vmsQuery.refetch()}
+      />
 
       {loading ? (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">

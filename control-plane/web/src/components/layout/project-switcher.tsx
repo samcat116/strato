@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useProjectContext } from "@/providers";
 
-export function ProjectSwitcher() {
+export function ProjectSwitcher({ onSelection }: { onSelection?: () => void }) {
   const { currentProject, projects, isLoading, switchProject } =
     useProjectContext();
   const router = useRouter();
@@ -22,6 +22,7 @@ export function ProjectSwitcher() {
   const handleSwitch = (projectId: string) => {
     switchProject(projectId);
     setOpen(false);
+    onSelection?.();
   };
 
   const label = isLoading
@@ -64,6 +65,7 @@ export function ProjectSwitcher() {
         <DropdownMenuItem
           onClick={() => {
             setOpen(false);
+            onSelection?.();
             router.push("/projects");
           }}
           className="cursor-pointer"

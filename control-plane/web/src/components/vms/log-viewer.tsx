@@ -96,7 +96,12 @@ function renderRow(log: VMLogEntry) {
 
 export function LogViewer({ vmId, className }: LogViewerProps) {
   const [limit, setLimit] = useState(100);
-  const query = useVMLogs(vmId, { limit, direction: "backward" });
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const query = useVMLogs(
+    vmId,
+    { limit, direction: "backward" },
+    autoRefresh
+  );
 
   return (
     <LogViewerShell
@@ -110,6 +115,8 @@ export function LogViewer({ vmId, className }: LogViewerProps) {
       }
       emptyStateMessage="Logs will appear here when VM operations are performed"
       downloadFilename={`vm-${vmId}-logs.txt`}
+      autoRefresh={autoRefresh}
+      onAutoRefreshChange={setAutoRefresh}
       className={className}
     />
   );

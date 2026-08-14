@@ -1,11 +1,12 @@
 "use client";
 
 import { Skeleton } from "@/components/ui/skeleton";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import { PoliciesSection } from "@/components/iam";
 import { useCurrentOrgAccess } from "@/lib/hooks";
 
 export default function PoliciesPage() {
-  const { orgId, canManage, isLoading } = useCurrentOrgAccess();
+  const { orgId, canManage, isLoading, error, retry } = useCurrentOrgAccess();
 
   if (isLoading) {
     return (
@@ -16,7 +17,7 @@ export default function PoliciesPage() {
     );
   }
 
-  if (!orgId) {
+  if (!orgId && !error) {
     return (
       <div className="max-w-4xl mx-auto">
         <div className="text-center py-12">
@@ -34,7 +35,15 @@ export default function PoliciesPage() {
           Author Cedar policies that permit or forbid actions across the organization.
         </p>
       </div>
-      <PoliciesSection ownerType="organization" ownerId={orgId} canManage={canManage} />
+      <QueryErrorNotice
+        resource="organization access"
+        error={error}
+        hasData={!!orgId}
+        onRetry={() => void retry()}
+      />
+      {orgId && (
+        <PoliciesSection ownerType="organization" ownerId={orgId} canManage={canManage} />
+      )}
     </div>
   );
 }

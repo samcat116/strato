@@ -14,15 +14,15 @@ export function makeResourceQueryHooks<TResource, TSnapshot>(config: {
   queryKey: string;
   /** Name of the list key's scope field, e.g. "orgId" or "projectId". */
   scopeKey: string;
-  list: (scopeId?: string) => Promise<TResource[]>;
-  get: (id: string) => Promise<TResource>;
-  listSnapshots: (id: string) => Promise<TSnapshot[]>;
+  list: (scopeId?: string, signal?: AbortSignal) => Promise<TResource[]>;
+  get: (id: string, signal?: AbortSignal) => Promise<TResource>;
+  listSnapshots: (id: string, signal?: AbortSignal) => Promise<TSnapshot[]>;
   listRefetchInterval: number;
 }) {
   function useList(scopeId?: string, options?: { enabled?: boolean }) {
     return useQuery({
       queryKey: [config.queryKey, { [config.scopeKey]: scopeId ?? null }],
-      queryFn: () => config.list(scopeId),
+      queryFn: ({ signal }) => config.list(scopeId, signal),
       enabled: options?.enabled,
       refetchInterval: config.listRefetchInterval,
     });
@@ -31,7 +31,7 @@ export function makeResourceQueryHooks<TResource, TSnapshot>(config: {
   function useDetail(id: string) {
     return useQuery({
       queryKey: [config.queryKey, id],
-      queryFn: () => config.get(id),
+      queryFn: ({ signal }) => config.get(id, signal),
       enabled: !!id,
     });
   }
@@ -39,7 +39,7 @@ export function makeResourceQueryHooks<TResource, TSnapshot>(config: {
   function useSnapshots(id: string) {
     return useQuery({
       queryKey: [config.queryKey, id, "snapshots"],
-      queryFn: () => config.listSnapshots(id),
+      queryFn: ({ signal }) => config.listSnapshots(id, signal),
       enabled: !!id,
       refetchInterval: 5000,
     });

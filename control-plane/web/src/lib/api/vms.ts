@@ -1,13 +1,13 @@
 // VM API endpoints
 
 import { api } from "./client";
+import { listAllPages } from "./pagination";
 import { buildLogQueryString } from "./logs";
 import type {
   VM,
   CreateVMRequest,
   PatchVMMetadataRequest,
   AcceptedMutation,
-  Page,
   VMLogEntry,
   VMLogsQueryParams,
   VMSnapshot,
@@ -16,7 +16,6 @@ import type {
   VMNetworkInterface,
   CreateVMNetworkInterfaceRequest,
 } from "@/types/api";
-import { LIST_PAGE_LIMIT } from "@/types/api";
 
 // Lifecycle mutations are asynchronous: the server responds 202 Accepted with
 // the VM, the generation it now has to converge on, and the id of the
@@ -25,17 +24,15 @@ import { LIST_PAGE_LIMIT } from "@/types/api";
 // converged — or, for a delete, polls operationsApi.get(mutationId), because a
 // deleted VM has nothing left to refetch.
 export const vmsApi = {
-  list(organizationId?: string): Promise<VM[]> {
-    return api
-      .get<Page<VM>>("/api/vms", {
-        limit: LIST_PAGE_LIMIT,
-        ...(organizationId ? { organization_id: organizationId } : {}),
-      })
-      .then((page) => page.items);
+  list(organizationId?: string, signal?: AbortSignal): Promise<VM[]> {
+    return listAllPages<VM>(
+      "/api/vms",
+      organizationId ? { organization_id: organizationId } : {}, signal
+    );
   },
 
-  get(id: string): Promise<VM> {
-    return api.get<VM>(`/api/vms/${id}`);
+  get(id: string, signal?: AbortSignal): Promise<VM> {
+    return api.get<VM>(`/api/vms/${id}`, undefined, signal);
   },
 
   create(data: CreateVMRequest): Promise<AcceptedMutation<VM>> {
@@ -108,12 +105,8 @@ export const vmsApi = {
   // at one instant, distinct from the disk-only volume snapshots. Capture and
   // delete are desired state on the checkpoint itself (STR-150); restore is an
   // edge-nonce on the VM's desired entry (STR-151) — see restoreSnapshot below.
-  listSnapshots(id: string): Promise<VMSnapshot[]> {
-    return api
-      .get<Page<VMSnapshot>>(`/api/vms/${id}/snapshots`, {
-        limit: LIST_PAGE_LIMIT,
-      })
-      .then((page) => page.items);
+  listSnapshots(id: string, signal?: AbortSignal): Promise<VMSnapshot[]> {
+    return listAllPages<VMSnapshot>(`/api/vms/${id}/snapshots`, {}, signal);
   },
 
   createSnapshot(
@@ -143,9 +136,9 @@ export const vmsApi = {
     );
   },
 
-  getLogs(id: string, params?: VMLogsQueryParams): Promise<VMLogEntry[]> {
+  getLogs(id: string, params?: VMLogsQueryParams, signal?: AbortSignal): Promise<VMLogEntry[]> {
     return api.get<VMLogEntry[]>(
-      `/api/vms/${id}/logs${buildLogQueryString(params)}`
+      `/api/vms/${id}/logs${buildLogQueryString(params)}`, undefined, signal
     );
   },
 };

@@ -13,7 +13,7 @@ export {
 } from "./use-sandboxes";
 export {
   useVolumes,
-  useSnapshotsForVolumes,
+  useProjectVolumeSnapshots,
   useInvalidateVolumes,
 } from "./use-volumes";
 export {
@@ -23,6 +23,7 @@ export {
   useCancelAgentUpdate,
   usePatchAgent,
   useAdoptAgentWorkloads,
+  useForceAgentOffline,
   useInvalidateAgents,
   isAgentsForbidden,
 } from "./use-agents";

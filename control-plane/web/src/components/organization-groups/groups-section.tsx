@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import {
   Card,
   CardContent,
@@ -22,7 +23,7 @@ interface GroupsSectionProps {
 }
 
 export function GroupsSection({ orgId, canManage }: GroupsSectionProps) {
-  const { data: groups = [], isLoading } = useGroups(orgId);
+  const { data: groups = [], isLoading, error, refetch } = useGroups(orgId);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<Group | null>(null);
@@ -69,6 +70,12 @@ export function GroupsSection({ orgId, canManage }: GroupsSectionProps) {
               members.
             </p>
           )}
+          <QueryErrorNotice
+            resource="groups"
+            error={error}
+            hasData={groups.length > 0}
+            onRetry={() => void refetch()}
+          />
           <GroupsTable
             orgId={orgId}
             groups={groups}

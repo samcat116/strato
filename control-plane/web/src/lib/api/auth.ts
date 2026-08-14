@@ -1,6 +1,6 @@
 // Auth API endpoints
 
-import { api } from "./client";
+import { api, ApiError } from "./client";
 import type { ClaimInfoResponse, SessionResponse, User } from "@/types/api";
 import type {
   PublicKeyCredentialCreationOptionsJSON,
@@ -11,8 +11,9 @@ export const authApi = {
   async getSession(): Promise<SessionResponse | null> {
     try {
       return await api.get<SessionResponse>("/auth/session");
-    } catch {
-      return null;
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) return null;
+      throw error;
     }
   },
 
@@ -20,12 +21,8 @@ export const authApi = {
   // OIDC-established and the provider supports single logout; the caller
   // should navigate there so the IdP session ends too.
   async logout(): Promise<{ sloUrl: string | null }> {
-    try {
-      const response = await api.post<{ sloUrl?: string | null } | undefined>("/auth/logout");
-      return { sloUrl: response?.sloUrl ?? null };
-    } catch {
-      return { sloUrl: null };
-    }
+    const response = await api.post<{ sloUrl?: string | null } | undefined>("/auth/logout");
+    return { sloUrl: response?.sloUrl ?? null };
   },
 
   // WebAuthn registration - begin

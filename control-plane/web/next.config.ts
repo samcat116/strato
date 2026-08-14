@@ -24,6 +24,9 @@ function resolveGitSHA(): string {
 const nextConfig: NextConfig = {
   output: "standalone", // Creates minimal server bundle for Docker
   poweredByHeader: false, // Don't advertise the framework in `X-Powered-By`
+  turbopack: {
+    root: process.cwd(),
+  },
   images: {
     unoptimized: true,
   },
@@ -43,7 +46,7 @@ const nextConfig: NextConfig = {
   // Only unconditional headers belong here: `headers()` is evaluated during
   // `next build` and baked into the routes manifest, so it can't gate on runtime
   // TLS state. HSTS, which must only be sent over HTTPS, is emitted per request
-  // in middleware.ts (keyed on X-Forwarded-Proto) instead.
+  // in proxy.ts (keyed on X-Forwarded-Proto) instead.
   //
   // Content-Security-Policy as defense-in-depth over React's escaping.
   // `script-src`/`style-src` keep `'unsafe-inline'` deliberately: Next.js ships
@@ -52,7 +55,7 @@ const nextConfig: NextConfig = {
   // the app. The value comes from restricting everything else — `default-src`
   // and `connect-src 'self'` confine fetch/XHR and the same-origin console
   // WebSocket (the API and UI share an origin in every supported topology, via
-  // ingress routing or the middleware.ts rewrite); `frame-ancestors 'none'`
+  // ingress routing or the proxy.ts rewrite); `frame-ancestors 'none'`
   // mirrors X-Frame-Options; `object-src`/`base-uri`/`form-action` close
   // plugin, base-tag, and form-hijack vectors. Tightening `script-src` to a
   // nonce is a follow-up (needs next-themes + Next nonce plumbing).

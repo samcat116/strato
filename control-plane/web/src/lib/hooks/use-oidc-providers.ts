@@ -9,7 +9,7 @@ import type {
 export function useOIDCProviders(orgId: string, enabled = true) {
   return useQuery({
     queryKey: ["oidc-providers", orgId],
-    queryFn: () => oidcProvidersApi.list(orgId),
+    queryFn: ({ signal }) => oidcProvidersApi.list(orgId, signal),
     enabled: enabled && !!orgId,
   });
 }
