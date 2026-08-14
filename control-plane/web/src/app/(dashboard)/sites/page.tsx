@@ -517,7 +517,7 @@ export default function SitesPage() {
     return {
       onlineAgents,
       provisioning,
-      live: sites.length - provisioning,
+      live: sites.filter((site) => site.status === "active").length,
       fleetCapacity: reservedPercent(totalCPU, availableCPU),
       runningVMs: vms.filter((vm) => vm.status === "Running").length,
       controllerCoverage:
