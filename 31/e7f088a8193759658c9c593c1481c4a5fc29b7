@@ -1,0 +1,30 @@
+control-plane/Sources/App/Services/ReplicaMessageBridge.swift
+  s_45f5bd5bc03fe4::t_a16cf1521d4e63 66-71,75,292-293,311,315,329
+  s_45f5bd5bc03fe4::t_b9bc492dbbbe09 72-74,286-290,322-325,330-331,337-339,341
+  s_45f5bd5bc03fe4::t_341f3d9a26dfb7 326,335,345
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_45f5bd5bc03fe4::t_b9bc492dbbbe09 477-481
+control-plane/Tests/AppPlatformTests/ReplicaMessageBridgeTests.swift
+  s_45f5bd5bc03fe4::t_341f3d9a26dfb7 58-59,62-64
+  s_45f5bd5bc03fe4::t_b9bc492dbbbe09 60-61,65-75
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_45f5bd5bc03fe4::t_b9bc492dbbbe09 487-530
+control-plane/Sources/App/Controllers/OperationController.swift
+  s_45f5bd5bc03fe4::t_b9bc492dbbbe09 35,54-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "31e7f088a8193759658c9c593c1481c4a5fc29b7",
+  "prompts": {},
+  "sessions": {
+    "s_45f5bd5bc03fe4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffdff-9a39-74b3-8ce3-c403f19183b6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
