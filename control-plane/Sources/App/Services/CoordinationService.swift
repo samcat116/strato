@@ -353,6 +353,8 @@ enum CoordinationStoreError: Error {
 /// absent, lock acquisition is first-writer-wins, and `tryReserve` is atomic
 /// (the actor serializes it).
 actor InMemoryCoordinationStore: CoordinationStore {
+    private struct InjectedWriteFailure: Error {}
+
     private struct Reservation {
         let amounts: ReservationAmounts
         let expiresAt: Date
@@ -363,13 +365,22 @@ actor InMemoryCoordinationStore: CoordinationStore {
     private var locks: [String: Date] = [:]
     private var reservations: [String: [String: Reservation]] = [:]
     private var subscribers: [String: [@Sendable (String) -> Void]] = [:]
+    private var failNextValueWriteKeys: Set<String> = []
 
     func setKey(_ key: String, ttlSeconds: Int) {
         keys[key] = Date().addingTimeInterval(TimeInterval(max(1, ttlSeconds)))
     }
 
-    func setValue(_ key: String, value: String, ttlSeconds: Int) {
+    func setValue(_ key: String, value: String, ttlSeconds: Int) throws {
+        if failNextValueWriteKeys.remove(key) != nil {
+            throw InjectedWriteFailure()
+        }
         values[key] = (value, Date().addingTimeInterval(TimeInterval(max(1, ttlSeconds))))
+    }
+
+    /// Test seam for one transient route/value write failure.
+    func failNextValueWrite(forKey key: String) {
+        failNextValueWriteKeys.insert(key)
     }
 
     func getValue(_ key: String) -> String? {
@@ -577,19 +588,22 @@ actor CoordinationService {
         "replica:\(replicaId):rpc-replies"
     }
 
+    @discardableResult
     func recordAgentRoute(
         agentKey: String, replicaId: String,
         ttlSeconds: Int = CoordinationService.presenceTTLSeconds
-    ) async {
+    ) async -> Bool {
         do {
             try await withStoreTimeout(Self.storeDeadline) {
                 try await self.store.setValue(
                     Self.routeKey(agentKey: agentKey), value: replicaId, ttlSeconds: ttlSeconds)
             }
+            return true
         } catch {
             logger.warning(
                 "Failed to record agent socket route",
                 metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
+            return false
         }
     }
 

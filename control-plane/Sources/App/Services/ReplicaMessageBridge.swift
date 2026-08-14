@@ -112,7 +112,8 @@ actor ReplicaMessageBridge {
 
     // MARK: - Socket routing and one-way RPC
 
-    func recordRoute(agentKey: String) async {
+    @discardableResult
+    func recordRoute(agentKey: String) async -> Bool {
         await app.coordination.recordAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
     }
 

@@ -78,6 +78,19 @@ struct CoordinationServiceTests {
         #expect(await service.isAgentPresent(agentKey: key) == false)
     }
 
+    @Test("A failed socket-route write is reported and the next write can retry")
+    func routeWriteFailureCanRetry() async {
+        let store = InMemoryCoordinationStore()
+        let service = CoordinationService(store: store, logger: Logger(label: "coordination-test"))
+        let key = agentKey("agent-a")
+        await store.failNextValueWrite(forKey: CoordinationService.routeKey(agentKey: key))
+
+        #expect(!(await service.recordAgentRoute(agentKey: key, replicaId: "replica-a")))
+        #expect(await service.agentRoute(agentKey: key) == nil)
+        #expect(await service.recordAgentRoute(agentKey: key, replicaId: "replica-a"))
+        #expect(await service.agentRoute(agentKey: key) == "replica-a")
+    }
+
     // MARK: - Sweep locks
 
     @Test("Sweep lock excludes a second acquirer until the TTL expires")

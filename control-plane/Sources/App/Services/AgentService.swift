@@ -18,6 +18,7 @@ import Metrics
 final class WebSocketManager: @unchecked Sendable {
     private struct Connection {
         let websocket: WebSocket
+        let frameProcessor: AgentWebSocketFrameProcessor
         /// Database UUID of the agent, learned at registration (the socket is
         /// accepted before the register message arrives, so it starts nil).
         var agentId: String?
@@ -31,20 +32,25 @@ final class WebSocketManager: @unchecked Sendable {
     /// other's desired state.
     private var connections: [String: Connection] = [:]
 
-    /// Store the connection for an agent, returning the socket it replaced (a
-    /// different instance under the same name) or nil. A non-nil result means
-    /// the agent reconnected while its previous socket's close was still
-    /// pending: that delayed close will take the `removeConnection(ifCurrent:)`
+    /// Store the connection for an agent, returning the frame processor it
+    /// replaced (a different socket under the same name) or nil. A non-nil
+    /// result means the agent reconnected while its previous socket's close
+    /// was still pending: that delayed close will take the
+    /// `removeConnection(ifCurrent:)`
     /// no-match path and skip its cleanup, so the caller must tear down state
     /// tied to the superseded connection (e.g. console or guest-exec sessions)
     /// here instead.
     /// Must be called from the WebSocket's event loop.
     @discardableResult
-    func setConnection(agentKey: String, websocket: WebSocket) -> WebSocket? {
+    func setConnection(
+        agentKey: String, websocket: WebSocket,
+        frameProcessor: AgentWebSocketFrameProcessor
+    ) -> AgentWebSocketFrameProcessor? {
         lock.withLock {
-            let previous = connections[agentKey]?.websocket
-            connections[agentKey] = Connection(websocket: websocket, agentId: nil)
-            return previous === websocket ? nil : previous
+            let previous = connections[agentKey]
+            connections[agentKey] = Connection(
+                websocket: websocket, frameProcessor: frameProcessor, agentId: nil)
+            return previous?.websocket === websocket ? nil : previous?.frameProcessor
         }
     }
 
@@ -109,6 +115,10 @@ actor AgentService {
     /// frame doubles Valkey traffic without extending liveness. Half the TTL
     /// leaves a full retry window after a failed write.
     private var presenceRefreshedAt: [String: ContinuousClock.Instant] = [:]
+    /// Route writes fail independently of presence writes. Keep their success
+    /// timestamps separate so a missing cross-replica socket route retries on
+    /// the next frame instead of waiting for the presence throttle window.
+    private var routeRefreshedAt: [String: ContinuousClock.Instant] = [:]
     private static let presenceRefreshInterval: Duration =
         .seconds(Int64(CoordinationService.presenceTTLSeconds / 2))
 
@@ -627,6 +637,7 @@ actor AgentService {
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
         app.guestExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
         presenceRefreshedAt.removeValue(forKey: agentKey)
+        routeRefreshedAt.removeValue(forKey: agentKey)
         await app.coordination.clearAgentPresence(agentKey: agentKey)
         await app.replicaBridge.clearRoute(agentKey: agentKey)
 
@@ -672,6 +683,7 @@ actor AgentService {
         // Drop both cluster-visible claims immediately. The route clear is a
         // compare-and-delete, so it cannot remove a successor connection.
         presenceRefreshedAt.removeValue(forKey: agentKey)
+        routeRefreshedAt.removeValue(forKey: agentKey)
         await app.coordination.clearAgentPresence(agentKey: agentKey)
         await app.replicaBridge.clearRoute(agentKey: agentKey)
 
@@ -717,6 +729,7 @@ actor AgentService {
         // A terminal frame may belong to a successor connection; the durable
         // command deadline handles executions that are truly abandoned.
         presenceRefreshedAt.removeValue(forKey: agentKey)
+        routeRefreshedAt.removeValue(forKey: agentKey)
         await app.replicaBridge.clearRoute(agentKey: agentKey)
 
         Telemetry.agentDisconnected(reason: "connection_closed")
@@ -890,22 +903,30 @@ actor AgentService {
         return orderedIDs.compactMap { byID[$0] }
     }
 
-    /// Refresh the agent's presence key at most once per half TTL. Failed
-    /// attempts are deliberately not recorded so the next incoming frame
-    /// retries instead of allowing a previously live key to expire.
+    /// Refresh the agent's presence and local-socket route at most once per
+    /// half TTL. Their success timestamps are independent: either failed write
+    /// retries on the next incoming frame even when the other one landed.
     private func refreshAgentPresenceIfNeeded(agentKey: String, force: Bool = false) async {
         let now = ContinuousClock.now
-        if !force, let lastRefresh = presenceRefreshedAt[agentKey],
-            lastRefresh.duration(to: now) < Self.presenceRefreshInterval
-        {
-            return
+        let presenceDue =
+            force
+            || presenceRefreshedAt[agentKey].map {
+                $0.duration(to: now) >= Self.presenceRefreshInterval
+            } ?? true
+        let routeDue =
+            force
+            || routeRefreshedAt[agentKey].map {
+                $0.duration(to: now) >= Self.presenceRefreshInterval
+            } ?? true
+
+        if presenceDue, await app.coordination.recordAgentPresence(agentKey: agentKey) {
+            presenceRefreshedAt[agentKey] = now
         }
 
-        if await app.coordination.recordAgentPresence(agentKey: agentKey) {
-            presenceRefreshedAt[agentKey] = now
-            if app.websocketManager.getConnection(agentKey: agentKey) != nil {
-                await app.replicaBridge.recordRoute(agentKey: agentKey)
-            }
+        if routeDue, app.websocketManager.getConnection(agentKey: agentKey) != nil,
+            await app.replicaBridge.recordRoute(agentKey: agentKey)
+        {
+            routeRefreshedAt[agentKey] = now
         }
     }
 
