@@ -55,6 +55,24 @@ final class ReplicaMessageBridgeTests {
 
     // MARK: Doorbell dispatch
 
+    @Test("Re-starting and a missed probe do not duplicate subscriptions")
+    func rearmingDoesNotDuplicateSubscriptions() async throws {
+        try await withBridge { bridge, delegate, store, replicaId in
+            await bridge.start(delegate: delegate)
+            let futureProbe = Date().addingTimeInterval(60)
+            await bridge.verifySubscriptions(now: futureProbe)
+            await bridge.verifySubscriptions(now: futureProbe.addingTimeInterval(21))
+
+            #expect(await store.subscriberCount(channel: CoordinationService.doorbellChannel) == 1)
+            #expect(
+                await store.subscriberCount(
+                    channel: CoordinationService.rpcChannel(replicaId: replicaId)) == 1)
+            #expect(
+                await store.subscriberCount(
+                    channel: CoordinationService.rpcReplyChannel(replicaId: replicaId)) == 1)
+        }
+    }
+
     @Test("An agent stream message is forwarded to the replica route and acknowledged")
     func agentMessageForwardsAcrossReplicas() async throws {
         let requesterApp = try await Application.make(.testing)

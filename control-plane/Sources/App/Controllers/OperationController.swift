@@ -32,10 +32,7 @@ struct OperationController: RouteCollection {
         }
 
         if let execution = try await VMCommandExecution.find(operationID, on: req.db) {
-            try await authorize(
-                resourceKind: .virtualMachine, resourceID: execution.vmID,
-                initiatedBy: execution.actorType == .user && execution.actorID == user.id,
-                req: req)
+            try await authorizeCommandExecution(execution, for: user, req: req)
             return try await execution.operationResponse(on: req.db)
         }
 
@@ -54,6 +51,20 @@ struct OperationController: RouteCollection {
             initiatedBy: event.actorType == .user && event.actorID == user.id,
             req: req)
         return try await OperationFacade.response(for: event, on: req.db)
+    }
+
+    /// Captured output can contain guest secrets and is therefore part of the
+    /// root-level command privilege, not ordinary VM visibility. The actor may
+    /// always poll the command they initiated; every other caller must still
+    /// hold `vm:runCommand` on the VM at read time.
+    private func authorizeCommandExecution(
+        _ execution: VMCommandExecution, for user: User, req: Request
+    ) async throws {
+        if execution.actorType == .user, execution.actorID == user.id {
+            try await req.markRowScopedAuthorization()
+            return
+        }
+        _ = try await req.authorizedVM(execution.vmID, action: "vm:runCommand")
     }
 
     /// Visibility follows the resource's `read` permission while it exists —

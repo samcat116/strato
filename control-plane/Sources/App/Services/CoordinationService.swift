@@ -474,6 +474,11 @@ actor InMemoryCoordinationStore: CoordinationStore {
         subscribers[channel, default: []].append(handler)
     }
 
+    /// Test-only observability for the process-local subscription contract.
+    func subscriberCount(channel: String) -> Int {
+        subscribers[channel]?.count ?? 0
+    }
+
     /// Prune and return the unexpired reservations for an agent.
     private func activeReservations(agentKey: String) -> [String: Reservation] {
         let now = Date()

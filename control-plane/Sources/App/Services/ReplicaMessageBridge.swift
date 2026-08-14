@@ -63,11 +63,16 @@ actor ReplicaMessageBridge {
 
     private var pendingDeliveries: [String: PendingDelivery] = [:]
 
-    /// Health bookkeeping for the replica's pub/sub subscriptions (issue #261
-    /// review): RediStack pins subscriptions to one dedicated connection and
-    /// does not restore them when it drops, so liveness is verified by probing
-    /// the doorbell channel from the heartbeat loop.
-    private var subscriptionsEstablished = false
+    private enum SubscriptionState {
+        case idle
+        case arming
+        case armed
+    }
+
+    /// Health bookkeeping for the replica's pub/sub subscriptions. The store
+    /// owns reconnection; this actor arms each channel once and probes the
+    /// doorbell channel from the heartbeat loop for observability.
+    private var subscriptionState = SubscriptionState.idle
     private var lastProbeSent: Date?
     private var lastProbeReceived: Date?
 
@@ -278,16 +283,14 @@ actor ReplicaMessageBridge {
     /// would look alive on the strength of a neighbor's traffic.
     static let subscriptionProbeMessage = "\u{0}subscription-probe"
 
-    /// Subscribe to the fleet-wide doorbell channel. Called from `start` and
-    /// re-armed by `verifySubscriptions()`; failure is logged and fails open —
-    /// the replica misses doorbell latency but agents still converge on their
-    /// own unconditional re-fetch, so it stays available.
-    ///
-    /// Safe to call repeatedly: RediStack replaces the receiver when the
-    /// channel is already subscribed on a live connection, and leases a fresh
-    /// pub/sub connection when the previous one died.
+    /// Subscribe to the fleet-wide doorbell and per-replica RPC channels. The
+    /// coordination store owns reconnection for the lifetime of each call, so
+    /// re-arming here would create a second permanent consumer and duplicate
+    /// RPC delivery. A failed initial arm may be retried; a completed arm is
+    /// idempotent.
     private func startSubscriptions() async {
-        guard !isShutDown, !app.didShutdown else { return }
+        guard !isShutDown, !app.didShutdown, subscriptionState == .idle else { return }
+        subscriptionState = .arming
         let replicaId = app.replicaID
         do {
             try await app.coordination.subscribe(
@@ -305,46 +308,41 @@ actor ReplicaMessageBridge {
             ) { [weak self] payload in
                 Task { await self?.handleDeliveryReply(payload) }
             }
-            subscriptionsEstablished = true
+            subscriptionState = .armed
             app.logger.info(
                 "Replica doorbell channel subscribed", metadata: ["replicaId": .string(replicaId)])
         } catch {
-            subscriptionsEstablished = false
+            subscriptionState = .idle
             app.logger.error(
                 "Failed to subscribe to the desired-state doorbell channel; this replica will not hear doorbells: \(error)"
             )
         }
     }
 
-    /// Verify the doorbell subscription is actually receiving (issue #261
-    /// review finding). RediStack pins subscriptions to one dedicated
-    /// connection and never restores them after a drop (Valkey restart,
-    /// failover, network blip) — and a dead subscription is silent: the replica
-    /// would stop hearing doorbells and park every poll it holds for the full
-    /// hold window without a single error. So each heartbeat tick publishes a
-    /// self-addressed probe on the doorbell channel; a probe that hasn't come
-    /// back by the next tick means the subscription connection is dead, and it
-    /// is re-armed. Runs on the 30s heartbeat tick, bounding the silent window
-    /// to about two ticks.
-    func verifySubscriptions() async {
+    /// Verify the doorbell subscription is receiving. The store's permanent
+    /// subscription task reconnects after Valkey interruption, so a missed
+    /// probe is logged but must not register another handler. Each heartbeat
+    /// tick publishes a self-addressed probe for this health signal.
+    func verifySubscriptions(now: Date = Date()) async {
         guard !isShutDown, !app.didShutdown else { return }
 
-        if !subscriptionsEstablished {
-            // The initial subscribe failed; keep retrying from here.
+        if subscriptionState == .idle {
+            // The initial arm failed before it established all channels; keep
+            // retrying from here.
             await startSubscriptions()
         } else if let sent = lastProbeSent,
             (lastProbeReceived ?? .distantPast) < sent,
-            Date().timeIntervalSince(sent) > 20
+            now.timeIntervalSince(sent) > 20
         {
-            // The previous tick's probe never arrived: the subscription
-            // connection is dead even though publishes still work.
+            // The previous tick's probe never arrived. The store's existing
+            // subscription task is already reconnecting; registering another
+            // handler here would duplicate every later RPC delivery.
             app.logger.warning(
-                "Replica subscription probe was not received; re-establishing channel subscriptions",
+                "Replica subscription probe was not received; awaiting store reconnection",
                 metadata: ["replicaId": .string(app.replicaID)])
-            await startSubscriptions()
         }
 
-        lastProbeSent = Date()
+        lastProbeSent = now
         do {
             try await app.coordination.publish(
                 channel: CoordinationService.doorbellChannel,
