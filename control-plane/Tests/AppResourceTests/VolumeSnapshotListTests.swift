@@ -75,4 +75,46 @@ struct VolumeSnapshotListTests {
             }
         }
     }
+
+    @Test("Project snapshot collection filters volumes the credential cannot read")
+    func projectCollectionFiltersUnreadableVolumes() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let admin = try await builder.createUser(
+                username: "snapshot-list-restricted",
+                email: "snapshot-list-restricted@example.com",
+                isSystemAdmin: true)
+            let projectOnly = try CredentialRestriction.validated(
+                actions: ["project:read"], nodeType: nil, nodeID: nil)
+            let token = try await admin.generateAPIKey(
+                on: app.db, restriction: projectOnly)
+            let organization = try await builder.createOrganization(
+                name: "Restricted Snapshot List Org")
+            let project = try await builder.createProject(
+                name: "Restricted Snapshot List Project", description: "",
+                organization: organization)
+            let volume = Volume(
+                name: "hidden-volume", description: "", projectID: project.id!,
+                environment: "development", size: 1 << 30, status: .available,
+                createdByID: admin.id!)
+            try await volume.save(on: app.db)
+            try await VolumeSnapshot(
+                name: "hidden-snapshot", description: "", volumeID: volume.id!,
+                projectID: project.id!, environment: "development", size: volume.size,
+                createdByID: admin.id!
+            ).save(on: app.db)
+
+            try await app.test(
+                .GET,
+                "/api/volume-snapshots?project_id=\(project.id!)"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { response in
+                #expect(response.status == .ok)
+                let page = try response.content.decode(PagedResponse<SnapshotResponse>.self)
+                #expect(page.total == 0)
+                #expect(page.items.isEmpty)
+            }
+        }
+    }
 }

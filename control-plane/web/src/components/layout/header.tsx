@@ -28,12 +28,17 @@ export function Header() {
       <Dialog open={navigationOpen} onOpenChange={setNavigationOpen}>
         <DialogContent className="left-0 top-0 h-screen w-[280px] max-w-[85vw] translate-x-0 translate-y-0 rounded-none p-0">
           <DialogTitle className="sr-only">Navigation</DialogTitle>
-          <Sidebar className="h-full w-full border-r-0" />
+          <Sidebar
+            className="h-full w-full border-r-0"
+            onNavigate={() => setNavigationOpen(false)}
+          />
         </DialogContent>
       </Dialog>
       <span className="text-[13px] font-semibold">{pageTitle(pathname)}</span>
       <div className="flex-1" />
-      <div className="hidden sm:block"><ProjectSwitcher /></div>
+      <div className="hidden sm:block">
+        <ProjectSwitcher />
+      </div>
       <CommandPalette />
     </header>
   );

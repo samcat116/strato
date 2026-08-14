@@ -1070,7 +1070,15 @@ struct VolumeController: RouteCollection {
             .sort(\.$id, .descending)
             .all()
 
-        return paging.page(snapshots.map { SnapshotResponse(from: $0) })
+        let volumeNodes = Set(
+            snapshots.map { IAMNode(type: .volume, id: $0.$volume.id) })
+        let readableVolumes = try await req.canFilter(
+            "volume:read", on: Array(volumeNodes))
+        let visibleSnapshots = snapshots.filter {
+            readableVolumes.contains(IAMNode(type: .volume, id: $0.$volume.id))
+        }
+
+        return paging.page(visibleSnapshots.map { SnapshotResponse(from: $0) })
     }
 
     /// List all snapshots for a volume
