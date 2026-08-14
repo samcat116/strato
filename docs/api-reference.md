@@ -71,6 +71,12 @@ algorithm name as its prefix. List inputs are bounded by cardinality too —
 notably `securityGroupIds`, which is held to the same five-per-interface cap at
 create that the attach endpoint enforces.
 
+For Firecracker VMs, `userData` is delivered through MMDS rather than a seed
+disk. Creation requires instance metadata and at least one selected network
+with metadata and DHCP enabled. Delivery does not install a guest consumer: the
+operator-provided rootfs must include cloud-init's `Ec2` datasource and the
+kernel command line must not disable cloud-init.
+
 **DNS zones and records** are bounded on the same terms, at their own grammar's
 ceiling (STR-198). A zone's `name` and a record's `name` may be **253
 characters**, RFC 1035's limit for a domain name in text form, rather than the
