@@ -67,11 +67,7 @@ public actor FileSystemStorageBackend: StorageBackend {
 
         // Ensure storage directory exists
         do {
-            try FileManager.default.createDirectory(
-                atPath: self.volumeStoragePath,
-                withIntermediateDirectories: true,
-                attributes: nil
-            )
+            try DurableFileWriter().createDirectory(at: self.volumeStoragePath)
             logger.info(
                 "Storage backend initialized",
                 metadata: [
@@ -129,11 +125,7 @@ public actor FileSystemStorageBackend: StorageBackend {
                 "format": .string(format.rawValue),
             ])
 
-        try FileManager.default.createDirectory(
-            atPath: volumeDirectory(volumeId: volumeId),
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
+        try DurableFileWriter().createDirectory(at: volumeDirectory(volumeId: volumeId))
 
         try await publishAtomically(to: path) { stagingPath in
             let result = try await self.runQemuImg(["create", "-f", format.rawValue, stagingPath, "\(sizeBytes)"])
@@ -208,11 +200,7 @@ public actor FileSystemStorageBackend: StorageBackend {
         let sourceFormat = try await detectFormat(of: sourcePath)
 
         let destinationDirectory = (path as NSString).deletingLastPathComponent
-        try FileManager.default.createDirectory(
-            atPath: destinationDirectory,
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
+        try DurableFileWriter().createDirectory(at: destinationDirectory)
 
         // Fail fast with a clear message when the destination filesystem
         // can't hold the disk — otherwise the copy/convert dies mid-write
@@ -297,8 +285,7 @@ public actor FileSystemStorageBackend: StorageBackend {
         }
 
         let directory = volumeDirectory(volumeId: volumeId)
-        try FileManager.default.createDirectory(
-            atPath: directory, withIntermediateDirectories: true)
+        try DurableFileWriter().createDirectory(at: directory)
         do {
             try FileManager.default.linkItem(atPath: existingPath, toPath: canonicalPath)
             try DurableFileWriter().write(
@@ -515,11 +502,8 @@ public actor FileSystemStorageBackend: StorageBackend {
                 "format": .string(format.rawValue),
             ])
 
-        try FileManager.default.createDirectory(
-            atPath: volumeDirectory(volumeId: targetVolumeId),
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
+        try DurableFileWriter().createDirectory(
+            at: volumeDirectory(volumeId: targetVolumeId))
 
         try await publishAtomically(to: targetPath) { stagingPath in
             let result = try await self.runQemuImg([

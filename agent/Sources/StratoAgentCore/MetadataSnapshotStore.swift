@@ -87,10 +87,6 @@ public struct MetadataSnapshotStore: Sendable {
     @discardableResult
     public func save(_ records: [UUID: PersistedMetadataRecord]) -> Bool {
         do {
-            let directory = (path as NSString).deletingLastPathComponent
-            if !directory.isEmpty {
-                try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
-            }
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
             let data = try encoder.encode(

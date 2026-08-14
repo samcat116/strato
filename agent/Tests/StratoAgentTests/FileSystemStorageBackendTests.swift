@@ -312,6 +312,30 @@ struct FileSystemStorageBackendTests {
         #expect(FileManager.default.contents(atPath: target) == Data("image-bytes".utf8))
     }
 
+    @Test func materializeDiskCopiesReadOnlySource() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let sourcePath = "\(root)/cached-image.qcow2"
+        FileManager.default.createFile(
+            atPath: sourcePath, contents: Data("read-only-image".utf8))
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o444], ofItemAtPath: sourcePath)
+
+        let recorder = SubprocessRecorder()
+        await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "qcow2"))
+        let backend = makeBackend(
+            root: root, recorder: recorder, imageSource: StaticImageSource(path: sourcePath))
+
+        let target = "\(root)/vms/vm-read-only/disk.qcow2"
+        let attachment = try await backend.materializeDisk(
+            at: target, from: makeImageInfo(), format: .qcow2)
+
+        #expect(attachment.path == target)
+        #expect(FileManager.default.contents(atPath: target) == Data("read-only-image".utf8))
+        let mode = try FileManager.default.attributesOfItem(atPath: target)[.posixPermissions] as? NSNumber
+        #expect(mode?.int16Value == 0o444)
+    }
+
     @Test func materializeDiskConvertsWhenFormatsDiffer() async throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }

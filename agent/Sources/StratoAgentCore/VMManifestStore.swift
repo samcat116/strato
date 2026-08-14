@@ -449,10 +449,6 @@ public struct VMManifestStore {
         preserving quarantined: [String: QuarantinedManifestEntry] = [:]
     ) -> Bool {
         do {
-            let directory = (path as NSString).deletingLastPathComponent
-            if !directory.isEmpty {
-                try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
-            }
             let data = try JSONEncoder().encode(
                 MergedManifest(entries: manifest, quarantined: quarantined.mapValues(\.raw)))
             // Synchronize the replacement before publishing it and the

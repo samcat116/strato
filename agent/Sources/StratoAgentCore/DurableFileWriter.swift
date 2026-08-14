@@ -13,6 +13,8 @@ import Foundation
 protocol DurableFileSystemCalls: Sendable {
     var errorNumber: CInt { get }
 
+    func pathStatus(at path: String) -> DurablePathStatus
+    func createDirectory(at path: String, permissions: CInt) -> CInt
     func removeItem(at path: String) -> CInt
     func createFile(at path: String, permissions: CInt) -> CInt
     func openFileForSynchronization(at path: String) -> CInt
@@ -22,6 +24,13 @@ protocol DurableFileSystemCalls: Sendable {
     func synchronizeDirectory(_ fileDescriptor: CInt) -> CInt
     func close(_ fileDescriptor: CInt) -> CInt
     func replaceItem(at destination: String, withItemAt source: String) -> CInt
+}
+
+enum DurablePathStatus: Sendable, Equatable {
+    case missing
+    case directory
+    case other
+    case failure(errorNumber: CInt)
 }
 
 /// Atomically publishes files with power-loss durability.
@@ -41,6 +50,8 @@ struct DurableFileWriter: Sendable {
     /// `path`. `permissions` is applied when the temporary file is created and
     /// is therefore never wider while its contents are present.
     func write(_ data: Data, to path: String, permissions: CInt = 0o666) throws {
+        try createDirectory(at: parentDirectory(of: path))
+
         let temporaryPath = path + ".tmp"
         _ = systemCalls.removeItem(at: temporaryPath)
 
@@ -77,6 +88,54 @@ struct DurableFileWriter: Sendable {
         }
     }
 
+    /// Creates a directory and any missing ancestors, synchronizing each new
+    /// directory through its parent before returning.
+    ///
+    /// Synchronizing a new directory's own descriptor persists entries inside
+    /// it, but not the directory's name in its parent. Creating top-down and
+    /// synchronizing each parent closes that separate power-loss window.
+    func createDirectory(at path: String) throws {
+        let directoryPath = path.isEmpty ? "." : (path as NSString).standardizingPath
+        var missingDirectories: [String] = []
+        var candidate = directoryPath
+
+        while true {
+            switch systemCalls.pathStatus(at: candidate) {
+            case .directory:
+                break
+            case .missing:
+                missingDirectories.append(candidate)
+                let parent = parentDirectory(of: candidate)
+                guard parent != candidate else {
+                    throw DurableFileWriteError(
+                        operation: "find existing directory ancestor", path: candidate,
+                        errorNumber: ENOENT)
+                }
+                candidate = parent
+                continue
+            case .other:
+                throw DurableFileWriteError(
+                    operation: "create directory", path: candidate, errorNumber: ENOTDIR)
+            case .failure(let errorNumber):
+                throw DurableFileWriteError(
+                    operation: "inspect directory", path: candidate, errorNumber: errorNumber)
+            }
+            break
+        }
+
+        for directory in missingDirectories.reversed() {
+            let result = systemCalls.createDirectory(at: directory, permissions: 0o777)
+            if result != 0 {
+                let errorNumber = systemCalls.errorNumber
+                guard errorNumber == EEXIST, systemCalls.pathStatus(at: directory) == .directory else {
+                    throw DurableFileWriteError(
+                        operation: "create directory", path: directory, errorNumber: errorNumber)
+                }
+            }
+            try synchronizeParentDirectory(of: directory)
+        }
+    }
+
     /// Durably publishes a complete file already staged beside `path`.
     func publish(stagingPath: String, to path: String) throws {
         let fileDescriptor = systemCalls.openFileForSynchronization(at: stagingPath)
@@ -106,8 +165,7 @@ struct DurableFileWriter: Sendable {
     }
 
     private func synchronizeParentDirectory(of path: String) throws {
-        let parent = (path as NSString).deletingLastPathComponent
-        let directoryPath = parent.isEmpty ? "." : parent
+        let directoryPath = parentDirectory(of: path)
         let directoryDescriptor = systemCalls.openDirectoryForSynchronization(at: directoryPath)
         guard directoryDescriptor >= 0 else {
             throw error(operation: "open directory", path: directoryPath)
@@ -128,6 +186,11 @@ struct DurableFileWriter: Sendable {
             }
             throw error
         }
+    }
+
+    private func parentDirectory(of path: String) -> String {
+        let parent = (path as NSString).deletingLastPathComponent
+        return parent.isEmpty ? "." : parent
     }
 
     private func requireSuccess(_ result: CInt, operation: String, path: String) throws {
@@ -152,6 +215,27 @@ struct DurableFileWriteError: Error, CustomStringConvertible {
 private struct POSIXDurableFileSystemCalls: DurableFileSystemCalls {
     var errorNumber: CInt { errno }
 
+    func pathStatus(at path: String) -> DurablePathStatus {
+        var information = stat()
+        let result = path.withCString { pointer in
+            stat(pointer, &information)
+        }
+        if result == 0 {
+            return information.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) ? .directory : .other
+        }
+        return errno == ENOENT ? .missing : .failure(errorNumber: errno)
+    }
+
+    func createDirectory(at path: String, permissions: CInt) -> CInt {
+        retryOnInterrupt {
+            #if canImport(Glibc)
+            Glibc.mkdir(path, mode_t(permissions))
+            #else
+            Darwin.mkdir(path, mode_t(permissions))
+            #endif
+        }
+    }
+
     func removeItem(at path: String) -> CInt {
         retryOnInterrupt {
             #if canImport(Glibc)
@@ -175,9 +259,9 @@ private struct POSIXDurableFileSystemCalls: DurableFileSystemCalls {
     func openFileForSynchronization(at path: String) -> CInt {
         retryOnInterrupt {
             #if canImport(Glibc)
-            Glibc.open(path, O_RDWR | O_CLOEXEC)
+            Glibc.open(path, O_RDONLY | O_CLOEXEC)
             #else
-            Darwin.open(path, O_RDWR | O_CLOEXEC)
+            Darwin.open(path, O_RDONLY | O_CLOEXEC)
             #endif
         }
     }

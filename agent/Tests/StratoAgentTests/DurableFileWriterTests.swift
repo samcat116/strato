@@ -6,6 +6,8 @@ import Testing
 
 private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sendable {
     enum Event: Equatable, Sendable {
+        case pathStatus(String)
+        case createDirectory(String, permissions: CInt)
         case remove(String)
         case create(String, permissions: CInt)
         case openFile(String)
@@ -20,10 +22,17 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
     private struct State: Sendable {
         var events: [Event] = []
         var fileSynchronizationFails = false
+        var existingDirectories: Set<String>
     }
 
-    private let state = Mutex(State())
+    private let state: Mutex<State>
     let errorNumber: CInt = 5
+
+    init(existingDirectories: Set<String> = ["/state"]) {
+        self.state = Mutex(
+            State(
+                existingDirectories: existingDirectories))
+    }
 
     var events: [Event] {
         state.withLock { $0.events }
@@ -31,6 +40,21 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
 
     func failFileSynchronization() {
         state.withLock { $0.fileSynchronizationFails = true }
+    }
+
+    func pathStatus(at path: String) -> DurablePathStatus {
+        state.withLock {
+            $0.events.append(.pathStatus(path))
+            return $0.existingDirectories.contains(path) ? .directory : .missing
+        }
+    }
+
+    func createDirectory(at path: String, permissions: CInt) -> CInt {
+        state.withLock {
+            $0.events.append(.createDirectory(path, permissions: permissions))
+            $0.existingDirectories.insert(path)
+        }
+        return 0
     }
 
     func removeItem(at path: String) -> CInt {
@@ -94,6 +118,7 @@ struct DurableFileWriterTests {
 
         #expect(
             calls.events == [
+                .pathStatus("/state"),
                 .remove("/state/manifest.json.tmp"),
                 .create("/state/manifest.json.tmp", permissions: 0o600),
                 .write(data, fileDescriptor: 10),
@@ -103,6 +128,41 @@ struct DurableFileWriterTests {
                     source: "/state/manifest.json.tmp",
                     destination: "/state/manifest.json"),
                 .openDirectory("/state"),
+                .synchronizeDirectory(20),
+                .close(20),
+            ])
+    }
+
+    @Test("Every newly created directory is synchronized through its parent")
+    func newDirectoryOrdering() throws {
+        let calls = RecordingDurableFileSystemCalls(existingDirectories: ["/root"])
+        let writer = DurableFileWriter(systemCalls: calls)
+        let data = Data("manifest".utf8)
+
+        try writer.write(data, to: "/root/state/records/manifest.json")
+
+        #expect(
+            calls.events == [
+                .pathStatus("/root/state/records"),
+                .pathStatus("/root/state"),
+                .pathStatus("/root"),
+                .createDirectory("/root/state", permissions: 0o777),
+                .openDirectory("/root"),
+                .synchronizeDirectory(20),
+                .close(20),
+                .createDirectory("/root/state/records", permissions: 0o777),
+                .openDirectory("/root/state"),
+                .synchronizeDirectory(20),
+                .close(20),
+                .remove("/root/state/records/manifest.json.tmp"),
+                .create("/root/state/records/manifest.json.tmp", permissions: 0o666),
+                .write(data, fileDescriptor: 10),
+                .synchronizeFile(10),
+                .close(10),
+                .replace(
+                    source: "/root/state/records/manifest.json.tmp",
+                    destination: "/root/state/records/manifest.json"),
+                .openDirectory("/root/state/records"),
                 .synchronizeDirectory(20),
                 .close(20),
             ])
