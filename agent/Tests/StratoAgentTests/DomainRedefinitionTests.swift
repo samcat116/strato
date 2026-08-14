@@ -237,6 +237,86 @@ struct DomainRedefinitionTests {
         }
     }
 
+    // MARK: - IMDS bootstrap migration
+
+    @Test("a legacy x86 IMDS domain gains the NoCloud network hint")
+    func legacyIMDSDomainGainsBootstrapHint() throws {
+        let original = Self.definedDomain()
+        let repaired = try #require(
+            try DomainRedefinition.addingIMDSBootstrapHint(
+                toInactiveDomainXML: original,
+                metadataSource: .imds,
+                architecture: .x86_64))
+        let before = try DomainXMLNode.parse(original)
+        let after = try DomainXMLNode.parse(repaired)
+
+        let sysinfo = try #require(
+            after.children.first { $0.name == "sysinfo" && $0.attribute("type") == "smbios" })
+        let serial = try #require(
+            sysinfo.child(named: "system")?.children.first {
+                $0.name == "entry" && $0.attribute("name") == "serial"
+            })
+        #expect(serial.text == "ds=nocloud;dsmode=net")
+        #expect(after.child(named: "os")?.child(named: "smbios")?.attribute("mode") == "sysinfo")
+
+        // The migration is as narrow as the builder's new requirement. In
+        // particular, every device and host-resolved path survives unchanged.
+        #expect(after.child(named: "devices") == before.child(named: "devices"))
+        #expect(after.child(named: "name") == before.child(named: "name"))
+        #expect(after.child(named: "uuid") == before.child(named: "uuid"))
+    }
+
+    @Test("the IMDS bootstrap migration is idempotent")
+    func imdsBootstrapMigrationIsIdempotent() throws {
+        let first = try #require(
+            try DomainRedefinition.addingIMDSBootstrapHint(
+                toInactiveDomainXML: Self.definedDomain(),
+                metadataSource: .imds,
+                architecture: .x86_64))
+        let second = try DomainRedefinition.addingIMDSBootstrapHint(
+            toInactiveDomainXML: first,
+            metadataSource: .imds,
+            architecture: .x86_64)
+
+        #expect(second == nil)
+    }
+
+    @Test("ISO and ARM domains do not receive the x86 IMDS hint")
+    func unrelatedDomainsDoNotGainBootstrapHint() throws {
+        let document = Self.definedDomain()
+        #expect(
+            try DomainRedefinition.addingIMDSBootstrapHint(
+                toInactiveDomainXML: document,
+                metadataSource: .iso,
+                architecture: .x86_64) == nil)
+        #expect(
+            try DomainRedefinition.addingIMDSBootstrapHint(
+                toInactiveDomainXML: document,
+                metadataSource: .imds,
+                architecture: .arm64) == nil)
+    }
+
+    @Test("an existing different SMBIOS identity is refused")
+    func conflictingSMBIOSIsRefused() {
+        let document = Self.definedDomain().replacingOccurrences(
+            of: "  <os>\n",
+            with: """
+                  <sysinfo type='smbios'>
+                    <system>
+                      <entry name='serial'>operator-owned</entry>
+                    </system>
+                  </sysinfo>
+                  <os>
+                """)
+
+        #expect(throws: DomainInventoryError.self) {
+            try DomainRedefinition.addingIMDSBootstrapHint(
+                toInactiveDomainXML: document,
+                metadataSource: .imds,
+                architecture: .x86_64)
+        }
+    }
+
     // MARK: - Spare root ports
 
     @Test("a domain whose spare ports are all taken gets four more")

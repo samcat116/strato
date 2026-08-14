@@ -235,7 +235,8 @@ public enum ReconcileStep: Equatable, Sendable {
     /// Sandboxes are not resizable in place.
     case resize
     /// Reconcile a managed QEMU VM's durable NIC set with its desired spec
-    /// (STR-202). Creation already realizes the complete initial set.
+    /// (STR-202), or replace a Firecracker VMM whose immutable MMDS interface
+    /// allow-list changed (STR-67). Creation realizes either initial set.
     case reconfigureNetworks
     case shutdown
     /// Gracefully stop (best effort) and remove the workload from this host.
@@ -621,6 +622,11 @@ public protocol ReconcileActuator: Sendable {
     func observedSizing() async -> [String: VMSizing]
     /// Network specs durably recorded in each managed VM manifest.
     func observedNetworkSpecs() async -> [String: [NetworkSpec]]
+    /// Exact immutable MMDS interface allow-list recorded for each managed
+    /// Firecracker VM. This includes the per-VM metadata kill switch, which is
+    /// not represented by `NetworkSpec` and may change without a VM generation
+    /// bump.
+    func observedFirecrackerMMDSInterfaces() async -> [String: [String]]
     /// Re-adopt an orphaned VM and return its observed status, so the
     /// reconciler can plan the remaining convergence steps toward the desired
     /// status.
@@ -697,6 +703,8 @@ extension ReconcileActuator {
     public func prepareManagedVolumeInventory(
         from _: [DesiredVMState], desiredVolumes _: [DesiredVolumeState]
     ) async {}
+
+    public func observedFirecrackerMMDSInterfaces() async -> [String: [String]] { [:] }
 }
 
 /// Why a volume could not be converged (STR-148). Every case carries a
@@ -1151,7 +1159,8 @@ public actor Reconciler {
             desired: message.vms, present: presentVMs, lastApplied: appliedGenerations(kind: .vm),
             presentSizing: await actuator.observedSizing(), tombstones: tombstones,
             appliedEdges: appliedEdges,
-            presentNetworks: await actuator.observedNetworkSpecs())
+            presentNetworks: await actuator.observedNetworkSpecs(),
+            presentFirecrackerMMDSInterfaces: await actuator.observedFirecrackerMMDSInterfaces())
         var plan = ReconcilePlan(items: [], unrecognized: vmPlan.unrecognized)
 
         var volumePlan = ReconcilePlan()
@@ -1800,7 +1809,8 @@ public actor Reconciler {
         presentSizing: [String: VMSizing] = [:],
         tombstones: [DesiredWorkloadTombstone] = [],
         appliedEdges: [String: AppliedEdgeNonces] = [:],
-        presentNetworks: [String: [NetworkSpec]] = [:]
+        presentNetworks: [String: [NetworkSpec]] = [:],
+        presentFirecrackerMMDSInterfaces: [String: [String]] = [:]
     ) -> ReconcilePlan {
         var plan = planCore(
             desired: desired, tombstones: tombstones, present: present, lastApplied: lastApplied,
@@ -1809,8 +1819,10 @@ public actor Reconciler {
             to: &plan.items, desired: desired, present: present, lastApplied: lastApplied,
             sizing: presentSizing, appliedEdges: appliedEdges)
         addNetworkChanges(
-            to: &plan.items, desired: desired, present: present,
-            presentNetworks: presentNetworks, appliedEdges: appliedEdges)
+            to: &plan.items, desired: desired, present: present, lastApplied: lastApplied,
+            presentNetworks: presentNetworks,
+            presentFirecrackerMMDSInterfaces: presentFirecrackerMMDSInterfaces,
+            appliedEdges: appliedEdges)
         return plan
     }
 
@@ -1818,21 +1830,55 @@ public actor Reconciler {
         to items: inout [ReconcileWorkItem],
         desired: [DesiredVMState],
         present: [String: VMPresence],
+        lastApplied: [String: Int64],
         presentNetworks: [String: [NetworkSpec]],
+        presentFirecrackerMMDSInterfaces: [String: [String]],
         appliedEdges: [String: AppliedEdgeNonces]
     ) {
-        for entry in desired where !entry.wantsAbsent && entry.hypervisorType == .qemu {
+        for entry in desired where !entry.wantsAbsent {
             let id = entry.vmId.uuidString
-            guard case .managed? = present[id],
-                let observed = presentNetworks[id],
-                observed != entry.spec.networks
-            else { continue }
+            // Same staleness rule as the core diff and resize pass: equal
+            // generations may correct drift, but an older replay must never
+            // restore an obsolete NIC or MMDS policy.
+            if let applied = lastApplied[id], entry.generation < applied { continue }
+            guard case .managed? = present[id], let observed = presentNetworks[id] else { continue }
+
+            let needsReconfiguration: Bool
+            switch entry.hypervisorType {
+            case .qemu:
+                needsReconfiguration = observed != entry.spec.networks
+            case .firecracker:
+                // Firecracker cannot change MMDS's interface allow-list after
+                // boot. Other NIC edits remain unsupported post-create, but a
+                // metadata policy edit must rebuild the VMM so a disabled NIC
+                // does not retain access until the VM is manually recreated.
+                let observedInterfaces =
+                    presentFirecrackerMMDSInterfaces[id]
+                    ?? FirecrackerMMDSInterfacePlan.interfaceIDs(for: observed)
+                let desiredInterfaces = FirecrackerMMDSInterfacePlan.interfaceIDs(
+                    for: entry.spec.networks,
+                    metadataServiceEnabled: entry.metadata?.isServiceEnabled ?? false)
+                needsReconfiguration = observedInterfaces != desiredInterfaces
+            }
+            guard needsReconfiguration else { continue }
 
             if let index = items.firstIndex(where: { $0.kind == .vm && $0.id == id }) {
                 guard !items[index].steps.contains(.create),
                     !items[index].steps.contains(.delete),
                     !items[index].steps.contains(.adopt)
                 else { continue }
+
+                if entry.hypervisorType == .firecracker {
+                    let steps = Self.firecrackerMetadataReconfigurationSteps(
+                        entry, appliedEdges: appliedEdges[id])
+                    items[index] = ReconcileWorkItem(
+                        kind: .vm, id: id, generation: entry.generation, steps: steps,
+                        target: entry.asTarget,
+                        appliedEdges: Self.edgesAfter(
+                            entry.edges, applied: appliedEdges[id], planning: steps))
+                    continue
+                }
+
                 var steps = items[index].steps
                 if let shutdown = steps.firstIndex(of: .shutdown) {
                     steps.insert(.reconfigureNetworks, at: shutdown + 1)
@@ -1845,7 +1891,13 @@ public actor Reconciler {
                     kind: .vm, id: id, generation: entry.generation, steps: steps,
                     target: entry.asTarget, appliedEdges: items[index].appliedEdges)
             } else {
-                let steps: [ReconcileStep] = [.reconfigureNetworks]
+                let steps: [ReconcileStep]
+                if entry.hypervisorType == .firecracker {
+                    steps = Self.firecrackerMetadataReconfigurationSteps(
+                        entry, appliedEdges: appliedEdges[id])
+                } else {
+                    steps = [.reconfigureNetworks]
+                }
                 items.append(
                     ReconcileWorkItem(
                         kind: .vm, id: id, generation: entry.generation, steps: steps,
@@ -1854,6 +1906,21 @@ public actor Reconciler {
                             entry.edges, applied: appliedEdges[id], planning: steps)))
             }
         }
+    }
+
+    /// A Firecracker metadata-policy change replaces its process and therefore
+    /// resets observed power state to `.created`. Re-plan from that fact so a
+    /// running VM boots again, a paused VM boots then pauses, and a shutdown VM
+    /// remains stopped. A boot supersedes a pending reboot; restores retain the
+    /// same ordering and nonce semantics as the ordinary status planner.
+    private static func firecrackerMetadataReconfigurationSteps(
+        _ entry: DesiredVMState, appliedEdges: AppliedEdgeNonces?
+    ) -> [ReconcileStep] {
+        let status = Self.statusSteps(desired: entry.desiredStatus, observed: .created)
+        return [.reconfigureNetworks] + status
+            + Self.edgeSteps(
+                entry.edges, applied: appliedEdges, after: status,
+                wantsRunning: entry.wantsRunning)
     }
 
     /// Plans `.resize` for VMs that are already running the status the control

@@ -5397,7 +5397,7 @@ export interface components {
             /** @description Interfaces to create in stable slot order. Do not combine this with `networkId`, `networkName`, or scalar `securityGroupIds`. Creation requires either this array or the legacy scalar network form. */
             networkInterfaces?: components["schemas"]["CreateVMNetworkInterfaceRequest"][];
             sshPublicKey?: string;
-            /** @description cloud-init user data. */
+            /** @description cloud-init user data, capped at 64 KiB and beginning with a format header cloud-init recognizes. QEMU delivers it through the selected NoCloud bootstrap source. Firecracker delivers it through MMDS and requires the VM metadata service plus at least one selected network with metadata and DHCP enabled. The Firecracker rootfs must include cloud-init with its Ec2 datasource enabled, and its kernel command line must not disable cloud-init. */
             userData?: string;
             hypervisorType?: components["schemas"]["HypervisorType"];
             /**
@@ -7946,6 +7946,8 @@ export interface components {
             capabilities: components["schemas"]["AgentHypervisorCapabilities"];
             /** @description Whether this host can attach a virtio-vsock device for this hypervisor; null for agents that predate vsock probing. */
             supportsVsock?: boolean | null;
+            /** @description Whether this agent can bridge guest-exec sessions to VMs using this hypervisor; null for agents that predate VM guest exec. */
+            supportsGuestExec?: boolean | null;
             /** @description The hypervisor binary's probed version; null for agents predating version probing or when the probe failed. */
             version?: string | null;
         };

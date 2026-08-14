@@ -448,24 +448,24 @@ struct AgentWebSocketController: RouteCollection {
 
             case .guestExecStarted:
                 let message = try envelope.decode(as: GuestExecStartedMessage.self)
-                req.sandboxExecSessionManager.handleStarted(
+                req.guestExecSessionManager.handleStarted(
                     sessionId: message.sessionId, fromAgentKey: agentKey)
 
             case .guestExecOutput:
                 let message = try envelope.decode(as: GuestExecOutputMessage.self)
                 if let data = message.rawData {
-                    req.sandboxExecSessionManager.handleOutput(
+                    req.guestExecSessionManager.handleOutput(
                         sessionId: message.sessionId, fromAgentKey: agentKey, data: data)
                 }
 
             case .guestExecExit:
                 let message = try envelope.decode(as: GuestExecExitMessage.self)
-                req.sandboxExecSessionManager.handleExit(
+                req.guestExecSessionManager.handleExit(
                     sessionId: message.sessionId, fromAgentKey: agentKey, exitCode: message.exitCode)
 
             case .guestExecClosed:
                 let message = try envelope.decode(as: GuestExecClosedMessage.self)
-                req.sandboxExecSessionManager.handleClosed(
+                req.guestExecSessionManager.handleClosed(
                     sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
 
             case .sandboxLog:
@@ -613,7 +613,7 @@ struct AgentWebSocketController: RouteCollection {
                 // instead of leaving frozen terminals behind.
                 req.application.consoleSessionManager.closeAllSessions(
                     forAgent: agentKey, reason: "agent disconnected")
-                req.application.sandboxExecSessionManager.closeAllSessions(
+                req.application.guestExecSessionManager.closeAllSessions(
                     forAgent: agentKey, reason: "agent disconnected")
 
                 // Mark agent as offline asynchronously
@@ -623,12 +623,14 @@ struct AgentWebSocketController: RouteCollection {
             }
 
             // Store WebSocket for this agent. If this reconnect superseded a
-            // still-open prior socket, its console sessions are now stale (a
-            // fresh agent process holds no console pty) and the delayed close
-            // will skip them — tear them down here so their browsers don't sit
-            // on a frozen terminal.
+            // still-open prior socket, its console and guest-exec sessions are
+            // now stale (a fresh agent process owns none of their guest-side
+            // processes) and the delayed close will skip them — tear them down
+            // here so their browsers don't sit on frozen terminals.
             if req.application.websocketManager.setConnection(agentKey: agentKey, websocket: ws) != nil {
                 req.application.consoleSessionManager.closeAllSessions(
+                    forAgent: agentKey, reason: "agent reconnected")
+                req.application.guestExecSessionManager.closeAllSessions(
                     forAgent: agentKey, reason: "agent reconnected")
             }
 

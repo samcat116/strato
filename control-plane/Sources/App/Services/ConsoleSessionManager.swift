@@ -373,7 +373,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
     /// when the reporting agent owns the session. Without this an agent that
     /// learned another session's (random) id could inject console bytes into,
     /// or signal readiness on, a session it does not host. Mirrors the
-    /// ownership gate `SandboxExecSessionManager.frontendConnection` enforces.
+    /// ownership gate `GuestExecSessionManager.frontendConnection` enforces.
     private func frontendConnection(
         sessionId: String, fromAgentKey agentKey: String, event: String
     ) -> WebSocket? {

@@ -15,6 +15,9 @@ actor FirecrackerService: HypervisorService {
     private let vmStoragePath: String
     private let firecrackerBinaryPath: String
     private let socketDirectory: String
+    /// Reads the generation-guarded metadata record at the instant MMDS is
+    /// seeded. Nil in standalone tests, where createVM's argument is used.
+    private let metadataProvider: (@Sendable (UUID) async -> InstanceMetadata?)?
 
     // HypervisorService protocol requirement
     public let hypervisorType: HypervisorType = .firecracker
@@ -23,6 +26,13 @@ actor FirecrackerService: HypervisorService {
     private var firecrackerClient: FirecrackerClient?
     private var vmManagers: [String: FirecrackerManager] = [:]
     private var vmSpecs: [String: VMSpec] = [:]
+    /// Exact pre-boot MMDS interface policy installed in each managed VMM.
+    /// The VM-level metadata switch participates in this list even though it
+    /// does not live in `VMSpec.networks`.
+    private var mmdsInterfaces: [String: [String]] = [:]
+    /// Last successfully installed MMDS snapshot. Avoids rewriting the VMM's
+    /// store on every level-triggered sync when the document did not change.
+    private var mmdsPayloads: [String: Data] = [:]
 
     init(
         logger: Logger,
@@ -31,7 +41,8 @@ actor FirecrackerService: HypervisorService {
         vmStoragePath: String,
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
         socketDirectory: String = "/tmp/firecracker",
-        firecrackerClient: FirecrackerClient? = nil
+        firecrackerClient: FirecrackerClient? = nil,
+        metadataProvider: (@Sendable (UUID) async -> InstanceMetadata?)? = nil
     ) {
         self.logger = logger
         self.storage = storage
@@ -39,6 +50,7 @@ actor FirecrackerService: HypervisorService {
         self.vmStoragePath = vmStoragePath
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.socketDirectory = socketDirectory
+        self.metadataProvider = metadataProvider
         // A shared client (created by the Agent) lets VMs and sandboxes drive
         // Firecracker through one process registry and socket directory; when
         // absent (e.g. tests) it is created lazily on first use.
@@ -57,27 +69,22 @@ actor FirecrackerService: HypervisorService {
     func createVM(
         vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil,
         networkAttachments: [ResolvedNetworkAttachment] = [],
-        // Accepted and unused: Firecracker guests boot from a kernel + rootfs
-        // with no seed ISO to render a hostname into. Delivering it means
-        // reaching the guest through MMDS, which is the IMDS work (STR-52).
         metadata: InstanceMetadata? = nil,
         // Firecracker's guest CID is private to its own process and its host
         // transport is a UDS, so it never consumes this host-global lease.
         vsockCID: UInt32? = nil
     ) async throws {
-        logger.info("Creating Firecracker VM", metadata: ["vmId": .string(vmId)])
+        let bootArtifacts = try await resolveBootArtifacts(spec: spec, imageInfo: imageInfo)
+        try await createVM(
+            vmId: vmId, spec: spec, bootArtifacts: bootArtifacts,
+            networkAttachments: networkAttachments, metadata: metadata)
+    }
 
-        // Boot parameters start from the spec's direct-kernel fields. When the
-        // image supplies kernel artifacts, they take precedence and are
-        // resolved to agent-local cache paths below.
-        var kernelPath: String?
-        var initramfsPath: String?
-        var cmdline: String?
-        if case .directKernel(let specKernel, let specInitramfs, let specCmdline) = spec.boot {
-            kernelPath = specKernel.isEmpty ? nil : specKernel
-            initramfsPath = specInitramfs
-            cmdline = specCmdline
-        }
+    private func createVM(
+        vmId: String, spec: VMSpec, bootArtifacts: FirecrackerBootArtifacts,
+        networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
+    ) async throws {
+        logger.info("Creating Firecracker VM", metadata: ["vmId": .string(vmId)])
 
         // Firecracker can only realize TAP attachments. Reject anything else up
         // front instead of silently launching the VM without its NICs.
@@ -119,97 +126,87 @@ actor FirecrackerService: HypervisorService {
             id: bootVolume.volumeId.uuidString, path: bootPath, readOnly: bootVolume.readonly
         )
 
-        if let imageInfo {
-            guard let imageSource else {
-                throw HypervisorServiceError.invalidConfiguration(
-                    "Firecracker cannot realize typed kernel artifacts without an image-source service")
-            }
-            guard imageInfo.artifact(ofKind: .kernel) != nil else {
-                throw HypervisorServiceError.invalidConfiguration(
-                    "Firecracker image \(imageInfo.imageId) has no kernel artifact")
-            }
-            guard imageInfo.artifact(ofKind: .rootfs) != nil else {
-                throw HypervisorServiceError.invalidConfiguration(
-                    "Firecracker image \(imageInfo.imageId) has no rootfs artifact")
-            }
-            logger.info(
-                "Realizing boot artifacts from image",
-                metadata: [
-                    "vmId": .string(vmId),
-                    "imageId": .string(imageInfo.imageId.uuidString),
-                ])
+        // MMDS carries the complete cloud-init document. Firecracker's 50 KiB
+        // default API limit is smaller than Strato's accepted user data before
+        // the surrounding EC2 tree is added, so raise this VMM's finite limit
+        // before any API request can seed or later refresh the snapshot.
+        let manager = try await client.createVM(
+            vmId: vmId,
+            httpAPIMaxPayloadSize: FirecrackerMMDSInterfacePlan.payloadLimitBytes)
 
-            do {
-                // Direct-kernel boot artifacts (kernel, optional initramfs) are
-                // opaque blobs fetched into the cache as-is. When the image
-                // supplies its own kernel it fully owns the direct-kernel boot:
-                // drop any stale spec initramfs so the image kernel is never
-                // paired with a legacy/nonexistent initrd, then use the image's
-                // initramfs only if it provides one.
-                kernelPath = try await imageSource.localImagePath(for: imageInfo, kind: .kernel)
-                if imageInfo.artifact(ofKind: .initramfs) != nil {
-                    initramfsPath = try await imageSource.localImagePath(for: imageInfo, kind: .initramfs)
-                } else {
-                    initramfsPath = nil
-                }
-
-            } catch {
-                logger.error(
-                    "Failed to realize kernel artifacts from image",
-                    metadata: [
-                        "vmId": .string(vmId),
-                        "error": .string(error.localizedDescription),
-                    ])
-                throw error
-            }
-        }
-
-        // Firecracker cannot boot without a kernel — from the image or the spec.
-        guard let kernelPath = kernelPath, !kernelPath.isEmpty else {
-            throw HypervisorServiceError.invalidConfiguration(
-                "Firecracker requires direct kernel boot - no kernel artifact or kernel path available")
-        }
-
-        // Create Firecracker VM
-        let manager = try await client.createVM(vmId: vmId)
-
-        // Configure machine
-        let machineConfig = MachineConfig(
-            vcpuCount: spec.cpus,
-            memSizeMib: Int(spec.memoryBytes / (1024 * 1024))
-        )
-        try await manager.configureMachine(machineConfig)
-
-        // Configure boot source (qualified: StratoShared also declares a BootSource)
-        let bootSource = SwiftFirecracker.BootSource(
-            kernelImagePath: kernelPath,
-            initrdPath: initramfsPath,
-            bootArgs: cmdline ?? "console=ttyS0 reboot=k panic=1 pci=off"
-        )
-        try await manager.configureBootSource(bootSource)
-
-        let drive = Drive.rootDrive(
-            id: rootDrive.id,
-            path: rootDrive.path,
-            readOnly: rootDrive.readOnly
-        )
-        try await manager.configureDrive(drive)
-
-        // Configure networking: one interface per resolved attachment (validated
-        // above to be .tap)
-        for (index, nic) in networkAttachments.enumerated() {
-            guard case .tap(let tapName) = nic.attachment else { continue }
-            let networkInterface = NetworkInterface.tap(
-                id: "eth\(index)",
-                tapName: tapName,
-                macAddress: nic.macAddress ?? ""
+        do {
+            // Configure machine
+            let machineConfig = MachineConfig(
+                vcpuCount: spec.cpus,
+                memSizeMib: Int(spec.memoryBytes / (1024 * 1024))
             )
-            try await manager.configureNetwork(networkInterface)
-        }
+            try await manager.configureMachine(machineConfig)
 
-        // Store references
-        vmManagers[vmId] = manager
-        vmSpecs[vmId] = spec
+            // Configure boot source (qualified: StratoShared also declares a BootSource)
+            let bootSource = SwiftFirecracker.BootSource(
+                kernelImagePath: bootArtifacts.kernelPath,
+                initrdPath: bootArtifacts.initramfsPath,
+                bootArgs: bootArtifacts.cmdline ?? "console=ttyS0 reboot=k panic=1 pci=off"
+            )
+            try await manager.configureBootSource(bootSource)
+
+            let drive = Drive.rootDrive(
+                id: rootDrive.id,
+                path: rootDrive.path,
+                readOnly: rootDrive.readOnly
+            )
+            try await manager.configureDrive(drive)
+
+            // Configure networking: one interface per resolved attachment (validated
+            // above to be .tap)
+            for (index, nic) in networkAttachments.enumerated() {
+                guard case .tap(let tapName) = nic.attachment else { continue }
+                let networkInterface = NetworkInterface.tap(
+                    id: "eth\(index)",
+                    tapName: tapName,
+                    macAddress: nic.macAddress ?? ""
+                )
+                try await manager.configureNetwork(networkInterface)
+            }
+
+            // MMDS configuration is pre-boot state. Each Firecracker NIC must be
+            // opted in explicitly; a VM may therefore expose metadata through one
+            // interface while keeping another unable to reach the service. Seed
+            // the EC2-shaped snapshot before `bootVM` starts the guest so cloud-init
+            // cannot race the agent's first desired-state refresh.
+            let configuredMMDSInterfaces = FirecrackerMMDSInterfacePlan.interfaceIDs(
+                for: networkAttachments,
+                metadataServiceEnabled: metadata?.isServiceEnabled ?? false)
+            if !configuredMMDSInterfaces.isEmpty {
+                try await manager.configureMMDS(
+                    MMDSConfig(version: .v2, networkInterfaces: configuredMMDSInterfaces))
+                // The desired item that scheduled this create can be an older
+                // replay while MetadataStore already holds a newer generation.
+                // Read through its guard at the last possible moment instead of
+                // installing the replay's copy into the new VMM.
+                let guardedMetadata: InstanceMetadata?
+                if let metadataProvider, let id = UUID(uuidString: vmId) {
+                    guardedMetadata = await metadataProvider(id)
+                } else {
+                    guardedMetadata = metadata
+                }
+                let payload = try Self.mmdsPayload(for: guardedMetadata)
+                try await manager.setMMDSData(rawJSON: payload)
+                mmdsPayloads[vmId] = payload
+            }
+
+            // Publish the manager only after every pre-boot API call succeeds.
+            vmManagers[vmId] = manager
+            vmSpecs[vmId] = spec
+            mmdsInterfaces[vmId] = configuredMMDSInterfaces
+        } catch {
+            // `FirecrackerClient.createVM` has already spawned and registered
+            // the process. No caller can clean it up through this service yet,
+            // because the manager is intentionally unpublished until the full
+            // configuration succeeds.
+            await discardPartialVMM(vmId: vmId, client: client)
+            throw error
+        }
 
         logger.info("Firecracker VM created successfully", metadata: ["vmId": .string(vmId)])
     }
@@ -290,6 +287,8 @@ actor FirecrackerService: HypervisorService {
         // Clean up local state
         vmManagers.removeValue(forKey: vmId)
         vmSpecs.removeValue(forKey: vmId)
+        mmdsPayloads.removeValue(forKey: vmId)
+        mmdsInterfaces.removeValue(forKey: vmId)
 
         // Remove the VM's directory, which holds the rootfs materialized at
         // create. Same rule as the QEMU driver: one recursive removal rather
@@ -460,9 +459,190 @@ actor FirecrackerService: HypervisorService {
 
         vmManagers[vmId] = manager
         vmSpecs[vmId] = spec
+        // Adopted manifests written before the exact policy field configured
+        // MMDS from the network list. The agent's durable policy inventory is
+        // authoritative for reconciliation; this fallback only suppresses
+        // pointless data PUTs when no network could have been configured.
+        mmdsInterfaces[vmId] = FirecrackerMMDSInterfacePlan.interfaceIDs(for: spec.networks)
 
         return Self.vmStatus(from: info.state)
     }
+
+    /// Replaces the VMM-local MMDS snapshot for a managed VM. MMDS remains
+    /// configured only on the NICs selected before boot; this live PUT updates
+    /// the data behind those interfaces without rebuilding or restarting the
+    /// guest.
+    func refreshInstanceMetadata(vmId: String, metadata: InstanceMetadata?) async throws {
+        guard let manager = vmManagers[vmId] else {
+            throw HypervisorServiceError.vmNotFound(vmId)
+        }
+        guard !(mmdsInterfaces[vmId] ?? []).isEmpty else {
+            return
+        }
+
+        let payload = try Self.mmdsPayload(for: metadata)
+        guard mmdsPayloads[vmId] != payload else { return }
+        try await manager.setMMDSData(rawJSON: payload)
+        mmdsPayloads[vmId] = payload
+        logger.info(
+            "Refreshed Firecracker MMDS snapshot",
+            metadata: ["vmId": .string(vmId), "bytes": .stringConvertible(payload.count)])
+    }
+
+    func restoreMetadataInterfaceInventory(vmId: String, interfaces: [String]) async {
+        guard vmManagers[vmId] != nil else { return }
+        mmdsInterfaces[vmId] = interfaces
+    }
+
+    /// Replaces only the Firecracker process. Managed disks and host-side TAPs
+    /// remain in place; the new process is configured from the desired spec and
+    /// receives the new MMDS interface allow-list before it is booted.
+    func reconfigureMetadataInterfaces(
+        vmId: String, spec: VMSpec, imageInfo: ImageInfo?,
+        networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
+    ) async throws {
+        guard let client = firecrackerClient else {
+            throw HypervisorServiceError.vmNotFound(vmId)
+        }
+
+        // Resolve or download the replacement's kernel while the current VMM
+        // is still healthy. A temporarily unavailable image must fail this
+        // attempt without shutting down a guest that cannot yet be recreated.
+        let bootArtifacts = try await resolveBootArtifacts(spec: spec, imageInfo: imageInfo)
+
+        logger.info(
+            "Replacing Firecracker VMM to reconfigure MMDS interfaces",
+            metadata: ["vmId": .string(vmId)])
+        if let manager = vmManagers[vmId] {
+            try await quiesceForReplacement(vmId: vmId, manager: manager, client: client)
+            try await client.destroyVM(vmId: vmId)
+            vmManagers.removeValue(forKey: vmId)
+            vmSpecs.removeValue(forKey: vmId)
+            mmdsPayloads.removeValue(forKey: vmId)
+            mmdsInterfaces.removeValue(forKey: vmId)
+        }
+
+        // A failed replacement has already removed the old manager. Its next
+        // level-triggered retry must start here rather than failing vmNotFound.
+        // createVM owns cleanup for any new process that fails configuration.
+        try await createVM(
+            vmId: vmId, spec: spec, bootArtifacts: bootArtifacts,
+            networkAttachments: networkAttachments, metadata: metadata)
+    }
+
+    private func resolveBootArtifacts(
+        spec: VMSpec, imageInfo: ImageInfo?
+    ) async throws -> FirecrackerBootArtifacts {
+        if let imageInfo {
+            logger.info(
+                "Realizing boot artifacts from image",
+                metadata: ["imageId": .string(imageInfo.imageId.uuidString)])
+        }
+        do {
+            return try await FirecrackerBootArtifactResolver.resolve(
+                spec: spec, imageInfo: imageInfo, imageSource: imageSource)
+        } catch {
+            logger.error(
+                "Failed to resolve Firecracker boot artifacts",
+                metadata: ["error": .string(error.localizedDescription)])
+            throw error
+        }
+    }
+
+    /// Asks the guest to flush and shut down, then proves its VMM exited before
+    /// the replacement is allowed to reopen the same managed disk. A paused
+    /// guest must briefly resume to handle Ctrl+Alt+Del; if shutdown fails, put
+    /// it back in its original paused state rather than leaving an unrelated
+    /// policy edit with a power-state side effect.
+    private func quiesceForReplacement(
+        vmId: String, manager: FirecrackerManager, client: FirecrackerClient
+    ) async throws {
+        let initialState: InstanceState
+        do {
+            initialState = try await manager.getInstanceInfo().state
+        } catch {
+            // A retry may arrive after the guest completed shutdown but before
+            // the previous attempt removed the client's process record.
+            if try await client.waitForVMExit(vmId: vmId, timeout: .milliseconds(0)) {
+                return
+            }
+            throw error
+        }
+
+        guard initialState != .notStarted else { return }
+        let restorePauseOnFailure = initialState == .paused
+
+        do {
+            if restorePauseOnFailure {
+                try await manager.resume()
+            }
+            try await manager.sendCtrlAltDel()
+            guard
+                try await client.waitForVMExit(
+                    vmId: vmId, timeout: .seconds(Self.gracefulReplacementShutdownSeconds))
+            else {
+                throw HypervisorServiceError.timeout(
+                    "waiting \(Self.gracefulReplacementShutdownSeconds)s for Firecracker guest \(vmId) "
+                        + "to shut down before MMDS reconfiguration")
+            }
+            logger.info(
+                "Firecracker guest shut down cleanly before VMM replacement",
+                metadata: ["vmId": .string(vmId)])
+        } catch {
+            if (try? await client.waitForVMExit(vmId: vmId, timeout: .milliseconds(0))) == true {
+                logger.info(
+                    "Firecracker VMM exited while quiescing for replacement",
+                    metadata: ["vmId": .string(vmId)])
+                return
+            }
+            if restorePauseOnFailure {
+                do {
+                    try await manager.pause()
+                } catch {
+                    logger.error(
+                        "Could not restore paused state after Firecracker shutdown failed",
+                        metadata: [
+                            "vmId": .string(vmId),
+                            "error": .string(error.localizedDescription),
+                        ])
+                }
+            }
+            throw error
+        }
+    }
+
+    /// Removes a process spawned by `createVM` before its manager became
+    /// visible to the rest of the service. Preserve the configuration error as
+    /// the operation's result, but log a cleanup failure loudly: in that case
+    /// the client's process registry deliberately prevents a duplicate spawn.
+    private func discardPartialVMM(vmId: String, client: FirecrackerClient) async {
+        do {
+            try await client.destroyVM(vmId: vmId)
+        } catch {
+            logger.error(
+                "Failed to discard partially configured Firecracker VMM",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+        vmManagers.removeValue(forKey: vmId)
+        vmSpecs.removeValue(forKey: vmId)
+        mmdsPayloads.removeValue(forKey: vmId)
+        mmdsInterfaces.removeValue(forKey: vmId)
+    }
+
+    private static func mmdsPayload(for metadata: InstanceMetadata?) throws -> Data {
+        let document = metadata.map { EC2MetadataRenderer.mmdsDocument(for: $0) } ?? .object([:])
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(document)
+    }
+
+    /// Same guest-shutdown envelope as the QEMU/libvirt backend. Unlike VM
+    /// deletion, MMDS policy reconciliation does not escalate to forced power
+    /// loss: a timeout leaves the old VMM and its disk intact for a later retry.
+    private static let gracefulReplacementShutdownSeconds = 60
 
     /// Firecracker exposes the guest serial console on the firecracker process's
     /// stdio, not a Unix socket, so socket-based console access is not available yet.

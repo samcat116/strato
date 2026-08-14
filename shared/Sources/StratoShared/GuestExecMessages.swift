@@ -13,7 +13,7 @@ import Foundation
 // failure.
 
 /// A resource whose guest control channel can host an exec session.
-public enum GuestResourceKind: String, Codable, CaseIterable, Sendable {
+public enum GuestResourceKind: String, Codable, CaseIterable, Hashable, Sendable {
     case virtualMachine = "virtual_machine"
     case sandbox
 }
