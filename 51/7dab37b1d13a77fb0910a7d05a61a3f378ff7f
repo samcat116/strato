@@ -1,0 +1,148 @@
+agent/Tests/StratoAgentTests/CloudInitNetworkConfigTests.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 10,70-71,77,89-108
+  s_c73d8cff1afa96::t_3263226dfaec10 109-110
+control-plane/Tests/AppPlatformTests/OpenAPISpecDriftTests.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 36-37
+docs/architecture/sandboxes.md
+  s_c73d8cff1afa96::t_1e454312394a1f 455-467
+deploy/compose/spiffe/agent-cp-entrypoint.sh
+  s_c73d8cff1afa96::t_1e454312394a1f 15-16,29-53,65
+docs/architecture/control-plane.md
+  s_c73d8cff1afa96::t_1e454312394a1f 141-142
+helm/strato-control-plane/values.yaml
+  s_c73d8cff1afa96::t_1e454312394a1f 756-770
+deploy/agent/tests/install-sh-test.sh
+  s_c73d8cff1afa96::t_1e454312394a1f 11-14,66,163-181
+  s_c73d8cff1afa96::t_452c371e25beda 182
+deploy/compose/docker-compose.yml
+  s_c73d8cff1afa96::t_1e454312394a1f 145-148,213-217,223,263-265,415-417,520
+docs/deployment/agents.md
+  s_c73d8cff1afa96::t_1e454312394a1f 170-173,481-484
+control-plane/Sources/App/routes.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 87-88
+agent/Sources/StratoAgentCore/AgentUpdater.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 16-18,29-32
+  s_c73d8cff1afa96::t_f1ec850bed7cca 33
+deploy/compose/spiffe/bootstrap.sh
+  s_c73d8cff1afa96::t_1e454312394a1f 17-18,74-98
+  s_c73d8cff1afa96::t_e602fb76433cb4 99
+agent/Sources/StratoAgentCore/DomainXMLBuilder.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 336-356,405-407
+  s_c73d8cff1afa96::t_174e8b25fdb1ca 408
+shared/Sources/StratoShared/NodeDependency.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 159,162-165
+agent/Sources/StratoAgentCore/DomainRedefinition.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 73-148
+agent/Tests/StratoAgentTests/DomainXMLBuilderTests.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 90-91,96,388-406
+  s_c73d8cff1afa96::t_f13ebc0c4ea1cd 407
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 346-348
+agent/Sources/StratoAgentCore/NodeDependencyHostAdapters.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 76-99,154-155,158-165,168-169
+control-plane/Sources/App/Models/Agent.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 510-519
+control-plane/Tests/AppIAMTests/IAMAuthorizerTests.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 621,629-630
+agent/Sources/StratoAgentCore/NodeDependencyManager.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 37,41-44,46
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 17-19,29,31,61
+agent/Tests/StratoAgentTests/DomainRedefinitionTests.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 240-319
+control-plane/Sources/App/Controllers/VMController.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 133,1769-1849
+  s_c73d8cff1afa96::t_729e5417d987fd 1850-1851
+docs/architecture/guest-identity.md
+  s_c73d8cff1afa96::t_1e454312394a1f 388-393,601-605,607-608,667-668
+shared/Sources/StratoShared/HypervisorTypes.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 71-76,91,100
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 875-876,908-910,923
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 195-203,625-628,656-659,665-667,827-831,854-855
+control-plane/Sources/App/Services/AgentService.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 39-40,626,666
+control-plane/Tests/AppResourceTests/GuestExecAttachIntegrationTests.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 1-477
+agent/Sources/StratoAgentCore/InitialNodeDependencyModules.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 55,63,70,83-91,98-102,119-130,135,238-242,256-268
+  s_c73d8cff1afa96::t_85112f110cd6d9 269
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 745-798
+docs/api-reference.md
+  s_c73d8cff1afa96::t_1e454312394a1f 195
+control-plane/Tests/AppPlatformTests/AgentWebSocketIntegrationTests.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 203-280
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 146-158,475-478
+  s_c73d8cff1afa96::t_a27b87b6784ab5 479
+control-plane/Tests/AppResourceTests/GuestExecTests.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 1-679
+agent/Dockerfile
+  s_c73d8cff1afa96::t_1e454312394a1f 167-169,177
+control-plane/Sources/App/openapi.yaml
+  s_c73d8cff1afa96::t_1e454312394a1f 111-118,14076-14081
+deploy/compose/.env.example
+  s_c73d8cff1afa96::t_1e454312394a1f 52-56
+control-plane/web/src/types/openapi.ts
+  s_c73d8cff1afa96::t_1e454312394a1f 7949-7950
+control-plane/Sources/App/Controllers/GuestExecWebSocketController.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 1-351
+docs/architecture/multi-replica.md
+  s_c73d8cff1afa96::t_1e454312394a1f 119,121
+docs/architecture/agent-dependency-management.md
+  s_c73d8cff1afa96::t_1e454312394a1f 49-52,69-78,80-82
+deploy/agent/install.sh
+  s_c73d8cff1afa96::t_1e454312394a1f 68-70,122,137-138,140,168,963-977,995-1000,1002,1011-1012,1025
+shared/Sources/StratoShared/GuestExecMessages.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 16
+control-plane/web/src/types/api.ts
+  s_c73d8cff1afa96::t_1e454312394a1f 616
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 67-68
+agent/Tests/StratoAgentTests/NodeDependencyManagerTests.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 249-302,348,354-355,357,363-512,564,566-595
+agent/Sources/StratoAgent/Agent.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 303,440,477,1829,2972,3458-3460,4283-4295
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 451,457,463,468,619,629-632,636
+  s_c73d8cff1afa96::t_ae867407c12930 637
+docs/architecture/agent.md
+  s_c73d8cff1afa96::t_1e454312394a1f 571-578,1087-1091
+helm/strato-control-plane/templates/deployment.yaml
+  s_c73d8cff1afa96::t_1e454312394a1f 278-283,440-441,460-466,470,485-488
+  s_c73d8cff1afa96::t_34a93ad0adc245 489-490
+helm/strato-control-plane/templates/spire-agent-configmap.yaml
+  s_c73d8cff1afa96::t_1e454312394a1f 18-26
+helm/strato-control-plane/templates/spire-agent-daemonset.yaml
+  s_c73d8cff1afa96::t_1e454312394a1f 38-43,48-52,103-108,122-127
+agent/Sources/StratoAgentCore/OrderedByteRelay.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 16
+docs/architecture/iam.md
+  s_c73d8cff1afa96::t_1e454312394a1f 705-706
+control-plane/Sources/App/Services/ConsoleSessionManager.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 376
+control-plane/Sources/App/Services/GuestExecSessionManager.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 1-553
+agent/Tests/StratoAgentTests/CloudInitMetaDataTests.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 50
+control-plane/Tests/AppPlatformTests/AgentDependencyHealthTests.swift
+  s_c73d8cff1afa96::t_1e454312394a1f 92-109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "517dab37b1d13a77fb0910a7d05a61a3f378ff7f",
+  "prompts": {},
+  "sessions": {
+    "s_c73d8cff1afa96": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffd73-35f2-7f32-bcbf-7ca5a1a41383",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
