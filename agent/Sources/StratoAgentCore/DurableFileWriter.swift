@@ -94,7 +94,10 @@ struct DurableFileWriter: Sendable {
     /// it, but not the directory's name in its parent. Creating top-down and
     /// synchronizing each parent closes that separate power-loss window.
     func createDirectory(at path: String) throws {
-        let directoryPath = path.isEmpty ? "." : (path as NSString).standardizingPath
+        // Preserve lexical `.` and `..` components. The kernel cannot resolve
+        // `missing/..` until `missing` exists, so normalizing the path first
+        // would skip a directory that callers still need in the original path.
+        let directoryPath = path.isEmpty ? "." : path
         var missingDirectories: [String] = []
         var candidate = directoryPath
 

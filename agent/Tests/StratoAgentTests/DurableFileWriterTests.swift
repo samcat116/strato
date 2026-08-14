@@ -172,6 +172,26 @@ struct DurableFileWriterTests {
             ])
     }
 
+    @Test("Directory creation preserves unresolved dot-dot components")
+    func unresolvedParentComponent() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("durable-directory-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+
+        let stagingDirectory = root.appendingPathComponent("staging")
+        let targetPath =
+            stagingDirectory
+            .appendingPathComponent("..")
+            .appendingPathComponent("volumes")
+            .path
+
+        try DurableFileWriter().createDirectory(at: targetPath)
+
+        #expect(FileManager.default.fileExists(atPath: stagingDirectory.path))
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("volumes").path))
+    }
+
     @Test("Publishing an existing staging file has the same durability ordering")
     func publishOrdering() throws {
         let calls = RecordingDurableFileSystemCalls()
