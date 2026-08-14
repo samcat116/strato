@@ -18,6 +18,7 @@ import Metrics
 final class WebSocketManager: @unchecked Sendable {
     private struct Connection {
         let websocket: WebSocket
+        let frameProcessor: AgentWebSocketFrameProcessor
         /// Database UUID of the agent, learned at registration (the socket is
         /// accepted before the register message arrives, so it starts nil).
         var agentId: String?
@@ -31,20 +32,25 @@ final class WebSocketManager: @unchecked Sendable {
     /// other's desired state.
     private var connections: [String: Connection] = [:]
 
-    /// Store the connection for an agent, returning the socket it replaced (a
-    /// different instance under the same name) or nil. A non-nil result means
-    /// the agent reconnected while its previous socket's close was still
-    /// pending: that delayed close will take the `removeConnection(ifCurrent:)`
+    /// Store the connection for an agent, returning the frame processor it
+    /// replaced (a different socket under the same name) or nil. A non-nil
+    /// result means the agent reconnected while its previous socket's close
+    /// was still pending: that delayed close will take the
+    /// `removeConnection(ifCurrent:)`
     /// no-match path and skip its cleanup, so the caller must tear down state
     /// tied to the superseded connection (e.g. console or guest-exec sessions)
     /// here instead.
     /// Must be called from the WebSocket's event loop.
     @discardableResult
-    func setConnection(agentKey: String, websocket: WebSocket) -> WebSocket? {
+    func setConnection(
+        agentKey: String, websocket: WebSocket,
+        frameProcessor: AgentWebSocketFrameProcessor
+    ) -> AgentWebSocketFrameProcessor? {
         lock.withLock {
-            let previous = connections[agentKey]?.websocket
-            connections[agentKey] = Connection(websocket: websocket, agentId: nil)
-            return previous === websocket ? nil : previous
+            let previous = connections[agentKey]
+            connections[agentKey] = Connection(
+                websocket: websocket, frameProcessor: frameProcessor, agentId: nil)
+            return previous?.websocket === websocket ? nil : previous?.frameProcessor
         }
     }
 
@@ -109,6 +115,10 @@ actor AgentService {
     /// frame doubles Valkey traffic without extending liveness. Half the TTL
     /// leaves a full retry window after a failed write.
     private var presenceRefreshedAt: [String: ContinuousClock.Instant] = [:]
+    /// Route writes fail independently of presence writes. Keep their success
+    /// timestamps separate so a missing cross-replica socket route retries on
+    /// the next frame instead of waiting for the presence throttle window.
+    private var routeRefreshedAt: [String: ContinuousClock.Instant] = [:]
     private static let presenceRefreshInterval: Duration =
         .seconds(Int64(CoordinationService.presenceTTLSeconds / 2))
 
@@ -620,12 +630,16 @@ actor AgentService {
         app.websocketManager.removeConnection(agentKey: agentKey)
         // The eventual socket close skips its cleanup once the connection is
         // gone (`removeConnection(ifCurrent:)` no longer matches), so console
-        // and exec sessions must be torn down here for the graceful-unregister
-        // path.
+        // and attached exec sessions must be torn down here for the
+        // graceful-unregister path. Captured commands remain pending because a
+        // terminal frame may already be in flight; their deadline is the safe
+        // failure backstop.
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
         app.guestExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
         presenceRefreshedAt.removeValue(forKey: agentKey)
+        routeRefreshedAt.removeValue(forKey: agentKey)
         await app.coordination.clearAgentPresence(agentKey: agentKey)
+        await app.replicaBridge.clearRoute(agentKey: agentKey)
 
         Telemetry.agentDisconnected(reason: "unregister")
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
@@ -661,15 +675,17 @@ actor AgentService {
 
         app.websocketManager.removeConnection(agentKey: agentKey)
         // Same reasoning as `unregisterAgent`: the socket-close handler will
-        // not run its cleanup once the connection entry is gone.
+        // not run its interactive-session cleanup once the connection entry is
+        // gone. Captured commands keep waiting for a terminal frame or their
+        // deadline.
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
         app.guestExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
-        // Drop the cluster-visible claim that this agent is alive, so the
-        // stale-agent sweep stops skipping it. This used to fall out of
-        // clearing the socket-route key, which shared a write with presence;
-        // with the route gone (STR-152) presence is cleared on its own.
+        // Drop both cluster-visible claims immediately. The route clear is a
+        // compare-and-delete, so it cannot remove a successor connection.
         presenceRefreshedAt.removeValue(forKey: agentKey)
+        routeRefreshedAt.removeValue(forKey: agentKey)
         await app.coordination.clearAgentPresence(agentKey: agentKey)
+        await app.replicaBridge.clearRoute(agentKey: agentKey)
 
         app.logger.info(
             "Agent force unregistered",
@@ -681,13 +697,13 @@ actor AgentService {
     /// the close handler already drops a delayed close superseded by a
     /// same-replica reconnect.
     ///
-    /// This used to consult the `agent:{name}:replica` routing key and also
-    /// skip the offline mark when the agent had reconnected to *another*
-    /// replica. The key existed for the cross-replica RPC bridge and went with
-    /// it (STR-152), so a close delayed past such a reconnect now writes
-    /// `offline` under a live connection until the holding replica's next
-    /// frame writes `.online` back — bounded by the agent's heartbeat interval,
-    /// about 20 seconds.
+    /// The delivery-only route restored for captured commands identifies the
+    /// socket-holding replica, but it is not durable liveness truth. A close
+    /// delayed past a reconnect on another replica can therefore still write
+    /// `offline` under a live connection until the holder's next frame writes
+    /// `.online` back — bounded by the agent's heartbeat interval, about 20
+    /// seconds. Compare-and-delete does ensure this cleanup cannot erase the
+    /// successor replica's route.
     ///
     /// **That window is not cosmetic**, and it is worth being precise about the
     /// cost: `status == .online` is an admission gate, not just a badge.
@@ -706,10 +722,15 @@ actor AgentService {
     /// the common case. That inverts the failure into the more damaging
     /// direction: admitting placements onto a host that is gone, rather than
     /// refusing them onto one that is live. Closing the window properly needs a
-    /// signal that says *which* connection is current, which is the directory
-    /// this change deleted.
+    /// signal that says *which connection generation* is current; a replica id
+    /// alone is intentionally not treated as that authority.
     func removeAgent(_ agentKey: String) async {
+        // For the same reason, do not fail captured commands from this close.
+        // A terminal frame may belong to a successor connection; the durable
+        // command deadline handles executions that are truly abandoned.
         presenceRefreshedAt.removeValue(forKey: agentKey)
+        routeRefreshedAt.removeValue(forKey: agentKey)
+        await app.replicaBridge.clearRoute(agentKey: agentKey)
 
         Telemetry.agentDisconnected(reason: "connection_closed")
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
@@ -882,19 +903,30 @@ actor AgentService {
         return orderedIDs.compactMap { byID[$0] }
     }
 
-    /// Refresh the agent's presence key at most once per half TTL. Failed
-    /// attempts are deliberately not recorded so the next incoming frame
-    /// retries instead of allowing a previously live key to expire.
+    /// Refresh the agent's presence and local-socket route at most once per
+    /// half TTL. Their success timestamps are independent: either failed write
+    /// retries on the next incoming frame even when the other one landed.
     private func refreshAgentPresenceIfNeeded(agentKey: String, force: Bool = false) async {
         let now = ContinuousClock.now
-        if !force, let lastRefresh = presenceRefreshedAt[agentKey],
-            lastRefresh.duration(to: now) < Self.presenceRefreshInterval
-        {
-            return
+        let presenceDue =
+            force
+            || presenceRefreshedAt[agentKey].map {
+                $0.duration(to: now) >= Self.presenceRefreshInterval
+            } ?? true
+        let routeDue =
+            force
+            || routeRefreshedAt[agentKey].map {
+                $0.duration(to: now) >= Self.presenceRefreshInterval
+            } ?? true
+
+        if presenceDue, await app.coordination.recordAgentPresence(agentKey: agentKey) {
+            presenceRefreshedAt[agentKey] = now
         }
 
-        if await app.coordination.recordAgentPresence(agentKey: agentKey) {
-            presenceRefreshedAt[agentKey] = now
+        if routeDue, app.websocketManager.getConnection(agentKey: agentKey) != nil,
+            await app.replicaBridge.recordRoute(agentKey: agentKey)
+        {
+            routeRefreshedAt[agentKey] = now
         }
     }
 
@@ -1142,6 +1174,7 @@ actor AgentService {
         } catch {
             app.logger.error("Stuck-convergence sweep failed: \(error)")
         }
+        await app.vmCommandExecutionService.sweepStuck(now: now)
     }
 
     /// Fixed grace before a resting desired/observed mismatch becomes
@@ -2091,6 +2124,13 @@ actor AgentService {
     /// know where it came from.
     func deliverDoorbell(agentKey: String) async {
         await applyDoorbell(agentKey: agentKey)
+    }
+
+    func deliverAgentEnvelope(_ envelope: MessageEnvelope, agentKey: String) async throws {
+        guard let websocket = app.websocketManager.getConnection(agentKey: agentKey) else {
+            throw ReplicaMessageBridge.DeliveryError.agentNotConnected(agentKey)
+        }
+        websocket.send(try WireProtocol.makeEncoder().encode(envelope))
     }
 
     // MARK: - Observed-state reports (issue #260)

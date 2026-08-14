@@ -414,12 +414,13 @@ that would apply to one action and confuse every reader of the other hundred.
 The split between the two is about **attribution, not privilege**.
 `vm:runCommand` is not a lesser `vm:exec` — a one-shot `sh -c` is a shell. What
 differs is what the platform can say afterwards: a non-interactive run carries
-its command in the request body and its output in a stored operation record, so
-each invocation is a discrete, attributable row, while an interactive session
-is a byte stream the control plane never parses. Two actions let an
-organization say "automation may run recorded commands here, humans may not
-hold unrecorded shells"; one action cannot express that. Both ride the `vm`
-service group, so an existing `vm:*` ceiling covers them with no edit.
+its exact argv and captured output in a durable payload linked to the stored
+operation, so each invocation is a discrete, attributable row, while an
+interactive session is a byte stream the control plane never parses. Two
+actions let an organization say "automation may run recorded commands here,
+humans may not hold unrecorded shells"; one action cannot express that. Both
+ride the `vm` service group, so an existing `vm:*` ceiling covers them with no
+edit.
 
 Sandboxes keep a single `sandbox:exec` (in `operator`), and the asymmetry is
 intended: a sandbox is an ephemeral, project-scoped unit of compute that exists
@@ -702,8 +703,8 @@ could previously reach on a safe method, all of them the defect rather than
 collateral: the sandbox exec-attach WebSocket (`sandbox:exec`, a GET), the VM
 console upgrade (`vm:viewConsole`, an editor action — and CLI sessions, which
 the hand-written scope carve-out never checked, are now covered by the same
-path), the VM exec-attach WebSocket (`vm:exec`, also a GET), and
-`vm:runCommand` when its route lands.
+path), the VM exec-attach WebSocket (`vm:exec`, also a GET), and the recorded
+command route (`vm:runCommand`).
 
 A fourth follows from the same rule but surfaces differently, and operators
 driving enrollment tooling with a read-only credential need to widen it before

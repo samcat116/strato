@@ -132,19 +132,22 @@ public struct GuestExecOutputMessage: WebSocketMessage {
     public let requestId: String
     public let timestamp: Date
     public let sessionId: String
-    /// Base64-encoded output bytes (stdout and stderr interleaved; the
-    /// receiving side renders one stream).
+    /// `stdout` or `stderr`; PTY sessions always use `stdout`.
+    public let stream: String
+    /// Base64-encoded output bytes.
     public let data: String
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         sessionId: String,
+        stream: String,
         data: String
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.sessionId = sessionId
+        self.stream = stream
         self.data = data
     }
 
@@ -152,10 +155,11 @@ public struct GuestExecOutputMessage: WebSocketMessage {
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         sessionId: String,
+        stream: String,
         rawData: Data
     ) {
         self.init(
-            requestId: requestId, timestamp: timestamp, sessionId: sessionId,
+            requestId: requestId, timestamp: timestamp, sessionId: sessionId, stream: stream,
             data: rawData.base64EncodedString())
     }
 

@@ -667,6 +667,37 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/vms/{vmID}/actions/run:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    post:
+      operationId: runVMCommand
+      summary: Run a captured command in a virtual machine
+      description: >-
+        Requires `vm:runCommand`. Accepts a non-interactive guest command and
+        returns an operation immediately. Poll the operation until terminal;
+        a succeeded operation includes stdout, stderr, and the process exit
+        code. Captured output is limited to 1 MiB across both streams.
+      tags: [Virtual Machines]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VMRunCommandRequest"
+      responses:
+        "202":
+          description: The accepted command operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourceOperation"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /api/vms/{vmID}/snapshots:
     parameters:
       - $ref: "#/components/parameters/VMID"
@@ -8994,6 +9025,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    ServiceUnavailable:
+      description: The placed agent cannot currently accept guest commands.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     PayloadTooLarge:
       description: The uploaded body exceeded the size limit.
       content:
@@ -9218,11 +9255,11 @@ components:
         Poll it until `status` is terminal.
 
 
-        Synthesized on read from the mutation's audit record and the resource's
-        `conditions` — there is no operations table behind it — so a client
-        written against the older contract keeps working. `completedAt` is
-        reported only for a completed delete, which is the one outcome recorded
-        rather than derived.
+        Lifecycle operations are synthesized on read from the mutation's audit
+        record and the resource's `conditions`. Captured VM commands use a
+        dedicated status record and may include `result`; their invoked argv
+        and potentially large output live in a separate payload table.
+        `completedAt` is also reported for recorded command completion.
       required: [resourceKind, resourceId, kind, status]
       properties:
         id:
@@ -9253,6 +9290,42 @@ components:
         completedAt:
           type: string
           format: date-time
+        result:
+          $ref: "#/components/schemas/VMCommandResult"
+
+    VMRunCommandRequest:
+      type: object
+      required: [command]
+      properties:
+        command:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            type: string
+            maxLength: 4096
+        env:
+          type: object
+          maxProperties: 128
+          additionalProperties:
+            type: string
+            maxLength: 4096
+        workingDir:
+          type: string
+          maxLength: 4096
+
+    VMCommandResult:
+      type: object
+      required: [stdout, stderr, exitCode, truncated]
+      properties:
+        stdout:
+          type: string
+        stderr:
+          type: string
+        exitCode:
+          type: integer
+        truncated:
+          type: boolean
 
     OperationResourceKind:
       type: string
@@ -9279,6 +9352,7 @@ components:
         - attach
         - detach
         - throttle
+        - run
     OperationStatus:
       type: string
       description: The state of an operation. `pending` is the only non-terminal value.

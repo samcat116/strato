@@ -484,6 +484,50 @@ final class VMOperationTests {
         }
     }
 
+    @Test("Captured command output requires initiation or vm:runCommand")
+    func commandOutputRequiresCommandPrivilege() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            let vmID = try vm.requireID()
+            let execution = VMCommandExecution(
+                vmID: vmID, actorID: try user.requireID(), agentKey: "agent-key",
+                deadline: Date().addingTimeInterval(60))
+            try await execution.create(command: ["/usr/bin/printenv"], on: app.db)
+            let executionID = try execution.requireID()
+            let payload = try #require(try await VMCommandPayload.find(executionID, on: app.db))
+            payload.recordResult(
+                stdout: Data("SECRET=value\n".utf8), stderr: Data(), exitCode: 0,
+                truncated: false)
+            try await payload.update(on: app.db)
+            execution.status = .succeeded
+            execution.completedAt = Date()
+            try await execution.update(on: app.db)
+
+            // The initiating user may poll the result even though no seeded
+            // role grants vm:runCommand.
+            try await app.test(.GET, "/api/operations/\(executionID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let operation = try res.content.decode(OperationResponse.self)
+                #expect(operation.result?.stdout == "SECRET=value\n")
+            }
+
+            let reader = try await TestDataBuilder(db: app.db).createUser(
+                username: "command-output-reader", email: "command-output-reader@example.com")
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: try reader.requireID(), role: .viewer,
+                nodeType: .virtualMachine, nodeID: vmID, createdBy: nil, on: app.db)
+            let readerToken = try await reader.generateAPIKey(on: app.db)
+
+            try await app.test(.GET, "/api/operations/\(executionID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: readerToken)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+                #expect(!res.body.string.contains("SECRET=value"))
+            }
+        }
+    }
+
     @Test("An operation whose VM is gone is visible to its initiator only")
     func operationForDeletedVMVisibleToInitiatorOnly() async throws {
         try await withVMTestApp { app, user, vm, token in

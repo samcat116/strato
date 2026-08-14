@@ -4,12 +4,11 @@ import StratoShared
 
 /// Read API for asynchronous resource operations (issue #259).
 ///
-/// Since ADR 0001 stage 4 (STR-147) this is a **compatibility façade**, and
-/// since stage 11 (STR-152) it is nothing else: no mutation writes an operation
-/// row, because the table is gone. Every answer is synthesized from the
-/// `resource_events` row the mutation did write plus the resource's current
-/// conditions (`OperationFacade`), so a client written against the old contract
-/// keeps working unchanged.
+/// Since ADR 0001 stage 4 (STR-147), lifecycle mutations are a compatibility
+/// façade synthesized from `resource_events` plus resource conditions. STR-79
+/// adds recorded VM commands under the same response shape, backed by a small
+/// command-status row and a cold result side table because command completion
+/// is not desired-state convergence.
 ///
 /// It is also the *supported* way to follow a **delete** to completion, for the
 /// one thing conditions cannot express: a delete succeeds by its resource
@@ -32,6 +31,11 @@ struct OperationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid operation ID")
         }
 
+        if let execution = try await VMCommandExecution.find(operationID, on: req.db) {
+            try await authorizeCommandExecution(execution, for: user, req: req)
+            return try await execution.operationResponse(on: req.db)
+        }
+
         // The id names a recorded mutation. Only `.requested` rows are
         // addressable: a terminal row is the evidence a request's verdict is
         // read from, not an operation in its own right, and answering for its
@@ -47,6 +51,20 @@ struct OperationController: RouteCollection {
             initiatedBy: event.actorType == .user && event.actorID == user.id,
             req: req)
         return try await OperationFacade.response(for: event, on: req.db)
+    }
+
+    /// Captured output can contain guest secrets and is therefore part of the
+    /// root-level command privilege, not ordinary VM visibility. The actor may
+    /// always poll the command they initiated; every other caller must still
+    /// hold `vm:runCommand` on the VM at read time.
+    private func authorizeCommandExecution(
+        _ execution: VMCommandExecution, for user: User, req: Request
+    ) async throws {
+        if execution.actorType == .user, execution.actorID == user.id {
+            try await req.markRowScopedAuthorization()
+            return
+        }
+        _ = try await req.authorizedVM(execution.vmID, action: "vm:runCommand")
     }
 
     /// Visibility follows the resource's `read` permission while it exists —

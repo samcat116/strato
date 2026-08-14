@@ -8,10 +8,15 @@ import Vapor
 /// to exactly this method so the seam stays narrow — everything else the bridge
 /// needs it reaches through `CoordinationService` and `Application` directly.
 ///
-/// It had a second method, `runLocalExchange`, which ran a forwarded correlated
-/// exchange over a held socket. That went with the cross-replica RPC bridge
-/// (STR-152).
+/// It deliberately does not restore the old `runLocalExchange` seam removed in
+/// STR-152. Captured commands only need the narrower delivery acknowledgement;
+/// their eventual result follows the ordinary guest-exec stream.
 protocol ReplicaBridgeDelegate: AnyObject, Sendable {
+    /// Queue one already-encoded agent message on a socket held by this
+    /// process. Recorded VM commands use delivery acknowledgement only; their
+    /// eventual result arrives as the ordinary guest-exec stream.
+    func deliverAgentEnvelope(_ envelope: MessageEnvelope, agentKey: String) async throws
+
     /// Act on a broadcast doorbell for `agentKey` by waking a poll parked here.
     /// A replica that holds no such poll does nothing, which is the common case
     /// — the doorbell is broadcast precisely so no one has to know in advance
@@ -19,7 +24,7 @@ protocol ReplicaBridgeDelegate: AnyObject, Sendable {
     func deliverDoorbell(agentKey: String) async
 }
 
-/// Cross-replica desired-state doorbell (issue #261, STR-146).
+/// Cross-replica desired-state doorbell and agent-stream delivery.
 ///
 /// This is how a mutation handled by any control-plane replica promptly reaches
 /// an agent whose long-poll may be parked on another: one fleet-wide
@@ -27,23 +32,23 @@ protocol ReplicaBridgeDelegate: AnyObject, Sendable {
 /// or targeted delivery. The replica holding the parked poll acts; every other
 /// replica drops it.
 ///
-/// This used to be two halves. The other was correlated request/reply RPC
-/// forwarding over `replica:{id}:rpc`, which needed a `agent:{name}:replica`
-/// routing directory to find the socket holder and fail fast when nobody held
-/// it. Every verb that used it became desired state (ADR 0001 stages 5–9), so
-/// both went in STR-152 and what is left needs no directory at all: a broadcast
-/// nobody can act on is simply ignored.
+/// Captured VM commands add a deliberately narrow second half: the accepting
+/// replica resolves `agent:{key}:replica`, publishes an encoded stream envelope
+/// to `replica:{id}:rpc`, and waits only for delivery acknowledgement. It does
+/// not recreate the correlated agent exchange removed in STR-152; command
+/// completion remains durable database state populated by later stream frames.
 ///
 /// It composes `CoordinationService` (the pub/sub channel, itself backed by the
 /// Valkey / in-memory `CoordinationStore` adapters) and delegates the one
 /// operation that requires local state back to its owner through
 /// `ReplicaBridgeDelegate`.
 ///
-/// Everything the bridge does is a latency optimization: a lost doorbell or a
-/// dropped subscription never corrupts state because every agent converges on
-/// its own unconditional re-fetch.
+/// Doorbells remain a latency optimization. Agent-stream delivery is different:
+/// it is acknowledged or rejected, and the durable command is failed when it
+/// cannot be delivered.
 actor ReplicaMessageBridge {
     private let app: Application
+    private let deliveryAcknowledgementTimeout: Duration
 
     /// The owner that tracks local parked polls (production: `AgentService`).
     /// Weak so the bridge never keeps its owner alive; a nil delegate means an
@@ -51,19 +56,35 @@ actor ReplicaMessageBridge {
     /// unconditional re-fetch repairs.
     private weak var delegate: (any ReplicaBridgeDelegate)?
 
-    /// Health bookkeeping for the replica's pub/sub subscriptions (issue #261
-    /// review): RediStack pins subscriptions to one dedicated connection and
-    /// does not restore them when it drops, so liveness is verified by probing
-    /// the doorbell channel from the heartbeat loop.
-    private var subscriptionsEstablished = false
+    private struct PendingDelivery {
+        let continuation: CheckedContinuation<Void, Error>
+        var timeout: Task<Void, Never>?
+    }
+
+    private var pendingDeliveries: [String: PendingDelivery] = [:]
+
+    private enum SubscriptionState {
+        case idle
+        case arming
+        case armed
+    }
+
+    /// Health bookkeeping for the replica's pub/sub subscriptions. The store
+    /// owns reconnection; this actor arms each channel once and probes the
+    /// doorbell channel from the heartbeat loop for observability.
+    private var subscriptionState = SubscriptionState.idle
     private var lastProbeSent: Date?
     private var lastProbeReceived: Date?
 
     /// Set at shutdown. Guards subscription (re-)arming from racing teardown.
     private var isShutDown = false
 
-    init(app: Application) {
+    init(
+        app: Application,
+        deliveryAcknowledgementTimeout: Duration = .seconds(10)
+    ) {
         self.app = app
+        self.deliveryAcknowledgementTimeout = deliveryAcknowledgementTimeout
     }
 
     // MARK: - Lifecycle
@@ -82,6 +103,165 @@ actor ReplicaMessageBridge {
     /// shutdown; this only closes the re-arm path (`verifySubscriptions`).
     func shutdown() {
         isShutDown = true
+        for (_, pending) in pendingDeliveries {
+            pending.timeout?.cancel()
+            pending.continuation.resume(throwing: CancellationError())
+        }
+        pendingDeliveries.removeAll()
+    }
+
+    // MARK: - Socket routing and one-way RPC
+
+    @discardableResult
+    func recordRoute(agentKey: String) async -> Bool {
+        await app.coordination.recordAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
+    }
+
+    func clearRoute(agentKey: String) async {
+        await app.coordination.clearAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
+    }
+
+    struct AgentDeliveryRequest: Codable {
+        let rpcId: String
+        let replyChannel: String
+        let agentKey: String
+        let envelope: MessageEnvelope
+    }
+
+    struct AgentDeliveryReply: Codable {
+        let rpcId: String
+        let delivered: Bool
+        let error: String?
+    }
+
+    enum DeliveryError: Error, LocalizedError {
+        case agentNotConnected(String)
+        case timedOut
+        case deliveryUncertain(String)
+        case remote(String)
+
+        /// Only a rejection before the target socket accepted the envelope is
+        /// safe to expose as a failed command. A publish/acknowledgement loss
+        /// may mean the command is already running, so its durable operation
+        /// must remain pending for the guest stream or deadline sweep.
+        var isDefinitive: Bool {
+            switch self {
+            case .agentNotConnected, .remote: true
+            case .timedOut, .deliveryUncertain: false
+            }
+        }
+
+        var errorDescription: String? {
+            switch self {
+            case .agentNotConnected(let agentKey): return "Agent not connected: \(agentKey)"
+            case .timedOut: return "Timed out forwarding the command to the agent socket replica"
+            case .deliveryUncertain(let reason): return "Agent delivery outcome is unknown: \(reason)"
+            case .remote(let reason): return reason
+            }
+        }
+    }
+
+    /// Queue a stream message on the replica that owns `agentKey`'s socket.
+    /// This acknowledges delivery to the WebSocket only; command completion is
+    /// reported later through the durable execution record.
+    func deliver<T: WebSocketMessage>(_ message: T, agentKey: String) async throws {
+        try await deliver(MessageEnvelope(message: message), agentKey: agentKey)
+    }
+
+    func deliver(_ envelope: MessageEnvelope, agentKey: String) async throws {
+        if app.websocketManager.getConnection(agentKey: agentKey) != nil, let delegate {
+            try await delegate.deliverAgentEnvelope(envelope, agentKey: agentKey)
+            return
+        }
+
+        guard let replicaId = await app.coordination.agentRoute(agentKey: agentKey),
+            replicaId != app.replicaID
+        else {
+            throw DeliveryError.agentNotConnected(agentKey)
+        }
+
+        let rpcId = UUID().uuidString
+        let request = AgentDeliveryRequest(
+            rpcId: rpcId,
+            replyChannel: CoordinationService.rpcReplyChannel(replicaId: app.replicaID),
+            agentKey: agentKey,
+            envelope: envelope)
+        let payload = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
+
+        try await withCheckedThrowingContinuation { continuation in
+            pendingDeliveries[rpcId] = PendingDelivery(continuation: continuation, timeout: nil)
+            Task {
+                do {
+                    try await self.app.coordination.publish(
+                        channel: CoordinationService.rpcChannel(replicaId: replicaId), message: payload)
+                } catch {
+                    self.resolveDelivery(
+                        rpcId: rpcId,
+                        result: .failure(DeliveryError.deliveryUncertain(error.localizedDescription)))
+                    return
+                }
+                let timeout = Task {
+                    try? await Task.sleep(for: self.deliveryAcknowledgementTimeout)
+                    guard !Task.isCancelled else { return }
+                    self.resolveDelivery(rpcId: rpcId, result: .failure(DeliveryError.timedOut))
+                }
+                self.attachDeliveryTimeout(timeout, rpcId: rpcId)
+            }
+        }
+    }
+
+    private func handleDeliveryRequest(_ payload: String) async {
+        guard
+            let request = try? JSONDecoder().decode(
+                AgentDeliveryRequest.self, from: Data(payload.utf8))
+        else {
+            app.logger.warning("Malformed cross-replica agent delivery request")
+            return
+        }
+
+        let reply: AgentDeliveryReply
+        do {
+            guard let delegate else { throw DeliveryError.agentNotConnected(request.agentKey) }
+            try await delegate.deliverAgentEnvelope(request.envelope, agentKey: request.agentKey)
+            reply = AgentDeliveryReply(rpcId: request.rpcId, delivered: true, error: nil)
+        } catch {
+            reply = AgentDeliveryReply(
+                rpcId: request.rpcId, delivered: false, error: error.localizedDescription)
+        }
+
+        do {
+            let encoded = try JSONEncoder().encode(reply)
+            try await app.coordination.publish(
+                channel: request.replyChannel, message: String(decoding: encoded, as: UTF8.self))
+        } catch {
+            app.logger.error("Failed to publish cross-replica agent delivery reply: \(error)")
+        }
+    }
+
+    private func handleDeliveryReply(_ payload: String) {
+        guard
+            let reply = try? JSONDecoder().decode(
+                AgentDeliveryReply.self, from: Data(payload.utf8))
+        else { return }
+        resolveDelivery(
+            rpcId: reply.rpcId,
+            result: reply.delivered
+                ? .success(())
+                : .failure(DeliveryError.remote(reply.error ?? "Agent delivery failed")))
+    }
+
+    private func attachDeliveryTimeout(_ timeout: Task<Void, Never>, rpcId: String) {
+        guard pendingDeliveries[rpcId] != nil else {
+            timeout.cancel()
+            return
+        }
+        pendingDeliveries[rpcId]?.timeout = timeout
+    }
+
+    private func resolveDelivery(rpcId: String, result: Result<Void, Error>) {
+        guard let pending = pendingDeliveries.removeValue(forKey: rpcId) else { return }
+        pending.timeout?.cancel()
+        pending.continuation.resume(with: result)
     }
 
     // MARK: - Desired-state doorbell (STR-146)
@@ -104,16 +284,14 @@ actor ReplicaMessageBridge {
     /// would look alive on the strength of a neighbor's traffic.
     static let subscriptionProbeMessage = "\u{0}subscription-probe"
 
-    /// Subscribe to the fleet-wide doorbell channel. Called from `start` and
-    /// re-armed by `verifySubscriptions()`; failure is logged and fails open —
-    /// the replica misses doorbell latency but agents still converge on their
-    /// own unconditional re-fetch, so it stays available.
-    ///
-    /// Safe to call repeatedly: RediStack replaces the receiver when the
-    /// channel is already subscribed on a live connection, and leases a fresh
-    /// pub/sub connection when the previous one died.
+    /// Subscribe to the fleet-wide doorbell and per-replica RPC channels. The
+    /// coordination store owns reconnection for the lifetime of each call, so
+    /// re-arming here would create a second permanent consumer and duplicate
+    /// RPC delivery. A failed initial arm may be retried; a completed arm is
+    /// idempotent.
     private func startSubscriptions() async {
-        guard !isShutDown, !app.didShutdown else { return }
+        guard !isShutDown, !app.didShutdown, subscriptionState == .idle else { return }
+        subscriptionState = .arming
         let replicaId = app.replicaID
         do {
             try await app.coordination.subscribe(
@@ -121,46 +299,51 @@ actor ReplicaMessageBridge {
             ) { [weak self] payload in
                 Task { await self?.handleDoorbell(payload) }
             }
-            subscriptionsEstablished = true
+            try await app.coordination.subscribe(
+                channel: CoordinationService.rpcChannel(replicaId: replicaId)
+            ) { [weak self] payload in
+                Task { await self?.handleDeliveryRequest(payload) }
+            }
+            try await app.coordination.subscribe(
+                channel: CoordinationService.rpcReplyChannel(replicaId: replicaId)
+            ) { [weak self] payload in
+                Task { await self?.handleDeliveryReply(payload) }
+            }
+            subscriptionState = .armed
             app.logger.info(
                 "Replica doorbell channel subscribed", metadata: ["replicaId": .string(replicaId)])
         } catch {
-            subscriptionsEstablished = false
+            subscriptionState = .idle
             app.logger.error(
                 "Failed to subscribe to the desired-state doorbell channel; this replica will not hear doorbells: \(error)"
             )
         }
     }
 
-    /// Verify the doorbell subscription is actually receiving (issue #261
-    /// review finding). RediStack pins subscriptions to one dedicated
-    /// connection and never restores them after a drop (Valkey restart,
-    /// failover, network blip) — and a dead subscription is silent: the replica
-    /// would stop hearing doorbells and park every poll it holds for the full
-    /// hold window without a single error. So each heartbeat tick publishes a
-    /// self-addressed probe on the doorbell channel; a probe that hasn't come
-    /// back by the next tick means the subscription connection is dead, and it
-    /// is re-armed. Runs on the 30s heartbeat tick, bounding the silent window
-    /// to about two ticks.
-    func verifySubscriptions() async {
+    /// Verify the doorbell subscription is receiving. The store's permanent
+    /// subscription task reconnects after Valkey interruption, so a missed
+    /// probe is logged but must not register another handler. Each heartbeat
+    /// tick publishes a self-addressed probe for this health signal.
+    func verifySubscriptions(now: Date = Date()) async {
         guard !isShutDown, !app.didShutdown else { return }
 
-        if !subscriptionsEstablished {
-            // The initial subscribe failed; keep retrying from here.
+        if subscriptionState == .idle {
+            // The initial arm failed before it established all channels; keep
+            // retrying from here.
             await startSubscriptions()
         } else if let sent = lastProbeSent,
             (lastProbeReceived ?? .distantPast) < sent,
-            Date().timeIntervalSince(sent) > 20
+            now.timeIntervalSince(sent) > 20
         {
-            // The previous tick's probe never arrived: the subscription
-            // connection is dead even though publishes still work.
+            // The previous tick's probe never arrived. The store's existing
+            // subscription task is already reconnecting; registering another
+            // handler here would duplicate every later RPC delivery.
             app.logger.warning(
-                "Replica subscription probe was not received; re-establishing channel subscriptions",
+                "Replica subscription probe was not received; awaiting store reconnection",
                 metadata: ["replicaId": .string(app.replicaID)])
-            await startSubscriptions()
         }
 
-        lastProbeSent = Date()
+        lastProbeSent = now
         do {
             try await app.coordination.publish(
                 channel: CoordinationService.doorbellChannel,

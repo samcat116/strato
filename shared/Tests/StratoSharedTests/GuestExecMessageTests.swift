@@ -63,9 +63,10 @@ struct GuestExecMessageTests {
     @Test("output carries raw bytes")
     func outputCarriesRawBytes() throws {
         let payload = Data("hello\r\n".utf8)
-        let message = GuestExecOutputMessage(sessionId: "s-1", rawData: payload)
+        let message = GuestExecOutputMessage(sessionId: "s-1", stream: "stdout", rawData: payload)
         let decoded = try throughEnvelope(message)
         #expect(decoded.rawData == payload)
+        #expect(decoded.stream == "stdout")
     }
 
     @Test("resize, exit, close, closed, started round-trip")

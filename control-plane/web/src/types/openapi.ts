@@ -406,6 +406,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vms/{vmID}/actions/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a captured command in a virtual machine
+         * @description Requires `vm:runCommand`. Accepts a non-interactive guest command and returns an operation immediately. Poll the operation until terminal; a succeeded operation includes stdout, stderr, and the process exit code. Captured output is limited to 1 MiB across both streams.
+         */
+        post: operations["runVMCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vms/{vmID}/snapshots": {
         parameters: {
             query?: never;
@@ -5457,7 +5480,7 @@ export interface components {
         /**
          * @description The operation view of one asynchronous resource lifecycle mutation. Poll it until `status` is terminal.
          *
-         *     Synthesized on read from the mutation's audit record and the resource's `conditions` — there is no operations table behind it — so a client written against the older contract keeps working. `completedAt` is reported only for a completed delete, which is the one outcome recorded rather than derived.
+         *     Lifecycle operations are synthesized on read from the mutation's audit record and the resource's `conditions`. Captured VM commands use a dedicated status record and may include `result`; their invoked argv and potentially large output live in a separate payload table. `completedAt` is also reported for recorded command completion.
          */
         ResourceOperation: {
             /** Format: uuid */
@@ -5478,6 +5501,20 @@ export interface components {
             createdAt?: string;
             /** Format: date-time */
             completedAt?: string;
+            result?: components["schemas"]["VMCommandResult"];
+        };
+        VMRunCommandRequest: {
+            command: string[];
+            env?: {
+                [key: string]: string;
+            };
+            workingDir?: string;
+        };
+        VMCommandResult: {
+            stdout: string;
+            stderr: string;
+            exitCode: number;
+            truncated: boolean;
         };
         /**
          * @description Which kind of resource a mutation acts on.
@@ -5488,7 +5525,7 @@ export interface components {
          * @description The lifecycle mutation an operation performs.
          * @enum {string}
          */
-        OperationKind: "create" | "boot" | "shutdown" | "reboot" | "pause" | "resume" | "delete" | "resize" | "snapshot" | "snapshot_delete" | "restore" | "snapshot_export" | "attach" | "detach" | "throttle";
+        OperationKind: "create" | "boot" | "shutdown" | "reboot" | "pause" | "resume" | "delete" | "resize" | "snapshot" | "snapshot_delete" | "restore" | "snapshot_export" | "attach" | "detach" | "throttle" | "run";
         /**
          * @description The state of an operation. `pending` is the only non-terminal value.
          * @enum {string}
@@ -9702,6 +9739,15 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description The placed agent cannot currently accept guest commands. */
+        ServiceUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
         /** @description The uploaded body exceeded the size limit. */
         PayloadTooLarge: {
             headers: {
@@ -10518,6 +10564,39 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    runVMCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VMRunCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description The accepted command operation. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOperation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     listVMSnapshots: {

@@ -3,13 +3,17 @@ import StratoShared
 import Testing
 import Vapor
 
-import AppTestSupport
 @testable import App
 
 /// Records what the bridge asks its owner to do, standing in for `AgentService`
 /// so the bridge can be exercised without any real agent sockets.
 private actor FakeBridgeDelegate: ReplicaBridgeDelegate {
     private(set) var deliveredDoorbells: [String] = []
+    private(set) var deliveredAgentKeys: [String] = []
+
+    func deliverAgentEnvelope(_ envelope: MessageEnvelope, agentKey: String) async throws {
+        deliveredAgentKeys.append(agentKey)
+    }
 
     func deliverDoorbell(agentKey: String) async {
         deliveredDoorbells.append(agentKey)
@@ -21,9 +25,8 @@ private actor FakeBridgeDelegate: ReplicaBridgeDelegate {
 /// #261). Everything runs over an in-memory coordination store; no real agent
 /// sockets are involved.
 ///
-/// Two thirds of this suite went with STR-152: the `remoteRoute` decision table
-/// and the requester/holder RPC outcomes. What is left is the doorbell, which
-/// is what the bridge is now.
+/// These tests cover both the broadcast doorbell and the narrower one-way
+/// delivery RPC used by captured VM commands.
 @Suite("Replica Message Bridge Tests", .serialized)
 final class ReplicaMessageBridgeTests {
 
@@ -33,7 +36,7 @@ final class ReplicaMessageBridgeTests {
     private func withBridge(
         _ test: (ReplicaMessageBridge, FakeBridgeDelegate, InMemoryCoordinationStore, String) async throws -> Void
     ) async throws {
-        let app = try await Application.makeForTesting()
+        let app = try await Application.make(.testing)
         do {
             let store = InMemoryCoordinationStore()
             app.coordination = CoordinationService(store: store, logger: app.logger)
@@ -44,13 +47,92 @@ final class ReplicaMessageBridgeTests {
 
             try await test(bridge, delegate, store, app.replicaID)
         } catch {
-            try await app.shutdownForTesting()
+            try await app.asyncShutdown()
             throw error
         }
-        try await app.shutdownForTesting()
+        try await app.asyncShutdown()
     }
 
     // MARK: Doorbell dispatch
+
+    @Test("Re-starting and a missed probe do not duplicate subscriptions")
+    func rearmingDoesNotDuplicateSubscriptions() async throws {
+        try await withBridge { bridge, delegate, store, replicaId in
+            await bridge.start(delegate: delegate)
+            let futureProbe = Date().addingTimeInterval(60)
+            await bridge.verifySubscriptions(now: futureProbe)
+            await bridge.verifySubscriptions(now: futureProbe.addingTimeInterval(21))
+
+            #expect(await store.subscriberCount(channel: CoordinationService.doorbellChannel) == 1)
+            #expect(
+                await store.subscriberCount(
+                    channel: CoordinationService.rpcChannel(replicaId: replicaId)) == 1)
+            #expect(
+                await store.subscriberCount(
+                    channel: CoordinationService.rpcReplyChannel(replicaId: replicaId)) == 1)
+        }
+    }
+
+    @Test("An agent stream message is forwarded to the replica route and acknowledged")
+    func agentMessageForwardsAcrossReplicas() async throws {
+        let requesterApp = try await Application.make(.testing)
+        let holderApp = try await Application.make(.testing)
+        do {
+            let store = InMemoryCoordinationStore()
+            requesterApp.coordination = CoordinationService(store: store, logger: requesterApp.logger)
+            holderApp.coordination = CoordinationService(store: store, logger: holderApp.logger)
+
+            let requester = ReplicaMessageBridge(app: requesterApp)
+            let holder = ReplicaMessageBridge(app: holderApp)
+            let requesterDelegate = FakeBridgeDelegate()
+            let holderDelegate = FakeBridgeDelegate()
+            await requester.start(delegate: requesterDelegate)
+            await holder.start(delegate: holderDelegate)
+            await holder.recordRoute(agentKey: "spiffe://example.test/agent/node-1")
+
+            try await requester.deliver(
+                GuestExecCloseMessage(sessionId: "session-1"),
+                agentKey: "spiffe://example.test/agent/node-1")
+
+            #expect(await holderDelegate.deliveredAgentKeys == ["spiffe://example.test/agent/node-1"])
+            #expect(await requesterDelegate.deliveredAgentKeys.isEmpty)
+        } catch {
+            try await requesterApp.asyncShutdown()
+            try await holderApp.asyncShutdown()
+            throw error
+        }
+        try await requesterApp.asyncShutdown()
+        try await holderApp.asyncShutdown()
+    }
+
+    @Test("A lost delivery acknowledgement is ambiguous after the holder queues the message")
+    func lostAcknowledgementIsAmbiguous() async throws {
+        let requesterApp = try await Application.make(.testing)
+        let holderApp = try await Application.make(.testing)
+        let store = InMemoryCoordinationStore()
+        requesterApp.coordination = CoordinationService(store: store, logger: requesterApp.logger)
+        holderApp.coordination = CoordinationService(store: store, logger: holderApp.logger)
+
+        // The requester deliberately does not subscribe to its reply channel,
+        // modeling a reply lost after the holder queued the envelope.
+        let requester = ReplicaMessageBridge(
+            app: requesterApp, deliveryAcknowledgementTimeout: .milliseconds(10))
+        let holder = ReplicaMessageBridge(app: holderApp)
+        let holderDelegate = FakeBridgeDelegate()
+        await holder.start(delegate: holderDelegate)
+        await holder.recordRoute(agentKey: "spiffe://example.test/agent/node-1")
+
+        let error = await #expect(throws: ReplicaMessageBridge.DeliveryError.self) {
+            try await requester.deliver(
+                GuestExecCloseMessage(sessionId: "session-1"),
+                agentKey: "spiffe://example.test/agent/node-1")
+        }
+
+        #expect(error?.isDefinitive == false)
+        #expect(await holderDelegate.deliveredAgentKeys == ["spiffe://example.test/agent/node-1"])
+        try await requesterApp.asyncShutdown()
+        try await holderApp.asyncShutdown()
+    }
 
     @Test("A doorbell from another replica is handed to the delegate")
     func doorbellDispatchedToDelegate() async throws {

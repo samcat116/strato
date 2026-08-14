@@ -62,6 +62,44 @@ struct PatchVMMetadataRequest: Content, ValidatedRequestBody {
     }
 }
 
+struct VMRunCommandRequest: Content, ValidatedRequestBody {
+    var command: [String]
+    var env: [String: String]?
+    var workingDir: String?
+
+    mutating func validate() throws {
+        guard !command.isEmpty else {
+            throw Abort(.badRequest, reason: "'command' must be a non-empty array of strings")
+        }
+        try Validate.stringList(command, "command", maxEntries: 128)
+        try Validate.stringMap(env, "env", maxEntries: 128)
+        _ = try Validate.text(workingDir, "workingDir")
+        guard !command[0].isEmpty else {
+            throw Abort(.badRequest, reason: "The executable in 'command' must not be empty")
+        }
+        guard command.allSatisfy({ !$0.contains("\0") }) else {
+            throw Abort(.badRequest, reason: "Entries in 'command' must not contain NUL characters")
+        }
+        if let env {
+            for (key, value) in env {
+                guard
+                    !key.isEmpty, !key.contains("="), !key.contains("\0"),
+                    !value.contains("\0")
+                else {
+                    throw Abort(
+                        .badRequest,
+                        reason:
+                            "Environment keys must be non-empty and contain neither '=' nor NUL; values must not contain NUL"
+                    )
+                }
+            }
+        }
+        guard workingDir?.contains("\0") != true else {
+            throw Abort(.badRequest, reason: "'workingDir' must not contain NUL characters")
+        }
+    }
+}
+
 struct VMController: RouteCollection {
     static func resolvedMetadataSource(
         _ requested: MetadataSource?, for hypervisor: HypervisorType,
@@ -141,6 +179,9 @@ struct VMController: RouteCollection {
             vm.get("status", use: status)
             vm.get("operations", use: listOperations)
             vm.post("exec", use: exec)
+            vm.group("actions") { actions in
+                actions.post("run", use: runCommand)
+            }
             vm.get("interfaces", use: listInterfaces)
             vm.post("interfaces", use: attachInterface)
             vm.group("interfaces", ":interfaceID") { interface in
@@ -1781,6 +1822,78 @@ struct VMController: RouteCollection {
     }
 
     // MARK: - Exec (STR-81)
+
+    /// `POST /api/vms/:id/actions/run`: accept a durable captured command and
+    /// queue its exec stream on the replica that owns the VM's agent socket.
+    func runCommand(req: Request) async throws -> Response {
+        let user = try req.requireActingUser("Running a command on a VM")
+        let run = try req.content.decodeValidated(VMRunCommandRequest.self)
+        let vm = try await fetchVMWithAction(req: req, action: "vm:runCommand")
+        let vmID = try vm.requireID()
+
+        guard vm.isRunning else {
+            throw Abort(
+                .badRequest,
+                reason: "VM must be running to run a command. Current state: \(vm.status.rawValue)")
+        }
+        guard vm.guestAgentEnabled else {
+            throw Abort(
+                .badRequest,
+                reason: "Running a command requires a VM created with the Strato guest agent enabled")
+        }
+        guard let agentIDString = vm.hypervisorId,
+            let agentID = UUID(uuidString: agentIDString),
+            let agent = try await Agent.find(agentID, on: req.db)
+        else {
+            throw Abort(.conflict, reason: "VM is not placed on an available agent")
+        }
+        guard agent.supportsGuestExec(for: vm.hypervisorType) else {
+            throw Abort(
+                .serviceUnavailable,
+                reason: "Agent '\(agent.name)' does not support VM guest exec for \(vm.hypervisorType.rawValue)")
+        }
+
+        let execution = VMCommandExecution(
+            vmID: vmID,
+            actorID: try user.requireID(),
+            agentKey: agent.identity.key,
+            deadline: Date().addingTimeInterval(VMCommandExecutionService.completionBudget))
+        try await req.db.transaction { db in
+            try await execution.create(command: run.command, on: db)
+        }
+        let executionID = try execution.requireID()
+
+        do {
+            try await req.application.replicaBridge.deliver(
+                GuestExecStartMessage(
+                    resourceKind: .virtualMachine,
+                    resourceId: vmID.uuidString,
+                    sessionId: executionID.uuidString,
+                    command: run.command,
+                    env: run.env,
+                    workingDir: run.workingDir,
+                    tty: false),
+                agentKey: agent.identity.key)
+        } catch let error as ReplicaMessageBridge.DeliveryError where !error.isDefinitive {
+            req.logger.warning(
+                "VM command delivery outcome is unknown; leaving operation pending",
+                metadata: [
+                    "executionId": .string(executionID.uuidString),
+                    "agentKey": .string(agent.identity.key),
+                    "error": .string(error.localizedDescription),
+                ])
+        } catch {
+            await req.vmCommandExecutionService.markDispatchFailed(
+                id: executionID, reason: "Could not dispatch command: \(error.localizedDescription)")
+        }
+
+        guard let stored = try await VMCommandExecution.find(executionID, on: req.db) else {
+            throw Abort(.internalServerError, reason: "Command execution disappeared after acceptance")
+        }
+        let response = Response(status: .accepted)
+        try response.content.encode(try await stored.operationResponse(on: req.db))
+        return response
+    }
 
     /// `POST /api/vms/:id/exec`: mint an exec session inside a running VM.
     /// The process starts only when the caller attaches to the returned

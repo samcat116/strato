@@ -40,8 +40,10 @@ struct AgentWebSocketController: RouteCollection {
         /// `maxPreAuthBufferBytes` so an unauthenticated peer cannot grow the
         /// buffer without bound while validation is in flight.
         var bufferedBytes = 0
-        /// Set exactly once, when authentication succeeds; nil means "buffer".
-        var agent: AuthenticatedAgent?
+        /// One bounded, serial consumer for authenticated frames. It replaces
+        /// the old task-per-frame chain, whose waiting tasks retained an
+        /// unbounded amount of output during slow async work.
+        var frameProcessor: AgentWebSocketFrameProcessor?
     }
 
     private typealias MessageState = NIOLoopBound<MessageStateValue>
@@ -77,8 +79,8 @@ struct AgentWebSocketController: RouteCollection {
         let state = MessageState(MessageStateValue(), eventLoop: ws.eventLoop)
 
         ws.onText { ws, text in
-            if let agent = state.value.agent {
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent)
+            if let processor = state.value.frameProcessor {
+                self.enqueueWebSocketMessage(req: req, ws: ws, text: text, processor: processor)
             } else {
                 self.bufferPreAuthFrame(req: req, ws: ws, text: text, state: state)
             }
@@ -89,8 +91,8 @@ struct AgentWebSocketController: RouteCollection {
                 req.logger.error("Failed to convert binary buffer to string")
                 return
             }
-            if let agent = state.value.agent {
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent)
+            if let processor = state.value.frameProcessor {
+                self.enqueueWebSocketMessage(req: req, ws: ws, text: text, processor: processor)
             } else {
                 self.bufferPreAuthFrame(req: req, ws: ws, text: text, state: state)
             }
@@ -128,12 +130,15 @@ struct AgentWebSocketController: RouteCollection {
         Task { try? await ws.close(code: .policyViolation) }
     }
 
-    /// Switch a connection from buffering to routing: record the authenticated
-    /// agent name and replay any frames that arrived during authentication.
+    /// Switch a connection from buffering to routing and replay any frames
+    /// that arrived during authentication.
     /// Hops to the WebSocket's event loop, where all `state` access lives.
-    private func activateMessageRouting(req: Request, ws: WebSocket, state: MessageState, agent: AuthenticatedAgent) {
+    private func activateMessageRouting(
+        req: Request, ws: WebSocket, state: MessageState, agent: AuthenticatedAgent,
+        processor: AgentWebSocketFrameProcessor
+    ) {
         ws.eventLoop.execute {
-            state.value.agent = agent
+            state.value.frameProcessor = processor
             if !state.value.buffer.isEmpty {
                 req.logger.info(
                     "Processing \(state.value.buffer.count) buffered messages",
@@ -141,9 +146,10 @@ struct AgentWebSocketController: RouteCollection {
                 )
             }
             for text in state.value.buffer {
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent)
+                self.enqueueWebSocketMessage(req: req, ws: ws, text: text, processor: processor)
             }
             state.value.buffer.removeAll()
+            state.value.bufferedBytes = 0
         }
     }
 
@@ -235,9 +241,30 @@ struct AgentWebSocketController: RouteCollection {
     // AgentMTLSAuthenticator, shared with the mTLS-authenticated artifact
     // download route (issue #493).
 
+    /// Called only on the socket event loop. The processor has one consumer and
+    /// a byte-bounded FIFO, preserving wire order without retaining one waiting
+    /// task and full frame string per message.
+    private func enqueueWebSocketMessage(
+        req: Request, ws: WebSocket, text: String, processor: AgentWebSocketFrameProcessor
+    ) {
+        switch processor.enqueue(text) {
+        case .accepted, .closed:
+            return
+        case .overflow:
+            req.logger.warning(
+                "Closing agent WebSocket: authenticated frame queue limit exceeded",
+                metadata: [
+                    "frameBytes": .stringConvertible(text.utf8.count),
+                    "queueLimitBytes": .stringConvertible(
+                        AgentWebSocketFrameProcessor.defaultBufferLimitBytes),
+                ])
+            _ = ws.close(code: .policyViolation)
+        }
+    }
+
     private func handleWebSocketMessage(
         req: Request, ws: WebSocket, text: String, agent: AuthenticatedAgent
-    ) {
+    ) async {
         // The key every agent-scoped registry is stored under (sockets,
         // presence, routes, session ownership) — the full SPIFFE ID, never the
         // bare name. `identity.name` is for display and the register response.
@@ -448,25 +475,44 @@ struct AgentWebSocketController: RouteCollection {
 
             case .guestExecStarted:
                 let message = try envelope.decode(as: GuestExecStartedMessage.self)
-                req.guestExecSessionManager.handleStarted(
-                    sessionId: message.sessionId, fromAgentKey: agentKey)
+                if !(await req.vmCommandExecutionService.handleStarted(
+                    sessionId: message.sessionId, fromAgentKey: agentKey))
+                {
+                    req.guestExecSessionManager.handleStarted(
+                        sessionId: message.sessionId, fromAgentKey: agentKey)
+                }
 
             case .guestExecOutput:
                 let message = try envelope.decode(as: GuestExecOutputMessage.self)
                 if let data = message.rawData {
-                    req.guestExecSessionManager.handleOutput(
-                        sessionId: message.sessionId, fromAgentKey: agentKey, data: data)
+                    if !(await req.vmCommandExecutionService.handleOutput(
+                        sessionId: message.sessionId, fromAgentKey: agentKey,
+                        stream: message.stream, data: data))
+                    {
+                        req.guestExecSessionManager.handleOutput(
+                            sessionId: message.sessionId, fromAgentKey: agentKey, data: data)
+                    }
                 }
 
             case .guestExecExit:
                 let message = try envelope.decode(as: GuestExecExitMessage.self)
-                req.guestExecSessionManager.handleExit(
-                    sessionId: message.sessionId, fromAgentKey: agentKey, exitCode: message.exitCode)
+                if !(await req.vmCommandExecutionService.handleExit(
+                    sessionId: message.sessionId, fromAgentKey: agentKey,
+                    exitCode: message.exitCode))
+                {
+                    req.guestExecSessionManager.handleExit(
+                        sessionId: message.sessionId, fromAgentKey: agentKey,
+                        exitCode: message.exitCode)
+                }
 
             case .guestExecClosed:
                 let message = try envelope.decode(as: GuestExecClosedMessage.self)
-                req.guestExecSessionManager.handleClosed(
-                    sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
+                if !(await req.vmCommandExecutionService.handleClosed(
+                    sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason))
+                {
+                    req.guestExecSessionManager.handleClosed(
+                        sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
+                }
 
             case .sandboxLog:
                 // Sandbox workload stdout/stderr line from the agent — push to
@@ -578,6 +624,10 @@ struct AgentWebSocketController: RouteCollection {
                     "authMethod": .string(authMethod),
                 ])
 
+            let processor = AgentWebSocketFrameProcessor { text in
+                await self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent)
+            }
+
             ws.onClose.whenComplete { result in
                 switch result {
                 case .success:
@@ -596,28 +646,25 @@ struct AgentWebSocketController: RouteCollection {
                         ])
                 }
 
-                // Only tear down agent state if this socket is still the agent's current
-                // connection — a delayed close from a connection the agent has already
-                // replaced (reconnect under the same name) must not remove its successor.
-                guard req.application.websocketManager.removeConnection(agentKey: agentKey, ifCurrent: ws) else {
-                    req.logger.debug(
-                        "Closed WebSocket was already superseded; skipping agent cleanup",
-                        metadata: [
-                            "agentName": .string(agentName)
-                        ])
-                    return
-                }
-
-                // Console and attached exec sessions cannot outlive the agent
-                // socket: close their browser sockets with an error frame
-                // instead of leaving frozen terminals behind.
-                req.application.consoleSessionManager.closeAllSessions(
-                    forAgent: agentKey, reason: "agent disconnected")
-                req.application.guestExecSessionManager.closeAllSessions(
-                    forAgent: agentKey, reason: "agent disconnected")
-
-                // Mark agent as offline asynchronously
+                // Frames accepted before EOF belong ahead of disconnect
+                // cleanup. In particular, final exec output/exit must reach
+                // the browser before its session is torn down.
                 Task {
+                    await processor.finishAndDrain()
+                    guard
+                        req.application.websocketManager.removeConnection(
+                            agentKey: agentKey, ifCurrent: ws)
+                    else {
+                        req.logger.debug(
+                            "Closed WebSocket was already superseded; skipping agent cleanup",
+                            metadata: ["agentName": .string(agentName)])
+                        return
+                    }
+
+                    req.application.consoleSessionManager.closeAllSessions(
+                        forAgent: agentKey, reason: "agent disconnected")
+                    req.application.guestExecSessionManager.closeAllSessions(
+                        forAgent: agentKey, reason: "agent disconnected")
                     await req.agentService.removeAgent(agentKey)
                 }
             }
@@ -626,23 +673,36 @@ struct AgentWebSocketController: RouteCollection {
             // still-open prior socket, its console and guest-exec sessions are
             // now stale (a fresh agent process owns none of their guest-side
             // processes) and the delayed close will skip them — tear them down
-            // here so their browsers don't sit on frozen terminals.
-            if req.application.websocketManager.setConnection(agentKey: agentKey, websocket: ws) != nil {
-                req.application.consoleSessionManager.closeAllSessions(
-                    forAgent: agentKey, reason: "agent reconnected")
-                req.application.guestExecSessionManager.closeAllSessions(
-                    forAgent: agentKey, reason: "agent reconnected")
+            // here so their browsers don't sit on frozen terminals. Captured
+            // commands stay pending because this replica cannot tell whether a
+            // terminal frame from either connection generation is in flight.
+            let previousProcessor = req.application.websocketManager.setConnection(
+                agentKey: agentKey, websocket: ws, frameProcessor: processor)
+
+            if let previousProcessor {
+                Task {
+                    // The old socket may have queued its final exit frame
+                    // before closing. Drain it before removing the old
+                    // interactive sessions, then activate this generation.
+                    await previousProcessor.finishAndDrain()
+                    guard req.application.websocketManager.getConnection(agentKey: agentKey) === ws
+                    else { return }
+                    req.application.consoleSessionManager.closeAllSessions(
+                        forAgent: agentKey, reason: "agent reconnected")
+                    req.application.guestExecSessionManager.closeAllSessions(
+                        forAgent: agentKey, reason: "agent reconnected")
+                    self.activateMessageRouting(
+                        req: req, ws: ws, state: state, agent: agent, processor: processor)
+                }
+            } else {
+                self.activateMessageRouting(
+                    req: req, ws: ws, state: state, agent: agent, processor: processor)
             }
 
-            // Nothing advertises which replica holds this socket any more: the
-            // `agent:{name}:replica` claim existed so other replicas could
-            // forward imperative RPCs here, and both went in STR-152. Desired
-            // state reaches the agent through the broadcast doorbell, which
-            // needs no directory.
-
-            // Switch from buffering to routing, replaying any frames that
-            // arrived while authentication was in flight.
-            self.activateMessageRouting(req: req, ws: ws, state: state, agent: agent)
+            // The registration frame associates the persisted agent id and
+            // refreshes both presence and the short-lived socket route. Until
+            // then the authenticated socket is local but does not advertise a
+            // cross-replica command-delivery route.
 
             req.logger.info(
                 "Agent WebSocket connection established via \(authMethod)",

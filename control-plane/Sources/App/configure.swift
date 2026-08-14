@@ -425,6 +425,9 @@ public func configure(
     // turn caller input into PostgreSQL 54000 and an API 500.
     app.migrations.add(AddAdministrativeTextLengthConstraints())
 
+    // STR-79: durable captured VM command state with cold output payloads.
+    app.migrations.add(CreateVMCommandExecutions())
+
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
     // that records it, so concurrent replica boots race the same migration and a

@@ -147,7 +147,8 @@ struct GuestExecAttachIntegrationTests {
             agent.send(
                 text: try encodeEnvelope(
                     GuestExecOutputMessage(
-                        sessionId: session.sessionId, rawData: Data("hello\n".utf8))))
+                        sessionId: session.sessionId, stream: "stdout",
+                        rawData: Data("hello\n".utf8))))
             let output = try await browser.nextFrame()
             #expect(output == .binary(Data("hello\n".utf8)))
 

@@ -330,6 +330,60 @@ final class GuestExecTests {
         }
     }
 
+    // MARK: - POST /api/vms/:id/actions/run
+
+    @Test("VM command run is denied without the separate vm:runCommand grant")
+    func vmRunDeniedWithoutPermission() async throws {
+        try await withSandboxTestApp { app, _, project, _, token in
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "run-vm", project: project)
+            try await app.test(.POST, "/api/vms/\(vm.id!)/actions/run") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(ExecBody(command: ["/usr/bin/id"]))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+            #expect(try await VMCommandExecution.query(on: app.db).count() == 0)
+        }
+    }
+
+    @Test("VM command run returns a pollable failed operation when socket delivery fails")
+    func vmRunReturnsPollableOperation() async throws {
+        try await withSandboxTestApp { app, user, project, _, token in
+            user.isSystemAdmin = true
+            try await user.save(on: app.db)
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "run-vm", project: project)
+            vm.guestAgentEnabled = true
+            _ = try await self.registerAgent(app: app, vm: vm, supportsVMGuestExec: true)
+            vm.setStatus(.running)
+            try await vm.save(on: app.db)
+
+            var accepted: OperationResponse?
+            try await app.test(.POST, "/api/vms/\(vm.id!)/actions/run") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(ExecBody(command: ["/usr/bin/id"]))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                accepted = try res.content.decode(OperationResponse.self)
+                #expect(accepted?.kind == .run)
+                #expect(accepted?.status == .failed)
+                #expect(accepted?.result?.exitCode == nil)
+            }
+
+            let operationID = try #require(accepted?.id)
+            let payload = try #require(try await VMCommandPayload.find(operationID, on: app.db))
+            #expect(payload.command == ["/usr/bin/id"])
+            try await app.test(.GET, "/api/operations/\(operationID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let operation = try res.content.decode(OperationResponse.self)
+                #expect(operation.id == operationID)
+                #expect(operation.status == .failed)
+                #expect(operation.error?.contains("Could not dispatch command") == true)
+            }
+        }
+    }
+
     // MARK: - Session manager lifecycle
 
     private func mintPendingSession(

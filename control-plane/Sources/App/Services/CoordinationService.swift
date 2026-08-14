@@ -83,11 +83,15 @@ protocol CoordinationStore: Sendable {
     /// Sum reservations for every agent key in one pipelined store round trip.
     func reservedTotals(agentKeys: [String]) async throws -> [ReservationAmounts]
 
-    // The value primitives — `setValue`/`getValue`/`deleteValue(_:ifEquals:)`
-    // and the paired `setAgentLiveness` write — existed for the
-    // `agent:{name}:replica` socket-route key and went with it (STR-152). Every
-    // key this store writes now is a presence/lock/grant marker whose *value*
-    // carries nothing, which is what `setKey`/`keyExists` are for.
+    /// Store a short-lived routing value. Used only for the replica that owns
+    /// an agent socket; PostgreSQL remains authoritative for durable state.
+    func setValue(_ key: String, value: String, ttlSeconds: Int) async throws
+
+    func getValue(_ key: String) async throws -> String?
+
+    /// Compare-and-delete so an old disconnect cannot erase a successor's
+    /// freshly written socket route.
+    func deleteValue(_ key: String, ifEquals value: String) async throws
 
     /// Publish `message` to `channel` — fire-and-forget fan-out to current
     /// subscribers, no persistence. Losing a message must always be safe for
@@ -193,6 +197,27 @@ struct ValkeyCoordinationStore: CoordinationStore {
     func setKey(_ key: String, ttlSeconds: Int) async throws {
         _ = try await client.set(
             ValkeyKey(key), value: "1", expiration: .seconds(max(1, ttlSeconds)))
+    }
+
+    func setValue(_ key: String, value: String, ttlSeconds: Int) async throws {
+        _ = try await client.set(
+            ValkeyKey(key), value: value, expiration: .seconds(max(1, ttlSeconds)))
+    }
+
+    func getValue(_ key: String) async throws -> String? {
+        try await client.get(ValkeyKey(key)).map(String.init)
+    }
+
+    func deleteValue(_ key: String, ifEquals value: String) async throws {
+        let script = """
+            if redis.call('GET', KEYS[1]) == ARGV[1] then
+                return redis.call('DEL', KEYS[1])
+            end
+            return 0
+            """
+        _ = try await scripts.execute(
+            name: "coordination.compare-delete", script: script,
+            keys: [ValkeyKey(key)], args: [value])
     }
 
     func deleteKey(_ key: String) async throws {
@@ -328,18 +353,48 @@ enum CoordinationStoreError: Error {
 /// absent, lock acquisition is first-writer-wins, and `tryReserve` is atomic
 /// (the actor serializes it).
 actor InMemoryCoordinationStore: CoordinationStore {
+    private struct InjectedWriteFailure: Error {}
+
     private struct Reservation {
         let amounts: ReservationAmounts
         let expiresAt: Date
     }
 
     private var keys: [String: Date] = [:]
+    private var values: [String: (value: String, expiresAt: Date)] = [:]
     private var locks: [String: Date] = [:]
     private var reservations: [String: [String: Reservation]] = [:]
     private var subscribers: [String: [@Sendable (String) -> Void]] = [:]
+    private var failNextValueWriteKeys: Set<String> = []
 
     func setKey(_ key: String, ttlSeconds: Int) {
         keys[key] = Date().addingTimeInterval(TimeInterval(max(1, ttlSeconds)))
+    }
+
+    func setValue(_ key: String, value: String, ttlSeconds: Int) throws {
+        if failNextValueWriteKeys.remove(key) != nil {
+            throw InjectedWriteFailure()
+        }
+        values[key] = (value, Date().addingTimeInterval(TimeInterval(max(1, ttlSeconds))))
+    }
+
+    /// Test seam for one transient route/value write failure.
+    func failNextValueWrite(forKey key: String) {
+        failNextValueWriteKeys.insert(key)
+    }
+
+    func getValue(_ key: String) -> String? {
+        guard let stored = values[key] else { return nil }
+        guard stored.expiresAt > Date() else {
+            values.removeValue(forKey: key)
+            return nil
+        }
+        return stored.value
+    }
+
+    func deleteValue(_ key: String, ifEquals value: String) {
+        guard getValue(key) == value else { return }
+        values.removeValue(forKey: key)
     }
 
     func deleteKey(_ key: String) {
@@ -430,6 +485,11 @@ actor InMemoryCoordinationStore: CoordinationStore {
         subscribers[channel, default: []].append(handler)
     }
 
+    /// Test-only observability for the process-local subscription contract.
+    func subscriberCount(channel: String) -> Int {
+        subscribers[channel]?.count ?? 0
+    }
+
     /// Prune and return the unexpired reservations for an agent.
     private func activeReservations(agentKey: String) -> [String: Reservation] {
         let now = Date()
@@ -516,16 +576,73 @@ actor CoordinationService {
         "agent:\(agentKey):presence"
     }
 
+    nonisolated static func routeKey(agentKey: String) -> String {
+        "agent:\(agentKey):replica"
+    }
+
+    nonisolated static func rpcChannel(replicaId: String) -> String {
+        "replica:\(replicaId):rpc"
+    }
+
+    nonisolated static func rpcReplyChannel(replicaId: String) -> String {
+        "replica:\(replicaId):rpc-replies"
+    }
+
+    @discardableResult
+    func recordAgentRoute(
+        agentKey: String, replicaId: String,
+        ttlSeconds: Int = CoordinationService.presenceTTLSeconds
+    ) async -> Bool {
+        do {
+            try await withStoreTimeout(Self.storeDeadline) {
+                try await self.store.setValue(
+                    Self.routeKey(agentKey: agentKey), value: replicaId, ttlSeconds: ttlSeconds)
+            }
+            return true
+        } catch {
+            logger.warning(
+                "Failed to record agent socket route",
+                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
+            return false
+        }
+    }
+
+    func agentRoute(agentKey: String) async -> String? {
+        do {
+            return try await withStoreTimeout(Self.storeDeadline) {
+                try await self.store.getValue(Self.routeKey(agentKey: agentKey))
+            }
+        } catch {
+            logger.warning(
+                "Failed to read agent socket route",
+                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
+            return nil
+        }
+    }
+
+    func clearAgentRoute(agentKey: String, replicaId: String) async {
+        do {
+            try await withStoreTimeout(Self.storeDeadline) {
+                try await self.store.deleteValue(
+                    Self.routeKey(agentKey: agentKey), ifEquals: replicaId)
+            }
+        } catch {
+            logger.warning(
+                "Failed to clear agent socket route; TTL will reclaim it",
+                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
+        }
+    }
+
     /// Record (or refresh) an agent's presence. Failures are logged, not
     /// thrown: a missed refresh costs one TTL window of cross-process
     /// visibility and the next heartbeat repairs it. Returns whether the write
     /// landed, so a caller throttling refreshes can decline to record a failed
     /// attempt as one and retry on the next frame.
     ///
-    /// This used to write presence and the socket-route key together in one Lua
-    /// invocation, so the pair could never drift apart under a throttle. The
-    /// route key went with the cross-replica RPC bridge (STR-152), leaving one
-    /// key and one `SET`.
+    /// Socket routes use the same TTL and refresh cadence, but are written
+    /// separately because presence remains useful even when this process no
+    /// longer holds a WebSocket. A failed route write makes command dispatch
+    /// fail closed; it does not weaken stale-agent detection.
     @discardableResult
     func recordAgentPresence(
         agentKey: String, ttlSeconds: Int = CoordinationService.presenceTTLSeconds
@@ -843,8 +960,9 @@ actor CoordinationService {
         }
     }
 
-    /// Publish on an arbitrary replica channel. Unlike nudges this throws:
-    /// RPC callers must learn that their request never left the process.
+    /// Publish on an arbitrary replica channel. Unlike nudges this throws, but
+    /// callers must treat an error as ambiguous: the broker may have accepted
+    /// the message before its acknowledgement was lost.
     func publish(channel: String, message: String) async throws {
         try await store.publish(channel: channel, message: message)
     }
