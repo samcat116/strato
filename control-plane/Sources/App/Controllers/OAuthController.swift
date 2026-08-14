@@ -67,19 +67,13 @@ struct OAuthController: RouteCollection {
             case restriction
         }
 
-        private enum LegacyCodingKeys: String, CodingKey {
-            case scope
-        }
-
         init(clientName: String?, restriction: CredentialRestrictionPayload?) {
             self.clientName = clientName
             self.restriction = restriction
         }
 
         init(from decoder: any Decoder) throws {
-            if try decoder.container(keyedBy: LegacyCodingKeys.self).contains(.scope) {
-                throw LegacyCredentialScopeError.unsupported
-            }
+            try decoder.rejectLegacyField("scope", throwing: LegacyCredentialScopeError.unsupported)
             let values = try decoder.container(keyedBy: CodingKeys.self)
             clientName = try values.decodeIfPresent(String.self, forKey: .clientName)
             restriction = try values.decodeIfPresent(CredentialRestrictionPayload.self, forKey: .restriction)
