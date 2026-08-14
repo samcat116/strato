@@ -36,6 +36,9 @@ public enum VMOperationKind: String, Codable, CaseIterable, Sendable {
     /// and the two changes move nothing in common — one moves bytes, the other
     /// moves a policy number.
     case throttle
+    /// A non-interactive guest command whose captured result is stored outside
+    /// the hot operation row (STR-79).
+    case run
 }
 
 /// Terminal-or-not state of an asynchronous VM operation. `pending` is the only

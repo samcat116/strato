@@ -88,7 +88,7 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
                 // disks, and moving one off-node is out of scope for v1
                 // (issue #564). The budget function stays total.
                 return 300
-            case .attach, .detach, .throttle:
+            case .attach, .detach, .throttle, .run:
                 // Volume-only kinds (STR-148, STR-19); unreachable for VMs.
                 // Total function, unreachable arm.
                 return 120
@@ -122,7 +122,7 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
                 return 3600
             case .snapshotDelete:
                 return 120
-            case .attach, .detach, .throttle:
+            case .attach, .detach, .throttle, .run:
                 // Unreachable for sandboxes (no endpoint issues them); the
                 // budget function stays total.
                 return 120
@@ -149,7 +149,7 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
                 // covers a sync round trip and the agent's next report, like
                 // the resize arm above.
                 return 180
-            case .boot, .shutdown, .reboot, .pause, .resume,
+            case .boot, .shutdown, .reboot, .pause, .resume, .run,
                 .snapshot, .snapshotDelete, .restore, .snapshotExport:
                 // A volume has no run state, and its snapshot artifacts are
                 // their own resource kinds since STR-150. Total function,
@@ -169,7 +169,7 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
             case .delete:
                 return 120
             case .boot, .shutdown, .reboot, .pause, .resume, .resize,
-                .snapshot, .snapshotDelete, .restore, .snapshotExport, .attach, .detach, .throttle:
+                .snapshot, .snapshotDelete, .restore, .snapshotExport, .attach, .detach, .throttle, .run:
                 return 120
             }
 
@@ -183,7 +183,7 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
                 // Dropping an internal snapshot rewrites metadata, not data.
                 return 120
             case .boot, .shutdown, .reboot, .pause, .resume, .resize,
-                .snapshot, .snapshotDelete, .restore, .snapshotExport, .attach, .detach, .throttle:
+                .snapshot, .snapshotDelete, .restore, .snapshotExport, .attach, .detach, .throttle, .run:
                 return 120
             }
 
@@ -201,7 +201,7 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
             case .delete:
                 return 120
             case .boot, .shutdown, .reboot, .pause, .resume, .resize,
-                .snapshot, .snapshotDelete, .restore, .attach, .detach, .throttle:
+                .snapshot, .snapshotDelete, .restore, .attach, .detach, .throttle, .run:
                 return 120
             }
         }
@@ -360,10 +360,10 @@ enum OperationFacade {
     /// `GET /<resource>/:id/operations` handlers return once their own
     /// permission check has produced the id.
     ///
-    /// One source now: `resource_events`. It used to merge in the operation
-    /// rows the still-imperative verbs wrote, and the merge went with them
-    /// (STR-152) rather than the events half, because every verb records an
-    /// event and none records a row.
+    /// Lifecycle history comes from `resource_events`; captured VM commands
+    /// add their dedicated status rows. The command result table is batch
+    /// loaded so its potentially large bytes never sit on the hot status row
+    /// and this list does not become a point query per command.
     ///
     /// Every event here names the same resource, so the view the verdicts read
     /// is resolved once rather than per event: this is a list endpoint, and a
@@ -382,10 +382,38 @@ enum OperationFacade {
             .sort(\.$createdAt, .descending)
             .limit(limit)
             .all()
-        guard !events.isEmpty else { return [] }
+        var responses: [OperationResponse] = []
+        if !events.isEmpty {
+            let view = try await view(of: resourceKind, id: resourceID, on: db)
+            responses.append(contentsOf: events.map { response(for: $0, in: view) })
+        }
 
-        let view = try await view(of: resourceKind, id: resourceID, on: db)
-        return events.map { response(for: $0, in: view) }
+        if resourceKind == .virtualMachine {
+            let commands = try await VMCommandExecution.query(on: db)
+                .filter(\.$vmID == resourceID)
+                .sort(\.$createdAt, .descending)
+                .limit(limit)
+                .all()
+            let commandIDs = try commands.map { try $0.requireID() }
+            let outputs =
+                commandIDs.isEmpty
+                ? []
+                : try await VMCommandOutput.query(on: db)
+                    .filter(\.$id ~~ commandIDs)
+                    .all()
+            let outputsByID = Dictionary(
+                uniqueKeysWithValues: try outputs.map {
+                    (try $0.requireID(), $0)
+                })
+            for command in commands {
+                let commandID = try command.requireID()
+                responses.append(try command.operationResponse(output: outputsByID[commandID]))
+            }
+        }
+
+        return Array(
+            responses.sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
+                .prefix(limit))
     }
 }
 
@@ -396,10 +424,9 @@ enum OperationFacade {
 /// optional in the contract so clients can stop depending on it;
 /// `resourceKind`/`resourceId` are the canonical target fields.
 ///
-/// Since STR-152 there is exactly one source: `OperationFacade`'s synthesis
-/// over `resource_events` + the resource's `conditions`. The shape is unchanged
-/// from when a `resource_operations` row could also answer, which is the point
-/// — nothing about a client should have to notice which it was.
+/// Lifecycle operations are synthesized over `resource_events` plus resource
+/// conditions. Captured VM commands use a dedicated durable record and may
+/// populate `result`; clients poll both through this one shape.
 struct OperationResponse: Content {
     let id: UUID?
     let vmId: UUID?
@@ -410,6 +437,7 @@ struct OperationResponse: Content {
     let error: String?
     let createdAt: Date?
     let completedAt: Date?
+    let result: VMCommandResultResponse?
 
     init(
         id: UUID?,
@@ -419,7 +447,8 @@ struct OperationResponse: Content {
         status: VMOperationStatus,
         error: String?,
         createdAt: Date?,
-        completedAt: Date?
+        completedAt: Date?,
+        result: VMCommandResultResponse? = nil
     ) {
         self.id = id
         self.vmId = resourceID
@@ -430,5 +459,13 @@ struct OperationResponse: Content {
         self.error = error
         self.createdAt = createdAt
         self.completedAt = completedAt
+        self.result = result
     }
+}
+
+struct VMCommandResultResponse: Content {
+    let stdout: String
+    let stderr: String
+    let exitCode: Int
+    let truncated: Bool
 }

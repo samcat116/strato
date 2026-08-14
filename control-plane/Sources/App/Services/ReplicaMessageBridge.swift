@@ -8,10 +8,15 @@ import Vapor
 /// to exactly this method so the seam stays narrow — everything else the bridge
 /// needs it reaches through `CoordinationService` and `Application` directly.
 ///
-/// It had a second method, `runLocalExchange`, which ran a forwarded correlated
-/// exchange over a held socket. That went with the cross-replica RPC bridge
-/// (STR-152).
+/// It deliberately does not restore the old `runLocalExchange` seam removed in
+/// STR-152. Captured commands only need the narrower delivery acknowledgement;
+/// their eventual result follows the ordinary guest-exec stream.
 protocol ReplicaBridgeDelegate: AnyObject, Sendable {
+    /// Queue one already-encoded agent message on a socket held by this
+    /// process. Recorded VM commands use delivery acknowledgement only; their
+    /// eventual result arrives as the ordinary guest-exec stream.
+    func deliverAgentEnvelope(_ envelope: MessageEnvelope, agentKey: String) async throws
+
     /// Act on a broadcast doorbell for `agentKey` by waking a poll parked here.
     /// A replica that holds no such poll does nothing, which is the common case
     /// — the doorbell is broadcast precisely so no one has to know in advance
@@ -19,7 +24,7 @@ protocol ReplicaBridgeDelegate: AnyObject, Sendable {
     func deliverDoorbell(agentKey: String) async
 }
 
-/// Cross-replica desired-state doorbell (issue #261, STR-146).
+/// Cross-replica desired-state doorbell and agent-stream delivery.
 ///
 /// This is how a mutation handled by any control-plane replica promptly reaches
 /// an agent whose long-poll may be parked on another: one fleet-wide
@@ -27,21 +32,20 @@ protocol ReplicaBridgeDelegate: AnyObject, Sendable {
 /// or targeted delivery. The replica holding the parked poll acts; every other
 /// replica drops it.
 ///
-/// This used to be two halves. The other was correlated request/reply RPC
-/// forwarding over `replica:{id}:rpc`, which needed a `agent:{name}:replica`
-/// routing directory to find the socket holder and fail fast when nobody held
-/// it. Every verb that used it became desired state (ADR 0001 stages 5–9), so
-/// both went in STR-152 and what is left needs no directory at all: a broadcast
-/// nobody can act on is simply ignored.
+/// Captured VM commands add a deliberately narrow second half: the accepting
+/// replica resolves `agent:{key}:replica`, publishes an encoded stream envelope
+/// to `replica:{id}:rpc`, and waits only for delivery acknowledgement. It does
+/// not recreate the correlated agent exchange removed in STR-152; command
+/// completion remains durable database state populated by later stream frames.
 ///
 /// It composes `CoordinationService` (the pub/sub channel, itself backed by the
 /// Valkey / in-memory `CoordinationStore` adapters) and delegates the one
 /// operation that requires local state back to its owner through
 /// `ReplicaBridgeDelegate`.
 ///
-/// Everything the bridge does is a latency optimization: a lost doorbell or a
-/// dropped subscription never corrupts state because every agent converges on
-/// its own unconditional re-fetch.
+/// Doorbells remain a latency optimization. Agent-stream delivery is different:
+/// it is acknowledged or rejected, and the durable command is failed when it
+/// cannot be delivered.
 actor ReplicaMessageBridge {
     private let app: Application
 
@@ -50,6 +54,13 @@ actor ReplicaMessageBridge {
     /// inbound doorbell is dropped (and logged), which the agent's
     /// unconditional re-fetch repairs.
     private weak var delegate: (any ReplicaBridgeDelegate)?
+
+    private struct PendingDelivery {
+        let continuation: CheckedContinuation<Void, Error>
+        var timeout: Task<Void, Never>?
+    }
+
+    private var pendingDeliveries: [String: PendingDelivery] = [:]
 
     /// Health bookkeeping for the replica's pub/sub subscriptions (issue #261
     /// review): RediStack pins subscriptions to one dedicated connection and
@@ -82,6 +93,149 @@ actor ReplicaMessageBridge {
     /// shutdown; this only closes the re-arm path (`verifySubscriptions`).
     func shutdown() {
         isShutDown = true
+        for (_, pending) in pendingDeliveries {
+            pending.timeout?.cancel()
+            pending.continuation.resume(throwing: CancellationError())
+        }
+        pendingDeliveries.removeAll()
+    }
+
+    // MARK: - Socket routing and one-way RPC
+
+    func recordRoute(agentKey: String) async {
+        await app.coordination.recordAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
+    }
+
+    func clearRoute(agentKey: String) async {
+        await app.coordination.clearAgentRoute(agentKey: agentKey, replicaId: app.replicaID)
+    }
+
+    struct AgentDeliveryRequest: Codable {
+        let rpcId: String
+        let replyChannel: String
+        let agentKey: String
+        let envelope: MessageEnvelope
+    }
+
+    struct AgentDeliveryReply: Codable {
+        let rpcId: String
+        let delivered: Bool
+        let error: String?
+    }
+
+    enum DeliveryError: Error, LocalizedError {
+        case agentNotConnected(String)
+        case timedOut
+        case remote(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .agentNotConnected(let agentKey): return "Agent not connected: \(agentKey)"
+            case .timedOut: return "Timed out forwarding the command to the agent socket replica"
+            case .remote(let reason): return reason
+            }
+        }
+    }
+
+    /// Queue a stream message on the replica that owns `agentKey`'s socket.
+    /// This acknowledges delivery to the WebSocket only; command completion is
+    /// reported later through the durable execution record.
+    func deliver<T: WebSocketMessage>(_ message: T, agentKey: String) async throws {
+        try await deliver(MessageEnvelope(message: message), agentKey: agentKey)
+    }
+
+    func deliver(_ envelope: MessageEnvelope, agentKey: String) async throws {
+        if app.websocketManager.getConnection(agentKey: agentKey) != nil, let delegate {
+            try await delegate.deliverAgentEnvelope(envelope, agentKey: agentKey)
+            return
+        }
+
+        guard let replicaId = await app.coordination.agentRoute(agentKey: agentKey),
+            replicaId != app.replicaID
+        else {
+            throw DeliveryError.agentNotConnected(agentKey)
+        }
+
+        let rpcId = UUID().uuidString
+        let request = AgentDeliveryRequest(
+            rpcId: rpcId,
+            replyChannel: CoordinationService.rpcReplyChannel(replicaId: app.replicaID),
+            agentKey: agentKey,
+            envelope: envelope)
+        let payload = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
+
+        try await withCheckedThrowingContinuation { continuation in
+            pendingDeliveries[rpcId] = PendingDelivery(continuation: continuation, timeout: nil)
+            Task {
+                do {
+                    try await self.app.coordination.publish(
+                        channel: CoordinationService.rpcChannel(replicaId: replicaId), message: payload)
+                } catch {
+                    self.resolveDelivery(rpcId: rpcId, result: .failure(error))
+                    return
+                }
+                let timeout = Task {
+                    try? await Task.sleep(for: .seconds(10))
+                    guard !Task.isCancelled else { return }
+                    self.resolveDelivery(rpcId: rpcId, result: .failure(DeliveryError.timedOut))
+                }
+                self.attachDeliveryTimeout(timeout, rpcId: rpcId)
+            }
+        }
+    }
+
+    private func handleDeliveryRequest(_ payload: String) async {
+        guard
+            let request = try? JSONDecoder().decode(
+                AgentDeliveryRequest.self, from: Data(payload.utf8))
+        else {
+            app.logger.warning("Malformed cross-replica agent delivery request")
+            return
+        }
+
+        let reply: AgentDeliveryReply
+        do {
+            guard let delegate else { throw DeliveryError.agentNotConnected(request.agentKey) }
+            try await delegate.deliverAgentEnvelope(request.envelope, agentKey: request.agentKey)
+            reply = AgentDeliveryReply(rpcId: request.rpcId, delivered: true, error: nil)
+        } catch {
+            reply = AgentDeliveryReply(
+                rpcId: request.rpcId, delivered: false, error: error.localizedDescription)
+        }
+
+        do {
+            let encoded = try JSONEncoder().encode(reply)
+            try await app.coordination.publish(
+                channel: request.replyChannel, message: String(decoding: encoded, as: UTF8.self))
+        } catch {
+            app.logger.error("Failed to publish cross-replica agent delivery reply: \(error)")
+        }
+    }
+
+    private func handleDeliveryReply(_ payload: String) {
+        guard
+            let reply = try? JSONDecoder().decode(
+                AgentDeliveryReply.self, from: Data(payload.utf8))
+        else { return }
+        resolveDelivery(
+            rpcId: reply.rpcId,
+            result: reply.delivered
+                ? .success(())
+                : .failure(DeliveryError.remote(reply.error ?? "Agent delivery failed")))
+    }
+
+    private func attachDeliveryTimeout(_ timeout: Task<Void, Never>, rpcId: String) {
+        guard pendingDeliveries[rpcId] != nil else {
+            timeout.cancel()
+            return
+        }
+        pendingDeliveries[rpcId]?.timeout = timeout
+    }
+
+    private func resolveDelivery(rpcId: String, result: Result<Void, Error>) {
+        guard let pending = pendingDeliveries.removeValue(forKey: rpcId) else { return }
+        pending.timeout?.cancel()
+        pending.continuation.resume(with: result)
     }
 
     // MARK: - Desired-state doorbell (STR-146)
@@ -120,6 +274,16 @@ actor ReplicaMessageBridge {
                 channel: CoordinationService.doorbellChannel
             ) { [weak self] payload in
                 Task { await self?.handleDoorbell(payload) }
+            }
+            try await app.coordination.subscribe(
+                channel: CoordinationService.rpcChannel(replicaId: replicaId)
+            ) { [weak self] payload in
+                Task { await self?.handleDeliveryRequest(payload) }
+            }
+            try await app.coordination.subscribe(
+                channel: CoordinationService.rpcReplyChannel(replicaId: replicaId)
+            ) { [weak self] payload in
+                Task { await self?.handleDeliveryReply(payload) }
             }
             subscriptionsEstablished = true
             app.logger.info(

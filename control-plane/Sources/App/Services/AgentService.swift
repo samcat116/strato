@@ -624,8 +624,11 @@ actor AgentService {
         // path.
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
         app.guestExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
+        await app.vmCommandExecutionService.failAll(
+            forAgent: agentKey, reason: "Agent disconnected while command was running")
         presenceRefreshedAt.removeValue(forKey: agentKey)
         await app.coordination.clearAgentPresence(agentKey: agentKey)
+        await app.replicaBridge.clearRoute(agentKey: agentKey)
 
         Telemetry.agentDisconnected(reason: "unregister")
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
@@ -664,12 +667,13 @@ actor AgentService {
         // not run its cleanup once the connection entry is gone.
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
         app.guestExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
-        // Drop the cluster-visible claim that this agent is alive, so the
-        // stale-agent sweep stops skipping it. This used to fall out of
-        // clearing the socket-route key, which shared a write with presence;
-        // with the route gone (STR-152) presence is cleared on its own.
+        await app.vmCommandExecutionService.failAll(
+            forAgent: agentKey, reason: "Agent disconnected while command was running")
+        // Drop both cluster-visible claims immediately. The route clear is a
+        // compare-and-delete, so it cannot remove a successor connection.
         presenceRefreshedAt.removeValue(forKey: agentKey)
         await app.coordination.clearAgentPresence(agentKey: agentKey)
+        await app.replicaBridge.clearRoute(agentKey: agentKey)
 
         app.logger.info(
             "Agent force unregistered",
@@ -681,13 +685,13 @@ actor AgentService {
     /// the close handler already drops a delayed close superseded by a
     /// same-replica reconnect.
     ///
-    /// This used to consult the `agent:{name}:replica` routing key and also
-    /// skip the offline mark when the agent had reconnected to *another*
-    /// replica. The key existed for the cross-replica RPC bridge and went with
-    /// it (STR-152), so a close delayed past such a reconnect now writes
-    /// `offline` under a live connection until the holding replica's next
-    /// frame writes `.online` back — bounded by the agent's heartbeat interval,
-    /// about 20 seconds.
+    /// The delivery-only route restored for captured commands identifies the
+    /// socket-holding replica, but it is not durable liveness truth. A close
+    /// delayed past a reconnect on another replica can therefore still write
+    /// `offline` under a live connection until the holder's next frame writes
+    /// `.online` back — bounded by the agent's heartbeat interval, about 20
+    /// seconds. Compare-and-delete does ensure this cleanup cannot erase the
+    /// successor replica's route.
     ///
     /// **That window is not cosmetic**, and it is worth being precise about the
     /// cost: `status == .online` is an admission gate, not just a badge.
@@ -706,10 +710,13 @@ actor AgentService {
     /// the common case. That inverts the failure into the more damaging
     /// direction: admitting placements onto a host that is gone, rather than
     /// refusing them onto one that is live. Closing the window properly needs a
-    /// signal that says *which* connection is current, which is the directory
-    /// this change deleted.
+    /// signal that says *which connection generation* is current; a replica id
+    /// alone is intentionally not treated as that authority.
     func removeAgent(_ agentKey: String) async {
+        await app.vmCommandExecutionService.failAll(
+            forAgent: agentKey, reason: "Agent disconnected while command was running")
         presenceRefreshedAt.removeValue(forKey: agentKey)
+        await app.replicaBridge.clearRoute(agentKey: agentKey)
 
         Telemetry.agentDisconnected(reason: "connection_closed")
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
@@ -895,6 +902,9 @@ actor AgentService {
 
         if await app.coordination.recordAgentPresence(agentKey: agentKey) {
             presenceRefreshedAt[agentKey] = now
+            if app.websocketManager.getConnection(agentKey: agentKey) != nil {
+                await app.replicaBridge.recordRoute(agentKey: agentKey)
+            }
         }
     }
 
@@ -1142,6 +1152,7 @@ actor AgentService {
         } catch {
             app.logger.error("Stuck-convergence sweep failed: \(error)")
         }
+        await app.vmCommandExecutionService.sweepStuck(now: now)
     }
 
     /// Fixed grace before a resting desired/observed mismatch becomes
@@ -2091,6 +2102,13 @@ actor AgentService {
     /// know where it came from.
     func deliverDoorbell(agentKey: String) async {
         await applyDoorbell(agentKey: agentKey)
+    }
+
+    func deliverAgentEnvelope(_ envelope: MessageEnvelope, agentKey: String) async throws {
+        guard let websocket = app.websocketManager.getConnection(agentKey: agentKey) else {
+            throw ReplicaMessageBridge.DeliveryError.agentNotConnected(agentKey)
+        }
+        websocket.send(try WireProtocol.makeEncoder().encode(envelope))
     }
 
     // MARK: - Observed-state reports (issue #260)

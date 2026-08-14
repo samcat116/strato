@@ -3655,8 +3655,9 @@ extension Agent {
             switch event {
             case .started:
                 try await websocketClient.sendMessage(GuestExecStartedMessage(sessionId: sessionId))
-            case .output(_, let data):
-                try await websocketClient.sendMessage(GuestExecOutputMessage(sessionId: sessionId, rawData: data))
+            case .output(let stream, let data):
+                try await websocketClient.sendMessage(
+                    GuestExecOutputMessage(sessionId: sessionId, stream: stream, rawData: data))
             case .exited(let code):
                 try await websocketClient.sendMessage(GuestExecExitMessage(sessionId: sessionId, exitCode: code))
             case .closed(let reason):

@@ -4,12 +4,11 @@ import StratoShared
 
 /// Read API for asynchronous resource operations (issue #259).
 ///
-/// Since ADR 0001 stage 4 (STR-147) this is a **compatibility façade**, and
-/// since stage 11 (STR-152) it is nothing else: no mutation writes an operation
-/// row, because the table is gone. Every answer is synthesized from the
-/// `resource_events` row the mutation did write plus the resource's current
-/// conditions (`OperationFacade`), so a client written against the old contract
-/// keeps working unchanged.
+/// Since ADR 0001 stage 4 (STR-147), lifecycle mutations are a compatibility
+/// façade synthesized from `resource_events` plus resource conditions. STR-79
+/// adds recorded VM commands under the same response shape, backed by a small
+/// command-status row and a cold result side table because command completion
+/// is not desired-state convergence.
 ///
 /// It is also the *supported* way to follow a **delete** to completion, for the
 /// one thing conditions cannot express: a delete succeeds by its resource
@@ -30,6 +29,14 @@ struct OperationController: RouteCollection {
 
         guard let operationID = req.parameters.get("operationID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid operation ID")
+        }
+
+        if let execution = try await VMCommandExecution.find(operationID, on: req.db) {
+            try await authorize(
+                resourceKind: .virtualMachine, resourceID: execution.vmID,
+                initiatedBy: execution.actorType == .user && execution.actorID == user.id,
+                req: req)
+            return try await execution.operationResponse(on: req.db)
         }
 
         // The id names a recorded mutation. Only `.requested` rows are

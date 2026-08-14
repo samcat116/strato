@@ -42,6 +42,10 @@ struct AgentWebSocketController: RouteCollection {
         var bufferedBytes = 0
         /// Set exactly once, when authentication succeeds; nil means "buffer".
         var agent: AuthenticatedAgent?
+        /// Serial tail for decoded frames. Guest exec is an ordered stream and
+        /// recorded-command persistence suspends, so later output must wait for
+        /// the preceding started frame to be classified.
+        var messageTask: Task<Void, Never>?
     }
 
     private typealias MessageState = NIOLoopBound<MessageStateValue>
@@ -78,7 +82,8 @@ struct AgentWebSocketController: RouteCollection {
 
         ws.onText { ws, text in
             if let agent = state.value.agent {
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent)
+                self.enqueueWebSocketMessage(
+                    req: req, ws: ws, text: text, agent: agent, state: state)
             } else {
                 self.bufferPreAuthFrame(req: req, ws: ws, text: text, state: state)
             }
@@ -90,7 +95,8 @@ struct AgentWebSocketController: RouteCollection {
                 return
             }
             if let agent = state.value.agent {
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent)
+                self.enqueueWebSocketMessage(
+                    req: req, ws: ws, text: text, agent: agent, state: state)
             } else {
                 self.bufferPreAuthFrame(req: req, ws: ws, text: text, state: state)
             }
@@ -141,7 +147,8 @@ struct AgentWebSocketController: RouteCollection {
                 )
             }
             for text in state.value.buffer {
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent)
+                self.enqueueWebSocketMessage(
+                    req: req, ws: ws, text: text, agent: agent, state: state)
             }
             state.value.buffer.removeAll()
         }
@@ -235,9 +242,22 @@ struct AgentWebSocketController: RouteCollection {
     // AgentMTLSAuthenticator, shared with the mTLS-authenticated artifact
     // download route (issue #493).
 
+    /// Called only on the socket event loop. Explicitly chains tasks so adding
+    /// an async consumer cannot reorder an agent's stream.
+    private func enqueueWebSocketMessage(
+        req: Request, ws: WebSocket, text: String, agent: AuthenticatedAgent,
+        state: MessageState
+    ) {
+        let previous = state.value.messageTask
+        state.value.messageTask = Task {
+            if let previous { await previous.value }
+            await self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent)
+        }
+    }
+
     private func handleWebSocketMessage(
         req: Request, ws: WebSocket, text: String, agent: AuthenticatedAgent
-    ) {
+    ) async {
         // The key every agent-scoped registry is stored under (sockets,
         // presence, routes, session ownership) — the full SPIFFE ID, never the
         // bare name. `identity.name` is for display and the register response.
@@ -448,25 +468,44 @@ struct AgentWebSocketController: RouteCollection {
 
             case .guestExecStarted:
                 let message = try envelope.decode(as: GuestExecStartedMessage.self)
-                req.guestExecSessionManager.handleStarted(
-                    sessionId: message.sessionId, fromAgentKey: agentKey)
+                if !(await req.vmCommandExecutionService.handleStarted(
+                    sessionId: message.sessionId, fromAgentKey: agentKey))
+                {
+                    req.guestExecSessionManager.handleStarted(
+                        sessionId: message.sessionId, fromAgentKey: agentKey)
+                }
 
             case .guestExecOutput:
                 let message = try envelope.decode(as: GuestExecOutputMessage.self)
                 if let data = message.rawData {
-                    req.guestExecSessionManager.handleOutput(
-                        sessionId: message.sessionId, fromAgentKey: agentKey, data: data)
+                    if !(await req.vmCommandExecutionService.handleOutput(
+                        sessionId: message.sessionId, fromAgentKey: agentKey,
+                        stream: message.stream, data: data))
+                    {
+                        req.guestExecSessionManager.handleOutput(
+                            sessionId: message.sessionId, fromAgentKey: agentKey, data: data)
+                    }
                 }
 
             case .guestExecExit:
                 let message = try envelope.decode(as: GuestExecExitMessage.self)
-                req.guestExecSessionManager.handleExit(
-                    sessionId: message.sessionId, fromAgentKey: agentKey, exitCode: message.exitCode)
+                if !(await req.vmCommandExecutionService.handleExit(
+                    sessionId: message.sessionId, fromAgentKey: agentKey,
+                    exitCode: message.exitCode))
+                {
+                    req.guestExecSessionManager.handleExit(
+                        sessionId: message.sessionId, fromAgentKey: agentKey,
+                        exitCode: message.exitCode)
+                }
 
             case .guestExecClosed:
                 let message = try envelope.decode(as: GuestExecClosedMessage.self)
-                req.guestExecSessionManager.handleClosed(
-                    sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
+                if !(await req.vmCommandExecutionService.handleClosed(
+                    sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason))
+                {
+                    req.guestExecSessionManager.handleClosed(
+                        sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
+                }
 
             case .sandboxLog:
                 // Sandbox workload stdout/stderr line from the agent — push to
@@ -632,13 +671,17 @@ struct AgentWebSocketController: RouteCollection {
                     forAgent: agentKey, reason: "agent reconnected")
                 req.application.guestExecSessionManager.closeAllSessions(
                     forAgent: agentKey, reason: "agent reconnected")
+                Task {
+                    await req.vmCommandExecutionService.failAll(
+                        forAgent: agentKey,
+                        reason: "Agent reconnected while command was running")
+                }
             }
 
-            // Nothing advertises which replica holds this socket any more: the
-            // `agent:{name}:replica` claim existed so other replicas could
-            // forward imperative RPCs here, and both went in STR-152. Desired
-            // state reaches the agent through the broadcast doorbell, which
-            // needs no directory.
+            // The registration frame associates the persisted agent id and
+            // refreshes both presence and the short-lived socket route. Until
+            // then the authenticated socket is local but does not advertise a
+            // cross-replica command-delivery route.
 
             // Switch from buffering to routing, replaying any frames that
             // arrived while authentication was in flight.
