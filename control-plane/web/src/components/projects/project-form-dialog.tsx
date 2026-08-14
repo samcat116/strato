@@ -20,17 +20,26 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useCreateProject, useUpdateProject } from "@/lib/hooks";
+import {
+  useCreateProject,
+  useTransferProject,
+  useUpdateProject,
+} from "@/lib/hooks";
 import type { Project } from "@/lib/api/projects";
+import type { ProjectFolderOption } from "./project-table-model";
 import { toast } from "sonner";
 
 const DEFAULT_ENVIRONMENTS = ["development", "staging", "production"];
+const ORGANIZATION_ROOT = "organization-root";
 
 interface ProjectFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Organization the project is created in (create mode only). */
   organizationId: string;
+  organizationName: string;
+  /** Folders that can be selected as the new project's immediate parent. */
+  folderOptions?: ProjectFolderOption[];
   /** When provided, the dialog edits this project instead of creating one. */
   project?: Project | null;
 }
@@ -39,12 +48,18 @@ export function ProjectFormDialog({
   open,
   onOpenChange,
   organizationId,
+  organizationName,
+  folderOptions = [],
   project,
 }: ProjectFormDialogProps) {
   const isEdit = !!project;
   const createProject = useCreateProject(organizationId);
   const updateProject = useUpdateProject();
-  const isPending = createProject.isPending || updateProject.isPending;
+  const transferProject = useTransferProject();
+  const isPending =
+    createProject.isPending ||
+    updateProject.isPending ||
+    transferProject.isPending;
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -53,6 +68,18 @@ export function ProjectFormDialog({
   );
   const [defaultEnvironment, setDefaultEnvironment] = useState("development");
   const [newEnvironment, setNewEnvironment] = useState("");
+  const [location, setLocation] = useState(ORGANIZATION_ROOT);
+  const selectableFolders =
+    project?.organizationalUnitId &&
+    !folderOptions.some((folder) => folder.id === project.organizationalUnitId)
+      ? [
+          {
+            id: project.organizationalUnitId,
+            label: "Current folder",
+          },
+          ...folderOptions,
+        ]
+      : folderOptions;
 
   // Seed form state whenever the dialog opens (or the target project changes),
   // derived during render rather than in an effect to avoid cascading renders.
@@ -67,11 +94,13 @@ export function ProjectFormDialog({
         setDescription(project.description || "");
         setEnvironments(project.environments);
         setDefaultEnvironment(project.defaultEnvironment);
+        setLocation(project.organizationalUnitId ?? ORGANIZATION_ROOT);
       } else {
         setName("");
         setDescription("");
         setEnvironments(DEFAULT_ENVIRONMENTS);
         setDefaultEnvironment("development");
+        setLocation(ORGANIZATION_ROOT);
       }
       setNewEnvironment("");
     }
@@ -128,6 +157,17 @@ export function ProjectFormDialog({
             defaultEnvironment,
           },
         });
+        const originalLocation =
+          project.organizationalUnitId ?? ORGANIZATION_ROOT;
+        if (location !== originalLocation) {
+          await transferProject.mutateAsync({
+            projectId: project.id,
+            data:
+              location === ORGANIZATION_ROOT
+                ? { organizationId }
+                : { organizationalUnitId: location },
+          });
+        }
         toast.success("Project updated");
       } else {
         await createProject.mutateAsync({
@@ -135,6 +175,8 @@ export function ProjectFormDialog({
           description,
           environments,
           defaultEnvironment,
+          organizationalUnitId:
+            location === ORGANIZATION_ROOT ? undefined : location,
         });
         toast.success(`Project "${trimmedName}" created`);
       }
@@ -191,6 +233,45 @@ export function ProjectFormDialog({
                 className="bg-background border-border text-foreground"
                 disabled={isPending}
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="projectLocation" className="text-foreground">
+                Location
+              </Label>
+              <Select
+                value={location}
+                onValueChange={setLocation}
+                disabled={isPending}
+              >
+                <SelectTrigger
+                  id="projectLocation"
+                  className="bg-background border-border text-foreground"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-card border-border">
+                  <SelectItem
+                    value={ORGANIZATION_ROOT}
+                    className="text-foreground focus:bg-accent focus:text-accent-foreground"
+                  >
+                    {organizationName} (organization root)
+                  </SelectItem>
+                  {selectableFolders.map((folder) => (
+                    <SelectItem
+                      key={folder.id}
+                      value={folder.id}
+                      className="text-foreground focus:bg-accent focus:text-accent-foreground"
+                    >
+                      {organizationName} / {folder.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Choose where this project belongs in the organization
+                hierarchy.
+              </p>
             </div>
 
             <div className="space-y-2">
