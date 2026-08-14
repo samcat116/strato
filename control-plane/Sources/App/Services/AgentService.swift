@@ -2210,7 +2210,7 @@ actor AgentService {
             // A newly authorized teardown (STR-98) is worth a sync right away:
             // until the tombstone reaches the agent it keeps holding — and
             // re-reporting — a workload nothing describes.
-            if outcome.authorizedTeardown {
+            if outcome.authorizedTeardown || outcome.desiredStateChanged {
                 await syncDesiredState(agentId: report.agentId)
             }
         } catch {

@@ -150,8 +150,10 @@ public struct ObservedVolumeFacts: Equatable, Sendable {
 /// no new VM mutation and no attempt burned.
 public enum VMBootVolumeDependency {
     /// Returns why `spec` is not safe to boot, or nil once its one canonical
-    /// boot volume is present, attached to `vmId`, and exactly the requested
-    /// virtual size.
+    /// boot volume is present, attached to `vmId`, and at the admitted desired
+    /// virtual size. The control plane normalizes a larger source image and
+    /// reserves its excess before sending the new desired size, so equality is
+    /// also the proof that materialized-size admission completed.
     public static func pendingReason(
         vmId: String,
         spec: VMSpec,
@@ -176,7 +178,7 @@ public enum VMBootVolumeDependency {
         }
         guard observedSize == requestedSize else {
             return
-                "managed boot volume \(volumeId) for VM \(vmId) is \(observedSize) bytes; waiting for the requested \(requestedSize) bytes"
+                "managed boot volume \(volumeId) for VM \(vmId) is \(observedSize) bytes; waiting for the admitted \(requestedSize) bytes"
         }
         guard observed.attachedVMId == vmId, observed.deviceName == bootVolume.deviceName.rawValue else {
             return
