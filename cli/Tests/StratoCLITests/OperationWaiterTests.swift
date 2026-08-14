@@ -16,9 +16,10 @@ struct OperationWaiterTests {
     private static let operationID = "6f9619ff-8b86-4d01-b42d-00cf4fc964ff"
 
     private static func json(status: String, error: String? = nil) -> String {
+        // Deliberately omit the deprecated `vmId`: generated clients must not require it.
         let errorField = error.map { ", \"error\": \"\($0)\"" } ?? ""
         return """
-            {"id": "\(operationID)", "vmId": "\(operationID)", "resourceKind": "virtual_machine",
+            {"id": "\(operationID)", "resourceKind": "virtual_machine",
              "resourceId": "\(operationID)", "kind": "boot", "status": "\(status)"\(errorField)}
             """
     }

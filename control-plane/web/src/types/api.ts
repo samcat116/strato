@@ -1348,11 +1348,11 @@ export type OperationResourceKind =
 
 export interface Operation {
   id: string;
-  /** Legacy alias for `resourceId`, kept by the backend; equals the VM or sandbox id. */
-  vmId: string;
-  /** Discriminates whether the operation targets a VM or a sandbox. */
+  /** @deprecated Legacy alias for `resourceId`; use `resourceKind`/`resourceId`. */
+  vmId?: string;
+  /** Discriminates the kind of resource targeted by the operation. */
   resourceKind: OperationResourceKind;
-  /** The targeted resource's id (VM or sandbox); prefer this over `vmId`. */
+  /** The targeted resource's id. */
   resourceId: string;
   kind: OperationKind;
   status: OperationStatus;

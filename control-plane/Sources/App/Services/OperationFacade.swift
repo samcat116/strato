@@ -391,11 +391,10 @@ enum OperationFacade {
 
 // MARK: - Response DTO
 
-/// Wire shape of an operation. `vmId` predates the resource-kind
-/// generalization and is kept verbatim — it is what the frontend's operation
-/// polling decodes — even though for a sandbox operation it carries the
-/// sandbox's id; `resourceKind`/`resourceId` are the kind-aware fields new
-/// clients should read.
+/// Wire shape of an operation. `vmId` is a deprecated compatibility alias for
+/// `resourceId`. It remains populated during its deprecation cycle, but is
+/// optional in the contract so clients can stop depending on it;
+/// `resourceKind`/`resourceId` are the canonical target fields.
 ///
 /// Since STR-152 there is exactly one source: `OperationFacade`'s synthesis
 /// over `resource_events` + the resource's `conditions`. The shape is unchanged
@@ -403,7 +402,7 @@ enum OperationFacade {
 /// — nothing about a client should have to notice which it was.
 struct OperationResponse: Content {
     let id: UUID?
-    let vmId: UUID
+    let vmId: UUID?
     let resourceKind: OperationResourceKind
     let resourceId: UUID
     let kind: VMOperationKind

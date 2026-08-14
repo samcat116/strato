@@ -8956,7 +8956,7 @@ components:
         written against the older contract keeps working. `completedAt` is
         reported only for a completed delete, which is the one outcome recorded
         rather than derived.
-      required: [vmId, resourceKind, resourceId, kind, status]
+      required: [resourceKind, resourceId, kind, status]
       properties:
         id:
           type: string
@@ -8964,9 +8964,11 @@ components:
         vmId:
           type: string
           format: uuid
+          deprecated: true
           description: >-
-            Legacy field equal to `resourceId`; retained for existing clients.
-            New clients should read `resourceKind`/`resourceId`.
+            Deprecated compatibility alias equal to `resourceId`; it remains
+            populated during its deprecation cycle, but clients must use
+            `resourceKind`/`resourceId` instead.
         resourceKind:
           $ref: "#/components/schemas/OperationResourceKind"
         resourceId:

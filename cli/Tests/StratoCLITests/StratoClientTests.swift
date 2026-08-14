@@ -11,8 +11,9 @@ struct StratoClientTests {
     let baseURL = URL(string: "https://strato.example.com")!
 
     static let operationID = "6f9619ff-8b86-4d01-b42d-00cf4fc964ff"
+    // Deliberately omit the deprecated `vmId`: generated clients must not require it.
     static let operationJSON = """
-        {"id": "\(operationID)", "vmId": "\(operationID)", "resourceKind": "virtual_machine",
+        {"id": "\(operationID)", "resourceKind": "virtual_machine",
          "resourceId": "\(operationID)", "kind": "boot", "status": "succeeded"}
         """
     static let tokenJSON = """
