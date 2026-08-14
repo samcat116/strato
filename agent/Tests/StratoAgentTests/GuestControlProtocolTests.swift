@@ -116,8 +116,8 @@ struct GuestControlProtocolTests {
 
     @Test("clock_synced decodes")
     func clockSyncedDecodes() throws {
-        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"clock_synced"}"#)
-        #expect(response == .clockSynced)
+        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"clock_synced","nonce":"n"}"#)
+        #expect(response == .clockSynced(nonce: "n"))
     }
 
     // MARK: - Warm start (issue #426)
@@ -208,8 +208,8 @@ struct GuestControlProtocolTests {
 
     @Test("launched decodes")
     func launchedDecodes() throws {
-        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"launched"}"#)
-        #expect(response == .launched)
+        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"launched","nonce":"n"}"#)
+        #expect(response == .launched(nonce: "n"))
     }
 
     @Test("reidentify encodes source guard, target identity, clock, and entropy")
@@ -266,8 +266,8 @@ struct GuestControlProtocolTests {
 
     @Test("reidentified decodes")
     func reidentifiedDecodes() throws {
-        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"reidentified"}"#)
-        #expect(response == .reidentified)
+        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"reidentified","nonce":"n"}"#)
+        #expect(response == .reidentified(nonce: "n"))
     }
 
     @Test("held workload state decodes in a status response")
@@ -318,8 +318,8 @@ struct GuestControlProtocolTests {
             sandboxId: "sb-1", nonce: "n-1", state: .exited, exitCode: 3)
         #expect(exited == expectedExited)
 
-        let error = try GuestControlProtocol.Response.decode(line: #"{"type":"error","message":"boom"}"#)
-        #expect(error == .error(message: "boom"))
+        let error = try GuestControlProtocol.Response.decode(line: #"{"type":"error","nonce":"n","message":"boom"}"#)
+        #expect(error == .error(nonce: "n", message: "boom"))
     }
 
     @Test("missing and legacy control versions are rejected explicitly")
@@ -343,36 +343,37 @@ struct GuestControlProtocolTests {
 
     @Test("exec_started decodes")
     func execStartedDecodes() throws {
-        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"exec_started"}"#)
-        #expect(response == .execStarted)
+        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"exec_started","nonce":"n"}"#)
+        #expect(response == .execStarted(nonce: "n"))
     }
 
     @Test("output decodes its stream and base64 payload")
     func outputDecodes() throws {
         let payload = Data("hello\n".utf8)
-        let line = #"{"type":"output","stream":"stderr","data":"\#(payload.base64EncodedString())"}"#
+        let line = #"{"type":"output","nonce":"n","stream":"stderr","data":"\#(payload.base64EncodedString())"}"#
         let response = try GuestControlProtocol.Response.decode(line: line)
-        #expect(response == .output(stream: "stderr", data: payload))
+        #expect(response == .output(nonce: "n", stream: "stderr", data: payload))
     }
 
     @Test("output with missing or invalid base64 data is malformed")
     func outputRejectsBadData() {
         #expect(throws: GuestControlError.self) {
-            try GuestControlProtocol.Response.decode(line: #"{"type":"output","stream":"stdout"}"#)
+            try GuestControlProtocol.Response.decode(line: #"{"type":"output","nonce":"n","stream":"stdout"}"#)
         }
         #expect(throws: GuestControlError.self) {
             try GuestControlProtocol.Response.decode(
-                line: #"{"type":"output","stream":"stdout","data":"%%%not-base64%%%"}"#)
+                line: #"{"type":"output","nonce":"n","stream":"stdout","data":"%%%not-base64%%%"}"#)
         }
         #expect(throws: GuestControlError.self) {
-            try GuestControlProtocol.Response.decode(line: #"{"type":"output","data":"aGk="}"#)
+            try GuestControlProtocol.Response.decode(line: #"{"type":"output","nonce":"n","data":"aGk="}"#)
         }
     }
 
     @Test("exec_exit decodes its exit code and requires one")
     func execExitDecodes() throws {
-        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"exec_exit","exit_code":137}"#)
-        #expect(response == .execExit(exitCode: 137))
+        let response = try GuestControlProtocol.Response.decode(
+            line: #"{"type":"exec_exit","nonce":"n","exit_code":137}"#)
+        #expect(response == .execExit(nonce: "n", exitCode: 137))
 
         #expect(throws: GuestControlError.self) {
             try GuestControlProtocol.Response.decode(line: #"{"type":"exec_exit"}"#)
@@ -382,31 +383,33 @@ struct GuestControlProtocolTests {
     @Test("log decodes seq, stream, and payload — and requires all three")
     func logDecodes() throws {
         let payload = Data("a line".utf8)
-        let line = #"{"type":"log","seq":18,"stream":"stdout","data":"\#(payload.base64EncodedString())"}"#
+        let line = #"{"type":"log","nonce":"n","seq":18,"stream":"stdout","data":"\#(payload.base64EncodedString())"}"#
         let response = try GuestControlProtocol.Response.decode(line: line)
-        #expect(response == .log(seq: 18, stream: "stdout", data: payload))
+        #expect(response == .log(nonce: "n", seq: 18, stream: "stdout", data: payload))
 
         #expect(throws: GuestControlError.self) {
-            try GuestControlProtocol.Response.decode(line: #"{"type":"log","stream":"stdout","data":"aGk="}"#)
+            try GuestControlProtocol.Response.decode(
+                line: #"{"type":"log","nonce":"n","stream":"stdout","data":"aGk="}"#)
         }
         #expect(throws: GuestControlError.self) {
-            try GuestControlProtocol.Response.decode(line: #"{"type":"log","seq":1,"data":"aGk="}"#)
+            try GuestControlProtocol.Response.decode(line: #"{"type":"log","nonce":"n","seq":1,"data":"aGk="}"#)
         }
         #expect(throws: GuestControlError.self) {
-            try GuestControlProtocol.Response.decode(line: #"{"type":"log","seq":1,"stream":"stdout"}"#)
+            try GuestControlProtocol.Response.decode(line: #"{"type":"log","nonce":"n","seq":1,"stream":"stdout"}"#)
         }
     }
 
     @Test("log_eof decodes as the log stream's terminal marker")
     func logEofDecodes() throws {
-        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"log_eof"}"#)
-        #expect(response == .logEof)
+        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"log_eof","nonce":"n"}"#)
+        #expect(response == .logEof(nonce: "n"))
     }
 
     @Test("a trailing newline on a response line is tolerated")
     func trailingNewlineTolerated() throws {
-        let response = try GuestControlProtocol.Response.decode(line: "{\"type\":\"exec_started\"}\n")
-        #expect(response == .execStarted)
+        let response = try GuestControlProtocol.Response.decode(
+            line: "{\"type\":\"exec_started\",\"nonce\":\"n\"}\n")
+        #expect(response == .execStarted(nonce: "n"))
     }
 
     @Test("unknown response types are malformed")

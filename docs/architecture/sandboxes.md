@@ -459,9 +459,9 @@ endpoint.
   through the other kind's route even if the UUID and user match. Minting also
   requires a VM created with the Strato guest agent enabled and an assigned
   hypervisor that explicitly advertises `supportsGuestExec`; absence is
-  fail-closed. Current agents do not advertise it until STR-82 provides the
-  node-agent vsock bridge, so the route returns 503 instead of minting a session
-  that cannot execute.
+  fail-closed. The agent advertises it for QEMU only when the STR-82 AF_VSOCK
+  bridge is present and host vsock preflight passes, so the route returns 503
+  instead of minting a session the assigned agent cannot execute.
 
 Like the VM console, guest exec is **single-replica**: the browser WebSocket must
 land on the replica holding the agent socket (`GuestExecSessionManager`

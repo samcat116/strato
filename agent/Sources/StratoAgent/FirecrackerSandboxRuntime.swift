@@ -2682,7 +2682,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             throw GuestControlError.malformedResponse("guest closed before confirming exec start")
         }
         let response = try GuestControlProtocol.Response.decode(line: line)
-        if case .error(let message) = response {
+        if case .error(_, let message) = response {
             throw GuestControlError.guestError(message)
         }
         guard case .execStarted = response else {
@@ -2729,12 +2729,12 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 return
             }
             switch response {
-            case .output(let stream, let data):
+            case .output(_, let stream, let data):
                 events(.output(stream: stream, data: data))
-            case .execExit(let exitCode):
+            case .execExit(_, let exitCode):
                 await finish(.exited(code: exitCode))
                 return
-            case .error(let message):
+            case .error(_, let message):
                 await finish(.closed(reason: "guest error: \(message)"))
                 return
             default:
@@ -2990,7 +2990,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 return false  // guest closed; the loop reconnects
             }
             switch try GuestControlProtocol.Response.decode(line: line) {
-            case .log(let seq, let stream, let data):
+            case .log(_, let seq, let stream, let data):
                 await runtime.recordLog(
                     sandboxId: sandboxId, generation: generation, seq: seq, stream: stream, data: data)
                 backoff = 1
@@ -3120,7 +3120,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             throw GuestControlError.malformedResponse("guest closed before sending a full response line")
         }
         let response = try GuestControlProtocol.Response.decode(line: line)
-        if case .error(let message) = response {
+        if case .error(_, let message) = response {
             throw GuestControlError.guestError(message)
         }
         return response

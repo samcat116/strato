@@ -480,29 +480,43 @@ public enum GuestControlProtocol {
         /// Every supported guest advertises the exact current protocol version.
         case pong(sandboxId: String, nonce: String, controlProtocolVersion: Int)
         case status(sandboxId: String, nonce: String, state: WorkloadState, exitCode: Int?)
-        case error(message: String)
+        case error(nonce: String, message: String)
         /// The exec process spawned; output may follow on this connection.
-        case execStarted
+        case execStarted(nonce: String)
         /// Output bytes from the exec process (`stream` is `stdout`/`stderr`;
         /// always `stdout` for a tty session).
-        case output(stream: String, data: Data)
+        case output(nonce: String, stream: String, data: Data)
         /// Terminal for an exec session: the child was reaped (signal N →
         /// 128+N) after all buffered output was flushed.
-        case execExit(exitCode: Int)
+        case execExit(nonce: String, exitCode: Int)
         /// One record of the workload's stdout/stderr ring buffer. `seq` is
         /// monotonic across both streams, starting at 1.
-        case log(seq: UInt64, stream: String, data: Data)
+        case log(nonce: String, seq: UInt64, stream: String, data: Data)
         /// Terminal for a log follow stream: every workload stdio pipe hit
         /// EOF and all retained records were delivered — no record will ever
         /// follow, so a partial final line can be flushed now.
-        case logEof
+        case logEof(nonce: String)
         /// The guest applied a `sync_clock` request (issue #426).
-        case clockSynced
+        case clockSynced(nonce: String)
         /// The guest applied a warm-start `launch` request: the workload
         /// spawned under the delivered identity (issue #426).
-        case launched
+        case launched(nonce: String)
         /// The guest completed fork identity rotation (issue #427).
-        case reidentified
+        case reidentified(nonce: String)
+
+        /// The guest boot generation that produced this record. Every response
+        /// carries one; exec bridges pin the first record's value and reject a
+        /// later record from a re-adopted or restarted guest.
+        public var nonce: String {
+            switch self {
+            case .pong(_, let nonce, _), .status(_, let nonce, _, _),
+                .error(let nonce, _), .execStarted(let nonce),
+                .output(let nonce, _, _), .execExit(let nonce, _),
+                .log(let nonce, _, _, _), .logEof(let nonce),
+                .clockSynced(let nonce), .launched(let nonce), .reidentified(let nonce):
+                return nonce
+            }
+        }
 
         /// Explicitly advertised by every supported `pong` reply.
         public var controlProtocolVersion: Int? {
@@ -544,29 +558,35 @@ public enum GuestControlProtocol {
                     state: state,
                     exitCode: try raw.boundedExitCode())
             case "error":
-                return .error(message: raw.errorMessage())
+                return .error(
+                    nonce: try raw.requiredIdentity(\.nonce, field: "nonce"),
+                    message: raw.errorMessage())
             case "exec_started":
-                return .execStarted
+                return .execStarted(nonce: try raw.requiredIdentity(\.nonce, field: "nonce"))
             case "output":
-                return .output(stream: try raw.streamLabel(line: line), data: try raw.payload(line: line))
+                return .output(
+                    nonce: try raw.requiredIdentity(\.nonce, field: "nonce"),
+                    stream: try raw.streamLabel(line: line), data: try raw.payload(line: line))
             case "exec_exit":
                 guard let exitCode = try raw.boundedExitCode() else {
                     throw GuestControlError.malformed(line)
                 }
-                return .execExit(exitCode: exitCode)
+                return .execExit(
+                    nonce: try raw.requiredIdentity(\.nonce, field: "nonce"), exitCode: exitCode)
             case "log":
                 return .log(
+                    nonce: try raw.requiredIdentity(\.nonce, field: "nonce"),
                     seq: try raw.boundedSeq(line: line),
                     stream: try raw.streamLabel(line: line),
                     data: try raw.payload(line: line))
             case "log_eof":
-                return .logEof
+                return .logEof(nonce: try raw.requiredIdentity(\.nonce, field: "nonce"))
             case "clock_synced":
-                return .clockSynced
+                return .clockSynced(nonce: try raw.requiredIdentity(\.nonce, field: "nonce"))
             case "launched":
-                return .launched
+                return .launched(nonce: try raw.requiredIdentity(\.nonce, field: "nonce"))
             case "reidentified":
-                return .reidentified
+                return .reidentified(nonce: try raw.requiredIdentity(\.nonce, field: "nonce"))
             default:
                 throw GuestControlError.malformed(line)
             }
@@ -778,7 +798,7 @@ public enum GuestControlError: Error, LocalizedError, Equatable, Sendable {
             return "guest control response field '\(field)' is out of range: \(value)"
         case .missingRequiredField(let field):
             return "guest control response is missing required field '\(field)'; "
-                + "replace the guest image and recreate the sandbox or checkpoint"
+                + "replace the guest image or guest agent and recreate the workload"
         case .unsupportedProtocolVersion(let version):
             return "unsupported sandbox guest control protocol "
                 + "\(version.map(String.init) ?? "missing"); version "

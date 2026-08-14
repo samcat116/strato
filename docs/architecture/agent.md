@@ -1073,7 +1073,7 @@ The VM daemon binds only AF_VSOCK port 1024 and rejects any peer CID other than
 `get_status` use `/etc/machine-id` in the protocol's historical `sandbox_id`
 field and Linux's boot id as `nonce`; that nonce survives a service restart but
 changes when the VM reboots. Every response, including each exec-stream record,
-echoes it so the later host bridge can pin a session to one guest generation.
+echoes it so the host bridge pins a session to one guest generation.
 The status is `running` while the daemon is serving. Sandbox-only launch,
 reidentify, clock, and log-follow operations are refused.
 
@@ -1084,11 +1084,11 @@ controlling PTY. Closing the host connection before `exec_exit` kills that
 group. Unlike the sandbox init, the daemon owns and waits for each child itself
 because it is not PID 1. STR-80 packages it as
 `strato-guest-agent-<arch>.tar.gz` with a systemd unit and publishes
-`guest-agent-manifest.json`; STR-82 owns the node-agent vsock bridge. Until that
-bridge lands, the agent does not advertise
-`HypervisorSupport.supportsGuestExec`; the control plane therefore returns 503
-before minting a VM exec session rather than handing the browser a session the
-agent will immediately reject.
+`guest-agent-manifest.json`. The STR-82 node-agent bridge opens one AF_VSOCK
+connection per exec session, relays stdin/EOF/resize and output/exit records,
+and verifies every record against the boot nonce captured from `exec_started`.
+QEMU agents advertise `HypervisorSupport.supportsGuestExec` only when host
+vsock preflight passes.
 
 ## Networking
 
