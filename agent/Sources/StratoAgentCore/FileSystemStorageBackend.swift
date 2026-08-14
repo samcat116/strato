@@ -400,6 +400,22 @@ public actor FileSystemStorageBackend: StorageBackend {
     public func createSnapshot(volumeId: String, snapshotId: String, volumePath: String) async throws -> String {
         let snapshotPath = snapshotPath(volumeId: volumeId, snapshotId: snapshotId)
 
+        // Snapshot capture is level-triggered. The artifact may have been
+        // durably published before a crash but its inventory record may not
+        // have been saved yet; replacing it would silently move the requested
+        // point in time. A canonical path is installed only after durable
+        // publication, so retain it unchanged on retry.
+        if FileManager.default.fileExists(atPath: snapshotPath) {
+            logger.debug(
+                "Snapshot already exists",
+                metadata: [
+                    "volumeId": .string(volumeId),
+                    "snapshotId": .string(snapshotId),
+                    "path": .string(snapshotPath),
+                ])
+            return snapshotPath
+        }
+
         logger.info(
             "Creating snapshot",
             metadata: [

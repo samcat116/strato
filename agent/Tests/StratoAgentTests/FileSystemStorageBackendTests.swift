@@ -616,6 +616,29 @@ struct FileSystemStorageBackendTests {
         #expect(!FileManager.default.fileExists(atPath: snapshotPath + ".partial"))
     }
 
+    @Test func createSnapshotIsIdempotent() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let recorder = SubprocessRecorder()
+        await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "raw"))
+        let backend = makeBackend(root: root, recorder: recorder)
+        let volumePath = "\(root)/vol-1/volume.raw"
+
+        let snapshotPath = try await backend.createSnapshot(
+            volumeId: "vol-1", snapshotId: "snap-1", volumePath: volumePath)
+        let originalPointInTime = Data("original-point-in-time".utf8)
+        try originalPointInTime.write(to: URL(fileURLWithPath: snapshotPath))
+
+        let retriedPath = try await backend.createSnapshot(
+            volumeId: "vol-1", snapshotId: "snap-1", volumePath: volumePath)
+
+        #expect(retriedPath == snapshotPath)
+        #expect(FileManager.default.contents(atPath: snapshotPath) == originalPointInTime)
+        let invocations = await recorder.invocations
+        #expect(invocations.filter { $0.arguments.first == "info" }.count == 1)
+        #expect(invocations.filter { $0.arguments.first == "create" }.count == 1)
+    }
+
     @Test func deleteSnapshotIsIdempotent() async throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }
