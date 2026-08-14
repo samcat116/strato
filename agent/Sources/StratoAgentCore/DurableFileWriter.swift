@@ -17,10 +17,10 @@ protocol DurableFileSystemCalls: Sendable {
     func createDirectory(at path: String, permissions: CInt) -> CInt
     func removeItem(at path: String) -> CInt
     func createFile(at path: String, permissions: CInt) -> CInt
-    func openFileForSynchronization(at path: String) -> CInt
     func openDirectoryForSynchronization(at path: String) -> CInt
     func write(_ data: Data, to fileDescriptor: CInt) throws
-    func synchronizeFile(_ fileDescriptor: CInt) -> CInt
+    func synchronizeFile(_ fileDescriptor: CInt, at path: String) throws
+    func synchronizeFile(at path: String) throws
     func synchronizeDirectory(_ fileDescriptor: CInt) -> CInt
     func close(_ fileDescriptor: CInt) -> CInt
     func replaceItem(at destination: String, withItemAt source: String) -> CInt
@@ -64,8 +64,7 @@ struct DurableFileWriter: Sendable {
         var temporaryFileExists = true
         do {
             try systemCalls.write(data, to: fileDescriptor)
-            try requireSuccess(
-                systemCalls.synchronizeFile(fileDescriptor), operation: "synchronize", path: temporaryPath)
+            try systemCalls.synchronizeFile(fileDescriptor, at: temporaryPath)
 
             let closeResult = systemCalls.close(fileDescriptor)
             descriptorIsOpen = false
@@ -138,30 +137,11 @@ struct DurableFileWriter: Sendable {
 
     /// Durably publishes a complete file already staged beside `path`.
     func publish(stagingPath: String, to path: String) throws {
-        let fileDescriptor = systemCalls.openFileForSynchronization(at: stagingPath)
-        guard fileDescriptor >= 0 else {
-            throw error(operation: "open", path: stagingPath)
-        }
-
-        var descriptorIsOpen = true
-        do {
-            try requireSuccess(
-                systemCalls.synchronizeFile(fileDescriptor), operation: "synchronize", path: stagingPath)
-
-            let closeResult = systemCalls.close(fileDescriptor)
-            descriptorIsOpen = false
-            try requireSuccess(closeResult, operation: "close", path: stagingPath)
-
-            try requireSuccess(
-                systemCalls.replaceItem(at: path, withItemAt: stagingPath),
-                operation: "rename", path: path)
-            try synchronizeParentDirectory(of: path)
-        } catch {
-            if descriptorIsOpen {
-                _ = systemCalls.close(fileDescriptor)
-            }
-            throw error
-        }
+        try systemCalls.synchronizeFile(at: stagingPath)
+        try requireSuccess(
+            systemCalls.replaceItem(at: path, withItemAt: stagingPath),
+            operation: "rename", path: path)
+        try synchronizeParentDirectory(of: path)
     }
 
     private func synchronizeParentDirectory(of path: String) throws {
@@ -256,16 +236,6 @@ private struct POSIXDurableFileSystemCalls: DurableFileSystemCalls {
         }
     }
 
-    func openFileForSynchronization(at path: String) -> CInt {
-        retryOnInterrupt {
-            #if canImport(Glibc)
-            Glibc.open(path, O_RDONLY | O_CLOEXEC)
-            #else
-            Darwin.open(path, O_RDONLY | O_CLOEXEC)
-            #endif
-        }
-    }
-
     func openDirectoryForSynchronization(at path: String) -> CInt {
         retryOnInterrupt {
             #if canImport(Glibc)
@@ -303,14 +273,28 @@ private struct POSIXDurableFileSystemCalls: DurableFileSystemCalls {
         }
     }
 
-    func synchronizeFile(_ fileDescriptor: CInt) -> CInt {
-        retryOnInterrupt {
-            #if canImport(Darwin)
-            // fsync(2) does not drain a drive's volatile write cache on macOS.
-            Darwin.fcntl(fileDescriptor, F_FULLFSYNC)
-            #else
-            Glibc.fsync(fileDescriptor)
-            #endif
+    func synchronizeFile(_ fileDescriptor: CInt, at path: String) throws {
+        #if canImport(Darwin)
+        // Foundation's synchronize() uses fsync(2), which does not drain a
+        // drive's volatile write cache on macOS.
+        guard retryOnInterrupt({ Darwin.fcntl(fileDescriptor, F_FULLFSYNC) }) == 0 else {
+            throw DurableFileWriteError(
+                operation: "synchronize", path: path, errorNumber: errno)
+        }
+        #else
+        let handle = FileHandle(fileDescriptor: fileDescriptor, closeOnDealloc: false)
+        try handle.synchronize()
+        #endif
+    }
+
+    func synchronizeFile(at path: String) throws {
+        let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
+        do {
+            try synchronizeFile(handle.fileDescriptor, at: path)
+            try handle.close()
+        } catch {
+            try? handle.close()
+            throw error
         }
     }
 

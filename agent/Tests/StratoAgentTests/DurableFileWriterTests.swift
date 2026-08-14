@@ -10,10 +10,10 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
         case createDirectory(String, permissions: CInt)
         case remove(String)
         case create(String, permissions: CInt)
-        case openFile(String)
         case openDirectory(String)
         case write(Data, fileDescriptor: CInt)
         case synchronizeFile(CInt)
+        case synchronizeFileAt(String)
         case synchronizeDirectory(CInt)
         case close(CInt)
         case replace(source: String, destination: String)
@@ -67,11 +67,6 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
         return 10
     }
 
-    func openFileForSynchronization(at path: String) -> CInt {
-        record(.openFile(path))
-        return 10
-    }
-
     func openDirectoryForSynchronization(at path: String) -> CInt {
         record(.openDirectory(path))
         return 20
@@ -81,9 +76,18 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
         record(.write(data, fileDescriptor: fileDescriptor))
     }
 
-    func synchronizeFile(_ fileDescriptor: CInt) -> CInt {
+    func synchronizeFile(_ fileDescriptor: CInt, at path: String) throws {
         record(.synchronizeFile(fileDescriptor))
-        return state.withLock { $0.fileSynchronizationFails ? -1 : 0 }
+        if state.withLock({ $0.fileSynchronizationFails }) {
+            throw DurableFileWriteError(operation: "synchronize", path: path, errorNumber: errorNumber)
+        }
+    }
+
+    func synchronizeFile(at path: String) throws {
+        record(.synchronizeFileAt(path))
+        if state.withLock({ $0.fileSynchronizationFails }) {
+            throw DurableFileWriteError(operation: "synchronize", path: path, errorNumber: errorNumber)
+        }
     }
 
     func synchronizeDirectory(_ fileDescriptor: CInt) -> CInt {
@@ -177,9 +181,7 @@ struct DurableFileWriterTests {
 
         #expect(
             calls.events == [
-                .openFile("/vol/disk.partial"),
-                .synchronizeFile(10),
-                .close(10),
+                .synchronizeFileAt("/vol/disk.partial"),
                 .replace(source: "/vol/disk.partial", destination: "/vol/disk.raw"),
                 .openDirectory("/vol"),
                 .synchronizeDirectory(20),
@@ -203,5 +205,18 @@ struct DurableFileWriterTests {
                 return false
             })
         #expect(calls.events.last == .remove("/state/manifest.json.tmp"))
+    }
+
+    @Test("A staged file synchronization failure never publishes the file")
+    func stagedFileSynchronizationFailureDoesNotRename() {
+        let calls = RecordingDurableFileSystemCalls()
+        calls.failFileSynchronization()
+        let writer = DurableFileWriter(systemCalls: calls)
+
+        #expect(throws: DurableFileWriteError.self) {
+            try writer.publish(stagingPath: "/vol/disk.partial", to: "/vol/disk.raw")
+        }
+
+        #expect(calls.events == [.synchronizeFileAt("/vol/disk.partial")])
     }
 }
