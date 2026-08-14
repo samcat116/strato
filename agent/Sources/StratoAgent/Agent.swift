@@ -1706,8 +1706,7 @@ actor Agent {
                 available: true,
                 accelerated: true,
                 capabilities: HypervisorCapabilities.capabilities(for: type),
-                supportsVsock: type == .qemu ? true : nil,
-                supportsGuestExec: type == .qemu ? true : nil
+                supportsVsock: type == .qemu ? true : nil
             )
         }
     }
