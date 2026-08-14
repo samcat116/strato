@@ -14,8 +14,9 @@ struct AgentMessageTests {
             resources: Fixtures.resources,
             hypervisors: [
                 HypervisorSupport(
-                    type: .firecracker, available: true, accelerated: true,
-                    capabilities: .capabilities(for: .firecracker), supportsVsock: true)
+                    type: .qemu, available: true, accelerated: true,
+                    capabilities: .capabilities(for: .qemu), supportsVsock: true,
+                    supportsGuestExec: true)
             ]
         )
         let decoded = try throughEnvelope(message)
@@ -25,8 +26,9 @@ struct AgentMessageTests {
         #expect(decoded.agentId == "agent-1")
         #expect(decoded.hostname == "hv-01.example")
         #expect(decoded.version == "1.2.3")
-        #expect(decoded.effectiveHypervisors.map(\.type) == [.firecracker])
+        #expect(decoded.effectiveHypervisors.map(\.type) == [.qemu])
         #expect(decoded.effectiveHypervisors.first?.supportsVsock == true)
+        #expect(decoded.effectiveHypervisors.first?.supportsGuestExec == true)
         #expect(decoded.resources.totalCPU == Fixtures.resources.totalCPU)
         #expect(decoded.resources.availableCPU == Fixtures.resources.availableCPU)
         #expect(decoded.resources.totalMemory == Fixtures.resources.totalMemory)
@@ -56,6 +58,7 @@ struct AgentMessageTests {
 
         let decoded = try JSONDecoder().decode(HypervisorSupport.self, from: Data(json.utf8))
         #expect(decoded.supportsVsock == nil)
+        #expect(decoded.supportsGuestExec == nil)
     }
 
     @Test("Sandbox capability is opt-in: absent unless the runtime advertises it")

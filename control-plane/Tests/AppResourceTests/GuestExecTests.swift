@@ -7,14 +7,12 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-/// Tests for the sandbox exec surface (issue #423): `POST /api/sandboxes/:id/exec`
-/// validation and gating, the `SandboxExecSessionManager` pending/attach
-/// lifecycle, agent-ownership anti-spoofing, and the sandbox logs endpoint's
-/// Loki gating. The browser-attach WebSocket relay itself needs a live agent
-/// socket, so HTTP tests stop at the "agent not connected to this replica"
-/// boundary.
-@Suite("Sandbox Exec Tests", .serialized)
-final class SandboxExecTests {
+/// Tests for the VM/sandbox guest-exec surface: HTTP validation and gating,
+/// the `GuestExecSessionManager` pending/attach lifecycle, agent-ownership
+/// anti-spoofing, and the sandbox logs endpoint's Loki gating. The
+/// browser-attach relay has a separate live-WebSocket integration suite.
+@Suite("Guest Exec and Sandbox Log Tests", .serialized)
+final class GuestExecTests {
 
     /// Same harness shape as `SandboxTests`: full middleware stack,
     /// role-binding-backed authorization, API-key auth, one org/project and
@@ -58,13 +56,15 @@ final class SandboxExecTests {
         try await app.shutdownForTesting()
     }
 
-    /// Registers an in-memory Firecracker-capable agent (current wire
-    /// protocol) and optionally maps the sandbox to it. Returns the agent's
-    /// UUID string.
+    /// Registers an in-memory agent (current wire protocol) and optionally
+    /// maps a workload to it. VM guest exec is opt-in so tests cannot
+    /// accidentally model today's bridge-less production agent as capable.
     private func registerAgent(
         app: Application,
         sandbox: Sandbox? = nil,
-        named agentName: String = "exec-agent"
+        vm: VM? = nil,
+        named agentName: String = "exec-agent",
+        supportsVMGuestExec: Bool? = nil
     ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: agentName,
@@ -75,6 +75,15 @@ final class SandboxExecTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
+            hypervisors: [
+                HypervisorSupport(
+                    type: .qemu,
+                    available: true,
+                    accelerated: true,
+                    capabilities: .capabilities(for: .qemu),
+                    supportsVsock: true,
+                    supportsGuestExec: supportsVMGuestExec)
+            ],
             protocolVersion: WireProtocol.currentVersion,
             sandboxCapable: true
         )
@@ -85,6 +94,10 @@ final class SandboxExecTests {
         if let sandbox {
             sandbox.hypervisorId = agentUUID.uuidString
             try await sandbox.save(on: app.db)
+        }
+        if let vm {
+            vm.hypervisorId = agentUUID.uuidString
+            try await vm.save(on: app.db)
         }
         return agentUUID.uuidString
     }
@@ -189,16 +202,146 @@ final class SandboxExecTests {
         }
     }
 
+    // MARK: - POST /api/vms/:id/exec validation
+
+    @Test("VM exec is denied (403) without a deliberate vm:exec grant")
+    func vmExecDeniedWithoutPermission() async throws {
+        try await withSandboxTestApp { app, _, project, _, token in
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+
+            try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(ExecBody(command: ["/bin/sh"]))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+        }
+    }
+
+    @Test("VM exec rejects an empty command array")
+    func vmExecRejectsEmptyCommand() async throws {
+        try await withSandboxTestApp { app, user, project, _, token in
+            user.isSystemAdmin = true
+            try await user.save(on: app.db)
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+
+            try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(ExecBody(command: []))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("VM exec is rejected (400) while the VM is not running")
+    func vmExecRejectedWhenNotRunning() async throws {
+        try await withSandboxTestApp { app, user, project, _, token in
+            user.isSystemAdmin = true
+            try await user.save(on: app.db)
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+
+            try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(ExecBody(command: ["/bin/sh"]))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("VM exec is rejected (409) for a running VM with no placement")
+    func vmExecRejectedWhenUnplaced() async throws {
+        try await withSandboxTestApp { app, user, project, _, token in
+            user.isSystemAdmin = true
+            try await user.save(on: app.db)
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+            vm.guestAgentEnabled = true
+            vm.setStatus(.running)
+            try await vm.save(on: app.db)
+
+            try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(ExecBody(command: ["/bin/sh"]))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+        }
+    }
+
+    @Test("VM exec is rejected (400) when the VM guest agent was not enabled")
+    func vmExecRejectedWithoutGuestAgent() async throws {
+        try await withSandboxTestApp { app, user, project, _, token in
+            user.isSystemAdmin = true
+            try await user.save(on: app.db)
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+            vm.setStatus(.running)
+            try await vm.save(on: app.db)
+
+            try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(ExecBody(command: ["/bin/sh"]))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("guest agent enabled"))
+            }
+        }
+    }
+
+    @Test("VM exec is rejected (503) when the assigned agent does not advertise its bridge")
+    func vmExecUnavailableWithoutAdvertisedBridge() async throws {
+        try await withSandboxTestApp { app, user, project, _, token in
+            user.isSystemAdmin = true
+            try await user.save(on: app.db)
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+            vm.guestAgentEnabled = true
+            _ = try await self.registerAgent(app: app, vm: vm)
+            vm.setStatus(.running)
+            try await vm.save(on: app.db)
+
+            try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(ExecBody(command: ["/bin/sh"]))
+            } afterResponse: { res in
+                #expect(res.status == .serviceUnavailable)
+                #expect(res.body.string.contains("does not support VM guest exec"))
+            }
+        }
+    }
+
+    @Test("VM exec is rejected (503) when this replica does not hold the agent socket")
+    func vmExecUnavailableWithoutLocalSocket() async throws {
+        try await withSandboxTestApp { app, user, project, _, token in
+            user.isSystemAdmin = true
+            try await user.save(on: app.db)
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+            vm.guestAgentEnabled = true
+            _ = try await self.registerAgent(app: app, vm: vm, supportsVMGuestExec: true)
+            vm.setStatus(.running)
+            try await vm.save(on: app.db)
+
+            try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(ExecBody(command: ["/bin/sh"]))
+            } afterResponse: { res in
+                #expect(res.status == .serviceUnavailable)
+                #expect(res.body.string.contains("requires the replica holding the agent socket"))
+            }
+        }
+    }
+
     // MARK: - Session manager lifecycle
 
     private func mintPendingSession(
-        _ manager: SandboxExecSessionManager,
-        sandboxId: String = UUID().uuidString,
+        _ manager: GuestExecSessionManager,
+        resourceKind: GuestResourceKind = .sandbox,
+        resourceId: String = UUID().uuidString,
         userId: String = UUID().uuidString,
         now: Date = Date()
-    ) -> SandboxExecSessionManager.PendingExecSession {
+    ) -> GuestExecSessionManager.PendingExecSession {
         manager.createPendingSession(
-            sandboxId: sandboxId,
+            resourceKind: resourceKind,
+            resourceId: resourceId,
             agentKey: agentKey("exec-agent"),
             userId: userId,
             command: ["/bin/sh", "-c", "echo hi"],
@@ -214,7 +357,7 @@ final class SandboxExecTests {
     @Test("A pending session carries the exec request and a 60s expiry")
     func pendingSessionShape() async throws {
         try await withSandboxTestApp { app, _, _, _, _ in
-            let manager = app.sandboxExecSessionManager
+            let manager = app.guestExecSessionManager
             let now = Date()
             let session = self.mintPendingSession(manager, now: now)
 
@@ -222,7 +365,7 @@ final class SandboxExecTests {
             #expect(session.tty == true)
             #expect(session.rows == 24)
             #expect(session.cols == 80)
-            let expectedExpiry = now.addingTimeInterval(SandboxExecSessionManager.pendingSessionTTL)
+            let expectedExpiry = now.addingTimeInterval(GuestExecSessionManager.pendingSessionTTL)
             #expect(session.expiresAt == expectedExpiry)
             let exists = manager.hasPendingSession(sessionId: session.sessionId, now: now)
             #expect(exists == true)
@@ -232,22 +375,23 @@ final class SandboxExecTests {
     @Test("Pending sessions expire after the TTL and are swept on access")
     func pendingSessionExpires() async throws {
         try await withSandboxTestApp { app, _, _, _, _ in
-            let manager = app.sandboxExecSessionManager
+            let manager = app.guestExecSessionManager
             let now = Date()
             let session = self.mintPendingSession(manager, now: now)
-            let later = now.addingTimeInterval(SandboxExecSessionManager.pendingSessionTTL + 1)
+            let later = now.addingTimeInterval(GuestExecSessionManager.pendingSessionTTL + 1)
 
             // Attaching after the TTL reports expiry...
             do {
                 _ = try manager.attachSession(
                     sessionId: session.sessionId,
-                    sandboxId: session.sandboxId,
+                    resourceKind: session.resourceKind,
+                    resourceId: session.resourceId,
                     userId: session.userId,
                     websocket: nil,
                     now: later
                 )
                 Issue.record("Expected sessionExpired to be thrown")
-            } catch let error as SandboxExecSessionError {
+            } catch let error as GuestExecSessionError {
                 #expect(error == .sessionExpired(session.sessionId))
             }
 
@@ -257,33 +401,48 @@ final class SandboxExecTests {
         }
     }
 
-    @Test("Attach validates the sandbox and user the session was minted for")
-    func attachValidatesSandboxAndUser() async throws {
+    @Test("Attach validates the resource kind, resource id, and user the session was minted for")
+    func attachValidatesResourceAndUser() async throws {
         try await withSandboxTestApp { app, _, _, _, _ in
-            let manager = app.sandboxExecSessionManager
+            let manager = app.guestExecSessionManager
             let session = self.mintPendingSession(manager)
 
             do {
                 _ = try manager.attachSession(
                     sessionId: session.sessionId,
-                    sandboxId: UUID().uuidString,
+                    resourceKind: session.resourceKind,
+                    resourceId: UUID().uuidString,
                     userId: session.userId,
                     websocket: nil
                 )
                 Issue.record("Expected sessionMismatch for a foreign sandbox")
-            } catch let error as SandboxExecSessionError {
+            } catch let error as GuestExecSessionError {
                 #expect(error == .sessionMismatch(session.sessionId))
             }
 
             do {
                 _ = try manager.attachSession(
                     sessionId: session.sessionId,
-                    sandboxId: session.sandboxId,
+                    resourceKind: .virtualMachine,
+                    resourceId: session.resourceId,
+                    userId: session.userId,
+                    websocket: nil
+                )
+                Issue.record("Expected sessionMismatch for a different resource kind")
+            } catch let error as GuestExecSessionError {
+                #expect(error == .sessionMismatch(session.sessionId))
+            }
+
+            do {
+                _ = try manager.attachSession(
+                    sessionId: session.sessionId,
+                    resourceKind: session.resourceKind,
+                    resourceId: session.resourceId,
                     userId: UUID().uuidString,
                     websocket: nil
                 )
                 Issue.record("Expected sessionMismatch for a foreign user")
-            } catch let error as SandboxExecSessionError {
+            } catch let error as GuestExecSessionError {
                 #expect(error == .sessionMismatch(session.sessionId))
             }
 
@@ -296,18 +455,19 @@ final class SandboxExecTests {
     @Test("Attach of an unknown session throws sessionNotFound")
     func attachUnknownSession() async throws {
         try await withSandboxTestApp { app, _, _, _, _ in
-            let manager = app.sandboxExecSessionManager
+            let manager = app.guestExecSessionManager
             let bogus = UUID().uuidString
 
             do {
                 _ = try manager.attachSession(
                     sessionId: bogus,
-                    sandboxId: UUID().uuidString,
+                    resourceKind: .sandbox,
+                    resourceId: UUID().uuidString,
                     userId: UUID().uuidString,
                     websocket: nil
                 )
                 Issue.record("Expected sessionNotFound")
-            } catch let error as SandboxExecSessionError {
+            } catch let error as GuestExecSessionError {
                 #expect(error == .sessionNotFound(bogus))
             }
         }
@@ -316,12 +476,13 @@ final class SandboxExecTests {
     @Test("Attach consumes the pending session; a second attach is rejected")
     func duplicateAttachRejected() async throws {
         try await withSandboxTestApp { app, _, _, _, _ in
-            let manager = app.sandboxExecSessionManager
+            let manager = app.guestExecSessionManager
             let session = self.mintPendingSession(manager)
 
             let attached = try manager.attachSession(
                 sessionId: session.sessionId,
-                sandboxId: session.sandboxId,
+                resourceKind: session.resourceKind,
+                resourceId: session.resourceId,
                 userId: session.userId,
                 websocket: nil
             )
@@ -329,27 +490,31 @@ final class SandboxExecTests {
             let pendingAfterAttach = manager.hasPendingSession(sessionId: session.sessionId)
             #expect(pendingAfterAttach == false)
             let info = manager.getSession(sessionId: session.sessionId)
-            #expect(info?.sandboxId == session.sandboxId)
+            #expect(info?.resourceKind == session.resourceKind)
+            #expect(info?.resourceId == session.resourceId)
             #expect(info?.agentKey == agentKey("exec-agent"))
 
             do {
                 _ = try manager.attachSession(
                     sessionId: session.sessionId,
-                    sandboxId: session.sandboxId,
+                    resourceKind: session.resourceKind,
+                    resourceId: session.resourceId,
                     userId: session.userId,
                     websocket: nil
                 )
                 Issue.record("Expected alreadyAttached")
-            } catch let error as SandboxExecSessionError {
+            } catch let error as GuestExecSessionError {
                 #expect(error == .alreadyAttached(session.sessionId))
             }
 
-            // The per-sandbox index tracks the attached session and empties
+            // The kind-aware resource index tracks the attached session and empties
             // on removal.
-            let forSandbox = manager.getSessionsForSandbox(sandboxId: session.sandboxId)
-            #expect(forSandbox.count == 1)
+            let forResource = manager.getSessions(
+                resourceKind: session.resourceKind, resourceId: session.resourceId)
+            #expect(forResource.count == 1)
             manager.removeSession(sessionId: session.sessionId)
-            let afterRemoval = manager.getSessionsForSandbox(sandboxId: session.sandboxId)
+            let afterRemoval = manager.getSessions(
+                resourceKind: session.resourceKind, resourceId: session.resourceId)
             #expect(afterRemoval.isEmpty)
             #expect(manager.getSession(sessionId: session.sessionId) == nil)
         }
@@ -358,11 +523,12 @@ final class SandboxExecTests {
     @Test("Terminal agent events only tear down sessions owned by the reporting agent")
     func terminalEventsRequireOwningAgent() async throws {
         try await withSandboxTestApp { app, _, _, _, _ in
-            let manager = app.sandboxExecSessionManager
+            let manager = app.guestExecSessionManager
             let session = self.mintPendingSession(manager)
             _ = try manager.attachSession(
                 sessionId: session.sessionId,
-                sandboxId: session.sandboxId,
+                resourceKind: session.resourceKind,
+                resourceId: session.resourceId,
                 userId: session.userId,
                 websocket: nil
             )
@@ -380,14 +546,15 @@ final class SandboxExecTests {
     @Test("Agent disconnect tears down that agent's attached and pending sessions")
     func agentDisconnectClosesSessions() async throws {
         try await withSandboxTestApp { app, _, _, _, _ in
-            let manager = app.sandboxExecSessionManager
+            let manager = app.guestExecSessionManager
 
             // One attached and one still-pending session for the
             // disconnecting agent...
             let attached = self.mintPendingSession(manager)
             _ = try manager.attachSession(
                 sessionId: attached.sessionId,
-                sandboxId: attached.sandboxId,
+                resourceKind: attached.resourceKind,
+                resourceId: attached.resourceId,
                 userId: attached.userId,
                 websocket: nil
             )
@@ -398,7 +565,8 @@ final class SandboxExecTests {
             let otherSandboxId = UUID().uuidString
             let otherUserId = UUID().uuidString
             let other = manager.createPendingSession(
-                sandboxId: otherSandboxId,
+                resourceKind: .sandbox,
+                resourceId: otherSandboxId,
                 agentKey: agentKey("other-agent"),
                 userId: otherUserId,
                 command: ["/bin/sh"],
@@ -410,7 +578,8 @@ final class SandboxExecTests {
             )
             _ = try manager.attachSession(
                 sessionId: other.sessionId,
-                sandboxId: otherSandboxId,
+                resourceKind: other.resourceKind,
+                resourceId: other.resourceId,
                 userId: otherUserId,
                 websocket: nil
             )
@@ -418,7 +587,8 @@ final class SandboxExecTests {
             manager.closeAllSessions(forAgent: agentKey("exec-agent"), reason: "agent disconnected")
 
             #expect(manager.getSession(sessionId: attached.sessionId) == nil)
-            let attachedIndex = manager.getSessionsForSandbox(sandboxId: attached.sandboxId)
+            let attachedIndex = manager.getSessions(
+                resourceKind: attached.resourceKind, resourceId: attached.resourceId)
             #expect(attachedIndex.isEmpty)
             let pendingSurvives = manager.hasPendingSession(sessionId: pending.sessionId)
             #expect(pendingSurvives == false)
@@ -431,13 +601,13 @@ final class SandboxExecTests {
     @Test("Input routing for an unattached session throws sessionNotFound")
     func inputRequiresAttachedSession() async throws {
         try await withSandboxTestApp { app, _, _, _, _ in
-            let manager = app.sandboxExecSessionManager
+            let manager = app.guestExecSessionManager
             let bogus = UUID().uuidString
 
             do {
                 try await manager.routeInput(sessionId: bogus, data: Data([0x6C, 0x73]))
                 Issue.record("Expected sessionNotFound")
-            } catch let error as SandboxExecSessionError {
+            } catch let error as GuestExecSessionError {
                 #expect(error == .sessionNotFound(bogus))
             }
         }

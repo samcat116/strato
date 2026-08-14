@@ -13,8 +13,9 @@ import Glibc
 
 // MARK: - Install mode
 
-/// How this agent process is installed on the host, deciding whether it may
-/// replace its own binary.
+/// How this agent process is installed on the host. In container mode, host
+/// dependency supervisors are outside the agent's namespace and the agent may
+/// not replace its own binary.
 public enum AgentInstallMode: Sendable, Equatable {
     /// A bare binary under a process supervisor (systemd, launchd, a shell):
     /// self-update may swap the executable and exit for the supervisor to
@@ -24,6 +25,11 @@ public enum AgentInstallMode: Sendable, Equatable {
     /// an immutable image layer — updates ship as a new image — so self-update
     /// refuses.
     case container(marker: String)
+
+    var isContainer: Bool {
+        if case .container = self { return true }
+        return false
+    }
 
     /// Detects the install mode. The explicit `STRATO_INSTALL_MODE` variable
     /// (baked into the agent's container image) wins in both directions;

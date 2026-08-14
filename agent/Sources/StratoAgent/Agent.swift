@@ -300,6 +300,7 @@ actor Agent {
     // late, but can never make a live agent miss liveness reports.
     private var dependencyManager: NodeDependencyManager?
     private var dependencyObservationTask: Task<Void, Never>?
+    private let installMode: AgentInstallMode
     private let imageCachePath: String?
     // Byte budgets for the image caches; nil means unbounded (see
     // image_cache_max_size_gb / sandbox_image_cache_max_size_gb).
@@ -436,6 +437,7 @@ actor Agent {
         hardwareAccelerationEnabled: Bool = true,
         qemuMemoryOverheadBytes: Int64 = Int64(AgentConfig.defaultQEMUMemoryOverheadMB) * 1024 * 1024,
         simulation: SimulationConfig? = nil,
+        installMode: AgentInstallMode = .detect(),
         spiffeConfig: SPIFFEConfig? = nil,
         teardownGuard: TeardownGuard = TeardownGuard(),
         desiredStateFullRefetchInterval: Duration = DesiredStatePoller.defaultFullRefetchInterval,
@@ -472,6 +474,7 @@ actor Agent {
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
         self.qemuMemoryOverheadBytes = qemuMemoryOverheadBytes
         self.simulation = simulation
+        self.installMode = installMode
         self.spiffeConfig = spiffeConfig
         self.teardownGuard = teardownGuard
         self.desiredStateFullRefetchInterval = desiredStateFullRefetchInterval
@@ -1823,6 +1826,7 @@ actor Agent {
                 SPIRENodeDependencyModule(
                     systemd: systemd,
                     source: spiffeConfig?.sourceType == "files" ? .files : .workloadAPI,
+                    installMode: installMode,
                     version: {
                         await spireVersionCache.value(maxAge: 300) {
                             await DependencyVersionProbe.version(
@@ -2965,7 +2969,7 @@ extension Agent {
             inFlightReconcileItems += await reconciler.inFlightWorkloads(kind: .sandbox).count
         }
         let conditions = AutoUpdateGate.Conditions(
-            installMode: AgentInstallMode.detect(),
+            installMode: installMode,
             inFlightReconcileItems: inFlightReconcileItems
         )
         if let reason = AutoUpdateGate.blockedReason(conditions) {
@@ -3451,6 +3455,9 @@ extension Agent {
             ])
 
         guard message.resourceKind == .sandbox else {
+            // Defense in depth: the current registration deliberately omits
+            // `supportsGuestExec`, so the control plane must not send VM exec
+            // here until STR-82 installs and advertises the node-agent bridge.
             await sendGuestExecClosed(
                 sessionId: message.sessionId, reason: "VM exec is not supported by this agent build")
             return
@@ -4273,6 +4280,19 @@ extension Agent: ReconcileActuator {
             }
         }
         do {
+            // Existing IMDS VMs may carry a seed and persistent definition
+            // created before the NoCloudNet bootstrap repair. Re-realizing the
+            // NICs is idempotent and gives the provisioner the current guest
+            // network document. Treat this migration as required: a VM that
+            // merely starts while cloud-init falls back is not converged.
+            if !item.steps.contains(.create), desired.spec.metadataSource == .imds {
+                let attachments = try await networkOrchestrator.prepareAttachments(
+                    vmId: item.id, networks: desired.spec.networks,
+                    metadataDenied: desired.metadata.map { !$0.isServiceEnabled } ?? false)
+                try await service.convergeGuestBootstrap(
+                    vmId: item.id, spec: desired.spec,
+                    networkAttachments: attachments, metadata: desired.metadata)
+            }
             try await service.ensureMemoryCeiling(vmId: item.id, spec: desired.spec)
             try await service.bootVM(vmId: item.id)
         } catch {

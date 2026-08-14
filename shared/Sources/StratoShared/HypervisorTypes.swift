@@ -68,6 +68,12 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
     /// vsock probing still decode; absence must be treated as not capable.
     public let supportsVsock: Bool?
 
+    /// Whether this agent can bridge guest-exec sessions to VMs running on
+    /// this hypervisor. Optional/additive because virtio-vsock availability
+    /// alone does not imply that the node-agent bridge exists; absence must
+    /// be treated as not capable.
+    public let supportsGuestExec: Bool?
+
     /// The hypervisor binary's version, probed at agent startup (e.g. "1.7.0"
     /// from `firecracker --version`). Optional/additive: nil from agents that
     /// predate version probing, or when the probe failed. Snapshot mobility
@@ -82,6 +88,7 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
         unavailabilityReason: String? = nil,
         capabilities: HypervisorCapabilities,
         supportsVsock: Bool? = nil,
+        supportsGuestExec: Bool? = nil,
         version: String? = nil
     ) {
         self.type = type
@@ -90,6 +97,7 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
         self.unavailabilityReason = unavailabilityReason
         self.capabilities = capabilities
         self.supportsVsock = supportsVsock
+        self.supportsGuestExec = supportsGuestExec
         self.version = version
     }
 }

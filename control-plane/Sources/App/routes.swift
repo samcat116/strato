@@ -84,8 +84,8 @@ func routes(_ app: Application) throws {
     // VM graphics console: mint + attach for the VNC relay (issue #566)
     try app.register(collection: VNCWebSocketController())
 
-    // Sandbox exec attach WebSocket (issue #423)
-    try app.register(collection: SandboxExecWebSocketController())
+    // VM and sandbox guest-exec attach WebSockets (STR-81)
+    try app.register(collection: GuestExecWebSocketController())
 
     // VM Logs controller for querying logs from Loki
     try app.register(collection: LogsController())

@@ -108,9 +108,14 @@ info:
       binary frames after one `{"type":"ready"}` text frame. Listed here with
       its WebSocket half because the two are one exchange — the POST exists
       only to give the upgrade's pre-flight failures real status codes.
-    - `POST /api/sandboxes/{sandboxID}/exec` + `GET
-      /api/sandboxes/{sandboxID}/exec/{sessionID}/attach` — sandbox exec
-      (WebSocket attach).
+    - `POST /api/vms/{vmID}/exec` + `GET
+      /api/vms/{vmID}/exec/{sessionID}/attach`, and `POST
+      /api/sandboxes/{sandboxID}/exec` + `GET
+      /api/sandboxes/{sandboxID}/exec/{sessionID}/attach` — guest exec
+      (WebSocket attach). Both resource kinds use the same binary stdin/output
+      and JSON control-frame contract. VM minting is fail-closed unless the VM
+      opted into the Strato guest agent and its assigned hypervisor explicitly
+      advertises a node-agent guest-exec bridge.
 
     Everything else the control plane serves is described here. A route-drift
     test (`AppPlatformTests/OpenAPISpecDriftTests`) boots the app and enforces
@@ -14068,6 +14073,12 @@ components:
           description: >-
             Whether this host can attach a virtio-vsock device for this
             hypervisor; null for agents that predate vsock probing.
+        supportsGuestExec:
+          type: boolean
+          nullable: true
+          description: >-
+            Whether this agent can bridge guest-exec sessions to VMs using
+            this hypervisor; null for agents that predate VM guest exec.
         version:
           type: string
           nullable: true

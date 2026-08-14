@@ -142,6 +142,10 @@ services:
       # cannot verify a URI-SAN-only certificate, so the control-plane entry
       # carries the hostname agents dial as a DNS SAN.
       STRATO_HOSTNAME: ${STRATO_HOSTNAME:-localhost}
+      # Creates the separate uid:999 delegate entry only with the same opt-in
+      # that enables the SPIRE admin endpoint.
+      ENABLE_GUEST_IDENTITY: ${ENABLE_GUEST_IDENTITY:-false}
+      CONTROL_PLANE_UID: "999"
     volumes:
       - ./spiffe:/spiffe:ro
       - spire_server_api:/tmp/spire-server/private
@@ -206,11 +210,17 @@ services:
     image: strato-spire-helper:local
     command: ["bash", "/spiffe/agent-cp-entrypoint.sh"]
     pid: host
+    environment:
+      # Default-off trust grant for the embedded control-plane SPIRE agent.
+      # The admin socket is shared only with the registered uid:999 delegate.
+      ENABLE_GUEST_IDENTITY: ${ENABLE_GUEST_IDENTITY:-false}
+      GUEST_IDENTITY_DELEGATE_GID: "999"
     volumes:
       - ./spiffe:/spiffe:ro
       - spire_handoff:/handoff:ro
       - spire_agent_cp_data:/var/lib/spire/agent
       - spire_cp_sockets:/run/spire/agent/sockets
+      - spire_cp_admin:/var/run/spire
     depends_on:
       spire-bootstrap:
         condition: service_completed_successfully
@@ -250,6 +260,9 @@ services:
     # `main` is the moving tag CI publishes on every main-branch build; no
     # `latest` tag exists on GHCR until a versioned release is published.
     image: ghcr.io/samcat116/strato-control-plane:${STRATO_VERSION:-main}
+    # Matches the delegate registration in spiffe/bootstrap.sh and the group
+    # on the dedicated admin-socket volume.
+    user: "999:999"
     # To run from source instead of the published image, comment out `image:`
     # above and uncomment:
     # build:
@@ -399,6 +412,9 @@ services:
     volumes:
       - image_storage:/app/images
       - spire_handoff:/run/spire/handoff:ro
+      # Named volume, not a host bind mount. It contains only admin.sock and is
+      # readable by the registered control-plane delegate group.
+      - spire_cp_admin:/var/run/spire:ro
     depends_on:
       db:
         condition: service_healthy
@@ -501,3 +517,4 @@ volumes:
   spire_handoff:
   spire_agent_cp_data:
   spire_cp_sockets:
+  spire_cp_admin:

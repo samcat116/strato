@@ -3,12 +3,35 @@ import Foundation
 import StratoShared
 import Vapor
 
-/// WebSocket endpoint attaching a browser to a sandbox exec session
-/// (issue #423), modeled on `ConsoleWebSocketController`.
+/// Shared HTTP contract for minting a VM or sandbox exec session.
+struct GuestExecRequest: Content {
+    let command: [String]
+    let env: [String: String]?
+    let workingDir: String?
+    let tty: Bool?
+    let rows: Int?
+    let cols: Int?
+
+    func validate() throws {
+        guard !command.isEmpty else {
+            throw Abort(.badRequest, reason: "'command' must be a non-empty array of strings")
+        }
+    }
+}
+
+/// Shared response contract consumed by the reusable browser terminal flow.
+struct GuestExecSessionResponse: Content {
+    let sessionId: String
+    let websocketPath: String
+    let expiresAt: Date
+}
+
+/// WebSocket endpoints attaching a browser to a VM or sandbox exec session,
+/// modeled on `ConsoleWebSocketController`.
 ///
-/// Flow: `POST /api/sandboxes/:id/exec` mints a pending session; the browser
-/// then connects to `GET /api/sandboxes/:id/exec/:sessionId/attach`. This
-/// handler re-authorizes (`exec` on the sandbox), consumes the pending
+/// Flow: `POST /api/{vms|sandboxes}/:id/exec` mints a pending session; the
+/// browser then connects to that resource's exec attach route. This handler
+/// re-authorizes (`vm:exec` or `sandbox:exec`), consumes the pending
 /// session, sends the `GuestExecStartMessage` to the agent, and relays
 /// frames until the exec ends or the browser disconnects.
 ///
@@ -20,20 +43,79 @@ import Vapor
 ///   are output bytes (stdout/stderr interleaved);
 ///   `{"type":"exit","exitCode":N}` then a normal close when it exits;
 ///   `{"type":"error","message":"..."}` then a close on abnormal end.
-struct SandboxExecWebSocketController: RouteCollection {
+struct GuestExecWebSocketController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let sandboxRoutes = routes.grouped("api", "sandboxes")
-        sandboxRoutes.webSocket(":sandboxID", "exec", ":sessionID", "attach", onUpgrade: websocketHandler)
+        sandboxRoutes.webSocket(
+            ":sandboxID", "exec", ":sessionID", "attach",
+            onUpgrade: { req, ws in
+                websocketHandler(req: req, ws: ws, resource: .sandbox)
+            })
+
+        let vmRoutes = routes.grouped("api", "vms")
+        vmRoutes.webSocket(
+            ":vmID", "exec", ":sessionID", "attach",
+            onUpgrade: { req, ws in
+                websocketHandler(req: req, ws: ws, resource: .virtualMachine)
+            })
+    }
+
+    private enum Resource: Sendable {
+        case sandbox
+        case virtualMachine
+
+        var kind: GuestResourceKind {
+            switch self {
+            case .sandbox: .sandbox
+            case .virtualMachine: .virtualMachine
+            }
+        }
+
+        var parameterName: String {
+            switch self {
+            case .sandbox: "sandboxID"
+            case .virtualMachine: "vmID"
+            }
+        }
+
+        var iamAction: String {
+            switch self {
+            case .sandbox: "sandbox:exec"
+            case .virtualMachine: "vm:exec"
+            }
+        }
+
+        var nodeType: IAMNodeType {
+            switch self {
+            case .sandbox: .sandbox
+            case .virtualMachine: .virtualMachine
+            }
+        }
+
+        var displayName: String {
+            switch self {
+            case .sandbox: "sandbox"
+            case .virtualMachine: "VM"
+            }
+        }
+
+        var logName: String {
+            switch self {
+            case .sandbox: "Sandbox"
+            case .virtualMachine: "VM"
+            }
+        }
     }
 
     // Non-async handler - runs on WebSocket's event loop
-    private func websocketHandler(req: Request, ws: WebSocket) {
-        guard let sandboxIdString = req.parameters.get("sandboxID"),
-            let sandboxId = UUID(uuidString: sandboxIdString),
+    private func websocketHandler(req: Request, ws: WebSocket, resource: Resource) {
+        guard let resourceIdString = req.parameters.get(resource.parameterName),
+            let resourceId = UUID(uuidString: resourceIdString),
             let sessionId = req.parameters.get("sessionID"),
             !sessionId.isEmpty
         else {
-            ws.send(#"{"type":"error","message":"Invalid sandbox or session ID"}"#)
+            ws.send(
+                #"{"type":"error","message":"Invalid \#(resource.displayName) or session ID"}"#)
             _ = ws.close(code: .unacceptableData)
             return
         }
@@ -41,27 +123,32 @@ struct SandboxExecWebSocketController: RouteCollection {
         Task {
             // Authenticate + authorize before touching the session, mirroring
             // the console's validate-before-load ordering.
-            guard let userId = await validateExecAccess(req: req, ws: ws, sandboxId: sandboxId) else {
+            guard
+                let userId = await validateExecAccess(
+                    req: req, ws: ws, resource: resource, resourceId: resourceId)
+            else {
                 return
             }
 
-            let manager = req.sandboxExecSessionManager
+            let manager = req.guestExecSessionManager
 
             // Consume the pending session: it must exist, be unexpired, target
-            // this sandbox, and have been minted for this user.
-            let session: SandboxExecSessionManager.PendingExecSession
+            // this resource, and have been minted for this user.
+            let session: GuestExecSessionManager.PendingExecSession
             do {
                 session = try manager.attachSession(
                     sessionId: sessionId,
-                    sandboxId: sandboxId.uuidString,
+                    resourceKind: resource.kind,
+                    resourceId: resourceId.uuidString,
                     userId: userId,
                     websocket: ws
                 )
             } catch {
                 req.logger.warning(
-                    "Sandbox exec attach rejected: \(error)",
+                    "\(resource.logName) exec attach rejected: \(error)",
                     metadata: [
-                        "sandboxId": .string(sandboxId.uuidString),
+                        "resourceKind": .string(resource.kind.rawValue),
+                        "resourceId": .string(resourceId.uuidString),
                         "sessionId": .string(sessionId),
                     ])
                 try? await ws.send(#"{"type":"error","message":"Invalid, expired, or already attached exec session"}"#)
@@ -70,9 +157,10 @@ struct SandboxExecWebSocketController: RouteCollection {
             }
 
             req.logger.info(
-                "Sandbox exec WebSocket connection established",
+                "\(resource.logName) exec WebSocket connection established",
                 metadata: [
-                    "sandboxId": .string(sandboxId.uuidString),
+                    "resourceKind": .string(resource.kind.rawValue),
+                    "resourceId": .string(resourceId.uuidString),
                     "sessionId": .string(sessionId),
                     "agentName": .string(session.agentKey),
                 ])
@@ -82,7 +170,7 @@ struct SandboxExecWebSocketController: RouteCollection {
             // (preserving WebSocket arrival order) and one task relays events
             // to the agent one at a time. Spawning a Task per frame would let
             // the scheduler transpose rapid stdin frames (fast typing, paste),
-            // corrupting what runs in the sandbox. The exec start and the
+            // corrupting what runs in the guest. The exec start and the
             // browser-disconnect close ride the same pump — enqueued first and
             // last respectively — so a browser that disconnects while attach
             // setup is still in flight cannot make the close overtake the
@@ -100,7 +188,7 @@ struct SandboxExecWebSocketController: RouteCollection {
                             try await manager.sendExecStart(for: session)
                             started = true
                         } catch {
-                            req.logger.error("Failed to start sandbox exec on agent: \(error)")
+                            req.logger.error("Failed to start guest exec on agent: \(error)")
                             manager.removeSession(sessionId: sessionId)
                             try? await ws.send(
                                 #"{"type":"error","message":"Failed to start exec session on agent"}"#)
@@ -159,16 +247,18 @@ struct SandboxExecWebSocketController: RouteCollection {
                 switch result {
                 case .success:
                     req.logger.info(
-                        "Sandbox exec WebSocket connection closed",
+                        "\(resource.logName) exec WebSocket connection closed",
                         metadata: [
-                            "sandboxId": .string(sandboxId.uuidString),
+                            "resourceKind": .string(resource.kind.rawValue),
+                            "resourceId": .string(resourceId.uuidString),
                             "sessionId": .string(sessionId),
                         ])
                 case .failure(let error):
                     req.logger.error(
-                        "Sandbox exec WebSocket connection closed with error: \(error)",
+                        "\(resource.logName) exec WebSocket connection closed with error: \(error)",
                         metadata: [
-                            "sandboxId": .string(sandboxId.uuidString),
+                            "resourceKind": .string(resource.kind.rawValue),
+                            "resourceId": .string(resourceId.uuidString),
                             "sessionId": .string(sessionId),
                         ])
                 }
@@ -206,19 +296,20 @@ struct SandboxExecWebSocketController: RouteCollection {
         return frame
     }
 
-    /// Authenticates the request and re-checks the `exec` permission
-    /// on the sandbox. Returns the user ID on success; on any failure it
+    /// Authenticates the request and re-checks the resource's exec permission.
+    /// Returns the user ID on success; on any failure it
     /// reports the error over the socket, closes it, and returns nil.
     /// Mirrors `ConsoleWebSocketController.validateConsoleAccess`: authorize
     /// before loading the resource.
     private func validateExecAccess(
         req: Request,
         ws: WebSocket,
-        sandboxId: UUID
+        resource: Resource,
+        resourceId: UUID
     ) async -> String? {
         do {
             guard let user = req.auth.get(User.self) else {
-                req.logger.warning("Sandbox exec WebSocket authentication failed - no user found")
+                req.logger.warning("Guest exec WebSocket authentication failed - no user found")
                 try? await ws.send(#"{"type":"error","message":"Authentication required"}"#)
                 try? await ws.close(code: .policyViolation)
                 return nil
@@ -230,27 +321,29 @@ struct SandboxExecWebSocketController: RouteCollection {
                 return nil
             }
 
-            // Authorize before loading the sandbox, so unauthorized users
-            // cannot probe arbitrary sandbox UUIDs via distinct errors.
+            // Authorize before touching the pending session, so a session id
+            // cannot outlive a revoked permission and become a standing grant.
             let hasPermission = try await req.can(
-                "sandbox:exec", on: IAMNode(type: .sandbox, id: sandboxId))
+                resource.iamAction, on: IAMNode(type: resource.nodeType, id: resourceId))
 
             guard hasPermission else {
                 req.logger.warning(
-                    "Sandbox exec access denied",
+                    "\(resource.logName) exec access denied",
                     metadata: [
-                        "sandboxId": .string(sandboxId.uuidString),
+                        "resourceKind": .string(resource.kind.rawValue),
+                        "resourceId": .string(resourceId.uuidString),
                         "userId": .string(userId),
                     ])
                 try? await ws.send(
-                    #"{"type":"error","message":"You do not have permission to exec into this sandbox"}"#)
+                    #"{"type":"error","message":"You do not have permission to exec into this \#(resource.displayName)"}"#
+                )
                 try? await ws.close(code: .policyViolation)
                 return nil
             }
 
             return userId
         } catch {
-            req.logger.error("Sandbox exec WebSocket handler error: \(error)")
+            req.logger.error("Guest exec WebSocket handler error: \(error)")
             try? await ws.close(code: .unexpectedServerError)
             return nil
         }

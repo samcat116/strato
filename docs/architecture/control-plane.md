@@ -138,8 +138,8 @@ The important ones to know when navigating `Services/`:
 - **`DNSZoneService` / `DNSZoneAssembler`** — zone CRUD and network
   attachment, plus the on-demand derived ∪ authored assembly of a zone's
   contents (never stored); see [dns](./dns.md).
-- **`ConsoleSessionManager` / `SandboxExecSessionManager`** — bridge frontend
-  WebSockets to the agent socket for consoles and sandbox exec.
+- **`ConsoleSessionManager` / `GuestExecSessionManager`** — bridge frontend
+  WebSockets to the agent socket for consoles and VM/sandbox guest exec.
   `ConsoleSessionManager` carries both of a VM's consoles: the serial console
   upgrades in one step (`GET /api/vms/:id/console`), while the graphics console
   (issue #566) is minted and attached in two — `POST /api/vms/:id/console/vnc`

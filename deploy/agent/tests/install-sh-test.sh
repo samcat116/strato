@@ -8,9 +8,10 @@
 # by extract_function below, which fails loudly rather than silently testing
 # nothing if install.sh is reshaped.
 #
-# Covers the two helpers with real logic and real consequences: the qemu.conf
-# writer (which edits a 0600 root-owned file that can hold VNC/TLS secrets) and
-# the version comparison behind the libvirt floor.
+# Covers helpers with real logic and real consequences: the qemu.conf writer
+# (which edits a 0600 root-owned file that can hold VNC/TLS secrets), the
+# version comparison behind the libvirt floor, and the default-off SPIRE
+# delegate grant.
 #
 #   bash deploy/agent/tests/install-sh-test.sh
 
@@ -62,6 +63,7 @@ HARNESS="$WORK_DIR/harness.sh"
   echo 'warn() { :; }'
   extract_function set_qemu_conf_key
   extract_function version_ge
+  extract_function render_spire_guest_identity_config
 } > "$HARNESS"
 # shellcheck source=/dev/null
 . "$HARNESS"
@@ -157,6 +159,26 @@ check "11.4.99 does not clear it"                  no  "$(ge 11.4.99 11.5.0)"
 check "9.10.0 compares numerically, not lexically" no  "$(ge 9.10.0 11.5.0)"
 check "a non-numeric version is refused"           no  "$(ge abc 11.5.0)"
 check "an empty version is refused"                no  "$(ge '' 11.5.0)"
+
+# --- render_spire_guest_identity_config -------------------------------------
+# Enabling this widens the node's trust boundary, so absence is as important as
+# the enabled rendering being exact.
+
+echo "render_spire_guest_identity_config: explicit opt-in"
+GUEST_IDENTITY_OFF="$(render_spire_guest_identity_config \
+  0 strato.local hv-01 /var/run/spire/admin.sock)"
+check "disabled rendering is empty" "" "$GUEST_IDENTITY_OFF"
+
+GUEST_IDENTITY_ON="$(render_spire_guest_identity_config \
+  1 strato.local hv-01 /var/run/spire/admin.sock)"
+check "admin socket stays outside the Workload API directory" \
+  '    admin_socket_path = "/var/run/spire/admin.sock"' \
+  "$(printf '%s\n' "$GUEST_IDENTITY_ON" | grep '^[[:space:]]*admin_socket_path')"
+check "delegate is the workload SVID" \
+  '    authorized_delegates = ["spiffe://strato.local/agent/hv-01"]' \
+  "$(printf '%s\n' "$GUEST_IDENTITY_ON" | grep '^[[:space:]]*authorized_delegates')"
+check "delegate is not the node SVID" 0 \
+  "$(printf '%s\n' "$GUEST_IDENTITY_ON" | grep -c 'spiffe://strato.local/node/' || true)"
 
 echo
 if [ "$FAILURES" -eq 0 ]; then

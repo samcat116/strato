@@ -385,8 +385,12 @@ Why that is nonetheless acceptable here:
   `MintX509SVID` route — which buys nothing against a threat model in which the
   host can read guest RAM anyway.
 - **Socket hygiene**: `/var/run/spire/admin.sock`, root-owned, in a 0700
-  directory, never bind-mounted into a container and never reachable from a
-  Firecracker jail (`SandboxJailPlan` must not gain a path to it).
+  directory on installed hypervisor hosts, never reachable from a guest
+  container or Firecracker jail (`SandboxJailPlan` must not gain a path to it).
+  Containerized control-plane deployments use a separate root-owned, setgid
+  directory shared only between their SPIRE agent and the explicitly
+  registered delegate; the Workload API volume and guest workloads never see
+  it.
 - **Off by default.** The admin socket and `authorized_delegates` ship behind an
   explicit installer opt-in. This stands on its own merits and no longer mirrors
   anything at the VM layer: #789 originally specified "opt-in per VM, default
@@ -594,12 +598,14 @@ it is the argument for spiking before designing further layers on top.
 
 ## Appendix: verifying this on a node
 
-Nothing in `deploy/` is changed by the spike — enabling the admin socket fleet-wide
-is a trust change and belongs behind an opt-in installer flag, not in an upgrade
-nobody asked for. The steps below are therefore manual.
+The original spike left `deploy/` unchanged. STR-164 adds the trust change as an
+explicit node opt-in: re-run the enrollment's bootstrap command with
+`--enable-guest-identity`. Without that flag, upgrades continue to omit both the
+admin socket and delegate grant. The installer writes the following inside the
+existing `agent { }` block and restarts spire-agent:
 
-**1. Enable the admin socket.** In `/etc/spire/agent.conf`, inside the existing
-`agent { }` block:
+**1. Enable the admin socket.** Add `--enable-guest-identity` to the installer
+command. Its resulting `/etc/spire/agent.conf` contains:
 
 ```hcl
     admin_socket_path = "/var/run/spire/admin.sock"
@@ -658,8 +664,8 @@ produced.
 Filed under [#496](https://github.com/samcat116/strato/issues/496):
 
 0. ~~Per-VM `WorkloadRegistration` lifecycle (#789).~~ **Done** — STR-55.
-1. Enable the SPIRE agent admin socket behind an opt-in installer flag
-   (`deploy/agent/install.sh`, `deploy/compose/spiffe/`, Helm).
+1. ~~Enable the SPIRE agent admin socket behind an opt-in installer flag
+   (`deploy/agent/install.sh`, `deploy/compose/spiffe/`, Helm).~~ **Done — STR-164.**
 2. ~~Reserve `/vm/` and `/sandbox/` in
    `WorkloadRegistry.validateRegistrable`.~~ **Done** — STR-165.
 3. Per-sandbox `WorkloadRegistration` lifecycle (STR-166) — the sandbox twin of

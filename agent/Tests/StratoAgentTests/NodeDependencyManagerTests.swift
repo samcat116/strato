@@ -246,6 +246,60 @@ struct NodeDependencyManagerTests {
         #expect(observation.supervisorState == .active)
     }
 
+    @Test("Systemd discovery preserves inspection failure instead of reporting a missing unit")
+    func systemdDiscoveryPreservesInspectionFailure() async {
+        let executor = SystemctlOutputExecutor(outputs: [
+            "virtqemud.socket": "garbage",
+            "libvirtd.socket": "garbage",
+        ])
+        let adapter = SystemdHostAdapter(executor: executor)
+
+        let observation = await adapter.discoverFirst(
+            units: ["virtqemud.socket", "libvirtd.socket"])
+
+        #expect(observation.loadState == "unknown")
+        #expect(observation.supervisorState == .unknown)
+    }
+
+    @Test(
+        "Definitive systemd load failures are categorical",
+        arguments: ["masked", "bad-setting", "error"])
+    func definitiveSystemdLoadFailure(_ loadState: String) {
+        let observation = SystemdUnitObservation(
+            name: "spire-agent.service", loadState: loadState, activeState: "inactive",
+            subState: "dead", unitFileState: "masked")
+
+        #expect(observation.supervisorState == .failed)
+    }
+
+    @Test(
+        "Inconclusive systemd load states remain unknown",
+        arguments: ["unknown", "stub", "merged"])
+    func inconclusiveSystemdLoadState(_ loadState: String) {
+        let observation = SystemdUnitObservation(
+            name: "spire-agent.service", loadState: loadState, activeState: "inactive",
+            subState: "dead", unitFileState: "unknown")
+
+        #expect(observation.supervisorState == .unknown)
+    }
+
+    @Test("Systemd discovery preserves a masked unit")
+    func systemdDiscoveryPreservesMaskedUnit() async {
+        let executor = SystemctlOutputExecutor(outputs: [
+            "virtqemud.socket":
+                "LoadState=masked\nActiveState=inactive\nSubState=dead\nUnitFileState=masked\n",
+            "libvirtd.socket": "LoadState=not-found\nActiveState=inactive\n",
+        ])
+        let adapter = SystemdHostAdapter(executor: executor)
+
+        let observation = await adapter.discoverFirst(
+            units: ["virtqemud.socket", "libvirtd.socket"])
+
+        #expect(observation.name == "virtqemud.socket")
+        #expect(observation.loadState == "masked")
+        #expect(observation.supervisorState == .failed)
+    }
+
     private func module(
         _ id: NodeDependencyID,
         dependencies: [NodeDependencyID] = [],
@@ -291,19 +345,171 @@ struct InitialNodeDependencyModuleTests {
     }
 
     @Test("Externally supervised Workload API does not require a local SPIRE installation")
-    func externalWorkloadAPIState() async {
+    func externalWorkloadAPIState() async throws {
         let externalIdentity = SPIRENodeDependencyModule(
             systemd: FakeSystemd(defaultObservation: .missing("spire-agent.service")),
             source: .workloadAPI,
             version: { nil },
             svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
+        let manager = try NodeDependencyManager(
+            modules: [externalIdentity], logger: Logger(label: "test"))
 
-        let observation = await externalIdentity.inspect()
+        let observation = try #require(await manager.refresh().first)
         #expect(observation.supervisorState == .notApplicable)
         #expect(observation.installedVersion == nil)
         #expect(observation.compatibility == .compatible)
         #expect(observation.functionalState == .healthy)
         #expect(observation.reason == nil)
+        #expect(observation.permitsDependentWork)
+    }
+
+    @Test("Container install mode makes the Workload API authoritative without systemd")
+    func containerWorkloadAPIState() async throws {
+        let unavailableSystemd = SystemdUnitObservation(
+            name: "spire-agent.service", loadState: "unknown", activeState: "unknown",
+            subState: "unknown", unitFileState: "unknown")
+        let containerIdentity = SPIRENodeDependencyModule(
+            systemd: FakeSystemd(defaultObservation: unavailableSystemd),
+            source: .workloadAPI,
+            installMode: .container(marker: "STRATO_INSTALL_MODE"),
+            version: { nil },
+            svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
+        let manager = try NodeDependencyManager(
+            modules: [containerIdentity], logger: Logger(label: "test"))
+
+        let observation = try #require(await manager.refresh().first)
+        #expect(observation.supervisorState == .notApplicable)
+        #expect(observation.installedVersion == nil)
+        #expect(observation.compatibility == .compatible)
+        #expect(observation.functionalState == .healthy)
+        #expect(observation.reason == nil)
+        #expect(observation.permitsDependentWork)
+    }
+
+    @Test("A disabled SPIRE unit remains systemd-owned when it becomes inactive")
+    func disabledSPIREUnitRemainsSystemdOwned() async throws {
+        let inactive = SystemdUnitObservation(
+            name: "spire-agent.service", loadState: "loaded", activeState: "inactive",
+            subState: "dead", unitFileState: "disabled")
+        let cachedIdentity = SPIRENodeDependencyModule(
+            systemd: FakeSystemd(defaultObservation: inactive),
+            source: .workloadAPI,
+            version: { "1.12.4" },
+            svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
+        let manager = try NodeDependencyManager(
+            modules: [cachedIdentity], logger: Logger(label: "test"))
+
+        let observation = try #require(await manager.refresh().first)
+        #expect(observation.ownership == .observeOnly)
+        #expect(observation.supervisorState == .inactive)
+        #expect(observation.compatibility == .compatible)
+        #expect(observation.functionalState == .unhealthy)
+        #expect(observation.reason?.code == .inactiveUnit)
+        #expect(!observation.permitsDependentWork)
+    }
+
+    @Test("Systemd-managed SPIRE requires both its unit and Workload API")
+    func systemdManagedSPIREState() async throws {
+        let healthy = SPIRENodeDependencyModule(
+            systemd: FakeSystemd(defaultObservation: active),
+            version: { "1.12.4" },
+            svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
+        let healthyManager = try NodeDependencyManager(
+            modules: [healthy], logger: Logger(label: "test"))
+
+        let healthyObservation = try #require(await healthyManager.refresh().first)
+        #expect(healthyObservation.supervisorState == .active)
+        #expect(healthyObservation.functionalState == .healthy)
+        #expect(healthyObservation.permitsDependentWork)
+
+        let stoppedUnits: [(SystemdUnitObservation, NodeDependencyFailureCode)] = [
+            (
+                SystemdUnitObservation(
+                    name: "spire-agent.service", loadState: "loaded", activeState: "inactive",
+                    subState: "dead", unitFileState: "enabled"),
+                .inactiveUnit
+            ),
+            (
+                SystemdUnitObservation(
+                    name: "spire-agent.service", loadState: "loaded", activeState: "failed",
+                    subState: "failed", unitFileState: "enabled"),
+                .failedUnit
+            ),
+        ]
+        for (unit, expectedReason) in stoppedUnits {
+            let cachedIdentity = SPIRENodeDependencyModule(
+                systemd: FakeSystemd(defaultObservation: unit),
+                version: { "1.12.4" },
+                svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
+            let stoppedManager = try NodeDependencyManager(
+                modules: [cachedIdentity], logger: Logger(label: "test"))
+
+            let stoppedObservation = try #require(await stoppedManager.refresh().first)
+            #expect(stoppedObservation.functionalState == .unhealthy)
+            #expect(stoppedObservation.reason?.code == expectedReason)
+            #expect(!stoppedObservation.permitsDependentWork)
+        }
+    }
+
+    @Test("Failed systemd inspection does not classify SPIRE as externally supervised")
+    func failedSystemdInspectionDoesNotBypassSPIRESupervision() async throws {
+        let systemd = SystemdHostAdapter(
+            executor: SystemctlOutputExecutor(outputs: [
+                "spire-agent.service": "garbage"
+            ]))
+        let cachedIdentity = SPIRENodeDependencyModule(
+            systemd: systemd,
+            version: { "1.12.4" },
+            svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
+
+        let inspection = await cachedIdentity.inspect()
+        #expect(inspection.supervisorState == .unknown)
+        #expect(inspection.functionalState == .unhealthy)
+        #expect(inspection.reason?.code == .functionalProbeFailed)
+
+        let manager = try NodeDependencyManager(
+            modules: [cachedIdentity], logger: Logger(label: "test"))
+        _ = await manager.refresh()
+        let observation = try #require(await manager.refresh().first)
+        #expect(observation.functionalState == .unhealthy)
+        #expect(!observation.permitsDependentWork)
+    }
+
+    @Test("Masked systemd units gate SPIRE identity and libvirt placement immediately")
+    func maskedSystemdUnitsGateDependentWork() async throws {
+        let maskedSPIRE = SystemdUnitObservation(
+            name: "spire-agent.service", loadState: "masked", activeState: "inactive",
+            subState: "dead", unitFileState: "masked")
+        let identity = SPIRENodeDependencyModule(
+            systemd: FakeSystemd(defaultObservation: maskedSPIRE),
+            version: { "1.12.4" },
+            svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
+        let identityManager = try NodeDependencyManager(
+            modules: [identity], logger: Logger(label: "test"))
+
+        let identityObservation = try #require(await identityManager.refresh().first)
+        #expect(identityObservation.supervisorState == .failed)
+        #expect(identityObservation.functionalState == .unhealthy)
+        #expect(identityObservation.reason?.code == .failedUnit)
+        #expect(!identityObservation.permitsDependentWork)
+
+        let systemd = SystemdHostAdapter(
+            executor: SystemctlOutputExecutor(outputs: [
+                "virtqemud.socket":
+                    "LoadState=masked\nActiveState=inactive\nSubState=dead\nUnitFileState=masked\n",
+                "libvirtd.socket": "LoadState=not-found\nActiveState=inactive\n",
+            ]))
+        let libvirt = LibvirtNodeDependencyModule(
+            systemd: systemd,
+            probe: { .reachable(.init(major: 11, minor: 5, patch: 0)) })
+        let libvirtManager = try NodeDependencyManager(
+            modules: [libvirt], logger: Logger(label: "test"))
+
+        let libvirtObservation = try #require(await libvirtManager.refresh().first)
+        #expect(libvirtObservation.supervisorState == .failed)
+        #expect(libvirtObservation.functionalState == .unhealthy)
+        #expect(libvirtObservation.reason?.code == .failedUnit)
+        #expect(!libvirtObservation.permitsDependentWork)
     }
 
     @Test("File-based SPIFFE does not require a local SPIRE service or binary")
@@ -355,14 +561,38 @@ struct InitialNodeDependencyModuleTests {
         #expect(observation?.compatibility == .compatible)
         #expect(observation?.functionalState == .healthy)
         #expect(observation?.permitsDependentWork == true)
+    }
 
-        let inactive = SystemdUnitObservation(
-            name: "virtqemud.socket", loadState: "loaded", activeState: "inactive",
-            subState: "dead", unitFileState: "enabled")
-        let locallyStopped = LibvirtNodeDependencyModule(
-            systemd: FakeSystemd(defaultObservation: inactive),
-            probe: { .reachable(.init(major: 11, minor: 5, patch: 0)) })
-        #expect(await locallyStopped.inspect().supervisorState == .inactive)
+    @Test("Systemd-managed libvirt requires its enabled socket unit to be active")
+    func systemdManagedLibvirtState() async throws {
+        let stoppedUnits: [(SystemdUnitObservation, NodeDependencyFailureCode)] = [
+            (
+                SystemdUnitObservation(
+                    name: "virtqemud.socket", loadState: "loaded", activeState: "inactive",
+                    subState: "dead", unitFileState: "enabled"),
+                .inactiveUnit
+            ),
+            (
+                SystemdUnitObservation(
+                    name: "virtqemud.socket", loadState: "loaded", activeState: "failed",
+                    subState: "failed", unitFileState: "enabled"),
+                .failedUnit
+            ),
+        ]
+
+        for (unit, expectedReason) in stoppedUnits {
+            let locallyStopped = LibvirtNodeDependencyModule(
+                systemd: FakeSystemd(defaultObservation: unit),
+                probe: { .reachable(.init(major: 11, minor: 5, patch: 0)) })
+            let manager = try NodeDependencyManager(
+                modules: [locallyStopped], logger: Logger(label: "test"))
+
+            let observation = try #require(await manager.refresh().first)
+            #expect(observation.supervisorState == unit.supervisorState)
+            #expect(observation.functionalState == .unhealthy)
+            #expect(observation.reason?.code == expectedReason)
+            #expect(!observation.permitsDependentWork)
+        }
     }
 
     @Test("Libvirt distinguishes malformed output and an inactive supervisor")

@@ -65,6 +65,9 @@
 #   --trust-bundle PATH           SPIRE trust bundle PEM. Without it the agent
 #                                 uses insecure_bootstrap (TOFU) — fine for labs,
 #                                 not for hostile networks.
+#   --enable-guest-identity       Enable SPIRE delegated identity for guests.
+#                                 This is a node-level trust grant and is off by
+#                                 default.
 #   --control-plane-spiffe-id ID  SPIFFE ID the control plane's TLS certificate
 #                                 must present; the agent refuses any other
 #                                 identity, even bundle-signed ones (issue #552).
@@ -116,6 +119,7 @@ SPIRE_SERVER_ADDRESS=""
 TRUST_DOMAIN="strato.local"
 TRUST_BUNDLE=""
 CONTROL_PLANE_SPIFFE_ID=""
+ENABLE_GUEST_IDENTITY=0
 INSTALL_TELEMETRY=1
 INGEST_URL=""
 SPIRE_VERSION="1.9.6"
@@ -130,8 +134,10 @@ UNIT_FILE=/etc/systemd/system/strato-agent.service
 
 SPIRE_CONF_DIR=/etc/spire
 SPIRE_DATA_DIR=/var/lib/spire/agent
-SPIRE_SOCKET_DIR=/var/run/spire/sockets
+SPIRE_RUNTIME_DIR=/var/run/spire
+SPIRE_SOCKET_DIR="$SPIRE_RUNTIME_DIR/sockets"
 SPIRE_SOCKET="$SPIRE_SOCKET_DIR/workload.sock"
+SPIRE_ADMIN_SOCKET="$SPIRE_RUNTIME_DIR/admin.sock"
 ALLOY_CONF_DIR=/etc/alloy
 ALLOY_DATA_DIR=/var/lib/alloy
 ALLOY_CERT_DIR="$ALLOY_DATA_DIR/certs"
@@ -159,6 +165,7 @@ while [ $# -gt 0 ]; do
     --spire-server-address)  SPIRE_SERVER_ADDRESS="$2"; shift 2 ;;
     --trust-domain)          TRUST_DOMAIN="$2"; shift 2 ;;
     --trust-bundle)          TRUST_BUNDLE="$2"; shift 2 ;;
+    --enable-guest-identity) ENABLE_GUEST_IDENTITY=1; shift ;;
     --control-plane-spiffe-id) CONTROL_PLANE_SPIFFE_ID="$2"; shift 2 ;;
     --no-telemetry)          INSTALL_TELEMETRY=0; shift ;;
     --ingest-url)            INGEST_URL="$2"; shift 2 ;;
@@ -953,6 +960,21 @@ reset_spire_data_dir_if_reenrolling() {
     || die "could not clear $SPIRE_DATA_DIR; remove it by hand and re-run"
 }
 
+render_spire_guest_identity_config() {
+  local enabled="$1" trust_domain="$2" agent_name="$3" admin_socket="$4"
+  [ "$enabled" -eq 1 ] || return 0
+
+  cat << EOF
+    # Keep the admin socket outside the Workload API socket directory. SPIRE
+    # refuses to start when it is in or below that directory, so
+    # /var/run/spire/sockets/admin.sock is invalid even though it looks tidier.
+    admin_socket_path = "$admin_socket"
+    # Delegation is granted to strato-agent's workload SVID, not this node's
+    # spiffe://.../node/... identity.
+    authorized_delegates = ["spiffe://${trust_domain}/agent/${agent_name}"]
+EOF
+}
+
 setup_spire() {
   # Fail fast on a stale agent config. write_config below only writes
   # config.toml when it is absent, so a leftover file without a [spiffe]
@@ -970,8 +992,14 @@ setup_spire() {
   reset_spire_data_dir_if_reenrolling
 
   mkdir -p "$SPIRE_CONF_DIR" "$SPIRE_DATA_DIR" "$SPIRE_SOCKET_DIR"
+  if [ "$ENABLE_GUEST_IDENTITY" -eq 1 ]; then
+    # The admin socket is a root-only host capability. Keep its parent private;
+    # only the separate Workload API socket directory is shared with consumers.
+    chown root:root "$SPIRE_RUNTIME_DIR"
+    chmod 0700 "$SPIRE_RUNTIME_DIR"
+  fi
 
-  local bootstrap_line
+  local bootstrap_line guest_identity_config
   if [ -n "$TRUST_BUNDLE" ]; then
     [ -f "$TRUST_BUNDLE" ] || die "trust bundle not found: $TRUST_BUNDLE"
     cp "$TRUST_BUNDLE" "$SPIRE_CONF_DIR/bundle.pem"
@@ -980,6 +1008,8 @@ setup_spire() {
     log "No --trust-bundle given; using insecure_bootstrap (trust-on-first-use)"
     bootstrap_line='insecure_bootstrap = true'
   fi
+  guest_identity_config="$(render_spire_guest_identity_config \
+    "$ENABLE_GUEST_IDENTITY" "$TRUST_DOMAIN" "$AGENT_NAME" "$SPIRE_ADMIN_SOCKET")"
 
   log "Writing $SPIRE_CONF_DIR/agent.conf"
   cat > "$SPIRE_CONF_DIR/agent.conf" << EOF
@@ -992,6 +1022,7 @@ agent {
     server_address = "$host"
     server_port = "$port"
     socket_path = "$SPIRE_SOCKET"
+$guest_identity_config
     trust_domain = "$TRUST_DOMAIN"
     # Single-use: redeemed on first attestation, ignored once this node has
     # its SVID. Re-provision with a fresh token if the node is wiped.

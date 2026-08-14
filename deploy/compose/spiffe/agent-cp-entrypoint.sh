@@ -12,6 +12,8 @@ HANDOFF=/handoff
 DATA_DIR=/var/lib/spire/agent
 RUN_DIR=/run/spire/agent
 SOCKET_DIR=/run/spire/agent/sockets
+ADMIN_SOCKET_DIR=/var/run/spire
+ADMIN_SOCKET="$ADMIN_SOCKET_DIR/admin.sock"
 CONF="$RUN_DIR/agent.conf"
 
 log() { echo "==> $*"; }
@@ -24,6 +26,31 @@ mkdir -p "$DATA_DIR" "$SOCKET_DIR" "$RUN_DIR"
 cp "$HANDOFF/bundle.pem" "$RUN_DIR/bundle.pem"
 JOIN_TOKEN="$(cat "$HANDOFF/cp-agent-token")"
 
+GUEST_IDENTITY_CONFIG=""
+case "${ENABLE_GUEST_IDENTITY:-false}" in
+  true|1)
+    # A dedicated named volume exposes this directory only to spire-agent and
+    # the registered control-plane delegate. The setgid bit makes SPIRE's 0770
+    # socket inherit the delegate's fixed gid while keeping the directory
+    # root-owned and closed to every other container user.
+    mkdir -p "$ADMIN_SOCKET_DIR"
+    chown root:"${GUEST_IDENTITY_DELEGATE_GID:-999}" "$ADMIN_SOCKET_DIR"
+    chmod 2750 "$ADMIN_SOCKET_DIR"
+    GUEST_IDENTITY_CONFIG="$(cat <<EOF
+    # SPIRE refuses an admin socket in or below the Workload API socket
+    # directory. /run/spire/agent/sockets/admin.sock is therefore invalid.
+    admin_socket_path = "$ADMIN_SOCKET"
+    authorized_delegates = ["spiffe://${TRUST_DOMAIN}/control-plane/guest-identity-delegate"]
+EOF
+)"
+    ;;
+  false|0|"") ;;
+  *)
+    echo "error: ENABLE_GUEST_IDENTITY must be true or false" >&2
+    exit 1
+    ;;
+esac
+
 # discover_workload_path is off: we select Envoy by uid only, so there is no
 # need to read the caller's executable path. Resolving the caller's uid still
 # requires /proc access to its PID, which is why this agent runs with
@@ -35,6 +62,7 @@ agent {
     server_address = "spire-server"
     server_port = "8085"
     socket_path = "$SOCKET_DIR/workload.sock"
+$GUEST_IDENTITY_CONFIG
     trust_domain = "$TRUST_DOMAIN"
     join_token = "$JOIN_TOKEN"
     trust_bundle_path = "$RUN_DIR/bundle.pem"

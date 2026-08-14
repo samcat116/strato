@@ -568,6 +568,14 @@ enabled, and their kernel command line must not contain `cloud-init=disabled`.
 Without those guest prerequisites MMDS still serves the document, but nothing
 inside the guest consumes it.
 
+Before an existing IMDS-backed QEMU VM boots, the agent refreshes that local
+seed from current desired state and narrowly migrates its inactive libvirt
+definition when the x86 NoCloud network-mode SMBIOS hint is absent. This makes
+the bootstrap repair apply to VMs created by older agents without rebuilding
+their domain XML or changing full-ISO guests. A failed refresh or migration
+keeps the VM stopped; a running QEMU process alone is not evidence that
+cloud-init selected the intended datasource.
+
 VM creation rejects `imds` when the VM-level metadata switch is off or when
 none of its selected logical networks publish metadata. Either configuration
 would create a seed whose hand-off URL has no reachable listener; `iso` remains
@@ -1076,7 +1084,11 @@ controlling PTY. Closing the host connection before `exec_exit` kills that
 group. Unlike the sandbox init, the daemon owns and waits for each child itself
 because it is not PID 1. STR-80 packages it as
 `strato-guest-agent-<arch>.tar.gz` with a systemd unit and publishes
-`guest-agent-manifest.json`; STR-82 owns the node-agent vsock bridge.
+`guest-agent-manifest.json`; STR-82 owns the node-agent vsock bridge. Until that
+bridge lands, the agent does not advertise
+`HypervisorSupport.supportsGuestExec`; the control plane therefore returns 503
+before minting a VM exec session rather than handing the browser a session the
+agent will immediately reject.
 
 ## Networking
 

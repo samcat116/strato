@@ -52,6 +52,7 @@ public struct SPIRENodeDependencyModule: NodeDependencyModule {
 
     private let systemd: any SystemdControlling
     private let source: SPIREIdentitySource
+    private let installMode: AgentInstallMode
     private let version: @Sendable () async -> String?
     private let svid: @Sendable () async -> SPIREIdentityHealth
     private let now: @Sendable () -> Date
@@ -59,12 +60,14 @@ public struct SPIRENodeDependencyModule: NodeDependencyModule {
     public init(
         systemd: any SystemdControlling,
         source: SPIREIdentitySource = .workloadAPI,
+        installMode: AgentInstallMode = .supervisedBinary,
         version: @escaping @Sendable () async -> String?,
         svid: @escaping @Sendable () async -> SPIREIdentityHealth,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.systemd = systemd
         self.source = source
+        self.installMode = installMode
         self.version = version
         self.svid = svid
         self.now = now
@@ -77,17 +80,26 @@ public struct SPIRENodeDependencyModule: NodeDependencyModule {
                 installedVersion: nil,
                 identityHealth: await svid())
         }
+        // The container marker explicitly puts SPIRE outside this process's
+        // supervisor namespace. Do not run irrelevant systemd or local-binary
+        // probes there; the mounted Workload API is authoritative.
+        if installMode.isContainer {
+            return identityInspection(
+                supervisorState: .notApplicable,
+                installedVersion: nil,
+                identityHealth: await svid())
+        }
 
         async let unit = systemd.inspect(unit: "spire-agent.service")
         async let installedVersion = version()
         async let identity = svid()
         let (supervisor, installed, identityHealth) = await (unit, installedVersion, identity)
 
-        // A usable Workload API SVID proves that the identity source is
-        // functional. If there is no local unit, SPIRE is externally
-        // supervised (for example, the documented Docker/--no-systemd flow),
-        // so local service and executable checks do not apply.
-        if supervisor.supervisorState == .missing,
+        // A confirmed absent unit proves external supervision for a binary
+        // install (for example, the --no-systemd flow). An inspection failure
+        // alone must not select this path because SVIDManager may still hold a
+        // cached SVID after a systemd-owned agent stops.
+        if supervisor.loadState == "not-found",
             case .ready = identityHealth
         {
             return identityInspection(
@@ -104,13 +116,23 @@ public struct SPIRENodeDependencyModule: NodeDependencyModule {
                 reason: .init(code: .missingUnit, message: "spire-agent.service is not installed"))
         }
         guard supervisor.supervisorState == .active else {
+            let reason: NodeDependencyFailureReason =
+                switch supervisor.supervisorState {
+                case .failed:
+                    .init(code: .failedUnit, message: "spire-agent.service is \(supervisor.activeState)")
+                case .inactive:
+                    .init(code: .inactiveUnit, message: "spire-agent.service is \(supervisor.activeState)")
+                default:
+                    .init(
+                        code: .functionalProbeFailed,
+                        message: "could not verify spire-agent.service state (load=\(supervisor.loadState), "
+                            + "active=\(supervisor.activeState))")
+                }
             return NodeDependencyInspection(
                 supervisorState: supervisor.supervisorState, installedVersion: installed,
                 compatibility: installed == nil ? .unknown : .compatible,
                 functionalState: .unhealthy,
-                reason: .init(
-                    code: supervisor.supervisorState == .failed ? .failedUnit : .inactiveUnit,
-                    message: "spire-agent.service is \(supervisor.activeState)"))
+                reason: reason)
         }
         guard installed != nil else {
             return NodeDependencyInspection(
@@ -213,12 +235,11 @@ public struct LibvirtNodeDependencyModule: NodeDependencyModule {
                 compatibility: .unknown, functionalState: .unhealthy,
                 reason: .init(code: .malformedOutput, message: detail))
         case .reachable(let daemonVersion):
-            // A successful daemon probe is authoritative for externally
-            // supervised deployments. `discoverFirst` reports `.missing` both
-            // when neither unit exists and when systemd cannot be inspected
-            // (for example, the documented container agent using the host's
-            // mounted libvirt socket). Preserve known inactive/failed units,
-            // but do not gate a reachable daemon on an unavailable supervisor.
+            // Unlike the cached SPIRE SVID, this is a live daemon probe. It is
+            // authoritative when no local unit exists or systemd inspection is
+            // unavailable (for example, a container agent using the host's
+            // mounted libvirt socket). A known loaded unit remains functional
+            // evidence and must be active.
             let effectiveSupervisor: NodeDependencySupervisorState =
                 supervisor.supervisorState == .missing || supervisor.supervisorState == .unknown
                 ? .notApplicable : supervisor.supervisorState
@@ -231,6 +252,20 @@ public struct LibvirtNodeDependencyModule: NodeDependencyModule {
                     reason: .init(
                         code: .incompatibleVersion,
                         message: "libvirt \(daemonVersion) is older than required \(LibvirtProbe.minimumVersion)"))
+            }
+            guard effectiveSupervisor == .active || effectiveSupervisor == .notApplicable else {
+                let code: NodeDependencyFailureCode =
+                    effectiveSupervisor == .failed
+                    ? .failedUnit
+                    : effectiveSupervisor == .inactive ? .inactiveUnit : .functionalProbeFailed
+                return NodeDependencyInspection(
+                    supervisorState: effectiveSupervisor,
+                    installedVersion: installed,
+                    daemonVersion: daemonVersion.description,
+                    compatibility: .compatible, functionalState: .unhealthy,
+                    reason: .init(
+                        code: code,
+                        message: "\(supervisor.name) is \(supervisor.activeState)"))
             }
             return NodeDependencyInspection(
                 supervisorState: effectiveSupervisor,

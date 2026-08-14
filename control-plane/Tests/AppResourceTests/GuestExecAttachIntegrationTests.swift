@@ -9,19 +9,20 @@ import Vapor
 import AppTestSupport
 @testable import App
 
-/// End-to-end test for the sandbox exec attach WebSocket
-/// (`GET /api/sandboxes/:id/exec/:sessionId/attach`, issue #423): a real Vapor
+/// End-to-end tests for the VM and sandbox guest-exec WebSocket routes: a real Vapor
 /// server on an ephemeral port, a genuine agent WebSocket registered through
 /// the production handshake, and a genuine browser WebSocket attaching to a
 /// minted exec session. Regression test for the control-plane crash where
 /// attaching killed the process before the agent ever received
 /// `guest_exec_start` — none of this path is reachable through Vapor's
 /// in-memory `test()` harness, which never performs a WebSocket upgrade.
-@Suite("Sandbox Exec Attach Integration", .serialized)
-struct SandboxExecAttachIntegrationTests {
+@Suite("Guest Exec Attach Integration", .serialized)
+struct GuestExecAttachIntegrationTests {
 
-    @Test("Browser attach relays exec start to the agent and ready/output/exit back to the browser")
-    func attachRelaysExecStartAndFrames() async throws {
+    @Test(
+        "VM and sandbox routes mint a session and relay the identical browser frame contract",
+        arguments: [GuestResourceKind.sandbox, GuestResourceKind.virtualMachine])
+    func attachRelaysExecStartAndFrames(resourceKind: GuestResourceKind) async throws {
         try await withRunningExecApp { app, port in
             // A real agent socket, registered through the production handshake:
             // SPIFFE/mTLS, the only way an agent authenticates. SPIRE is enabled
@@ -51,7 +52,7 @@ struct SandboxExecAttachIntegrationTests {
                 url: "ws://127.0.0.1:\(port)/agent/ws?name=\(agentName)",
                 headers: agentHeaders,
                 on: app.eventLoopGroup)
-            agent.send(text: try encodeSandboxAgentRegister(agentName: agentName))
+            agent.send(text: try encodeGuestExecAgentRegister(agentName: agentName))
             let registered = try await agent.nextEnvelope()
             #expect(registered.type == .agentRegisterResponse)
 
@@ -67,33 +68,55 @@ struct SandboxExecAttachIntegrationTests {
             )
             let apiKey = try await user.generateAPIKey(on: app.db)
 
-            // A real sandbox in a real project: since the #482 cutover the
-            // middleware evaluates sandbox:read on the attach URL, and a
-            // sandbox id with no row behind it is a truncated chain — denied
-            // outright, admins included (fail-closed ceilings).
+            // A real resource in a real project: an id with no row behind it is
+            // a truncated IAM chain and is denied outright, admins included.
             let project = try await builder.createProject(
                 name: "Exec WS Project", description: "p", organization: org)
-            let sandboxRow = try await builder.createSandbox(name: "exec-ws-sb", project: project)
+            let registeredAgent = try #require(
+                try await Agent.query(on: app.db).filter(\.$name == agentName).first())
 
-            // A pending exec session, exactly as POST /exec mints it.
-            let sandboxId = try sandboxRow.requireID().uuidString
-            let session = app.sandboxExecSessionManager.createPendingSession(
-                sandboxId: sandboxId,
-                agentKey: agentKey(agentName),
-                userId: try user.requireID().uuidString,
-                command: ["/bin/echo", "hello"],
-                env: nil,
-                workingDir: nil,
-                tty: true,
-                rows: 24,
-                cols: 80
-            )
+            let collection: String
+            let resourceId: String
+            switch resourceKind {
+            case .sandbox:
+                let sandbox = try await builder.createSandbox(name: "exec-ws-sb", project: project)
+                sandbox.hypervisorId = try registeredAgent.requireID().uuidString
+                sandbox.setStatus(.running)
+                try await sandbox.save(on: app.db)
+                collection = "sandboxes"
+                resourceId = try sandbox.requireID().uuidString
+            case .virtualMachine:
+                let vm = try await builder.createVM(name: "exec-ws-vm", project: project)
+                vm.hypervisorId = try registeredAgent.requireID().uuidString
+                vm.guestAgentEnabled = true
+                vm.setStatus(.running)
+                try await vm.save(on: app.db)
+                collection = "vms"
+                resourceId = try vm.requireID().uuidString
+            }
+
+            // Exercise the public POST route rather than seeding the manager:
+            // both resource kinds must mint the same single-use session shape.
+            let mintResponse = try await app.client.post(
+                URI(string: "http://127.0.0.1:\(port)/api/\(collection)/\(resourceId)/exec")
+            ) { req in
+                req.headers.bearerAuthorization = .init(token: apiKey)
+                try req.content.encode(
+                    ExecMintRequest(
+                        command: ["/bin/echo", "hello"], env: nil, workingDir: nil,
+                        tty: true, rows: 24, cols: 80))
+            }
+            #expect(mintResponse.status == .created)
+            let session = try mintResponse.content.decode(ExecMintResponse.self)
+            #expect(
+                session.websocketPath
+                    == "/api/\(collection)/\(resourceId)/exec/\(session.sessionId)/attach")
 
             // The browser attaches over a real WebSocket upgrade.
             var browserHeaders = HTTPHeaders()
             browserHeaders.bearerAuthorization = .init(token: apiKey)
             let browser = try await ExecWSClient.connect(
-                url: "ws://127.0.0.1:\(port)/api/sandboxes/\(sandboxId)/exec/\(session.sessionId)/attach",
+                url: "ws://127.0.0.1:\(port)\(session.websocketPath)",
                 headers: browserHeaders,
                 on: app.eventLoopGroup)
 
@@ -108,8 +131,8 @@ struct SandboxExecAttachIntegrationTests {
                 }
             }()
             #expect(start.sessionId == session.sessionId)
-            #expect(start.resourceKind == .sandbox)
-            #expect(start.resourceId == sandboxId)
+            #expect(start.resourceKind == resourceKind)
+            #expect(start.resourceId == resourceId)
             #expect(start.command == ["/bin/echo", "hello"])
             #expect(start.tty == true)
 
@@ -128,6 +151,17 @@ struct SandboxExecAttachIntegrationTests {
             let output = try await browser.nextFrame()
             #expect(output == .binary(Data("hello\n".utf8)))
 
+            // Unknown text controls are ignored; the following valid resize
+            // is the only agent-bound event produced by this pair of frames.
+            browser.send(text: #"{"type":"future-control","value":1}"#)
+            browser.send(text: #"{"type":"resize","cols":120,"rows":40}"#)
+            let resizeEnvelope = try await agent.nextEnvelope(skipping: [.desiredState])
+            #expect(resizeEnvelope.type == .guestExecResize)
+            let resize = try resizeEnvelope.decode(as: GuestExecResizeMessage.self)
+            #expect(resize.sessionId == session.sessionId)
+            #expect(resize.cols == 120)
+            #expect(resize.rows == 40)
+
             // Browser stdin flows to the agent as guest_exec_input.
             browser.send(binary: Data("ls\n".utf8))
             let inputEnvelope = try await agent.nextEnvelope(skipping: [.desiredState])
@@ -144,11 +178,26 @@ struct SandboxExecAttachIntegrationTests {
             #expect(exit.type == "exit")
             #expect(exit.exitCode == 0)
             try await browser.waitForClose()
-            #expect(app.sandboxExecSessionManager.getSession(sessionId: session.sessionId) == nil)
+            #expect(app.guestExecSessionManager.getSession(sessionId: session.sessionId) == nil)
 
             try await agent.close()
         }
     }
+}
+
+private struct ExecMintRequest: Content {
+    let command: [String]
+    let env: [String: String]?
+    let workingDir: String?
+    let tty: Bool?
+    let rows: Int?
+    let cols: Int?
+}
+
+private struct ExecMintResponse: Content {
+    let sessionId: String
+    let websocketPath: String
+    let expiresAt: Date
 }
 
 // MARK: - Running-server harness (mirrors AgentWebSocketIntegrationTests)
@@ -398,8 +447,8 @@ private func encodeEnvelope<T: WebSocketMessage>(_ message: T) throws -> String 
     return String(decoding: data, as: UTF8.self)
 }
 
-/// A sandbox-capable agent registration at the current wire protocol version.
-private func encodeSandboxAgentRegister(agentName: String) throws -> String {
+/// A VM-vsock and sandbox-capable agent at the current wire protocol version.
+private func encodeGuestExecAgentRegister(agentName: String) throws -> String {
     try encodeEnvelope(
         AgentRegisterMessage(
             agentId: agentName,
@@ -413,6 +462,15 @@ private func encodeSandboxAgentRegister(agentName: String) throws -> String {
                 totalDisk: 1 << 40,
                 availableDisk: 1 << 40
             ),
+            hypervisors: [
+                HypervisorSupport(
+                    type: .qemu,
+                    available: true,
+                    accelerated: true,
+                    capabilities: .capabilities(for: .qemu),
+                    supportsVsock: true,
+                    supportsGuestExec: true)
+            ],
             protocolVersion: WireProtocol.currentVersion,
             sandboxCapable: true
         ))
