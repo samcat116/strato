@@ -15117,8 +15117,11 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 128
         description:
           type: string
+          maxLength: 4096
         ownerType:
           $ref: "#/components/schemas/IAMRoleOwnerType"
         ownerId:
@@ -15153,8 +15156,11 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 128
         description:
           type: string
+          maxLength: 4096
         actions:
           type: array
           items:
@@ -15259,8 +15265,11 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 128
         description:
           type: string
+          maxLength: 4096
         ownerType:
           $ref: "#/components/schemas/IAMRoleOwnerType"
         ownerId:
@@ -15288,8 +15297,11 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 128
         description:
           type: string
+          maxLength: 4096
         cedarText:
           type: string
         enabled:
@@ -15528,8 +15540,11 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 128
         description:
           type: string
+          maxLength: 4096
         effect:
           type: string
           description: >-
@@ -15574,6 +15589,7 @@ components:
       properties:
         description:
           type: string
+          maxLength: 4096
         actions:
           type: array
           items:
