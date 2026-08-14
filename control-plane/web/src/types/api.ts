@@ -1221,9 +1221,9 @@ export interface CreateVMRequest {
    */
   metadataEnabled?: boolean;
   /**
-   * Guest bootstrap source. Omitted QEMU creates default to `imds`, which
-   * requires an OVN-backed agent. Firecracker defaults to `iso` because this
-   * field selects the QEMU NoCloud seed shape.
+   * Guest bootstrap source. Omitted x86_64 QEMU creates default to `imds`,
+   * which requires an OVN-backed agent. ARM64 QEMU and Firecracker default to
+   * `iso` because they lack the NoCloudNet discovery hint.
    */
   metadataSource?: MetadataSource;
 }

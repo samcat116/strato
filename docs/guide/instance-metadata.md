@@ -1,7 +1,8 @@
 # Instance metadata and VM bootstrap
 
-New QEMU VMs use the instance metadata service (IMDS) for cloud-init by
-default. Their seed ISO contains only the network configuration needed to reach
+New x86_64 QEMU VMs use the instance metadata service (IMDS) for cloud-init by
+default. ARM64 QEMU and Firecracker VMs default to the ISO path. An IMDS-backed
+VM's seed ISO contains only the network configuration needed to reach
 `169.254.169.254` and a NoCloud `seedfrom` stub; the guest fetches its hostname,
 SSH keys, and user data from the agent after the network is online.
 
@@ -13,7 +14,7 @@ service enabled and must attach to at least one network with metadata enabled.
 
 ## Existing VMs do not change
 
-The default applies only when a QEMU VM is created without an explicit
+The default applies only when an x86_64 QEMU VM is created without an explicit
 `metadataSource`. Every existing VM keeps the value stored when it was created,
 including VMs created before the field existed, which remain on `iso`. Upgrading
 Strato never rewrites those rows or regenerates their seed media.

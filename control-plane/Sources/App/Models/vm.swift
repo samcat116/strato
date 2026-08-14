@@ -156,9 +156,10 @@ final class VM: Model, @unchecked Sendable {
     /// remaining documents from the link-local metadata service.
     ///
     /// Fixed at create because the ISO is materialized with the domain. New
-    /// QEMU API creates default to `.imds`; the schema migration and this
-    /// model's low-level initializer retain `.iso` so upgrades and fixture
-    /// construction never move an existing VM implicitly.
+    /// x86 QEMU API creates default to `.imds`; ARM64 QEMU and Firecracker
+    /// default to `.iso`. The schema migration and this model's low-level
+    /// initializer retain `.iso` so upgrades and fixture construction never
+    /// move an existing VM implicitly.
     @Enum(key: "metadata_source")
     var metadataSource: MetadataSource
 

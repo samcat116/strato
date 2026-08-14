@@ -1210,9 +1210,10 @@ verification on real multi-node hardware (recipe in
   network bootstrap, an empty discovery `user-data`, and a `seedfrom` stub
   instead of embedding guest user data. The source-bound capability is the
   authentication stock NoCloud can send; ordinary `/latest/*` reads still
-  require IMDSv2. New QEMU VMs default to `metadataSource: imds`; existing VMs
-  retain the source persisted at creation, while `iso` remains an explicit
-  compatibility option. `datasource_list` still puts NoCloud ahead of Ec2.
+  require IMDSv2. New x86_64 QEMU VMs default to `metadataSource: imds`;
+  ARM64 QEMU and Firecracker VMs default to `iso`, and existing VMs retain the
+  source persisted at creation. `iso` remains an explicit compatibility option.
+  `datasource_list` still puts NoCloud ahead of Ec2.
 - **A downgrade below wire v37 strips a network's resolver addresses** from its
   localport and reverts the DHCP row in the same sync, so guests are told to use
   the network's configured servers again at their next lease (within one

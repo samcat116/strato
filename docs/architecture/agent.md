@@ -543,7 +543,8 @@ shape at creation:
 
 - `iso` is the compatibility option and carries `meta-data`, `user-data`, and
   — when addressing requires it — a v2 `network-config`.
-- `imds` is the default for new QEMU VMs. It keeps the required
+- `imds` is the default for new x86_64 QEMU VMs. ARM64 QEMU defaults to `iso`
+  until it has an equivalent NoCloudNet discovery hint. IMDS keeps the required
   `network-config` and an empty `user-data` on the
   ISO, then replaces `meta-data` with a `seedfrom` URL under
   `http://169.254.169.254/latest/nocloud/<per-VM capability>/`. NoCloud requires

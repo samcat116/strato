@@ -119,20 +119,34 @@ export function CreateVMDialog({
   // artifact set when that set is compatible with exactly one, else QEMU.
   // Mirroring that inference here lets the firmware toggles disable themselves
   // instead of letting the create fail with a 400.
+  const selectedImage = useMemo(
+    () => readyImages.find((img) => img.id === formData.imageId),
+    [readyImages, formData.imageId]
+  );
   const isFirecracker = useMemo(() => {
-    const selected = readyImages.find((img) => img.id === formData.imageId);
-    const compatible = selected?.compatibleHypervisors ?? [];
+    const compatible = selectedImage?.compatibleHypervisors ?? [];
     return compatible.length === 1 && compatible[0] === "firecracker";
-  }, [readyImages, formData.imageId]);
+  }, [selectedImage]);
+  const allSelectedNetworksDisableMetadata = useMemo(
+    () =>
+      networkInterfaces.every((nic) => {
+        const network = networks.find((candidate) => candidate.id === nic.networkId);
+        return network !== undefined && !network.metadataEnabled;
+      }),
+    [networkInterfaces, networks]
+  );
+  const metadataSourceForcedToISO =
+    isFirecracker || !metadataEnabled || allSelectedNetworksDisableMetadata;
 
   // Handle image selection - applies defaults directly without useEffect
   const handleImageSelect = useCallback(
     (imageId: string) => {
-      const selectedImage = readyImages.find((img) => img.id === imageId);
-      if (selectedImage) {
-        const compatible = selectedImage.compatibleHypervisors ?? [];
+      const nextImage = readyImages.find((img) => img.id === imageId);
+      if (nextImage) {
+        const compatible = nextImage.compatibleHypervisors ?? [];
         setMetadataSource(
           !metadataEnabled ||
+            nextImage.architecture === "arm64" ||
             (compatible.length === 1 && compatible[0] === "firecracker")
             ? "iso"
             : "imds"
@@ -140,9 +154,9 @@ export function CreateVMDialog({
         setFormData((prev) => ({
           ...prev,
           imageId,
-          cpu: selectedImage.defaultCpu?.toString() || prev.cpu,
-          memory: selectedImage.defaultMemory?.toString() || prev.memory,
-          disk: selectedImage.defaultDisk?.toString() || prev.disk,
+          cpu: nextImage.defaultCpu?.toString() || prev.cpu,
+          memory: nextImage.defaultMemory?.toString() || prev.memory,
+          disk: nextImage.defaultDisk?.toString() || prev.disk,
         }));
       } else {
         setFormData((prev) => ({ ...prev, imageId }));
@@ -226,9 +240,8 @@ export function CreateVMDialog({
           // it does not know.
           metadataEnabled: metadataEnabled ? undefined : false,
           // Keep the selected source explicit so the request matches what the
-          // form showed. Firecracker has no NoCloud seed and records `iso`.
-          metadataSource:
-            isFirecracker || !metadataEnabled ? "iso" : metadataSource,
+          // form showed. Paths that cannot reach IMDS record `iso`.
+          metadataSource: metadataSourceForcedToISO ? "iso" : metadataSource,
         }),
       watch: {
         kind: "create",
@@ -590,15 +603,15 @@ export function CreateVMDialog({
               </div>
               <select
                 id="metadataSource"
-                value={metadataSource}
+                value={metadataSourceForcedToISO ? "iso" : metadataSource}
                 onChange={(e) =>
                   setMetadataSource(e.target.value as MetadataSource)
                 }
-                disabled={isLoading || isFirecracker || !metadataEnabled}
+                disabled={isLoading || metadataSourceForcedToISO}
                 className="w-full px-3 py-2 bg-background border border-input text-foreground rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <option value="imds">
-                  Instance metadata service (QEMU default)
+                  Instance metadata service (x86 QEMU default)
                 </option>
                 <option value="iso">Seed ISO</option>
               </select>
@@ -611,6 +624,17 @@ export function CreateVMDialog({
                 <p className="text-xs text-muted-foreground">
                   IMDS bootstrap requires the instance metadata service. Seed
                   ISO will be used while the service is disabled.
+                </p>
+              ) : allSelectedNetworksDisableMetadata ? (
+                <p className="text-xs text-muted-foreground">
+                  None of the selected networks publish instance metadata. Seed
+                  ISO will be used for this VM.
+                </p>
+              ) : selectedImage?.architecture === "arm64" &&
+                metadataSource === "iso" ? (
+                <p className="text-xs text-muted-foreground">
+                  ARM64 QEMU defaults to Seed ISO until it has an equivalent
+                  NoCloudNet discovery hint.
                 </p>
               ) : metadataSource === "imds" ? (
                 <p className="text-xs text-muted-foreground">

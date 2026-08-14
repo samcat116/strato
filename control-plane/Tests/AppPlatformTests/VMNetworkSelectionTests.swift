@@ -12,13 +12,21 @@ import AppTestSupport
 @Suite("VM Network Selection Tests", .serialized)
 final class VMNetworkSelectionTests {
 
-    @Test("metadataSource defaults to IMDS only on the QEMU bootstrap path")
+    @Test("metadataSource defaults to IMDS only for x86 QEMU")
     func metadataSourceDefault() {
-        #expect(VMController.resolvedMetadataSource(nil, for: .qemu) == .imds)
-        #expect(VMController.resolvedMetadataSource(nil, for: .firecracker) == .iso)
-        #expect(VMController.resolvedMetadataSource(.iso, for: .qemu) == .iso)
-        #expect(VMController.resolvedMetadataSource(.imds, for: .qemu) == .imds)
-        #expect(VMController.resolvedMetadataSource(.imds, for: .firecracker) == .imds)
+        #expect(
+            VMController.resolvedMetadataSource(nil, for: .qemu, architecture: .x86_64) == .imds)
+        #expect(
+            VMController.resolvedMetadataSource(nil, for: .qemu, architecture: .arm64) == .iso)
+        #expect(
+            VMController.resolvedMetadataSource(nil, for: .firecracker, architecture: .x86_64) == .iso)
+        #expect(
+            VMController.resolvedMetadataSource(.iso, for: .qemu, architecture: .x86_64) == .iso)
+        #expect(
+            VMController.resolvedMetadataSource(.imds, for: .qemu, architecture: .arm64) == .imds)
+        #expect(
+            VMController.resolvedMetadataSource(.imds, for: .firecracker, architecture: .x86_64)
+                == .imds)
     }
 
     // Body mirroring VMController's private CreateVMRequest so tests can POST /api/vms.

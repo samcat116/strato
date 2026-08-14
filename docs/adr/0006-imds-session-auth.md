@@ -113,8 +113,9 @@ Sessions are keyed by `SHA256(token)`. Nothing retains the token itself.
   hidden unless the renderer's disclosure policy is enabled. STR-60's
   NoCloud-net documents share the full seed renderer byte for byte. STR-64
   makes VMs whose `metadataSource` is `imds` consume them through the scoped
-  capability above. New QEMU VMs default to `imds`; `iso` remains the explicit
-  compatibility option and the preserved value for existing VMs.
+  capability above. New x86_64 QEMU VMs default to `imds`; ARM64 QEMU and
+  Firecracker VMs default to `iso`. ISO remains the explicit compatibility
+  option and the preserved value for existing VMs.
 - **A guest can mint without limit**, so sessions are capped per instance and
   swept on mint. The cap evicts the soonest-expiring, so a loop costs a bounded
   amount and never evicts a well-behaved guest's newest token.
