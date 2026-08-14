@@ -914,10 +914,12 @@ struct ObservedStateApplier {
     ///
     /// The agent prevents the unsafe boot. This gate prevents the independent VM
     /// generation from being declared successful while the volume resource is
-    /// still provisioning or degraded, or while its measured virtual size
-    /// disagrees with the request. A dependency failure remains a phase, not a
-    /// VM failure: volume reconciliation is level-triggered and can repair a
-    /// transient delay at the same generation without a stop or a second start.
+    /// still provisioning or degraded, or while its measured virtual size is
+    /// smaller than the request. The requested size is a floor: a source image
+    /// can have a larger native virtual size, and that is already a usable boot
+    /// volume. A dependency failure remains a phase, not a VM failure: volume
+    /// reconciliation is level-triggered and can repair a transient delay at
+    /// the same generation without a stop or a second start.
     private func pendingBootVolumePhase(
         for vm: VM, bootVolumes: [BootVolumeDependency]
     ) -> String? {
@@ -932,7 +934,7 @@ struct ObservedStateApplier {
         guard let observedSize = bootVolume.observedSize else {
             return "\(prefix): the agent has not reported its virtual size"
         }
-        guard observedSize == bootVolume.desiredSize else {
+        guard observedSize >= bootVolume.desiredSize else {
             return "\(prefix): observed \(observedSize) of \(bootVolume.desiredSize) requested bytes"
         }
         guard bootVolume.converged else {

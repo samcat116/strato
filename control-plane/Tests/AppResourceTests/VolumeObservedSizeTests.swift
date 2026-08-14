@@ -158,13 +158,14 @@ final class VolumeObservedSizeTests {
         }
     }
 
-    /// End-to-end through report application for STR-242. The agent may report
-    /// the VM's target generation and `Running` in the same heartbeat that still
-    /// shows the image-backed root disk at its 112 MiB source size. That report
-    /// must not settle the start; once a later report carries the requested size
-    /// and healthy attachment, the same VM mutation completes automatically.
-    @Test("VM start remains pending until its boot volume reaches the requested observed size")
-    func vmStartWaitsForBootVolumeSize() async throws {
+    /// End-to-end through report application for STR-242 and STR-247. The agent
+    /// may report the VM's target generation and `Running` in the same heartbeat
+    /// that still shows the image-backed root disk at its 112 MiB source size.
+    /// That report must not settle the start. A later report for an Ubuntu Noble
+    /// image whose native 3.5 GiB size exceeds the 2 GiB request is healthy,
+    /// however, and must complete the same VM mutation automatically.
+    @Test("VM start requires at least the requested boot volume size")
+    func vmStartRequiresAtLeastRequestedBootVolumeSize() async throws {
         try await withVolumeApp { app, user, project in
             let agentId = try await self.registerAgent(app: app, named: "rapid-start-agent")
             let builder = TestDataBuilder(db: app.db)
@@ -177,8 +178,9 @@ final class VolumeObservedSizeTests {
             vm.convergenceDeadline = Date().addingTimeInterval(300)
             try await vm.save(on: app.db)
 
-            let requestedSize: Int64 = 1 << 30
+            let requestedSize: Int64 = 2 << 30
             let sourceSize: Int64 = 112 << 20
+            let materializedSize: Int64 = 3_758_096_384
             let bootVolume = try await self.makeVolume(
                 app: app,
                 user: user,
@@ -228,7 +230,7 @@ final class VolumeObservedSizeTests {
                             volumeId: try bootVolume.requireID(),
                             present: true,
                             storagePath: "/var/lib/strato/volumes/root/volume.qcow2",
-                            sizeBytes: requestedSize,
+                            sizeBytes: materializedSize,
                             attachedVMId: try vm.requireID(),
                             observedGeneration: 1)
                     ]))
@@ -241,7 +243,8 @@ final class VolumeObservedSizeTests {
 
             let settledVolume = try #require(
                 try await Volume.find(try bootVolume.requireID(), on: app.db))
-            #expect(settledVolume.observedSizeBytes == requestedSize)
+            #expect(settledVolume.size == requestedSize)
+            #expect(settledVolume.observedSizeBytes == materializedSize)
             #expect(settledVolume.status == .attached)
             #expect(settledVolume.conditions.converged)
         }

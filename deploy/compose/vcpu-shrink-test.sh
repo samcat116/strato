@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# End-to-end contract test for STR-241 and STR-248 against a real libvirt agent.
+# End-to-end contract test for STR-241, STR-247, and STR-248 against a real
+# libvirt agent using an image whose native size can exceed the 2 GiB request.
 #
 # Creates and starts a 2-vCPU VM, proves API convergence agrees with the live
 # libvirt count, verifies a running 2 -> 1 update is rejected without changing
@@ -132,9 +133,9 @@ persistent_vcpus() {
   virsh -q -c "$LIBVIRT_URI" vcpucount "$VM_ID" --config --active | tr -d '[:space:]'
 }
 
-echo "STR-241/STR-248 vCPU shrink contract"
+echo "STR-241/STR-247/STR-248 VM convergence contract"
 create_body="$(printf \
-  '{"name":"str-248-%s","imageId":"%s","projectId":"%s","networkId":"%s","environment":"development","cpu":2,"maxCpu":2,"memory":536870912,"disk":10737418240}' \
+  '{"name":"str-248-%s","imageId":"%s","projectId":"%s","networkId":"%s","environment":"development","cpu":2,"maxCpu":2,"memory":536870912,"disk":2147483648}' \
   "$$" "$IMAGE_ID" "$PROJECT_ID" "$NETWORK_ID")"
 code="$(request POST /api/vms "$TMP_DIR/create.json" "$create_body")"
 expect_code "create 2-vCPU VM" "$code" 202 "$TMP_DIR/create.json"
@@ -200,4 +201,4 @@ assert d["cpu"] == 1, d
 assert d["conditions"]["converged"] is True, d["conditions"]
 PY
 echo "  ok: after stop/resize/start, converged API state agrees with libvirt live count 1"
-echo "PASS: STR-241 and STR-248"
+echo "PASS: STR-241, STR-247, and STR-248"
