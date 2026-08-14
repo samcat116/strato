@@ -312,6 +312,30 @@ struct FileSystemStorageBackendTests {
         #expect(FileManager.default.contents(atPath: target) == Data("image-bytes".utf8))
     }
 
+    @Test func materializeDiskCopiesReadOnlySource() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let sourcePath = "\(root)/cached-image.qcow2"
+        FileManager.default.createFile(
+            atPath: sourcePath, contents: Data("read-only-image".utf8))
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o444], ofItemAtPath: sourcePath)
+
+        let recorder = SubprocessRecorder()
+        await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "qcow2"))
+        let backend = makeBackend(
+            root: root, recorder: recorder, imageSource: StaticImageSource(path: sourcePath))
+
+        let target = "\(root)/vms/vm-read-only/disk.qcow2"
+        let attachment = try await backend.materializeDisk(
+            at: target, from: makeImageInfo(), format: .qcow2)
+
+        #expect(attachment.path == target)
+        #expect(FileManager.default.contents(atPath: target) == Data("read-only-image".utf8))
+        let mode = try FileManager.default.attributesOfItem(atPath: target)[.posixPermissions] as? NSNumber
+        #expect(mode?.int16Value == 0o444)
+    }
+
     @Test func materializeDiskConvertsWhenFormatsDiffer() async throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }
@@ -585,7 +609,34 @@ struct FileSystemStorageBackendTests {
         #expect(snapshotPath == "\(root)/vol-1/snapshots/snap-1.qcow2")
         let create = await recorder.invocations.first { $0.arguments.first == "create" }
         // Overlay is qcow2, but the backing format is detected, not assumed.
-        #expect(create?.arguments == ["create", "-f", "qcow2", "-b", volumePath, "-F", "raw", snapshotPath])
+        #expect(
+            create?.arguments
+                == ["create", "-f", "qcow2", "-b", volumePath, "-F", "raw", snapshotPath + ".partial"])
+        #expect(FileManager.default.contents(atPath: snapshotPath) == Data("created-bytes".utf8))
+        #expect(!FileManager.default.fileExists(atPath: snapshotPath + ".partial"))
+    }
+
+    @Test func createSnapshotIsIdempotent() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let recorder = SubprocessRecorder()
+        await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "raw"))
+        let backend = makeBackend(root: root, recorder: recorder)
+        let volumePath = "\(root)/vol-1/volume.raw"
+
+        let snapshotPath = try await backend.createSnapshot(
+            volumeId: "vol-1", snapshotId: "snap-1", volumePath: volumePath)
+        let originalPointInTime = Data("original-point-in-time".utf8)
+        try originalPointInTime.write(to: URL(fileURLWithPath: snapshotPath))
+
+        let retriedPath = try await backend.createSnapshot(
+            volumeId: "vol-1", snapshotId: "snap-1", volumePath: volumePath)
+
+        #expect(retriedPath == snapshotPath)
+        #expect(FileManager.default.contents(atPath: snapshotPath) == originalPointInTime)
+        let invocations = await recorder.invocations
+        #expect(invocations.filter { $0.arguments.first == "info" }.count == 1)
+        #expect(invocations.filter { $0.arguments.first == "create" }.count == 1)
     }
 
     @Test func deleteSnapshotIsIdempotent() async throws {
@@ -673,7 +724,9 @@ struct FileSystemStorageBackendTests {
 
         #expect(snapshotPath == "\(root)/vol-1/snapshots/snap-1.qcow2")
         let create = try #require(await recorder.invocations.first { $0.arguments.first == "create" })
-        #expect(create.arguments == ["create", "-f", "qcow2", "-b", volumePath, "-F", "raw", snapshotPath])
+        #expect(
+            create.arguments
+                == ["create", "-f", "qcow2", "-b", volumePath, "-F", "raw", snapshotPath + ".partial"])
     }
 
     /// Force-share belongs on inspection alone. On a mutating invocation the

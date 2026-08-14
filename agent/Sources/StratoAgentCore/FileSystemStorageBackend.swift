@@ -67,11 +67,7 @@ public actor FileSystemStorageBackend: StorageBackend {
 
         // Ensure storage directory exists
         do {
-            try FileManager.default.createDirectory(
-                atPath: self.volumeStoragePath,
-                withIntermediateDirectories: true,
-                attributes: nil
-            )
+            try DurableFileWriter().createDirectory(at: self.volumeStoragePath)
             logger.info(
                 "Storage backend initialized",
                 metadata: [
@@ -113,8 +109,9 @@ public actor FileSystemStorageBackend: StorageBackend {
         let path = volumePath(volumeId: volumeId, format: format)
 
         // Idempotent, like `materializeDisk`: a level-triggered sync may
-        // re-drive a create whose success report was lost, and the canonical
-        // path only ever holds a finished volume (see `publishAtomically`).
+        // re-drive a create whose success report was lost. `publishAtomically`
+        // synchronizes the completed staging file before installing the
+        // canonical name and synchronizes that directory before success.
         if FileManager.default.fileExists(atPath: path) {
             logger.debug("Volume already exists", metadata: ["volumeId": .string(volumeId)])
             return DiskAttachment(path: path, format: format)
@@ -128,11 +125,7 @@ public actor FileSystemStorageBackend: StorageBackend {
                 "format": .string(format.rawValue),
             ])
 
-        try FileManager.default.createDirectory(
-            atPath: volumeDirectory(volumeId: volumeId),
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
+        try DurableFileWriter().createDirectory(at: volumeDirectory(volumeId: volumeId))
 
         try await publishAtomically(to: path) { stagingPath in
             let result = try await self.runQemuImg(["create", "-f", format.rawValue, stagingPath, "\(sizeBytes)"])
@@ -186,10 +179,14 @@ public actor FileSystemStorageBackend: StorageBackend {
         at path: String, from imageInfo: ImageInfo, format: DiskFormat, artifactKind: ArtifactKind = .diskImage
     ) async throws -> DiskAttachment {
         // Idempotent: a disk already materialized for this path (e.g. a VM
-        // re-create after an agent restart) is reused, not overwritten. The
-        // final path only ever holds a complete disk because materialization
-        // writes to a temporary path and publishes via atomic rename below —
-        // an interrupted copy/convert can never satisfy this check.
+        // re-create after an agent restart) is reused, not overwritten. New
+        // materializations synchronize the complete staging file before its
+        // atomic rename and the directory afterwards, so success is durable
+        // across both process crashes and unclean host shutdowns.
+        //
+        // There is deliberately no new completion-marker requirement here:
+        // disks from older agents may already be live and guest-modified, so a
+        // missing marker cannot safely authorize replacing them.
         if FileManager.default.fileExists(atPath: path) {
             logger.debug("Disk already materialized", metadata: ["path": .string(path)])
             return DiskAttachment(path: path, format: format)
@@ -203,11 +200,7 @@ public actor FileSystemStorageBackend: StorageBackend {
         let sourceFormat = try await detectFormat(of: sourcePath)
 
         let destinationDirectory = (path as NSString).deletingLastPathComponent
-        try FileManager.default.createDirectory(
-            atPath: destinationDirectory,
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
+        try DurableFileWriter().createDirectory(at: destinationDirectory)
 
         // Fail fast with a clear message when the destination filesystem
         // can't hold the disk — otherwise the copy/convert dies mid-write
@@ -255,9 +248,9 @@ public actor FileSystemStorageBackend: StorageBackend {
                 }
             }
 
-            // Atomic publish: rename within the same directory, so the disk
-            // appears at its final path all-or-nothing.
-            try FileManager.default.moveItem(atPath: stagingPath, toPath: path)
+            // Flush the complete disk before publishing it, then flush the
+            // directory entry before reporting success.
+            try DurableFileWriter().publish(stagingPath: stagingPath, to: path)
         } catch {
             try? FileManager.default.removeItem(atPath: stagingPath)
             throw error
@@ -292,12 +285,11 @@ public actor FileSystemStorageBackend: StorageBackend {
         }
 
         let directory = volumeDirectory(volumeId: volumeId)
-        try FileManager.default.createDirectory(
-            atPath: directory, withIntermediateDirectories: true)
+        try DurableFileWriter().createDirectory(at: directory)
         do {
             try FileManager.default.linkItem(atPath: existingPath, toPath: canonicalPath)
-            try existingPath.write(
-                toFile: legacyPathRecord(volumeId: volumeId), atomically: true, encoding: .utf8)
+            try DurableFileWriter().write(
+                Data(existingPath.utf8), to: legacyPathRecord(volumeId: volumeId))
         } catch {
             try? FileManager.default.removeItem(atPath: canonicalPath)
             throw StorageBackendError.createFailed(
@@ -408,6 +400,22 @@ public actor FileSystemStorageBackend: StorageBackend {
     public func createSnapshot(volumeId: String, snapshotId: String, volumePath: String) async throws -> String {
         let snapshotPath = snapshotPath(volumeId: volumeId, snapshotId: snapshotId)
 
+        // Snapshot capture is level-triggered. The artifact may have been
+        // durably published before a crash but its inventory record may not
+        // have been saved yet; replacing it would silently move the requested
+        // point in time. A canonical path is installed only after durable
+        // publication, so retain it unchanged on retry.
+        if FileManager.default.fileExists(atPath: snapshotPath) {
+            logger.debug(
+                "Snapshot already exists",
+                metadata: [
+                    "volumeId": .string(volumeId),
+                    "snapshotId": .string(snapshotId),
+                    "path": .string(snapshotPath),
+                ])
+            return snapshotPath
+        }
+
         logger.info(
             "Creating snapshot",
             metadata: [
@@ -418,29 +426,29 @@ public actor FileSystemStorageBackend: StorageBackend {
 
         let backingFormat = try await detectFormat(of: volumePath)
 
-        try FileManager.default.createDirectory(
-            atPath: (snapshotPath as NSString).deletingLastPathComponent,
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
+        try DurableFileWriter().createDirectory(
+            at: (snapshotPath as NSString).deletingLastPathComponent)
 
-        let result = try await runQemuImg([
-            "create",
-            "-f", "qcow2",
-            "-b", volumePath,
-            "-F", backingFormat,
-            snapshotPath,
-        ])
-        if result.terminationStatus != 0 {
-            let output = result.combinedOutput
-            logger.error(
-                "qemu-img snapshot create failed",
-                metadata: [
-                    "volumeId": .string(volumeId),
-                    "output": .string(output),
-                ])
-            throw qemuImgFailure(
-                output: output, context: "qemu-img create snapshot", fallback: StorageBackendError.snapshotFailed)
+        try await publishAtomically(to: snapshotPath) { stagingPath in
+            let result = try await self.runQemuImg([
+                "create",
+                "-f", "qcow2",
+                "-b", volumePath,
+                "-F", backingFormat,
+                stagingPath,
+            ])
+            if result.terminationStatus != 0 {
+                let output = result.combinedOutput
+                self.logger.error(
+                    "qemu-img snapshot create failed",
+                    metadata: [
+                        "volumeId": .string(volumeId),
+                        "output": .string(output),
+                    ])
+                throw self.qemuImgFailure(
+                    output: output, context: "qemu-img create snapshot",
+                    fallback: StorageBackendError.snapshotFailed)
+            }
         }
 
         logger.info(
@@ -510,11 +518,8 @@ public actor FileSystemStorageBackend: StorageBackend {
                 "format": .string(format.rawValue),
             ])
 
-        try FileManager.default.createDirectory(
-            atPath: volumeDirectory(volumeId: targetVolumeId),
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
+        try DurableFileWriter().createDirectory(
+            at: volumeDirectory(volumeId: targetVolumeId))
 
         try await publishAtomically(to: targetPath) { stagingPath in
             let result = try await self.runQemuImg([
@@ -568,11 +573,12 @@ public actor FileSystemStorageBackend: StorageBackend {
     /// form of its id (STR-148).
     ///
     /// "Complete" is doing real work here: the check is for the *published*
-    /// `volume.<ext>` file, and every write path stages elsewhere and renames,
-    /// so a directory left behind by a create that died mid-write reports as
-    /// absent and the next sync re-drives it. Deliberately no `qemu-img info`
-    /// — this runs on every sync, and one subprocess per volume per sync is
-    /// not affordable on a dense host.
+    /// `volume.<ext>` file. Every current write path stages elsewhere,
+    /// synchronizes the staging file, renames it, and synchronizes its
+    /// directory, so a create that did not durably publish reports as absent
+    /// and the next sync re-drives it. Deliberately no `qemu-img info` — this
+    /// runs on every sync, and one subprocess per volume per sync is not
+    /// affordable on a dense host.
     public func listVolumes() async throws -> [String: DiskAttachment] {
         // "No store yet" and "a store I cannot read" are emphatically different
         // answers, and collapsing them into `[:]` was a data-loss bug: an empty
@@ -670,20 +676,20 @@ public actor FileSystemStorageBackend: StorageBackend {
                 + "\(error.localizedDescription). Ensure the agent user can read it.")
     }
 
-    /// Runs `write` against a staging path and publishes its output to `path`
-    /// with a rename inside the same directory, so the canonical path is
-    /// all-or-nothing.
+    /// Runs `write` against a staging path, synchronizes its completed bytes,
+    /// publishes it to `path` with a same-directory rename, and synchronizes
+    /// the directory entry.
     ///
-    /// This is what makes `listVolumes`' "the file is there" a sound answer to
-    /// "does this volume exist?", which the reconciler's whole create/no-create
-    /// decision rests on. Without it a truncated disk from an interrupted
-    /// `qemu-img create` would read as a converged volume.
+    /// This makes a canonical file's existence a sound completeness signal for
+    /// volumes and snapshots published by this build. Without the file and
+    /// directory synchronization, power loss could leave a canonical name
+    /// pointing at incomplete or stale bytes.
     private func publishAtomically(to path: String, _ write: (String) async throws -> Void) async throws {
         let stagingPath = path + ".partial"
         try? FileManager.default.removeItem(atPath: stagingPath)
         do {
             try await write(stagingPath)
-            try FileManager.default.moveItem(atPath: stagingPath, toPath: path)
+            try DurableFileWriter().publish(stagingPath: stagingPath, to: path)
         } catch {
             try? FileManager.default.removeItem(atPath: stagingPath)
             throw error

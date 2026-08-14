@@ -449,14 +449,13 @@ public struct VMManifestStore {
         preserving quarantined: [String: QuarantinedManifestEntry] = [:]
     ) -> Bool {
         do {
-            let directory = (path as NSString).deletingLastPathComponent
-            if !directory.isEmpty {
-                try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
-            }
             let data = try JSONEncoder().encode(
                 MergedManifest(entries: manifest, quarantined: quarantined.mapValues(\.raw)))
-            // Atomic write so a crash mid-write can't leave a truncated manifest.
-            try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+            // Synchronize the replacement before publishing it and the
+            // directory afterwards. The manifest therefore survives both a
+            // process crash during the write and an unclean host shutdown
+            // after this method reports success.
+            try DurableFileWriter().write(data, to: path)
             return true
         } catch {
             logger.error("Failed to write VM manifest at \(path): \(error)")

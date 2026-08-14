@@ -150,21 +150,18 @@ public struct SnapshotRecordStore: Sendable {
         return .loaded(records)
     }
 
-    /// Atomically writes the inventory. Callers must not write while the file
-    /// is unreadable — the first write after a failed read is what turns a
-    /// recoverable file into a permanent loss, `VMManifestStore.save`'s rule.
+    /// Atomically and durably writes the inventory. Callers must not write
+    /// while the file is unreadable — the first write after a failed read is
+    /// what turns a recoverable file into a permanent loss,
+    /// `VMManifestStore.save`'s rule.
     @discardableResult
     public func save(_ records: [UUID: SnapshotRecord]) -> Bool {
         do {
-            let directory = (path as NSString).deletingLastPathComponent
-            if !directory.isEmpty {
-                try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
-            }
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
             let data = try encoder.encode(
                 Dictionary(uniqueKeysWithValues: records.map { ($0.key.uuidString, $0.value) }))
-            try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+            try DurableFileWriter().write(data, to: path)
             return true
         } catch {
             logger.error("Failed to write snapshot records at \(path): \(error)")
