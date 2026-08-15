@@ -215,14 +215,22 @@ struct DomainDiskInventoryTests {
                 monHosts: ["mon-1:6789", "mon-2:6789"]),
             target: "vdc", readonly: false, volumeId: Self.dataVolumeId)
 
-        #expect(xml.contains("<disk type='network' device='disk'>"))
-        #expect(xml.contains("<source protocol='rbd' name='volumes/volume-1'>"))
-        #expect(xml.contains("<host name='mon-1' port='6789'/>"))
-        #expect(xml.contains("<host name='mon-2' port='6789'/>"))
-        #expect(xml.contains("<auth username='client.project-1'>"))
-        #expect(xml.contains("<secret type='ceph' usage='client.project-1'/>"))
-        #expect(!xml.contains("source file="))
-        #expect(!xml.contains("source dev="))
+        #expect(
+            xml == """
+                <disk type='network' device='disk'>
+                  <driver name='qemu' type='raw'/>
+                  <source protocol='rbd' name='volumes/volume-1'>
+                    <host name='mon-1' port='6789'/>
+                    <host name='mon-2' port='6789'/>
+                  </source>
+                  <auth username='client.project-1'>
+                    <secret type='ceph' usage='client.project-1'/>
+                  </auth>
+                  <target dev='vdc' bus='virtio'/>
+                  <serial>vol-\(Self.dataVolumeId)</serial>
+                </disk>
+
+                """)
     }
 
     /// libvirt resolves a disk detach by `<target dev>`; the source and driver

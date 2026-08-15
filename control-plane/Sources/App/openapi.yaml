@@ -10814,9 +10814,8 @@ components:
         diskAttachment:
           allOf:
             - $ref: "#/components/schemas/DiskAttachment"
-          nullable: true
           description: >-
-            The complete storage reference reported by the owning agent. Null
+            The complete storage reference reported by the owning agent. Omitted
             while a provisioning replica has not reported an attachment yet.
         state:
           type: string

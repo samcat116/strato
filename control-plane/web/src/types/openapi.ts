@@ -6275,8 +6275,8 @@ export interface components {
             /** Format: uuid */
             id?: string;
             agentId: string;
-            /** @description The complete storage reference reported by the owning agent. Null while a provisioning replica has not reported an attachment yet. */
-            diskAttachment?: components["schemas"]["DiskAttachment"] | null;
+            /** @description The complete storage reference reported by the owning agent. Omitted while a provisioning replica has not reported an attachment yet. */
+            diskAttachment?: components["schemas"]["DiskAttachment"];
             /** @enum {string} */
             state: "provisioning" | "healthy" | "degraded" | "resyncing" | "faulted";
             /** Format: int64 */

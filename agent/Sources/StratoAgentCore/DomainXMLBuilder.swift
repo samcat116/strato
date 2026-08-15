@@ -865,15 +865,18 @@ public enum DomainXMLBuilder {
         let diskType: String
         let driverFormat: String
         let source: DomainXMLNode
+        let authentication: DomainXMLNode?
         switch attachment {
         case .file(let path, let format):
             diskType = "file"
             driverFormat = format.rawValue
             source = DomainXMLNode("source", [("file", path)])
+            authentication = nil
         case .blockDevice(let path):
             diskType = "block"
             driverFormat = DiskFormat.raw.rawValue
             source = DomainXMLNode("source", [("dev", path)])
+            authentication = nil
         case .rbd(let pool, let image, let user, let monHosts):
             diskType = "network"
             driverFormat = DiskFormat.raw.rawValue
@@ -882,11 +885,11 @@ public enum DomainXMLBuilder {
             for monitor in monHosts {
                 networkSource.append(rbdMonitorNode(monitor))
             }
-            networkSource.append(
+            source = networkSource
+            authentication =
                 DomainXMLNode(
                     "auth", [("username", user)],
-                    children: [DomainXMLNode("secret", [("type", "ceph"), ("usage", user)])]))
-            source = networkSource
+                    children: [DomainXMLNode("secret", [("type", "ceph"), ("usage", user)])])
         }
 
         var disk = DomainXMLNode("disk", [("type", diskType), ("device", "disk")])
@@ -894,6 +897,9 @@ public enum DomainXMLBuilder {
         // here would be a behaviour change disguised as a translation.
         disk.append(DomainXMLNode("driver", [("name", "qemu"), ("type", driverFormat)]))
         disk.append(source)
+        if let authentication {
+            disk.append(authentication)
+        }
         disk.append(DomainXMLNode("target", [("dev", target), ("bus", "virtio")]))
         if readonly {
             disk.append(DomainXMLNode("readonly"))
