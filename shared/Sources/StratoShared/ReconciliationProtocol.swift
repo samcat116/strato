@@ -1272,7 +1272,7 @@ public struct ObservedSandboxState: Codable, Sendable {
 ///
 /// ADR stage 7 (STR-149) settled the same question for the rest of what
 /// `volume_info` used to return, and settled it the same way: nothing was
-/// added. Format, path and attachment were already here; allocated bytes, the
+/// added. Format, disk attachment and VM attachment were already here; allocated bytes, the
 /// dirty flag and the encryption flag have no reader, and allocation in
 /// particular moves with every guest write, so it cannot be cached the way
 /// virtual size can and would cost a subprocess per volume per report. A
@@ -1286,10 +1286,10 @@ public struct ObservedVolumeState: Codable, Sendable {
     /// failed-convergence sections. *Absence from the list* is what confirms a
     /// deletion; `present: false` explicitly does not.
     public let present: Bool
-    /// Where the agent put it. The agent owns path layout, so this is the only
-    /// direction a volume path travels: the control plane stores what it is
-    /// told and never derives one.
-    public let storagePath: String?
+    /// How the agent exposes the disk. The agent owns storage layout, so this
+    /// is the only direction the descriptor originates: the control plane
+    /// stores what it is told and never derives one.
+    public let attachment: DiskAttachment?
     /// The volume's **virtual size on disk** (STR-199) — what `qemu-img info`
     /// reports, not what anyone asked for.
     ///
@@ -1338,7 +1338,7 @@ public struct ObservedVolumeState: Codable, Sendable {
     public init(
         volumeId: UUID,
         present: Bool,
-        storagePath: String? = nil,
+        attachment: DiskAttachment? = nil,
         sizeBytes: Int64? = nil,
         attachedVMId: UUID? = nil,
         observedGeneration: Int64,
@@ -1349,7 +1349,7 @@ public struct ObservedVolumeState: Codable, Sendable {
     ) {
         self.volumeId = volumeId
         self.present = present
-        self.storagePath = storagePath
+        self.attachment = attachment
         self.sizeBytes = sizeBytes
         self.attachedVMId = attachedVMId
         self.observedGeneration = observedGeneration

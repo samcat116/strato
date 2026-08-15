@@ -1942,8 +1942,10 @@ struct ObservedStateApplier {
             .first()
         {
             var changed = false
-            if let datasetPath = observed.storagePath, existing.datasetPath != datasetPath {
-                existing.datasetPath = datasetPath
+            if let diskAttachment = observed.attachment,
+                existing.diskAttachment != diskAttachment
+            {
+                existing.diskAttachment = diskAttachment
                 changed = true
             }
             if existing.state != state {
@@ -1963,7 +1965,7 @@ struct ObservedStateApplier {
         try await VolumeReplica(
             volumeID: volumeID,
             agentId: agentId,
-            datasetPath: observed.storagePath,
+            diskAttachment: observed.attachment,
             state: state,
             generation: observed.observedGeneration
         ).create(on: db)

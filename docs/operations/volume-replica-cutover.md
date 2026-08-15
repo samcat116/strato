@@ -13,7 +13,7 @@ SELECT v.id,
        active.replica_count,
        active.missing_agent_count,
        active.nonmember_count,
-       active.pathless_healthy_count
+       active.attachmentless_healthy_count
 FROM volumes v
 LEFT JOIN storage_pools p ON p.id = v.pool_id
 CROSS JOIN LATERAL (
@@ -30,8 +30,8 @@ CROSS JOIN LATERAL (
                  AND NOT (r.agent_id = ANY(p.member_agent_ids))
            ) AS nonmember_count,
            COUNT(*) FILTER (
-               WHERE r.state = 'healthy' AND r.dataset_path IS NULL
-           ) AS pathless_healthy_count
+               WHERE r.state = 'healthy' AND r.disk_attachment IS NULL
+           ) AS attachmentless_healthy_count
     FROM volume_replicas r
     WHERE r.volume_id = v.id
       AND r.state IN ('healthy', 'provisioning')
@@ -43,7 +43,7 @@ WHERE v.desired_status::text <> 'Absent'
       OR active.replica_count <> 1
       OR active.missing_agent_count > 0
       OR active.nonmember_count > 0
-      OR active.pathless_healthy_count > 0
+      OR active.attachmentless_healthy_count > 0
   )
 ORDER BY v.id;
 ```

@@ -24,11 +24,14 @@ struct MessageEnvelopeTests {
     @Test("WireProtocol encodes the complete envelope")
     func wireProtocolEncoding() throws {
         let message = Fixtures.consoleConnect(vmId: "vm-7")
-        let expected = try WireProtocol.makeEncoder().encode(MessageEnvelope(message: message))
-
         let encoded = try WireProtocol.encodeEnvelope(message)
+        let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: encoded)
+        let decoded = try envelope.decode(as: ConsoleConnectMessage.self)
 
-        #expect(encoded == expected)
+        #expect(envelope.type == .consoleConnect)
+        #expect(decoded.vmId == message.vmId)
+        #expect(decoded.sessionId == message.sessionId)
+        #expect(decoded.requestId == message.requestId)
     }
 
     @Test("payload that does not match the requested type throws")

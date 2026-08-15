@@ -381,7 +381,8 @@ final class VolumeIOLimitsTests {
                         ObservedVolumeState(
                             volumeId: volume.id!,
                             present: true,
-                            storagePath: "/var/lib/strato/volumes/v/volume.qcow2",
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/v/volume.qcow2", format: .qcow2),
                             observedGeneration: 2,
                             ioLimits: nil)
                     ]))
@@ -414,7 +415,8 @@ final class VolumeIOLimitsTests {
                         ObservedVolumeState(
                             volumeId: volume.id!,
                             present: true,
-                            storagePath: "/var/lib/strato/volumes/v/volume.qcow2",
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/v/volume.qcow2", format: .qcow2),
                             observedGeneration: 2,
                             ioLimits: VolumeIOLimits(iopsTotal: nil, bpsTotal: nil))
                     ]))
@@ -440,7 +442,8 @@ final class VolumeIOLimitsTests {
                         ObservedVolumeState(
                             volumeId: volume.id!,
                             present: true,
-                            storagePath: "/var/lib/strato/volumes/v/volume.qcow2",
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/v/volume.qcow2", format: .qcow2),
                             observedGeneration: 2,
                             ioLimits: VolumeIOLimits(iopsTotal: 500, bpsTotal: nil))
                     ]))

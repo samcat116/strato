@@ -30,24 +30,28 @@ private extension VMSpecBuilder {
         let boot = testBootVolume(for: vm)
         return try! buildVMSpec(
             from: vm, image: image, volumes: [boot], networkInterfaces: networkInterfaces,
-            storagePathsByVolumeID: [boot.id!: "/var/lib/strato/volumes/boot/volume.qcow2"],
+            diskAttachmentsByVolumeID: [
+                boot.id!: .file(
+                    path: "/var/lib/strato/volumes/boot/volume.qcow2", format: .qcow2)
+            ],
             networks: networks)
     }
 
     static func buildCanonicalVMSpec(
         from vm: VM, image: Image?, volumes: [Volume], networkInterfaces: [VMNetworkInterface],
-        storagePathsByVolumeID: [UUID: String] = [:],
+        diskAttachmentsByVolumeID: [UUID: DiskAttachment] = [:],
         networks: [UUID: LogicalNetwork] = [:],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
         sendsMetadataPort: Bool = true,
         siteResolverCapable: Bool? = true
     ) -> VMSpec {
         let boot = testBootVolume(for: vm)
-        var paths = storagePathsByVolumeID
-        paths[boot.id!] = "/var/lib/strato/volumes/boot/volume.qcow2"
+        var attachments = diskAttachmentsByVolumeID
+        attachments[boot.id!] = .file(
+            path: "/var/lib/strato/volumes/boot/volume.qcow2", format: .qcow2)
         return try! buildVMSpec(
             from: vm, image: image, volumes: [boot] + volumes,
-            networkInterfaces: networkInterfaces, storagePathsByVolumeID: paths,
+            networkInterfaces: networkInterfaces, diskAttachmentsByVolumeID: attachments,
             networks: networks, securityGroupsByInterface: securityGroupsByInterface,
             sendsMetadataPort: sendsMetadataPort, siteResolverCapable: siteResolverCapable)
     }
@@ -336,7 +340,9 @@ struct VMSpecBuilderTests {
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
 
         #expect(spec.volumes.count == 1)
-        #expect(spec.volumes.first?.storagePath == "/var/lib/strato/volumes/boot/volume.qcow2")
+        #expect(
+            spec.volumes.first?.attachment
+                == .file(path: "/var/lib/strato/volumes/boot/volume.qcow2", format: .qcow2))
         #expect(spec.volumes.first?.readonly == false)
         #expect(spec.volumes.first?.deviceName.rawValue == "disk0")
         #expect(spec.volumes.first?.volumeId == UUID(uuidString: "00000000-0000-4000-8000-000000000001"))
@@ -365,10 +371,12 @@ struct VMSpecBuilderTests {
         return volume
     }
 
-    private func storagePaths(for volumes: [Volume]) -> [UUID: String] {
+    private func diskAttachments(for volumes: [Volume]) -> [UUID: DiskAttachment] {
         Dictionary(
             uniqueKeysWithValues: volumes.compactMap { volume in
-                volume.id.map { ($0, "/var/lib/strato/volumes/\($0).qcow2") }
+                volume.id.map {
+                    ($0, .file(path: "/var/lib/strato/volumes/\($0).qcow2", format: .qcow2))
+                }
             })
     }
 
@@ -386,12 +394,12 @@ struct VMSpecBuilderTests {
             attachedVolume(id: ids[3], deviceName: "disk3", bootOrder: nil),
         ]
 
-        let paths = storagePaths(for: volumes)
+        let attachments = diskAttachments(for: volumes)
         let forward = try VMSpecBuilder.volumeSpecs(
-            from: volumes, storagePathsByVolumeID: paths
+            from: volumes, diskAttachmentsByVolumeID: attachments
         ).map(\.deviceName.rawValue)
         let reversed = try VMSpecBuilder.volumeSpecs(
-            from: volumes.reversed(), storagePathsByVolumeID: paths
+            from: volumes.reversed(), diskAttachmentsByVolumeID: attachments
         ).map(\.deviceName.rawValue)
 
         // Explicit boot orders first, then device name inside each tier.
@@ -411,14 +419,14 @@ struct VMSpecBuilderTests {
             attachedVolume(id: first, deviceName: "disk0", bootOrder: 0),
         ]
 
-        let paths = storagePaths(for: volumes)
+        let attachments = diskAttachments(for: volumes)
         #expect(
             try VMSpecBuilder.volumeSpecs(
-                from: volumes, storagePathsByVolumeID: paths
+                from: volumes, diskAttachmentsByVolumeID: attachments
             ).map(\.volumeId) == [first, second])
         #expect(
             try VMSpecBuilder.volumeSpecs(
-                from: volumes.reversed(), storagePathsByVolumeID: paths
+                from: volumes.reversed(), diskAttachmentsByVolumeID: attachments
             ).map(\.volumeId) == [first, second])
     }
 
@@ -436,7 +444,7 @@ struct VMSpecBuilderTests {
 
         #expect(throws: Abort.self) {
             try VMSpecBuilder.volumeSpecs(
-                from: volumes, storagePathsByVolumeID: storagePaths(for: volumes))
+                from: volumes, diskAttachmentsByVolumeID: diskAttachments(for: volumes))
         }
     }
 
@@ -448,7 +456,7 @@ struct VMSpecBuilderTests {
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
 
         #expect(spec.volumes.count == 1)
-        #expect(spec.volumes[0].storagePath != nil)
+        #expect(spec.volumes[0].attachment != nil)
     }
 
     // MARK: - Network Tests

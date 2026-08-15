@@ -124,7 +124,7 @@ public actor MockStorageBackend: StorageBackend {
             metadata: ["volumeId": .string(volumeId), "sizeBytes": .stringConvertible(sizeBytes)])
         volumes[volumeId] = MockVolume(path: path, format: format, sizeBytes: sizeBytes)
         persist()
-        return DiskAttachment(path: path, format: format)
+        return .file(path: path, format: format)
     }
 
     /// Records the volume without fetching the image. Deliberately never touches
@@ -144,7 +144,7 @@ public actor MockStorageBackend: StorageBackend {
             metadata: ["volumeId": .string(volumeId), "imageId": .string(imageInfo.imageId.uuidString)])
         volumes[volumeId] = MockVolume(path: path, format: format, sizeBytes: sourceArtifact.size)
         persist()
-        return DiskAttachment(path: path, format: format)
+        return .file(path: path, format: format)
     }
 
     /// Reports the disk as materialized at `path` without writing it. Idempotent,
@@ -162,7 +162,7 @@ public actor MockStorageBackend: StorageBackend {
                 "imageId": .string(imageInfo.imageId.uuidString),
                 "artifactKind": .string(artifactKind.rawValue),
             ])
-        return DiskAttachment(path: path, format: format)
+        return .file(path: path, format: format)
     }
 
     public func adoptVolume(
@@ -172,7 +172,7 @@ public actor MockStorageBackend: StorageBackend {
         let path = volumePath(volumeId: volumeId, format: format)
         volumes[volumeId] = MockVolume(path: path, format: format, sizeBytes: size)
         persist()
-        return DiskAttachment(path: path, format: format)
+        return .file(path: path, format: format)
     }
 
     public func deleteVolume(volumeId: String) async throws {
@@ -229,7 +229,7 @@ public actor MockStorageBackend: StorageBackend {
             metadata: ["sourceVolumeId": .string(sourceVolumeId), "targetVolumeId": .string(targetVolumeId)])
         volumes[targetVolumeId] = MockVolume(path: path, format: source.format, sizeBytes: source.sizeBytes)
         persist()
-        return DiskAttachment(path: path, format: source.format)
+        return .file(path: path, format: source.format)
     }
 
     /// The simulated inventory, keyed the way the reconciler keys workloads
@@ -240,7 +240,7 @@ public actor MockStorageBackend: StorageBackend {
         var result: [String: DiskAttachment] = [:]
         for (id, volume) in volumes {
             guard let canonical = UUID(uuidString: id)?.uuidString else { continue }
-            result[canonical] = DiskAttachment(path: volume.path, format: volume.format)
+            result[canonical] = .file(path: volume.path, format: volume.format)
         }
         return result
     }

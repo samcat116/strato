@@ -127,11 +127,19 @@ chosen Ceph/RBD per site as the distributed backend (see
 
 ## Key design points
 
-### Typed disk attachments
+### Disk attachments as a sum type
 
-Operations that produce a disk return a `DiskAttachment` (host path + actual
-`DiskFormat`). Hypervisor drivers declare that format when attaching the disk
-instead of assuming qcow2.
+Operations that produce a disk return one exhaustive `DiskAttachment` value:
+`.file(path:format:)`, `.blockDevice(path:)`, or
+`.rbd(pool:image:user:monHosts:)`. The filesystem backend produces `.file`
+today. Libvirt renders a distinct file, block, or RBD source; Firecracker opens
+file and block-device paths and refuses native RBD, which a future Ceph backend
+must first map through krbd.
+
+The value crosses wire v51 intact. `ObservedVolumeState` is its source, the
+control plane stores it as JSON on `VolumeReplica`, and `VolumeSpec` echoes it
+back to the VM's agent. The control plane never derives or repurposes a path,
+and driver code no longer infers a file format from a filename.
 
 ### One image-materialization path
 
@@ -225,12 +233,13 @@ The volume root is the agent's `volume_storage_dir` config key (default
 `/var/lib/strato/volumes` on Linux), so a non-root agent can point it at a
 directory it can write.
 
-The control plane never derives paths. Since volumes became desired state
-(STR-148) the path travels in exactly one direction: the agent reports it on
-`ObservedVolumeState` and the control plane stores what it is told. No desired
-entry carries a path, and nothing on the wire lets the control plane suggest
-one — which is what makes a create whose report was lost recoverable, since
-every verb works from ids alone.
+The control plane never derives storage layout. Since volumes became desired
+state (STR-148), a disk attachment originates in exactly one direction: the
+agent reports it on `ObservedVolumeState` and the control plane stores what it
+is told. `DesiredVolumeState` still works from ids alone; when the control plane
+assembles the attached VM, `VolumeSpec` echoes the stored attachment verbatim.
+That is what makes a create whose report was lost recoverable without turning
+an RBD identity into a path-shaped hint.
 
 Presence means *complete*. Every write path stages into `<name>.partial` and
 publishes with a rename inside the same directory, so `listVolumes` — the
@@ -764,7 +773,7 @@ Placement is expressed through the phase-1 data model from
 [`distributed-storage.md`](./distributed-storage.md): every `Volume` belongs
 to a `StoragePool` (mode `local`/`replicated`, backing
 `filesystem`/`zfs`, member agents, replication factor), and each physical
-copy of a volume is a `VolumeReplica` row (agent, agent-owned dataset path,
+copy of a volume is a `VolumeReplica` row (agent, agent-owned disk attachment,
 health state, reconciliation generation). Today the only pool is the
 migration-seeded `default` local pool — one replica per volume, `filesystem`
 backing, any QEMU-capable agent eligible — which reproduces the host-local

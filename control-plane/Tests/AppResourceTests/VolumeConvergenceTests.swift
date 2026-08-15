@@ -245,7 +245,7 @@ final class VolumeConvergenceTests {
 
     // MARK: - Ingesting the observed report
 
-    @Test("An observed volume settles its status, path, and replica")
+    @Test("An observed volume settles its status, attachment, and replica")
     func observedVolumeSettles() async throws {
         try await withVolumeApp { app, _, user, project in
             let agentId = try await registerAgent(app: app, named: "observe-agent")
@@ -260,7 +260,7 @@ final class VolumeConvergenceTests {
                     volumes: [
                         ObservedVolumeState(
                             volumeId: volumeID, present: true,
-                            storagePath: "/agent/chosen/path.qcow2",
+                            attachment: .file(path: "/agent/chosen/path.qcow2", format: .qcow2),
                             observedGeneration: 1)
                     ]))
 
@@ -271,9 +271,78 @@ final class VolumeConvergenceTests {
 
             let replica = try await VolumeReplica.query(on: app.db)
                 .filter(\.$volume.$id == volumeID).first()
-            #expect(replica?.datasetPath == "/agent/chosen/path.qcow2")
+            #expect(
+                replica?.diskAttachment
+                    == .file(path: "/agent/chosen/path.qcow2", format: .qcow2))
             #expect(replica?.state == .healthy)
             #expect(replica?.generation == 1)
+        }
+    }
+
+    @Test("A typed attachment is persisted and echoed into the VM spec verbatim")
+    func typedAttachmentRoundTripsThroughControlPlane() async throws {
+        try await withVolumeApp { app, builder, user, project in
+            let agentId = try await registerAgent(app: app, named: "typed-attachment-agent")
+            let vm = try await builder.createVM(name: "typed-attachment-vm", project: project)
+            vm.hypervisorId = agentId
+            try await vm.save(on: app.db)
+
+            let volume = try await makeVolume(
+                on: app, user: user, project: project, agentId: agentId,
+                name: "typed-attachment-root", status: .creating, observedGeneration: 0,
+                storagePath: nil)
+            volume.$vm.id = try vm.requireID()
+            volume.volumeType = .boot
+            volume.deviceName = "disk0"
+            volume.bootOrder = 0
+            try await volume.save(on: app.db)
+            let volumeID = try volume.requireID()
+            let attachment = DiskAttachment.rbd(
+                pool: "volumes", image: volumeID.uuidString, user: "client.project",
+                monHosts: ["10.0.0.10:6789", "10.0.0.11:6789"])
+
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: agentId,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: volumeID, present: true, attachment: attachment,
+                            observedGeneration: 1)
+                    ]))
+
+            let replica = try #require(
+                try await VolumeReplica.query(on: app.db)
+                    .filter(\.$volume.$id == volumeID).first())
+            #expect(replica.diskAttachment == attachment)
+
+            let desired = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            let vmEntry = try #require(desired.vms.first { $0.vmId == vm.id })
+            #expect(vmEntry.spec.volumes.first?.attachment == attachment)
+        }
+    }
+
+    @Test("The replica migration preserves a legacy file path and infers its format")
+    func legacyDatasetPathMigration() async throws {
+        try await withVolumeApp { app, _, user, project in
+            let agentId = try await registerAgent(app: app, named: "legacy-attachment-agent")
+            let volume = try await makeVolume(
+                on: app, user: user, project: project, agentId: agentId,
+                storagePath: "/var/lib/strato/volumes/legacy/volume.raw")
+            let volumeID = try volume.requireID()
+            let migration = ReplaceVolumeReplicaDatasetPath()
+
+            // Reconstruct the preserved pre-STR-154 schema, then exercise the
+            // forward migration rather than merely testing the new model.
+            try await migration.revert(on: app.db)
+            try await migration.prepare(on: app.db)
+
+            let replica = try #require(
+                try await VolumeReplica.query(on: app.db)
+                    .filter(\.$volume.$id == volumeID).first())
+            #expect(
+                replica.diskAttachment
+                    == .file(
+                        path: "/var/lib/strato/volumes/legacy/volume.raw", format: .raw))
         }
     }
 
@@ -293,7 +362,8 @@ final class VolumeConvergenceTests {
                     agentId: firstAgentID,
                     volumes: [
                         ObservedVolumeState(
-                            volumeId: volumeID, present: true, storagePath: "/replica-a",
+                            volumeId: volumeID, present: true,
+                            attachment: .file(path: "/replica-a", format: .qcow2),
                             observedGeneration: 2)
                     ]))
 
@@ -307,7 +377,8 @@ final class VolumeConvergenceTests {
                     agentId: secondAgentID,
                     volumes: [
                         ObservedVolumeState(
-                            volumeId: volumeID, present: true, storagePath: "/replica-b",
+                            volumeId: volumeID, present: true,
+                            attachment: .file(path: "/replica-b", format: .qcow2),
                             observedGeneration: 2, lastError: "replica write failed",
                             failedGeneration: 2)
                     ]))
@@ -323,7 +394,8 @@ final class VolumeConvergenceTests {
                     agentId: firstAgentID,
                     volumes: [
                         ObservedVolumeState(
-                            volumeId: volumeID, present: true, storagePath: "/replica-a",
+                            volumeId: volumeID, present: true,
+                            attachment: .file(path: "/replica-a", format: .qcow2),
                             observedGeneration: 2)
                     ]))
             stored = try #require(try await Volume.find(volumeID, on: app.db))
@@ -335,7 +407,8 @@ final class VolumeConvergenceTests {
                     agentId: secondAgentID,
                     volumes: [
                         ObservedVolumeState(
-                            volumeId: volumeID, present: true, storagePath: "/replica-b",
+                            volumeId: volumeID, present: true,
+                            attachment: .file(path: "/replica-b", format: .qcow2),
                             observedGeneration: 2)
                     ]))
             stored = try #require(try await Volume.find(volumeID, on: app.db))
@@ -363,7 +436,8 @@ final class VolumeConvergenceTests {
                     agentId: agentId,
                     volumes: [
                         ObservedVolumeState(
-                            volumeId: volumeID, present: true, storagePath: "/p",
+                            volumeId: volumeID, present: true,
+                            attachment: .file(path: "/p", format: .qcow2),
                             attachedVMId: vm.id, observedGeneration: 2)
                     ]))
 
@@ -456,7 +530,8 @@ final class VolumeConvergenceTests {
                     agentId: agentId,
                     volumes: [
                         ObservedVolumeState(
-                            volumeId: volumeID, present: true, storagePath: "/p",
+                            volumeId: volumeID, present: true,
+                            attachment: .file(path: "/p", format: .qcow2),
                             observedGeneration: 3,
                             lastError: "no space left on device", failedGeneration: 3)
                     ]))
@@ -498,7 +573,8 @@ final class VolumeConvergenceTests {
                     agentId: agentId,
                     volumes: [
                         ObservedVolumeState(
-                            volumeId: volumeID, present: true, storagePath: "/p",
+                            volumeId: volumeID, present: true,
+                            attachment: .file(path: "/p", format: .qcow2),
                             attachedVMId: vm.id, observedGeneration: 2)
                     ]))
 

@@ -858,7 +858,7 @@ package func conditionedRoleBindingsAreRefused(on db: any Database) async throws
 package func placeVolume(
     _ volume: Volume,
     on agentID: String?,
-    at datasetPath: String? = "/var/lib/strato/volumes/test/volume.qcow2",
+    at filePath: String? = "/var/lib/strato/volumes/test/volume.qcow2",
     state: VolumeReplicaState = .healthy,
     using db: any Database
 ) async throws -> VolumeReplica? {
@@ -866,7 +866,11 @@ package func placeVolume(
     let replica = VolumeReplica(
         volumeID: try volume.requireID(),
         agentId: agentID,
-        datasetPath: datasetPath,
+        diskAttachment: filePath.map {
+            .file(
+                path: $0,
+                format: $0.lowercased().hasSuffix(".raw") ? .raw : .qcow2)
+        },
         state: state,
         generation: volume.observedGeneration
     )

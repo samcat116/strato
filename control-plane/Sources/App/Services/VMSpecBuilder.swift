@@ -2,10 +2,10 @@ import Foundation
 import Vapor
 import StratoShared
 
-/// Builds the hypervisor-neutral `VMSpec` sent to agents. The spec deliberately
-/// carries no device-level realization (host paths the control plane cannot know,
-/// tap names, queue sizing, machine types) — agents derive those when translating
-/// the spec into their driver-native configuration.
+/// Builds the hypervisor-neutral `VMSpec` sent to agents. The spec carries each
+/// backend-owned disk attachment exactly as the agent reported it, but no
+/// agent-derived networking, queue sizing, or machine configuration. Agents
+/// translate those details into their driver-native configuration.
 struct VMSpecBuilder {
     /// Upper bound on a guest kernel cmdline, in unicode scalars. The VM-create
     /// API applies the same 4096 bound in UTF-8 bytes; the two agree for the
@@ -169,7 +169,7 @@ struct VMSpecBuilder {
     ///   - networkInterfaces: The VM's network interfaces
     static func buildVMSpec(
         from vm: VM, image: Image?, volumes: [Volume], networkInterfaces: [VMNetworkInterface],
-        storagePathsByVolumeID: [UUID: String] = [:],
+        diskAttachmentsByVolumeID: [UUID: DiskAttachment] = [:],
         networks: [UUID: LogicalNetwork] = [:],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
         sendsMetadataPort: Bool = true,
@@ -178,7 +178,7 @@ struct VMSpecBuilder {
     ) throws -> VMSpec {
         try buildVMSpec(
             from: vm, image: image, volumes: volumes,
-            storagePathsByVolumeID: storagePathsByVolumeID,
+            diskAttachmentsByVolumeID: diskAttachmentsByVolumeID,
             resolvedInterfaces: resolvedInterfaces(
                 from: networkInterfaces, networks: networks, logger: logger),
             securityGroupsByInterface: securityGroupsByInterface,
@@ -190,7 +190,7 @@ struct VMSpecBuilder {
     /// `networkSpecs(fromResolved:securityGroupsByInterface:sendsMetadataPort:)`).
     static func buildVMSpec(
         from vm: VM, image: Image?, volumes: [Volume],
-        storagePathsByVolumeID: [UUID: String] = [:],
+        diskAttachmentsByVolumeID: [UUID: DiskAttachment] = [:],
         resolvedInterfaces: [(interface: VMNetworkInterface, network: LogicalNetwork)],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
         sendsMetadataPort: Bool = true,
@@ -224,7 +224,7 @@ struct VMSpecBuilder {
             vm.desiredStatus == .absent
             ? attachedVolumes : attachedVolumes.filter { $0.desiredStatus == .present }
         let volumeSpecs = try volumeSpecs(
-            from: desiredVolumes, storagePathsByVolumeID: storagePathsByVolumeID)
+            from: desiredVolumes, diskAttachmentsByVolumeID: diskAttachmentsByVolumeID)
 
         return VMSpec(
             cpus: cpuCount,
@@ -271,7 +271,7 @@ struct VMSpecBuilder {
     /// after a restart. The NIC path already avoids this by sorting on
     /// `(orderIndex, deviceName)`.
     static func volumeSpecs(
-        from volumes: [Volume], storagePathsByVolumeID: [UUID: String] = [:]
+        from volumes: [Volume], diskAttachmentsByVolumeID: [UUID: DiskAttachment] = [:]
     ) throws -> [VolumeSpec] {
         // Volumes with no explicit boot order sort after those that have one,
         // which `Int.max` expresses without a special case.
@@ -310,7 +310,7 @@ struct VMSpecBuilder {
                 VolumeSpec(
                     volumeId: volumeID,
                     deviceName: deviceName,
-                    storagePath: storagePathsByVolumeID[volumeID],
+                    attachment: diskAttachmentsByVolumeID[volumeID],
                     readonly: volume.readonly,
                     bootOrder: volume.bootOrder,
                     // Read off the same column `DesiredVolumeState.ioLimits`

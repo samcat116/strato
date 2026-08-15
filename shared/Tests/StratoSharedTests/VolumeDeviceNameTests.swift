@@ -66,7 +66,7 @@ struct VolumeDeviceNameTests {
         let spec = VolumeSpec(
             volumeId: UUID(uuidString: "00000000-0000-0000-0000-0000000000AA")!,
             deviceName: VolumeDeviceName("disk1")!,
-            storagePath: "/var/lib/strato/volumes/a.qcow2",
+            attachment: .file(path: "/var/lib/strato/volumes/a.qcow2", format: .qcow2),
             readonly: false,
             bootOrder: 1)
 

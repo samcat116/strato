@@ -4010,8 +4010,8 @@ extension Agent: ReconcileActuator {
     /// Every volume whose data this host holds, with the attachment the agent
     /// durably records for it (STR-148).
     ///
-    /// Presence comes from the storage backend's own inventory — a volume is a
-    /// file, so there is nothing to adopt and every entry is `.managed`.
+    /// Presence comes from the storage backend's own durable inventory, so
+    /// there is no hypervisor session to adopt and every entry is `.managed`.
     /// Attachment comes from the VM manifest entries, *not* from a live
     /// hypervisor query: a powered-off guest has no device list, and reading
     /// that silence as "detached" would plan an attach against a dead control
@@ -4039,11 +4039,16 @@ extension Agent: ReconcileActuator {
         var presence: [String: VolumePresence] = [:]
         for (volumeId, disk) in inventory {
             let attachment = attachments[volumeId]
+            let sizeBytes: Int64?
+            if case .file(let path, _) = disk {
+                sizeBytes = await volumeVirtualSize(volumeId: volumeId, path: path)
+            } else {
+                sizeBytes = volumeSizes[volumeId]
+            }
             presence[volumeId] = .managed(
                 ObservedVolumeFacts(
-                    path: disk.path,
-                    format: disk.format,
-                    sizeBytes: await volumeVirtualSize(volumeId: volumeId, path: disk.path),
+                    attachment: disk,
+                    sizeBytes: sizeBytes,
                     attachedVMId: attachment?.vmId,
                     deviceName: attachment?.deviceName))
         }
@@ -4094,7 +4099,7 @@ extension Agent: ReconcileActuator {
 
         for desiredVM in desiredVMs {
             for volume in desiredVM.spec.volumes where inventory[volume.volumeId.uuidString] == nil {
-                guard let existingPath = volume.storagePath else { continue }
+                guard case .file(let existingPath, _) = volume.attachment else { continue }
                 let volumeId = volume.volumeId.uuidString
                 guard let format = formats[volume.volumeId] else {
                     volumeAdoptionFailures[volumeId] =
@@ -4508,8 +4513,12 @@ extension Agent: ReconcileActuator {
                 throw SnapshotConvergenceError.sourceNotReady(
                     "volume \(parentId) is not present on this host yet")
             }
+            guard case .file(let diskPath, _) = disk else {
+                throw SnapshotConvergenceError.unsupported(
+                    "the filesystem snapshot backend cannot capture \(disk)")
+            }
             let path = try await backend.createSnapshot(
-                volumeId: parentId, snapshotId: snapshotId, volumePath: disk.path)
+                volumeId: parentId, snapshotId: snapshotId, volumePath: diskPath)
             facts = ObservedSnapshotFacts(
                 sizeBytes: Self.fileSizeBytes(at: path),
                 storagePath: path,
@@ -4759,6 +4768,10 @@ extension Agent: ReconcileActuator {
                 throw VolumeConvergenceError.sourceNotReady(
                     "source volume \(sourceId) is not present on this agent yet")
             }
+            guard case .file(let sourcePath, _) = source else {
+                throw VolumeConvergenceError.unsupported(
+                    "the filesystem clone path cannot use \(source)")
+            }
             if let holder = recordedVolumeAttachments()[sourceId] {
                 guard desired.source?.sourceVMId?.uuidString == holder.vmId else {
                     throw VolumeConvergenceError.sourceNotReady(
@@ -4774,7 +4787,7 @@ extension Agent: ReconcileActuator {
                 }
             }
             attachment = try await backend.cloneVolume(
-                sourceVolumeId: sourceId, sourcePath: source.path, targetVolumeId: item.id)
+                sourceVolumeId: sourceId, sourcePath: sourcePath, targetVolumeId: item.id)
         case DesiredVolumeSource.image:
             guard let imageInfo = desired.source?.imageInfo,
                 let artifactKind = desired.source?.artifactKind
@@ -4791,12 +4804,14 @@ extension Agent: ReconcileActuator {
 
         // A cloned or image-backed volume inherits the source's size, which may
         // be smaller than what was asked for; the next sync plans the grow.
-        volumeSizes[item.id] = try? await backend.volumeInfo(volumePath: attachment.path).virtualSize
+        if case .file(let path, _) = attachment {
+            volumeSizes[item.id] = try? await backend.volumeInfo(volumePath: path).virtualSize
+        }
         logger.info(
             "Volume converged into existence",
             metadata: [
                 "volumeId": .string(item.id),
-                "path": .string(attachment.path),
+                "attachment": .string(String(describing: attachment)),
                 "strategy": .string(desired.source?.kind ?? DesiredVolumeSource.blank),
             ])
     }
@@ -4809,6 +4824,10 @@ extension Agent: ReconcileActuator {
         guard let disk = try await backend.listVolumes()[item.id] else {
             throw VolumeConvergenceError.sourceNotReady("volume \(item.id) is not present on this agent")
         }
+        guard case .file(let diskPath, _) = disk else {
+            throw VolumeConvergenceError.unsupported(
+                "the filesystem resize path cannot use \(disk)")
+        }
         // The planner's cached size, not a fresh `qemu-img info` (STR-199).
         //
         // Two reasons, and the second is the load-bearing one. It is the same
@@ -4820,13 +4839,13 @@ extension Agent: ReconcileActuator {
         // reporting the size in the first place. The cache is authoritative
         // because every write path records the size it produced; the probe
         // behind it fires once per volume, not once per attempt.
-        guard let current = await volumeVirtualSize(volumeId: item.id, path: disk.path) else {
+        guard let current = await volumeVirtualSize(volumeId: item.id, path: diskPath) else {
             // Blocked rather than transient: an image whose size cannot be read
             // is not one to grow on a guess, and this is how the refusal
             // reaches an operator instead of the item running no steps and
             // recording the generation as converged.
             throw VolumeConvergenceError.blocked(
-                "cannot read the current size of volume \(item.id) at \(disk.path), so its size "
+                "cannot read the current size of volume \(item.id) at \(diskPath), so its size "
                     + "cannot be converged; check the image with `qemu-img info`")
         }
         guard desired.sizeBytes >= current else {
@@ -4884,7 +4903,7 @@ extension Agent: ReconcileActuator {
                             + "has no online grow path")
                 }
             }
-            try await backend.resizeVolume(volumePath: disk.path, newSizeBytes: desired.sizeBytes)
+            try await backend.resizeVolume(volumePath: diskPath, newSizeBytes: desired.sizeBytes)
         }
         volumeSizes[item.id] = desired.sizeBytes
     }
@@ -4929,7 +4948,7 @@ extension Agent: ReconcileActuator {
         let spec = VolumeSpec(
             volumeId: desired.volumeId,
             deviceName: attachment.deviceName,
-            storagePath: disk.path,
+            attachment: disk,
             readonly: attachment.readonly,
             bootOrder: attachment.bootOrder)
         await recordVolumeAttachment(spec, onVM: vmId, entry: entry)
@@ -4947,7 +4966,7 @@ extension Agent: ReconcileActuator {
             return
         }
         try await service.attachDisk(
-            vmId: vmId, volumeId: item.id, volumePath: disk.path,
+            vmId: vmId, volumeId: item.id, attachment: disk,
             deviceName: attachment.deviceName.rawValue, readonly: attachment.readonly)
     }
 
@@ -5011,9 +5030,9 @@ extension Agent: ReconcileActuator {
     /// Resolve every managed volume identity against this agent's own storage
     /// inventory before a hypervisor sees the VM spec. A sync may arrive before
     /// image materialization finishes, so absence is a retryable dependency;
-    /// retaining a nil or control-plane-stale path would recreate the legacy
+    /// retaining a nil or control-plane-stale attachment would recreate the legacy
     /// path-only boot behavior this contract replaces.
-    private func specWithRealizedVolumePaths(_ spec: VMSpec, vmId: String) async throws -> VMSpec {
+    private func specWithRealizedVolumeAttachments(_ spec: VMSpec, vmId: String) async throws -> VMSpec {
         let backend = try requireStorageBackend()
         let inventory = try await backend.listVolumes()
         let volumes = try spec.volumes.map { volume -> VolumeSpec in
@@ -5025,7 +5044,7 @@ extension Agent: ReconcileActuator {
             return VolumeSpec(
                 volumeId: volume.volumeId,
                 deviceName: volume.deviceName,
-                storagePath: disk.path,
+                attachment: disk,
                 readonly: volume.readonly,
                 bootOrder: volume.bootOrder,
                 ioLimits: volume.ioLimits)
@@ -5040,7 +5059,7 @@ extension Agent: ReconcileActuator {
         guard let service = getHypervisorService(for: desired.hypervisorType) else {
             throw HypervisorServiceError.hypervisorNotInstalled(desired.hypervisorType.rawValue)
         }
-        let realizedSpec = try await specWithRealizedVolumePaths(desired.spec, vmId: item.id)
+        let realizedSpec = try await specWithRealizedVolumeAttachments(desired.spec, vmId: item.id)
         let creationMetadata = await metadataForHypervisorCreate(desired)
 
         let currentEntry = managedVMs[item.id] ?? orphanedVMs[item.id]
@@ -5320,7 +5339,7 @@ extension Agent: ReconcileActuator {
         service: any HypervisorService
     ) async throws -> (spec: VMSpec, interfaces: [String]) {
         let targetSpec = entry.spec.withNetworks(desired.spec.networks)
-        let realizedSpec = try await specWithRealizedVolumePaths(targetSpec, vmId: item.id)
+        let realizedSpec = try await specWithRealizedVolumeAttachments(targetSpec, vmId: item.id)
         let metadata = await metadataForHypervisorCreate(desired)
 
         // These TAPs already exist. Reassert each attachment individually so a
@@ -6102,7 +6121,7 @@ extension Agent: ReconcileActuator {
                 ObservedVolumeState(
                     volumeId: uuid,
                     present: true,
-                    storagePath: facts.path,
+                    attachment: facts.attachment,
                     // The same number the planner just compared against the
                     // desired size (STR-199), so what the API reports and what
                     // this agent is converging on cannot disagree. Nil when the

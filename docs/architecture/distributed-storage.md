@@ -132,31 +132,22 @@ explicit dispositions, or phase-2 implementers will each guess differently:
   `siteId` plus the Ceph-client capability decides, and `memberAgentIds` is
   not consulted.
 
-### Naming, and the `storagePath` coupling
+### Naming and the attachment boundary
 
-The volume's RBD image name follows the existing invariant that **the agent
-owns naming**: the agent reports the image it created
-(`<pool>/<namespace>/vol-<uuid>`) and the control plane stores and replays
-that string verbatim. Delete still works from IDs alone.
+The volume's RBD identity follows the existing invariant that **the agent owns
+naming**: the agent reports the pool and backend-owned image name it created
+(for example, a namespace-qualified `vol-<uuid>`), and the control plane stores
+and replays those fields verbatim. Delete still works from IDs alone.
 
-But "no new column, we reuse the existing location field" understates the
-coupling, and this is the sharpest piece of hidden work in phase 2:
+Wire v51 completed the representation half of this boundary. The agent reports
+a `DiskAttachment`, `VolumeReplica.diskAttachment` stores its JSON value, and
+`VolumeSpec.attachment` replays it. An RBD image therefore keeps its pool,
+image, cephx user, and monitor hosts as coordinates rather than placing a
+`pool/image` string into a field whose other meaning is a host path.
 
-- **`Volume.storagePath` is paired with `hypervisorId` at every reader.**
-  `VolumeController` guards resize, snapshot, and clone with
-  `guard volume.hypervisorId != nil, volume.storagePath != nil`
-  (`VolumeController.swift:591`, `:656`, `:753`). For a Ceph volume
-  `hypervisorId` is meaningless — un-pinning it is the entire point — so
-  either those guards relax to pool-aware reachability, or a synthetic
-  agent id gets written just to satisfy them. Relax them.
-- **`VolumeSpec.storagePath` is documented on the wire as "Host path of the
-  volume as previously reported by the owning agent"**
-  (`shared/Sources/StratoShared/VMSpec.swift:203`). Putting a `pool/image`
-  string in it makes `pool.mode` the only discriminator between two
-  incompatible meanings of one field — exactly the untyped-path problem the
-  sum-type refactor below exists to delete. **The typed attachment should
-  carry the RBD coordinates end to end** rather than smuggling them through
-  a path-shaped field.
+Phase 2 still owns the placement half: a Ceph volume is site-reachable rather
+than pinned to one replica agent, so admission and snapshot/clone routing must
+use pool-aware reachability instead of inventing a synthetic host owner.
 
 `StoragePool.agentCanReach` gains its third case: for `.ceph`, an agent
 reaches the pool if it is a configured client of the pool's cluster —
@@ -194,18 +185,13 @@ guest ── virtio-blk ── Firecracker ─────┤
 
 ## `StorageBackend` and disk attachments as a sum type
 
-> Named carefully: [`storage.md`](./storage.md) already has a "Typed disk
-> attachments" section describing the *shipped* `DiskAttachment` (host path
-> + `DiskFormat`) as the typed attachment. This section is about turning
-> that struct into a sum type, which is a different change.
-
 The agent-side protocol (`agent/Sources/StratoAgentCore/StorageBackend.swift`)
 survives largely intact — create, delete, resize, snapshot, clone, and info
 all map onto `rbd` operations more directly than they map onto qemu-img. The
-part that breaks is `DiskAttachment`, which is a **host path plus format**.
-An RBD disk has no path.
+cross-backend boundary is `DiskAttachment`: it cannot be a host path plus
+format because an RBD disk has no path.
 
-So `DiskAttachment` becomes a typed value, exactly as NICs already did when
+`DiskAttachment` is now a typed value, exactly as NICs already did when
 `NetworkAttachment` replaced an assumed TAP path:
 
 ```swift
@@ -216,11 +202,10 @@ enum DiskAttachment {
 }
 ```
 
-Hypervisor drivers switch on it instead of opening a path. This refactor is
-worth doing **first and on its own**, against today's filesystem backend
-with no Ceph in sight: it is the change that touches the most existing code,
-it needs a wire-protocol version bump and capability gating (the
-`volume_snapshot_delete` precedent), and it de-risks everything after it.
+Hypervisor drivers switch on it instead of opening a path. This shipped first
+against the filesystem backend in wire v51: the exact registration handshake
+is the protocol gate, while Ceph-client capability gating remains phase 2's
+host-readiness decision.
 
 `CephRBDStorageBackend` then implements the protocol against `rbd`, and
 registers in the agent's driver registry alongside `FileSystemStorageBackend`
@@ -376,17 +361,10 @@ give them rows in an operations side-table. ADR 0001 deleted that table
 cluster resource, projected as a conditions block, with the
 stuck-*convergence* sweep flipping `degraded` past budget.
 
-This is the sharpest sequencing constraint in the whole roadmap, so it is
-worth stating plainly: **anything here that touches the volume wire messages
-is touching messages ADR 0001 is converting.** Typed disk attachments
-(phase 1) change what an attachment *is*, which is orthogonal to how it is
-delivered — that work is safe in either order, and doing it first simply
-means the declarative conversion carries a richer type. The Ceph *control-plane*
-volume lifecycle is not orthogonal: building it against the imperative
-`volume_*` RPCs would be building on messages scheduled for deletion. Prefer
-landing the declarative volume conversion first; if Ceph must move sooner,
-scope it to the agent-side backend and accept the conversion cost knowingly
-rather than by accident.
+ADR 0001's declarative volume conversion and the attachment sum type have now
+both landed. Desired volume state owns lifecycle delivery; `DiskAttachment`
+owns the realized storage reference. The remaining Ceph work builds on those
+two boundaries rather than adding imperative `volume_*` RPCs back.
 
 ## Images on RBD
 
@@ -463,14 +441,14 @@ Each phase is independently useful. The ordering principle is that the
 **client path and the orchestration path are separable**, and the client
 path is where all the value is.
 
-1. **Disk attachments as a sum type.** Replace the path-carrying
-   `DiskAttachment`, thread it through the hypervisor drivers and volume
-   wire messages, bump the wire version with capability gating. Pure
-   refactor, no Ceph.
+1. **Disk attachments as a sum type (shipped in wire v51).** Replaced the
+   path-carrying `DiskAttachment` and threaded it through hypervisor drivers,
+   observed volume state, replica persistence, and VM specs. Pure refactor, no
+   Ceph; the exact-version registration handshake gates the wire change.
 2. **Bring-your-own-Ceph client path.** `StoragePool.ceph` + `CephCluster`
    pointing at an existing cluster; `CephRBDStorageBackend`; QEMU `rbd`
    blockdev; agent advertises the Ceph-client capability; per-project RBD
-   namespaces and the relaxed `hypervisorId`/`storagePath` guards.
+   namespaces and pool-aware replica reachability/routing.
    **Volumes stop being agent-pinned here** — this alone unblocks #353 and
    #626.
 3. **Device inventory.** `StorageDevice` reporting and operator marking.

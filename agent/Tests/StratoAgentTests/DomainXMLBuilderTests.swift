@@ -63,7 +63,8 @@ struct DomainXMLBuilderTests {
 
     static let vmId = "0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
     static let vmDirectory = "/var/lib/strato/vms/\(vmId)"
-    static let bootDisk = ResolvedDisk(path: "\(vmDirectory)/disk.qcow2", format: .qcow2)
+    static let bootDisk = ResolvedDisk(
+        attachment: .file(path: "\(vmDirectory)/disk.qcow2", format: .qcow2))
     static let cloudInitISO = "\(vmDirectory)/cloud-init.iso"
     static let dataVolumeId = "6b1c0a5e-7d2f-4a83-9e10-5c4b3a2d1f00"
     static let referenceVolumeId = "9f3d7c21-4b6a-4e05-8d92-1a0b7c5e3d44"
@@ -164,12 +165,16 @@ struct DomainXMLBuilderTests {
                     // No volume id: this is the disk materialized from the VM's
                     // image, which no volume owns and which therefore carries
                     // no serial.
-                    ResolvedDisk(path: "\(vmDirectory)/disk.qcow2", format: .qcow2, bootOrder: 0),
                     ResolvedDisk(
-                        path: "/var/lib/strato/volumes/data.qcow2", format: .qcow2, bootOrder: 1,
+                        attachment: .file(path: "\(vmDirectory)/disk.qcow2", format: .qcow2),
+                        bootOrder: 0),
+                    ResolvedDisk(
+                        attachment: .file(
+                            path: "/var/lib/strato/volumes/data.qcow2", format: .qcow2), bootOrder: 1,
                         volumeId: dataVolumeId),
                     ResolvedDisk(
-                        path: "/var/lib/strato/volumes/reference.raw", format: .raw, readonly: true,
+                        attachment: .file(
+                            path: "/var/lib/strato/volumes/reference.raw", format: .raw), readonly: true,
                         volumeId: referenceVolumeId),
                 ],
                 cloudInitISOPath: nil,
@@ -217,12 +222,16 @@ struct DomainXMLBuilderTests {
                     maxMemoryBytes: 16 * 1024 * 1024 * 1024,
                     machine: MachineProfile(secureBoot: true, tpm: true), graphics: .vnc),
                 disks: [
-                    ResolvedDisk(path: "\(vmDirectory)/disk.qcow2", format: .qcow2, bootOrder: 0),
                     ResolvedDisk(
-                        path: "/var/lib/strato/volumes/data.qcow2", format: .qcow2,
+                        attachment: .file(path: "\(vmDirectory)/disk.qcow2", format: .qcow2),
+                        bootOrder: 0),
+                    ResolvedDisk(
+                        attachment: .file(
+                            path: "/var/lib/strato/volumes/data.qcow2", format: .qcow2),
                         volumeId: dataVolumeId),
                     ResolvedDisk(
-                        path: "/var/lib/strato/volumes/reference.raw", format: .raw, readonly: true,
+                        attachment: .file(
+                            path: "/var/lib/strato/volumes/reference.raw", format: .raw), readonly: true,
                         volumeId: referenceVolumeId),
                 ],
                 networks: [primaryNIC, jumboNIC, unaddressedNIC])),
@@ -550,7 +559,10 @@ struct DomainXMLBuilderTests {
     func bootOrderIsDerived() throws {
         func orders(_ stored: [Int?]) -> [Int?] {
             DomainXMLBuilder.derivedBootOrders(
-                stored.map { ResolvedDisk(path: "/d.qcow2", format: .qcow2, bootOrder: $0) })
+                stored.map {
+                    ResolvedDisk(
+                        attachment: .file(path: "/d.qcow2", format: .qcow2), bootOrder: $0)
+                })
         }
         // Strato's 0-based values become libvirt's 1-based ones.
         #expect(orders([0, 1, 2]) == [1, 2, 3])
@@ -575,7 +587,9 @@ struct DomainXMLBuilderTests {
                 spec: Self.spec(),
                 disks: [
                     Self.bootDisk,
-                    ResolvedDisk(path: "/volumes/data.qcow2", format: .qcow2, volumeId: volumeId),
+                    ResolvedDisk(
+                        attachment: .file(path: "/volumes/data.qcow2", format: .qcow2),
+                        volumeId: volumeId),
                 ]))
 
         #expect(xml.contains("<serial>vol-\(volumeId)</serial>"))
@@ -630,7 +644,9 @@ struct DomainXMLBuilderTests {
             Self.spareIndexes(
                 Self.input(
                     spec: Self.spec(),
-                    disks: (0..<disks).map { ResolvedDisk(path: "/d\($0).qcow2", format: .qcow2) })
+                    disks: (0..<disks).map {
+                        ResolvedDisk(attachment: .file(path: "/d\($0).qcow2", format: .qcow2))
+                    })
             ).count
         }
         // Four devices besides the disks (cloud-init ISO, NIC, virtio-serial,
@@ -789,7 +805,10 @@ struct DomainXMLBuilderTests {
                 boot: .directKernel(
                     kernel: "/images/vm & test/vmlinuz", initramfs: nil,
                     cmdline: "root=/dev/vda1 flag=\"a<b\" other='c&d'")),
-            disks: [ResolvedDisk(path: "/volumes/a & b/<disk>.qcow2", format: .qcow2)],
+            disks: [
+                ResolvedDisk(
+                    attachment: .file(path: "/volumes/a & b/<disk>.qcow2", format: .qcow2))
+            ],
             cloudInitISOPath: nil,
             networks: [
                 ResolvedNetworkAttachment(

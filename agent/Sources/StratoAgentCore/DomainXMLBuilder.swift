@@ -585,8 +585,8 @@ public enum DomainXMLBuilder {
         for (index, disk) in input.disks.enumerated() {
             devices.append(
                 diskNode(
-                    path: disk.path, format: disk.format.rawValue, index: index,
-                    readonly: disk.readonly, bootOrder: bootOrders[index],
+                    attachment: disk.attachment, index: index, readonly: disk.readonly,
+                    bootOrder: bootOrders[index],
                     volumeId: disk.volumeId))
         }
         if let isoPath = input.cloudInitISOPath {
@@ -595,7 +595,7 @@ public enum DomainXMLBuilder {
             // presence can never shift a data disk's target name.
             devices.append(
                 diskNode(
-                    path: isoPath, format: "raw", index: input.disks.count, readonly: true,
+                    attachment: .file(path: isoPath, format: .raw), index: input.disks.count, readonly: true,
                     bootOrder: nil, volumeId: nil))
         }
 
@@ -859,14 +859,47 @@ public enum DomainXMLBuilder {
     /// created with and one plugged in later are described identically —
     /// including the serial a detach resolves by.
     static func diskNode(
-        path: String, format: String, target: String, readonly: Bool, bootOrder: Int?,
+        attachment: DiskAttachment, target: String, readonly: Bool, bootOrder: Int?,
         volumeId: String?
     ) -> DomainXMLNode {
-        var disk = DomainXMLNode("disk", [("type", "file"), ("device", "disk")])
+        let diskType: String
+        let driverFormat: String
+        let source: DomainXMLNode
+        let authentication: DomainXMLNode?
+        switch attachment {
+        case .file(let path, let format):
+            diskType = "file"
+            driverFormat = format.rawValue
+            source = DomainXMLNode("source", [("file", path)])
+            authentication = nil
+        case .blockDevice(let path):
+            diskType = "block"
+            driverFormat = DiskFormat.raw.rawValue
+            source = DomainXMLNode("source", [("dev", path)])
+            authentication = nil
+        case .rbd(let pool, let image, let user, let monHosts):
+            diskType = "network"
+            driverFormat = DiskFormat.raw.rawValue
+            var networkSource = DomainXMLNode(
+                "source", [("protocol", "rbd"), ("name", "\(pool)/\(image)")])
+            for monitor in monHosts {
+                networkSource.append(rbdMonitorNode(monitor))
+            }
+            source = networkSource
+            authentication =
+                DomainXMLNode(
+                    "auth", [("username", user)],
+                    children: [DomainXMLNode("secret", [("type", "ceph"), ("usage", user)])])
+        }
+
+        var disk = DomainXMLNode("disk", [("type", diskType), ("device", "disk")])
         // No cache/discard/io tuning: the QEMU path passes none, and adding it
         // here would be a behaviour change disguised as a translation.
-        disk.append(DomainXMLNode("driver", [("name", "qemu"), ("type", format)]))
-        disk.append(DomainXMLNode("source", [("file", path)]))
+        disk.append(DomainXMLNode("driver", [("name", "qemu"), ("type", driverFormat)]))
+        disk.append(source)
+        if let authentication {
+            disk.append(authentication)
+        }
         disk.append(DomainXMLNode("target", [("dev", target), ("bus", "virtio")]))
         if readonly {
             disk.append(DomainXMLNode("readonly"))
@@ -885,12 +918,32 @@ public enum DomainXMLBuilder {
     }
 
     private static func diskNode(
-        path: String, format: String, index: Int, readonly: Bool, bootOrder: Int?,
+        attachment: DiskAttachment, index: Int, readonly: Bool, bootOrder: Int?,
         volumeId: String?
     ) -> DomainXMLNode {
         diskNode(
-            path: path, format: format, target: targetDeviceName(index: index),
+            attachment: attachment, target: targetDeviceName(index: index),
             readonly: readonly, bootOrder: bootOrder, volumeId: volumeId)
+    }
+
+    /// Libvirt models a monitor endpoint as separate host and port attributes.
+    /// Bracketed IPv6 and the common host:port spelling are split; an unbracketed
+    /// IPv6 address remains a host with no invented port.
+    private static func rbdMonitorNode(_ endpoint: String) -> DomainXMLNode {
+        if endpoint.hasPrefix("["), let closing = endpoint.firstIndex(of: "]") {
+            let name = String(endpoint[endpoint.index(after: endpoint.startIndex)..<closing])
+            let remainder = endpoint[endpoint.index(after: closing)...]
+            let port = remainder.hasPrefix(":") ? String(remainder.dropFirst()) : nil
+            return DomainXMLNode("host", [("name", name), ("port", port?.isEmpty == false ? port : nil)])
+        }
+
+        let colons = endpoint.filter { $0 == ":" }.count
+        if colons == 1, let separator = endpoint.lastIndex(of: ":") {
+            let name = String(endpoint[..<separator])
+            let port = String(endpoint[endpoint.index(after: separator)...])
+            return DomainXMLNode("host", [("name", name), ("port", port.isEmpty ? nil : port)])
+        }
+        return DomainXMLNode("host", [("name", endpoint)])
     }
 
     static func interfaceNode(_ nic: ResolvedNetworkAttachment) throws -> DomainXMLNode {

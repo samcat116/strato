@@ -446,7 +446,7 @@ struct DomainXMLLibvirtTests {
             spec: VMSpec(
                 cpus: 1, memoryBytes: 1024 * 1024 * 1024, boot: .disk(firmware: nil),
                 console: ConsoleSpec()),
-            disks: [ResolvedDisk(path: disk.path, format: .raw)],
+            disks: [ResolvedDisk(attachment: .file(path: disk.path, format: .raw))],
             networks: [], architecture: architecture,
             accelerator: FileManager.default.fileExists(atPath: "/dev/kvm") ? .kvm : .tcg,
             firmware: firmware)
@@ -520,12 +520,12 @@ struct DomainXMLLibvirtTests {
             spec: VMSpec(
                 cpus: 1, memoryBytes: 1024 * 1024 * 1024, boot: .disk(firmware: nil),
                 console: ConsoleSpec()),
-            disks: [ResolvedDisk(path: disk.path, format: .raw)],
+            disks: [ResolvedDisk(attachment: .file(path: disk.path, format: .raw))],
             networks: [], architecture: architecture,
             accelerator: FileManager.default.fileExists(atPath: "/dev/kvm") ? .kvm : .tcg,
             firmware: .monolithic(path: bootROM))
         let fragment = DomainDeviceXML.hotplugDisk(
-            path: hotplugged.path, format: .raw, target: "vdz", readonly: false,
+            attachment: .file(path: hotplugged.path, format: .raw), target: "vdz", readonly: false,
             volumeId: "6b1c0a5e-7d2f-4a83-9e10-5c4b3a2d1f00")
 
         // The document as built, and the same one with its spares un-indexed:
@@ -598,7 +598,8 @@ struct DomainXMLLibvirtTests {
             // touch a disk's source.
             for (index, target) in ["vdw", "vdx", "vdy", "vdz"].enumerated() {
                 let fragment = DomainDeviceXML.hotplugDisk(
-                    path: "\(NSTemporaryDirectory())strato-widen-\(index).qcow2", format: .qcow2,
+                    attachment: .file(
+                        path: "\(NSTemporaryDirectory())strato-widen-\(index).qcow2", format: .qcow2),
                     target: target, readonly: false,
                     volumeId: "00000000-0000-4000-8000-00000000000\(index)")
                 let attached = try Self.attachConfig(fragment, to: name, called: "\(name)-\(target)")
@@ -724,7 +725,7 @@ struct DomainXMLLibvirtTests {
             spec: VMSpec(
                 cpus: 1, memoryBytes: gib, maxMemoryBytes: 2 * gib, boot: .disk(firmware: nil),
                 console: ConsoleSpec()),
-            disks: [ResolvedDisk(path: disk.path, format: .raw)],
+            disks: [ResolvedDisk(attachment: .file(path: disk.path, format: .raw))],
             networks: [], architecture: architecture,
             accelerator: FileManager.default.fileExists(atPath: "/dev/kvm") ? .kvm : .tcg,
             firmware: .monolithic(path: bootROM))

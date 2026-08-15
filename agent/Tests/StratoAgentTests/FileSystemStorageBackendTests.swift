@@ -179,7 +179,7 @@ struct FileSystemStorageBackendTests {
 
         let attachment = try await backend.createVolume(volumeId: "vol-1", sizeBytes: 42, format: .qcow2)
 
-        #expect(attachment == DiskAttachment(path: "\(root)/vol-1/volume.qcow2", format: .qcow2))
+        #expect(attachment == .file(path: "\(root)/vol-1/volume.qcow2", format: .qcow2))
         let invocations = await recorder.invocations
         #expect(invocations.count == 1)
         #expect(invocations[0].executable == "/fake/qemu-img")
@@ -201,8 +201,8 @@ struct FileSystemStorageBackendTests {
 
         let attachment = try await backend.createVolume(volumeId: "vol-2", sizeBytes: 7, format: .raw)
 
-        #expect(attachment.path == "\(root)/vol-2/volume.raw")
-        #expect(attachment.format == .raw)
+        #expect(attachment.filePath == "\(root)/vol-2/volume.raw")
+        #expect(attachment.fileFormat == .raw)
         let invocations = await recorder.invocations
         #expect(invocations[0].arguments.contains("raw"))
     }
@@ -219,13 +219,13 @@ struct FileSystemStorageBackendTests {
         let adopted = try await backend.adoptVolume(
             volumeId: volumeId, existingPath: legacyPath, format: .qcow2)
 
-        #expect(adopted.path == "\(root)/\(volumeId)/volume.qcow2")
-        #expect(FileManager.default.contents(atPath: adopted.path) == bytes)
+        #expect(adopted.filePath == "\(root)/\(volumeId)/volume.qcow2")
+        #expect(FileManager.default.contents(atPath: adopted.filePath) == bytes)
         #expect(FileManager.default.contents(atPath: legacyPath) == bytes)
         #expect(try await backend.listVolumes()[volumeId] == adopted)
 
         try await backend.deleteVolume(volumeId: volumeId)
-        #expect(!FileManager.default.fileExists(atPath: adopted.path))
+        #expect(!FileManager.default.fileExists(atPath: adopted.filePath))
         #expect(!FileManager.default.fileExists(atPath: legacyPath))
     }
 
@@ -305,7 +305,7 @@ struct FileSystemStorageBackendTests {
         let target = "\(root)/vms/vm-1/disk.qcow2"
         let attachment = try await backend.materializeDisk(at: target, from: makeImageInfo(), format: .qcow2)
 
-        #expect(attachment == DiskAttachment(path: target, format: .qcow2))
+        #expect(attachment == .file(path: target, format: .qcow2))
         // Same format: plain copy, no qemu-img convert.
         let subcommands = await recorder.invocations.map { $0.arguments.first }
         #expect(!subcommands.contains("convert"))
@@ -330,7 +330,7 @@ struct FileSystemStorageBackendTests {
         let attachment = try await backend.materializeDisk(
             at: target, from: makeImageInfo(), format: .qcow2)
 
-        #expect(attachment.path == target)
+        #expect(attachment.filePath == target)
         #expect(FileManager.default.contents(atPath: target) == Data("read-only-image".utf8))
         let mode = try FileManager.default.attributesOfItem(atPath: target)[.posixPermissions] as? NSNumber
         #expect(mode?.int16Value == 0o444)
@@ -350,7 +350,7 @@ struct FileSystemStorageBackendTests {
         let target = "\(root)/vms/vm-1/rootfs.raw"
         let attachment = try await backend.materializeDisk(at: target, from: makeImageInfo(), format: .raw)
 
-        #expect(attachment.format == .raw)
+        #expect(attachment.fileFormat == .raw)
         // The conversion writes to a staging path, then publishes via rename.
         let convert = await recorder.invocations.first { $0.arguments.first == "convert" }
         #expect(convert?.arguments == ["convert", "-f", "qcow2", "-O", "raw", sourcePath, "\(target).partial"])
@@ -402,7 +402,7 @@ struct FileSystemStorageBackendTests {
 
         let attachment = try await backend.materializeDisk(at: target, from: makeImageInfo(), format: .qcow2)
 
-        #expect(attachment.path == target)
+        #expect(attachment.filePath == target)
         #expect(FileManager.default.contents(atPath: target) == Data("image-bytes".utf8))
         #expect(!FileManager.default.fileExists(atPath: "\(target).partial"))
     }
@@ -420,7 +420,7 @@ struct FileSystemStorageBackendTests {
 
         let attachment = try await backend.materializeDisk(at: target, from: makeImageInfo(), format: .qcow2)
 
-        #expect(attachment.path == target)
+        #expect(attachment.filePath == target)
         #expect(await recorder.invocations.isEmpty)
         #expect(FileManager.default.contents(atPath: target) == Data("existing".utf8))
     }
@@ -451,7 +451,7 @@ struct FileSystemStorageBackendTests {
             volumeId: "vol-9", imageInfo: makeImageInfo(), format: .qcow2,
             artifactKind: .diskImage)
 
-        #expect(attachment == DiskAttachment(path: "\(root)/vol-9/volume.qcow2", format: .qcow2))
+        #expect(attachment == .file(path: "\(root)/vol-9/volume.qcow2", format: .qcow2))
         #expect(FileManager.default.fileExists(atPath: "\(root)/vol-9/volume.qcow2"))
     }
 
@@ -466,7 +466,7 @@ struct FileSystemStorageBackendTests {
         let attachment = try await backend.cloneVolume(
             sourceVolumeId: "vol-1", sourcePath: sourcePath, targetVolumeId: "vol-2")
 
-        #expect(attachment == DiskAttachment(path: "\(root)/vol-2/volume.qcow2", format: .qcow2))
+        #expect(attachment == .file(path: "\(root)/vol-2/volume.qcow2", format: .qcow2))
         let convert = await recorder.invocations.first { $0.arguments.first == "convert" }
         // Staged and renamed, like `createVolume`: a clone's target path is
         // also a presence signal the reconciler reads (STR-148).
@@ -502,8 +502,8 @@ struct FileSystemStorageBackendTests {
 
         let listed = try await backend.listVolumes()
         #expect(Set(listed.keys) == [published])
-        #expect(listed[published]?.format == .qcow2)
-        #expect(listed[published]?.path == "\(root)/\(published)/volume.qcow2")
+        #expect(listed[published]?.fileFormat == .qcow2)
+        #expect(listed[published]?.filePath == "\(root)/\(published)/volume.qcow2")
     }
 
     /// STR-251: model teardown outside the backend actor removing a directory

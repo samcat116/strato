@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import StratoShared
 import Vapor
 
 /// Lifecycle of one physical copy of a volume.
@@ -14,8 +15,8 @@ public enum VolumeReplicaState: String, Codable, CaseIterable, Sendable {
 /// One physical copy ("region") of a volume on one agent. A `local`-pool
 /// volume has exactly one replica. The reserved `replicated` pool mode is not
 /// executable until a storage backend can keep copies coherent. The logical
-/// volume (size, format, attachment) stays on `Volume` — replicas only record
-/// where the bytes live and the health of each copy.
+/// volume (size, format, desired VM attachment) stays on `Volume`; each replica
+/// records where its bytes live and the health of that copy.
 /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
 /// receive IDs or immutable snapshots and reload their own instance.
 final class VolumeReplica: Model, @unchecked Sendable {
@@ -31,10 +32,10 @@ final class VolumeReplica: Model, @unchecked Sendable {
     @Field(key: "agent_id")
     var agentId: String
 
-    /// Agent-owned location of the copy (file path today, ZFS dataset later).
-    /// Nil until the agent reports it — the agent owns path layout.
-    @OptionalField(key: "dataset_path")
-    var datasetPath: String?
+    /// Agent-owned storage reference. Nil until the agent reports it; the
+    /// control plane persists and echoes the value without deriving layout.
+    @OptionalField(key: "disk_attachment")
+    var diskAttachment: DiskAttachment?
 
     @Enum(key: "state")
     var state: VolumeReplicaState
@@ -56,14 +57,14 @@ final class VolumeReplica: Model, @unchecked Sendable {
         id: UUID? = nil,
         volumeID: UUID,
         agentId: String,
-        datasetPath: String? = nil,
+        diskAttachment: DiskAttachment? = nil,
         state: VolumeReplicaState = .provisioning,
         generation: Int64 = 0
     ) {
         self.id = id
         self.$volume.id = volumeID
         self.agentId = agentId
-        self.datasetPath = datasetPath
+        self.diskAttachment = diskAttachment
         self.state = state
         self.generation = generation
     }

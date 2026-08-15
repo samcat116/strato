@@ -805,9 +805,9 @@ failed resize is re-planned by the next sync rather than looking applied.
 
 Volumes joined the engine as a third `WorkloadKind` rather than a forked
 planner: the staleness guard, the retry policy, the failure classification and
-the hold-and-report logic are all shared. A volume's presence comes from the
-storage backend's own inventory, not the manifest — a volume is a file, so
-there is nothing to adopt and no session to lose.
+the hold-and-report logic are all shared. A volume's presence and attachment
+come from the storage backend's own inventory, not the manifest. Durable
+storage has no hypervisor session to lose, so there is nothing to adopt.
 
 Two things are volume-specific. First, a work item can hold **more than one
 lane**: an attach or detach drives the target VM's hypervisor session, so it
