@@ -14,7 +14,11 @@ import {
   buildProjectFolderOptions,
   buildProjectTableRows,
 } from "@/components/projects/project-table-model";
-import { useHierarchy, useProjectsForOrganization } from "@/lib/hooks";
+import {
+  useHierarchy,
+  usePermissions,
+  useProjectsForOrganization,
+} from "@/lib/hooks";
 import { useOrganization } from "@/providers";
 import type { Project } from "@/lib/api/projects";
 
@@ -25,7 +29,35 @@ export default function ProjectsPage() {
   const projectsQuery = useProjectsForOrganization(orgId);
   const { data: projects = [], isLoading: projectsLoading } = projectsQuery;
   const hierarchyQuery = useHierarchy(orgId);
-  const canManage = currentOrg?.userRole === "admin";
+  const { permissions } = usePermissions([
+    ...(orgId
+      ? [
+          {
+            key: "create",
+            action: "project:create",
+            node: { type: "organization", id: orgId },
+          },
+        ]
+      : []),
+    ...projects.flatMap((project) => [
+      {
+        key: `update:${project.id}`,
+        action: "project:update",
+        node: { type: "project", id: project.id },
+      },
+      {
+        key: `transfer:${project.id}`,
+        action: "project:transfer",
+        node: { type: "project", id: project.id },
+      },
+      {
+        key: `delete:${project.id}`,
+        action: "project:delete",
+        node: { type: "project", id: project.id },
+      },
+    ]),
+  ]);
+  const canCreate = permissions.create;
 
   const [query, setQuery] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -65,7 +97,7 @@ export default function ProjectsPage() {
             </p>
           </div>
         </div>
-        {canManage && (
+        {canCreate && (
           <Button
             className="shrink-0 bg-primary hover:bg-primary/90"
             onClick={() => setCreateOpen(true)}
@@ -95,9 +127,9 @@ export default function ProjectsPage() {
             <h2 className="font-semibold text-foreground">
               All Projects ({projects.length})
             </h2>
-            {!canManage && (
+            {!canCreate && (
               <p className="text-xs text-muted-foreground">
-                You need admin rights to create or edit projects.
+                You do not have permission to create projects.
               </p>
             )}
           </div>
@@ -126,7 +158,11 @@ export default function ProjectsPage() {
           rows={rows}
           organizationName={currentOrg.name}
           isLoading={projectsLoading || hierarchyQuery.isLoading}
-          canManage={canManage}
+          actionsFor={(project) => ({
+            canUpdate: permissions[`update:${project.id}`],
+            canTransfer: permissions[`transfer:${project.id}`],
+            canDelete: permissions[`delete:${project.id}`],
+          })}
           onEdit={setEditProject}
           onTransfer={setTransferProject}
           emptyMessage={
