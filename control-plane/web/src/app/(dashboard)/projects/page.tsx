@@ -37,6 +37,11 @@ export default function ProjectsPage() {
             action: "project:create",
             node: { type: "organization", id: orgId },
           },
+          {
+            key: "update_organization",
+            action: "org:update",
+            node: { type: "organization", id: orgId },
+          },
         ]
       : []),
     ...projects.flatMap((project) => [
@@ -188,6 +193,11 @@ export default function ProjectsPage() {
         organizationName={currentOrg.name}
         folderOptions={folderOptions}
         project={editProject}
+        canChangeLocation={
+          !!editProject &&
+          permissions[`transfer:${editProject.id}`] &&
+          permissions.update_organization
+        }
       />
 
       <TransferProjectDialog

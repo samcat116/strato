@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,7 +21,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { usePermissions, useTransferProject } from "@/lib/hooks";
-import { useOrganization } from "@/providers";
+import { organizationsApi } from "@/lib/api/organizations";
+import { useAuth, useOrganization } from "@/providers";
 import type { Project } from "@/lib/api/projects";
 import { toast } from "sonner";
 
@@ -35,11 +37,20 @@ export function TransferProjectDialog({
   onOpenChange,
   project,
 }: TransferProjectDialogProps) {
+  const { user } = useAuth();
   const { organizations, currentOrg } = useOrganization();
   const transferProject = useTransferProject();
   const [destinationOrgId, setDestinationOrgId] = useState("");
 
-  const destinationCandidates = organizations.filter(
+  const allOrganizationsQuery = useQuery({
+    queryKey: ["organizations", "all"],
+    queryFn: ({ signal }) => organizationsApi.listAll(signal),
+    enabled: open && !!user?.isSystemAdmin,
+  });
+  const candidateOrganizations = user?.isSystemAdmin
+    ? (allOrganizationsQuery.data ?? organizations)
+    : organizations;
+  const destinationCandidates = candidateOrganizations.filter(
     (organization) => organization.id !== currentOrg?.id
   );
   const { permissions } = usePermissions(

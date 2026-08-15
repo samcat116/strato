@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ProjectsPage from "./page";
@@ -8,6 +9,9 @@ const { projects, usePermissions } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/providers", () => ({
+  useAuth: () => ({
+    user: { isSystemAdmin: false },
+  }),
   useOrganization: () => ({
     organizations: [
       {
@@ -56,6 +60,17 @@ vi.mock("@/lib/hooks", () => ({
   useTransferProject: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }));
 
+function renderProjectsPage() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <ProjectsPage />
+    </QueryClientProvider>
+  );
+}
+
 describe("ProjectsPage permissions", () => {
   afterEach(cleanup);
 
@@ -70,14 +85,14 @@ describe("ProjectsPage permissions", () => {
   });
 
   it("shows New Project when the authorization service permits project creation", () => {
-    render(<ProjectsPage />);
+    renderProjectsPage();
 
     expect(
       screen.getByRole("button", { name: "New Project" })
     ).toBeVisible();
   });
 
-  it("shows Edit for a project the viewer may update", () => {
+  it("allows metadata editing without offering an unauthorized location transfer", () => {
     projects.push({
       id: "project-1",
       name: "Default Project",
@@ -91,6 +106,7 @@ describe("ProjectsPage permissions", () => {
     usePermissions.mockReturnValue({
       permissions: {
         create: true,
+        update_organization: false,
         "update:project-1": true,
         "transfer:project-1": false,
         "delete:project-1": false,
@@ -100,9 +116,12 @@ describe("ProjectsPage permissions", () => {
       refetch: vi.fn(),
     });
 
-    render(<ProjectsPage />);
+    renderProjectsPage();
 
-    expect(screen.getByRole("button", { name: "Edit" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    expect(screen.getByRole("textbox", { name: "Name" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "Location" })).toBeDisabled();
   });
 
   it("offers only the permitted destructive project actions", async () => {
@@ -128,7 +147,7 @@ describe("ProjectsPage permissions", () => {
       refetch: vi.fn(),
     });
 
-    render(<ProjectsPage />);
+    renderProjectsPage();
     fireEvent.pointerDown(
       screen.getByRole("button", { name: "More actions for Default Project" })
     );
