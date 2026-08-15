@@ -38,8 +38,11 @@ interface ProjectsTableProps {
   rows: ProjectTableRow[];
   organizationName: string;
   isLoading?: boolean;
-  /** Whether the current user can edit/transfer/delete projects (org admin). */
-  canManage: boolean;
+  actionsFor: (project: Project) => {
+    canUpdate: boolean;
+    canTransfer: boolean;
+    canDelete: boolean;
+  };
   onEdit: (project: Project) => void;
   onTransfer: (project: Project) => void;
   emptyMessage?: string;
@@ -49,7 +52,7 @@ export function ProjectsTable({
   rows,
   organizationName,
   isLoading,
-  canManage,
+  actionsFor,
   onEdit,
   onTransfer,
   emptyMessage = "No projects yet. Create one to organize your VMs and images.",
@@ -96,6 +99,11 @@ export function ProjectsTable({
     );
   }
 
+  const hasAnyActions = rows.some((row) => {
+    const actions = actionsFor(row.project);
+    return actions.canUpdate || actions.canTransfer || actions.canDelete;
+  });
+
   return (
     <Table>
       <TableHeader>
@@ -104,7 +112,7 @@ export function ProjectsTable({
           <TableHead className="text-muted-foreground">Location</TableHead>
           <TableHead className="text-muted-foreground">Environments</TableHead>
           <TableHead className="text-muted-foreground text-right">VMs</TableHead>
-          {canManage && (
+          {hasAnyActions && (
             <TableHead className="text-muted-foreground w-32 text-right">
               Actions
             </TableHead>
@@ -112,8 +120,12 @@ export function ProjectsTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {rows.map(({ project, folderPath }) => (
-          <TableRow key={project.id} className="border-border">
+        {rows.map(({ project, folderPath }) => {
+          const actions = actionsFor(project);
+          const hasOverflowActions = actions.canTransfer || actions.canDelete;
+
+          return (
+            <TableRow key={project.id} className="border-border">
             <TableCell>
               <Link
                 href={`/projects/${project.id}`}
@@ -174,56 +186,65 @@ export function ProjectsTable({
             <TableCell className="text-right text-foreground">
               {project.vmCount ?? 0}
             </TableCell>
-            {canManage && (
+            {hasAnyActions && (
               <TableCell className="text-right">
                 <div className="flex items-center justify-end gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-muted-foreground hover:text-foreground"
-                    onClick={() => onEdit(project)}
-                    disabled={pendingId === project.id}
-                  >
-                    <Pencil className="h-4 w-4" />
-                    Edit
-                  </Button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                        disabled={pendingId === project.id}
-                        aria-label={`More actions for ${project.name}`}
-                      >
-                        <MoreHorizontal className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent
-                      className="bg-card border-border"
-                      align="end"
+                  {actions.canUpdate && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-muted-foreground hover:text-foreground"
+                      onClick={() => onEdit(project)}
+                      disabled={pendingId === project.id}
                     >
-                      <DropdownMenuItem
-                        onClick={() => onTransfer(project)}
-                        className="text-foreground focus:bg-accent focus:text-accent-foreground cursor-pointer"
+                      <Pencil className="h-4 w-4" />
+                      Edit
+                    </Button>
+                  )}
+                  {hasOverflowActions && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                          disabled={pendingId === project.id}
+                          aria-label={`More actions for ${project.name}`}
+                        >
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent
+                        className="bg-card border-border"
+                        align="end"
                       >
-                        <ArrowRightLeft className="h-4 w-4 mr-2" />
-                        Transfer
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={() => handleDelete(project)}
-                        className="text-red-600 focus:bg-accent focus:text-red-700 cursor-pointer"
-                      >
-                        <Trash2 className="h-4 w-4 mr-2" />
-                        Delete
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                        {actions.canTransfer && (
+                          <DropdownMenuItem
+                            onClick={() => onTransfer(project)}
+                            className="text-foreground focus:bg-accent focus:text-accent-foreground cursor-pointer"
+                          >
+                            <ArrowRightLeft className="h-4 w-4 mr-2" />
+                            Transfer
+                          </DropdownMenuItem>
+                        )}
+                        {actions.canDelete && (
+                          <DropdownMenuItem
+                            onClick={() => handleDelete(project)}
+                            className="text-red-600 focus:bg-accent focus:text-red-700 cursor-pointer"
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Delete
+                          </DropdownMenuItem>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
                 </div>
               </TableCell>
             )}
-          </TableRow>
-        ))}
+            </TableRow>
+          );
+        })}
       </TableBody>
     </Table>
   );
