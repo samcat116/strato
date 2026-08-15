@@ -147,7 +147,7 @@ struct DesiredStateAssembler {
         let identityTTLSeconds =
             identityAudiences.isEmpty
             ? nil : min(900, max(1, identityIssuance.maximumTTLSeconds))
-        let volumeStoragePaths = try await VolumeService.storagePaths(
+        let volumeDiskAttachments = try await VolumeService.diskAttachments(
             for: vms.flatMap(\.volumes), accessibleFrom: agentId, on: db)
 
         var entries: [DesiredVMState] = []
@@ -164,7 +164,7 @@ struct DesiredStateAssembler {
                 from: vm,
                 image: image,
                 volumes: vm.volumes,
-                storagePathsByVolumeID: volumeStoragePaths,
+                diskAttachmentsByVolumeID: volumeDiskAttachments,
                 resolvedInterfaces: resolvedInterfaces,
                 securityGroupsByInterface: securityGroupsByInterface,
                 sendsMetadataPort: true,

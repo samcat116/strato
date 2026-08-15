@@ -50,7 +50,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 49). The required registration fields
+currently 51). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -84,6 +84,16 @@ control plane and agent still require the same v48 handshake.
 Wire v49 adds `AgentRegisterMessage.metadataServiceCapable`. The agent reports
 true only after it initializes the guest-facing listener supervisor; the
 control plane requires the explicit signal for IMDS-backed VM placement.
+
+Wire v50 preserves stdout/stderr identity on captured guest-exec output.
+
+Wire v51 replaces file-only volume paths with `DiskAttachment`: `.file`
+includes its declared format, `.blockDevice` carries a host device, and `.rbd`
+carries pool, image, cephx user, and monitor hosts. The agent reports the value,
+the control plane stores it on `VolumeReplica`, and `VMSpec.volumes` returns it
+verbatim to the VM's agent. This is a coordinated exact-version cutover, not a
+host capability: capability answers whether a node can use Ceph, while v51
+answers whether both peers can decode the attachment value at all.
 
 Two consequences worth knowing:
 
@@ -212,8 +222,9 @@ an optional attachment.
 
 Two fields it deliberately does *not* carry. There is no pool: placement is
 expressed by *which agent's sync the entry appears in*, and a second encoding
-of the same fact is a thing that can drift. There is no storage path: the agent
-owns path layout, so the path travels the other way, on the observed report.
+of the same fact is a thing that can drift. There is no disk reference on the
+volume lane: the agent owns storage layout, so the typed attachment originates
+on the observed report.
 
 `DesiredVolumeSource` is the create strategy — `blank`, `image`, or `clone` —
 and it is what used to be `volume_clone`. It follows the
@@ -233,9 +244,11 @@ of one fact cannot disagree; the volume lane is authoritative for realizing an
 attachment, and `VMSpec.volumes` is the boot-time convenience that rebuilds the
 same disk set.
 
-`ObservedVolumeState` reports presence, the agent-chosen path and format, the
-attachment, the volume's actual `sizeBytes` (v38+), and the usual convergence
-quartet. A nil `volumes` on the *report* has two causes and the control plane
+`ObservedVolumeState` reports presence, the agent-chosen `DiskAttachment`, the
+volume's actual `sizeBytes` (v38+), the VM attachment, and the usual convergence
+quartet. The control plane persists that disk attachment without interpreting
+it and projects it into `VMSpec.volumes` for VM realization. A nil `volumes` on
+the *report* has two causes and the control plane
 treats them identically, because the right response to both is to do nothing:
 an agent below v31 does not speak the field, and a v31 agent that cannot
 enumerate its volume store says so this way rather than claiming an empty

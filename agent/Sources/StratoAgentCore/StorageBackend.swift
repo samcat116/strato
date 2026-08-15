@@ -38,8 +38,8 @@ public struct VolumeInfoResult: Codable, Sendable {
 /// `NetworkServiceProtocol` (networking).
 ///
 /// The backend owns volume placement: callers pass IDs, the backend decides
-/// paths and reports them back through `DiskAttachment` (the control plane
-/// stores whatever the agent reports and never derives paths itself).
+/// its attachment and reports it through `DiskAttachment` (the control plane
+/// stores whatever the agent reports and never derives storage layout itself).
 /// Operations that hand back a disk return a typed `DiskAttachment` so
 /// hypervisor drivers never guess at formats.
 ///
@@ -96,11 +96,11 @@ public protocol StorageBackend: Actor {
 
     /// Every volume whose data this backend currently holds, by id (STR-148).
     ///
-    /// This is the agent's presence set for volume reconciliation: a volume is
-    /// a file, so the backend's own inventory is the whole truth and there is
-    /// no manifest to keep in step with it. Must tolerate a half-written
-    /// volume — a directory whose `qemu-img create` died partway through is
-    /// *not* present, so the next sync re-drives the create over it.
+    /// This is the agent's presence set for volume reconciliation: the
+    /// backend's own inventory is the whole truth and there is no manifest to
+    /// keep in step with it. A filesystem implementation must tolerate a
+    /// half-written volume — a directory whose `qemu-img create` died partway
+    /// through is *not* present, so the next sync re-drives the create over it.
     func listVolumes() async throws -> [String: DiskAttachment]
 }
 

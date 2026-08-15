@@ -637,9 +637,9 @@ public protocol ReconcileActuator: Sendable {
     /// Snapshot of every volume whose data this host holds (STR-148), or nil
     /// when the agent cannot enumerate the store at all.
     ///
-    /// Entries are always `.managed`: a volume is a file, so there is no
-    /// session to lose and nothing to re-adopt — the storage backend's
-    /// directory listing is the whole truth.
+    /// Entries are always `.managed`: the storage backend's inventory is the
+    /// authority for durable volume data, so there is no hypervisor session to
+    /// lose and nothing to re-adopt.
     ///
     /// The Optional is the volume counterpart of `presenceIsComplete` and
     /// exists for the same reason: an empty inventory is *authoritative* to

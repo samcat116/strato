@@ -4010,8 +4010,8 @@ extension Agent: ReconcileActuator {
     /// Every volume whose data this host holds, with the attachment the agent
     /// durably records for it (STR-148).
     ///
-    /// Presence comes from the storage backend's own inventory — a volume is a
-    /// file, so there is nothing to adopt and every entry is `.managed`.
+    /// Presence comes from the storage backend's own durable inventory, so
+    /// there is no hypervisor session to adopt and every entry is `.managed`.
     /// Attachment comes from the VM manifest entries, *not* from a live
     /// hypervisor query: a powered-off guest has no device list, and reading
     /// that silence as "detached" would plan an attach against a dead control

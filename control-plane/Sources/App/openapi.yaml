@@ -10751,7 +10751,7 @@ components:
           type: array
           description: >-
             Every physical copy of the volume. Healthy and provisioning copies
-            authoritatively define placement and agent-owned storage paths;
+            authoritatively define placement and agent-owned disk attachments;
             other states remain visible for repair and observability.
           items:
             $ref: "#/components/schemas/VolumeReplica"
@@ -10811,18 +10811,74 @@ components:
           format: uuid
         agentId:
           type: string
-        datasetPath:
-          type: string
+        diskAttachment:
+          allOf:
+            - $ref: "#/components/schemas/DiskAttachment"
           nullable: true
           description: >-
-            The agent-owned location of this physical copy. Null while a
-            provisioning replica has not reported its location yet.
+            The complete storage reference reported by the owning agent. Null
+            while a provisioning replica has not reported an attachment yet.
         state:
           type: string
           enum: [provisioning, healthy, degraded, resyncing, faulted]
         generation:
           type: integer
           format: int64
+    DiskAttachment:
+      description: >-
+        The storage-backend-owned disk reference. Exactly one case is present;
+        the control plane stores and returns it without deriving host layout.
+      oneOf:
+        - $ref: "#/components/schemas/FileDiskAttachment"
+        - $ref: "#/components/schemas/BlockDeviceDiskAttachment"
+        - $ref: "#/components/schemas/RBDDiskAttachment"
+    FileDiskAttachment:
+      type: object
+      required: [file]
+      additionalProperties: false
+      properties:
+        file:
+          type: object
+          required: [path, format]
+          additionalProperties: false
+          properties:
+            path:
+              type: string
+            format:
+              type: string
+              enum: [qcow2, raw]
+    BlockDeviceDiskAttachment:
+      type: object
+      required: [blockDevice]
+      additionalProperties: false
+      properties:
+        blockDevice:
+          type: object
+          required: [path]
+          additionalProperties: false
+          properties:
+            path:
+              type: string
+    RBDDiskAttachment:
+      type: object
+      required: [rbd]
+      additionalProperties: false
+      properties:
+        rbd:
+          type: object
+          required: [pool, image, user, monHosts]
+          additionalProperties: false
+          properties:
+            pool:
+              type: string
+            image:
+              type: string
+            user:
+              type: string
+            monHosts:
+              type: array
+              items:
+                type: string
     VolumeSnapshot:
       type: object
       required: [name, description, environment, size, sizeFormatted, status]

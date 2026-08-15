@@ -505,7 +505,7 @@ final class WorkloadTombstoneTests {
             attached.deviceName = "disk0"
             try await attached.save(on: app.db)
             try await VolumeReplica(
-                volumeID: try attached.requireID(), agentId: oldId, datasetPath: nil, state: .healthy
+                volumeID: try attached.requireID(), agentId: oldId, diskAttachment: nil, state: .healthy
             ).create(on: app.db)
 
             let detached = Volume(
@@ -513,7 +513,7 @@ final class WorkloadTombstoneTests {
                 size: 1 << 30, createdByID: try user.requireID())
             try await detached.save(on: app.db)
             try await VolumeReplica(
-                volumeID: try detached.requireID(), agentId: oldId, datasetPath: nil, state: .healthy
+                volumeID: try detached.requireID(), agentId: oldId, diskAttachment: nil, state: .healthy
             ).create(on: app.db)
 
             _ = try await app.observedStateApplier.apply(
