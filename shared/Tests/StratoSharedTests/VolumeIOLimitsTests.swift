@@ -132,7 +132,7 @@ struct VolumeIOLimitsTests {
         let spec = VolumeSpec(
             volumeId: UUID(),
             deviceName: VolumeDeviceName.disk(1),
-            storagePath: "/var/lib/strato/volumes/v/volume.qcow2",
+            attachment: .file(path: "/var/lib/strato/volumes/v/volume.qcow2", format: .qcow2),
             ioLimits: VolumeIOLimits(bpsTotal: 1 << 20))
         #expect(try roundTrip(spec).ioLimits?.bpsTotal == 1 << 20)
 

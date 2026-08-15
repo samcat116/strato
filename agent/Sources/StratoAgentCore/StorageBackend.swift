@@ -1,44 +1,4 @@
-import Foundation
 import StratoShared
-
-// MARK: - Disk Format
-
-/// On-disk image formats the storage layer can produce. Distinct from the
-/// wire-level format strings: parse those with `DiskFormat(rawValue:)` and
-/// reject unknown values at the boundary instead of passing free-form strings
-/// into qemu-img.
-public enum DiskFormat: String, Codable, Sendable, CaseIterable {
-    case qcow2
-    case raw
-
-    /// File extension used by the path layout (`volume.qcow2`, `rootfs.raw`).
-    public var fileExtension: String { rawValue }
-
-    /// Best-effort format inference for a disk referenced only by path. The
-    /// storage layout names files after their format, so the extension is
-    /// authoritative for backend-managed volumes; unknown extensions fall
-    /// back to qcow2 (the historical assumption for pre-existing disks).
-    public init(volumePath: String) {
-        self = DiskFormat(rawValue: (volumePath as NSString).pathExtension) ?? .qcow2
-    }
-}
-
-// MARK: - Disk Attachment Descriptor
-
-/// What the storage layer hands a hypervisor driver: a disk that exists on
-/// this host, with the format the driver must declare when attaching it.
-/// Drivers add their own attach options (readonly, device names, interfaces).
-public struct DiskAttachment: Sendable, Equatable {
-    /// Host path of the disk image.
-    public let path: String
-    /// Actual format of the image at `path`.
-    public let format: DiskFormat
-
-    public init(path: String, format: DiskFormat) {
-        self.path = path
-        self.format = format
-    }
-}
 
 // MARK: - Image Source
 

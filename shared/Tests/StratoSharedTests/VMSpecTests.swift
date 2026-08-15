@@ -51,10 +51,11 @@ struct VMSpecTests {
             boot: .disk(firmware: nil),
             volumes: [
                 VolumeSpec(
-                    volumeId: Fixtures.uuidA, deviceName: .disk(0), storagePath: "/v/disk0.qcow2", readonly: false,
+                    volumeId: Fixtures.uuidA, deviceName: .disk(0),
+                    attachment: .file(path: "/v/disk0.qcow2", format: .qcow2), readonly: false,
                     bootOrder: 0),
                 VolumeSpec(
-                    volumeId: Fixtures.uuidB, deviceName: .disk(1), storagePath: nil, readonly: true, bootOrder: 1),
+                    volumeId: Fixtures.uuidB, deviceName: .disk(1), attachment: nil, readonly: true, bootOrder: 1),
             ],
             networks: [
                 NetworkSpec(
@@ -74,11 +75,11 @@ struct VMSpecTests {
         #expect(decoded.volumes.count == 2)
         #expect(decoded.volumes[0].volumeId == Fixtures.uuidA)
         #expect(decoded.volumes[0].deviceName.rawValue == "disk0")
-        #expect(decoded.volumes[0].storagePath == "/v/disk0.qcow2")
+        #expect(decoded.volumes[0].attachment == .file(path: "/v/disk0.qcow2", format: .qcow2))
         #expect(decoded.volumes[0].bootOrder == 0)
         #expect(decoded.volumes[1].volumeId == Fixtures.uuidB)
         #expect(decoded.volumes[1].readonly)
-        #expect(decoded.volumes[1].storagePath == nil)
+        #expect(decoded.volumes[1].attachment == nil)
 
         #expect(decoded.networks.count == 2)
         #expect(decoded.networks[0].network == "default")
