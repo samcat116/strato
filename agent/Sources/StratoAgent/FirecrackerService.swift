@@ -113,10 +113,17 @@ actor FirecrackerService: HypervisorService {
         // image bytes are materialized by the volume reconciler; this driver
         // fetches only the direct-kernel artifacts it consumes itself.
         guard let bootVolume = spec.volumes.first(where: { $0.bootOrder == 0 }),
-            let bootPath = bootVolume.storagePath
+            let bootAttachment = bootVolume.attachment
         else {
             throw HypervisorServiceError.invalidConfiguration(
                 "Firecracker VM \(vmId) has no realized managed boot volume")
+        }
+        let bootPath: String
+        do {
+            bootPath = try FirecrackerDiskAttachment.hostPath(for: bootAttachment)
+        } catch FirecrackerDiskAttachment.Error.nativeRBD {
+            throw HypervisorServiceError.notSupported(
+                "Firecracker cannot open a native RBD attachment; map it through krbd first")
         }
         guard FileManager.default.fileExists(atPath: bootPath) else {
             throw HypervisorServiceError.diskError(
@@ -654,8 +661,10 @@ actor FirecrackerService: HypervisorService {
     }
 
     /// Firecracker does not support hot-plugging drives into a running microVM.
-    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool) async throws
-    {
+    func attachDisk(
+        vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String,
+        readonly: Bool
+    ) async throws {
         guard vmManagers[vmId] != nil else {
             throw HypervisorServiceError.vmNotFound(vmId)
         }

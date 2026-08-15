@@ -1432,9 +1432,10 @@ actor LibvirtService: HypervisorService {
     /// to do. That matters because attaches are level-triggered and replayed —
     /// without it a redelivered sync would give the guest the same disk twice
     /// under two names.
-    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool)
-        async throws
-    {
+    func attachDisk(
+        vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String,
+        readonly: Bool
+    ) async throws {
         try await perform("attach-disk", vmId: vmId) {
             let dom = try await domain(vmId)
             let disks = try await domainDisks(dom, vmId: vmId)
@@ -1450,8 +1451,7 @@ actor LibvirtService: HypervisorService {
 
             let target = DomainDiskInventory.nextTargetDevice(after: disks)
             let xml = DomainDeviceXML.hotplugDisk(
-                path: volumePath, format: DiskFormat(volumePath: volumePath), target: target,
-                readonly: readonly, volumeId: volumeId)
+                attachment: attachment, target: target, readonly: readonly, volumeId: volumeId)
             let flags = try await deviceFlags(dom, vmId: vmId)
 
             logger.info(
@@ -1459,7 +1459,8 @@ actor LibvirtService: HypervisorService {
                 metadata: [
                     "vmId": .string(vmId), "volumeId": .string(volumeId),
                     "deviceName": .string(deviceName), "target": .string(target),
-                    "volumePath": .string(volumePath), "readonly": .stringConvertible(readonly),
+                    "attachment": .string(String(describing: attachment)),
+                    "readonly": .stringConvertible(readonly),
                 ])
             do {
                 try await call("libvirt-attach-disk", vmId: vmId) { client, deadline in
@@ -2206,29 +2207,32 @@ actor LibvirtService: HypervisorService {
     /// hypervisor never invents a second, path-only boot disk.
     private func resolveDisks(vmId: String, spec: VMSpec, imageInfo _: ImageInfo?) async throws -> [ResolvedDisk] {
         var disks: [ResolvedDisk] = []
-        var seen: Set<String> = []
+        var seen: [DiskAttachment] = []
         for volume in spec.volumes {
-            guard let path = volume.storagePath else {
+            guard let attachment = volume.attachment else {
                 throw HypervisorServiceError.diskError(
-                    "managed volume \(volume.volumeId) for VM \(vmId) has no local storage path")
+                    "managed volume \(volume.volumeId) for VM \(vmId) has no realized disk attachment")
             }
-            guard seen.insert(path).inserted else {
+            guard !seen.contains(attachment) else {
                 throw HypervisorServiceError.diskError(
-                    "managed volumes for VM \(vmId) resolve to the same storage path \(path)")
+                    "managed volumes for VM \(vmId) resolve to the same disk attachment \(attachment)")
             }
+            seen.append(attachment)
             // Checked here rather than left to libvirt: a define accepts a
-            // source file that does not exist and only the *start* fails, so
-            // without this a create reports success and the boot that follows
-            // fails with an error naming a path but not the volume behind it.
-            guard FileManager.default.fileExists(atPath: path) else {
-                throw HypervisorServiceError.diskError(
-                    "volume \(volume.volumeId) for VM \(vmId) has no "
-                        + "file at "
-                        + "\(path) on this host")
+            // missing local source and only the *start* fails. Native RBD has
+            // no local path to probe and is deliberately left to libvirt.
+            switch attachment {
+            case .file(let path, _), .blockDevice(let path):
+                guard FileManager.default.fileExists(atPath: path) else {
+                    throw HypervisorServiceError.diskError(
+                        "volume \(volume.volumeId) for VM \(vmId) has no source at \(path) on this host")
+                }
+            case .rbd:
+                break
             }
             disks.append(
                 ResolvedDisk(
-                    path: path, format: DiskFormat(volumePath: path), readonly: volume.readonly,
+                    attachment: attachment, readonly: volume.readonly,
                     bootOrder: volume.bootOrder,
                     // Written into the document as `<serial>`, so a detach can
                     // resolve this disk by managed identity after a restart.

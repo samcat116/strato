@@ -43,11 +43,11 @@ public enum DomainDeviceXML {
     /// without it, libvirt filled them with the domain's own devices, and every
     /// attach this function feeds failed with "No more available PCI slots".
     public static func hotplugDisk(
-        path: String, format: DiskFormat, target: String, readonly: Bool, volumeId: String
+        attachment: DiskAttachment, target: String, readonly: Bool, volumeId: String
     ) -> String {
         DomainXMLBuilder.diskNode(
-            path: path, format: format.rawValue, target: target, readonly: readonly,
-            bootOrder: nil, volumeId: volumeId
+            attachment: attachment, target: target, readonly: readonly, bootOrder: nil,
+            volumeId: volumeId
         ).render()
     }
 

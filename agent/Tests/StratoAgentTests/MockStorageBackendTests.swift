@@ -39,9 +39,10 @@ struct MockStorageBackendTests {
         let attachment = try await sut.createVolume(volumeId: "vol-1", sizeBytes: 1024, format: .qcow2)
         _ = try await sut.createVolumeFromImage(
             volumeId: "vol-2", imageInfo: imageInfo(), format: .raw, artifactKind: .diskImage)
-        _ = try await sut.createSnapshot(volumeId: "vol-1", snapshotId: "snap-1", volumePath: attachment.path)
+        _ = try await sut.createSnapshot(
+            volumeId: "vol-1", snapshotId: "snap-1", volumePath: attachment.filePath)
 
-        #expect(!FileManager.default.fileExists(atPath: attachment.path))
+        #expect(!FileManager.default.fileExists(atPath: attachment.filePath))
         #expect(!FileManager.default.fileExists(atPath: root))
     }
 
@@ -49,11 +50,11 @@ struct MockStorageBackendTests {
     func pathLayout() async throws {
         let sut = backend(root: "/var/lib/strato/volumes")
         let attachment = try await sut.createVolume(volumeId: "vol-1", sizeBytes: 1024, format: .qcow2)
-        #expect(attachment.path == "/var/lib/strato/volumes/vol-1/volume.qcow2")
-        #expect(attachment.format == .qcow2)
+        #expect(attachment.filePath == "/var/lib/strato/volumes/vol-1/volume.qcow2")
+        #expect(attachment.fileFormat == .qcow2)
 
         let raw = try await sut.createVolume(volumeId: "vol-2", sizeBytes: 1024, format: .raw)
-        #expect(raw.path == "/var/lib/strato/volumes/vol-2/volume.raw")
+        #expect(raw.filePath == "/var/lib/strato/volumes/vol-2/volume.raw")
     }
 
     @Test("A from-image volume takes its virtual size from the image, and reports no consumption")
@@ -63,7 +64,7 @@ struct MockStorageBackendTests {
         let attachment = try await sut.createVolumeFromImage(
             volumeId: "vol-1", imageInfo: image, format: .qcow2, artifactKind: .diskImage)
 
-        let info = try await sut.volumeInfo(volumePath: attachment.path)
+        let info = try await sut.volumeInfo(volumePath: attachment.filePath)
         #expect(info.virtualSize == 8 * 1024 * 1024 * 1024)
         // A volume that does not exist consumes nothing; reporting otherwise
         // would fabricate host disk usage.
@@ -92,8 +93,8 @@ struct MockStorageBackendTests {
     func resize() async throws {
         let sut = backend(root: "/tmp/x")
         let attachment = try await sut.createVolume(volumeId: "vol-1", sizeBytes: 1024, format: .qcow2)
-        try await sut.resizeVolume(volumePath: attachment.path, newSizeBytes: 4096)
-        let info = try await sut.volumeInfo(volumePath: attachment.path)
+        try await sut.resizeVolume(volumePath: attachment.filePath, newSizeBytes: 4096)
+        let info = try await sut.volumeInfo(volumePath: attachment.filePath)
         #expect(info.virtualSize == 4096)
     }
 
@@ -101,16 +102,17 @@ struct MockStorageBackendTests {
     func clone() async throws {
         let sut = backend(root: "/tmp/x")
         let source = try await sut.createVolume(volumeId: "src", sizeBytes: 2048, format: .raw)
-        let clone = try await sut.cloneVolume(sourceVolumeId: "src", sourcePath: source.path, targetVolumeId: "dst")
+        let clone = try await sut.cloneVolume(
+            sourceVolumeId: "src", sourcePath: source.filePath, targetVolumeId: "dst")
 
-        #expect(clone.path == "/tmp/x/dst/volume.raw")
-        #expect(clone.format == .raw)
-        let info = try await sut.volumeInfo(volumePath: clone.path)
+        #expect(clone.filePath == "/tmp/x/dst/volume.raw")
+        #expect(clone.fileFormat == .raw)
+        let info = try await sut.volumeInfo(volumePath: clone.filePath)
         #expect(info.virtualSize == 2048)
 
         // Independent: deleting the source leaves the clone intact.
         try await sut.deleteVolume(volumeId: "src")
-        let stillThere = try await sut.volumeInfo(volumePath: clone.path)
+        let stillThere = try await sut.volumeInfo(volumePath: clone.filePath)
         #expect(stillThere.virtualSize == 2048)
     }
 
@@ -149,17 +151,18 @@ struct MockStorageBackendTests {
         let after = MockStorageBackend(
             logger: Logger(label: "test"), volumeStoragePath: "/tmp/x", metadataPath: metadata)
 
-        let info = try await after.volumeInfo(volumePath: attachment.path)
+        let info = try await after.volumeInfo(volumePath: attachment.filePath)
         #expect(info.virtualSize == 4096)
 
         // Every operation the control plane may still send for a placed volume.
-        try await after.resizeVolume(volumePath: attachment.path, newSizeBytes: 8192)
-        _ = try await after.createSnapshot(volumeId: "vol-1", snapshotId: "snap-1", volumePath: attachment.path)
+        try await after.resizeVolume(volumePath: attachment.filePath, newSizeBytes: 8192)
+        _ = try await after.createSnapshot(
+            volumeId: "vol-1", snapshotId: "snap-1", volumePath: attachment.filePath)
         let clone = try await after.cloneVolume(
-            sourceVolumeId: "vol-1", sourcePath: attachment.path, targetVolumeId: "vol-3")
-        #expect(clone.format == .qcow2)
+            sourceVolumeId: "vol-1", sourcePath: attachment.filePath, targetVolumeId: "vol-3")
+        #expect(clone.fileFormat == .qcow2)
 
-        let resized = try await after.volumeInfo(volumePath: attachment.path)
+        let resized = try await after.volumeInfo(volumePath: attachment.filePath)
         #expect(resized.virtualSize == 8192)
 
         // The from-image volume survives with its size and format too.
@@ -184,7 +187,7 @@ struct MockStorageBackendTests {
         let after = MockStorageBackend(
             logger: Logger(label: "test"), volumeStoragePath: "/tmp/x", metadataPath: metadata)
         await #expect(throws: StorageBackendError.self) {
-            _ = try await after.volumeInfo(volumePath: attachment.path)
+            _ = try await after.volumeInfo(volumePath: attachment.filePath)
         }
     }
 
@@ -204,7 +207,7 @@ struct MockStorageBackendTests {
 
         // The reported volume does not exist, and the metadata is tiny — not a
         // multi-GB image.
-        #expect(!FileManager.default.fileExists(atPath: attachment.path))
+        #expect(!FileManager.default.fileExists(atPath: attachment.filePath))
         let size = try FileManager.default.attributesOfItem(atPath: metadata)[.size] as? Int ?? 0
         #expect(size > 0 && size < 4096)
     }
@@ -222,7 +225,7 @@ struct MockStorageBackendTests {
             logger: Logger(label: "test"), volumeStoragePath: "/tmp/x", metadataPath: metadata)
         // Starts empty rather than trapping, and still works.
         let attachment = try await sut.createVolume(volumeId: "vol-1", sizeBytes: 1024, format: .qcow2)
-        let info = try await sut.volumeInfo(volumePath: attachment.path)
+        let info = try await sut.volumeInfo(volumePath: attachment.filePath)
         #expect(info.virtualSize == 1024)
     }
 
@@ -232,8 +235,8 @@ struct MockStorageBackendTests {
         let path = "/var/lib/strato/vms/vm-1/rootfs.raw"
         let attachment = try await sut.materializeDisk(
             at: path, from: imageInfo(kind: .rootfs), format: .raw, artifactKind: .rootfs)
-        #expect(attachment.path == path)
-        #expect(attachment.format == .raw)
+        #expect(attachment.filePath == path)
+        #expect(attachment.fileFormat == .raw)
         #expect(!FileManager.default.fileExists(atPath: path))
     }
 

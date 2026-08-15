@@ -164,7 +164,8 @@ struct DomainDiskInventoryTests {
     @Test("a hot-plugged disk is described exactly as a create-time one")
     func hotplugFragment() {
         let xml = DomainDeviceXML.hotplugDisk(
-            path: "/var/lib/strato/volumes/data.qcow2", format: .qcow2, target: "vdc",
+            attachment: .file(
+                path: "/var/lib/strato/volumes/data.qcow2", format: .qcow2), target: "vdc",
             readonly: false, volumeId: Self.dataVolumeId)
 
         #expect(
@@ -188,10 +189,40 @@ struct DomainDiskInventoryTests {
     @Test("a read-only volume stays read-only when hot-plugged")
     func readonlyHotplugFragment() {
         let xml = DomainDeviceXML.hotplugDisk(
-            path: "/volumes/reference.raw", format: .raw, target: "vdz", readonly: true,
+            attachment: .file(path: "/volumes/reference.raw", format: .raw), target: "vdz", readonly: true,
             volumeId: Self.dataVolumeId)
         #expect(xml.contains("<driver name='qemu' type='raw'/>"))
         #expect(xml.contains("<readonly/>"))
+    }
+
+    @Test("a block-device attachment uses libvirt's block source shape")
+    func blockDeviceHotplugFragment() {
+        let xml = DomainDeviceXML.hotplugDisk(
+            attachment: .blockDevice(path: "/dev/rbd0"), target: "vdc", readonly: false,
+            volumeId: Self.dataVolumeId)
+
+        #expect(xml.contains("<disk type='block' device='disk'>"))
+        #expect(xml.contains("<driver name='qemu' type='raw'/>"))
+        #expect(xml.contains("<source dev='/dev/rbd0'/>"))
+        #expect(!xml.contains("source file="))
+    }
+
+    @Test("an RBD attachment preserves its native network coordinates")
+    func rbdHotplugFragment() {
+        let xml = DomainDeviceXML.hotplugDisk(
+            attachment: .rbd(
+                pool: "volumes", image: "volume-1", user: "client.project-1",
+                monHosts: ["mon-1:6789", "mon-2:6789"]),
+            target: "vdc", readonly: false, volumeId: Self.dataVolumeId)
+
+        #expect(xml.contains("<disk type='network' device='disk'>"))
+        #expect(xml.contains("<source protocol='rbd' name='volumes/volume-1'>"))
+        #expect(xml.contains("<host name='mon-1' port='6789'/>"))
+        #expect(xml.contains("<host name='mon-2' port='6789'/>"))
+        #expect(xml.contains("<auth username='client.project-1'>"))
+        #expect(xml.contains("<secret type='ceph' usage='client.project-1'/>"))
+        #expect(!xml.contains("source file="))
+        #expect(!xml.contains("source dev="))
     }
 
     /// libvirt resolves a disk detach by `<target dev>`; the source and driver
@@ -255,7 +286,8 @@ struct DomainDiskInventoryTests {
     @Test("a hostile path still produces a parseable fragment")
     func fragmentEscaping() {
         let xml = DomainDeviceXML.hotplugDisk(
-            path: "/volumes/a & b/<disk>.qcow2", format: .qcow2, target: "vdc", readonly: false,
+            attachment: .file(path: "/volumes/a & b/<disk>.qcow2", format: .qcow2), target: "vdc",
+            readonly: false,
             volumeId: Self.dataVolumeId)
         #expect(xml.contains("/volumes/a &amp; b/&lt;disk&gt;.qcow2"))
         let parser = XMLParser(data: Data(xml.utf8))
