@@ -14452,7 +14452,7 @@ components:
           type: string
           nullable: true
         devicePath: { type: string }
-        sizeBytes: { type: integer, format: int64, minimum: 1 }
+        sizeBytes: { type: integer, format: int64, minimum: 0 }
         model:
           type: string
           nullable: true
