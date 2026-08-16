@@ -5520,7 +5520,7 @@ export interface components {
          * @description Which kind of resource a mutation acts on.
          * @enum {string}
          */
-        OperationResourceKind: "virtual_machine" | "sandbox";
+        OperationResourceKind: "virtual_machine" | "sandbox" | "volume" | "volume_snapshot" | "vm_checkpoint" | "sandbox_snapshot";
         /**
          * @description The lifecycle mutation an operation performs.
          * @enum {string}
