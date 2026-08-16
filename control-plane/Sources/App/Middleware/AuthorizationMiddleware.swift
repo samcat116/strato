@@ -121,6 +121,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         "/api/organizations",
         "/api/projects",
         "/api/volumes",
+        "/api/volume-snapshots",
         "/api/networks",
         "/api/load-balancers",
         "/api/images",
