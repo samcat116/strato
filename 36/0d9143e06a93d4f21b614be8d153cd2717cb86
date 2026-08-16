@@ -1,0 +1,30 @@
+agent/Sources/StratoAgentCore/BlockDeviceInventory.swift
+  s_1dd9ddf4b6d7c1::t_9afc787fab1801 64,209-218,220-232,237-241,247-250
+  s_1dd9ddf4b6d7c1::t_ee007737e468a7 2,6-58,60-63,65-96,100-107
+  s_1dd9ddf4b6d7c1::t_5565e946c8968c 111,113,116,118
+  s_1dd9ddf4b6d7c1::t_8c30cc0018378e 1,3-5,97-99,108-110,112,114-115,117,119-208,251-357
+  s_1dd9ddf4b6d7c1::t_9f78d825358420 59
+  s_1dd9ddf4b6d7c1::t_f41eccebc2c121 219,233-236,242-246
+agent/Tests/StratoAgentTests/BlockDeviceInventoryTests.swift
+  s_1dd9ddf4b6d7c1::t_6541d813af1a56 47-76,382-402
+  s_1dd9ddf4b6d7c1::t_db4581674db15b 7-28,244-319,407-413
+  s_1dd9ddf4b6d7c1::t_1149e935c486bb 322-337
+  s_1dd9ddf4b6d7c1::t_ad735751818001 29-46,338-381,403-404,414-424
+  s_1dd9ddf4b6d7c1::t_fc8778dfa96f63 1-6,77-243,320-321,405-406,425-426
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "360d9143e06a93d4f21b614be8d153cd2717cb86",
+  "prompts": {},
+  "sessions": {
+    "s_1dd9ddf4b6d7c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a006b7-8a6c-79c2-965b-1ae759428c83",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
