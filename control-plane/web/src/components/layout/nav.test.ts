@@ -32,3 +32,14 @@ describe("networking navigation", () => {
     expect(pageTitle(pathname)).toBe(title);
   });
 });
+
+describe("storage navigation", () => {
+  it("includes the physical device inventory under Storage", () => {
+    const storage = navTree.find((item) => item.label === "Storage");
+    expect(storage?.children?.map(({ label, href }) => ({ label, href }))).toContainEqual({
+      label: "Devices",
+      href: "/storage/devices",
+    });
+    expect(pageTitle("/storage/devices")).toBe("Devices");
+  });
+});

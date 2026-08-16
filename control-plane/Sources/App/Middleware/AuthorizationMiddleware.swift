@@ -129,6 +129,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         "/api/security-groups",
         "/api/dns-zones",
         "/api/agents",
+        "/api/storage-devices",
         "/api/agent-enrollments",
         "/api/sites",
         "/api/quotas",

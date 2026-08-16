@@ -200,6 +200,8 @@ tags:
     description: Resource quotas attached at organization, folder, or project level.
   - name: Agents
     description: Hypervisor node registration, enrollment, and fleet actions.
+  - name: Storage Devices
+    description: Agent-reported physical block-device inventory and OSD eligibility.
   - name: Sites
     description: Physical or logical groupings of agents.
   - name: Workload Identity
@@ -5230,6 +5232,76 @@ paths:
                 $ref: "#/components/schemas/AgentListPage"
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+  /api/storage-devices:
+    get:
+      operationId: listStorageDevices
+      summary: List storage devices
+      description: >-
+        Physical whole-disk inventory reported by agents visible to the caller.
+        Missing disks remain in the list with `present: false`. A device path is
+        display data; `identityKind` and `identityValue` identify a physical
+        device across path renumbering. Devices without a WWN or serial remain
+        visible but cannot be selected for an OSD.
+      tags: [Storage Devices]
+      parameters:
+        - $ref: "#/components/parameters/OrganizationIdQuery"
+        - name: site_id
+          in: query
+          required: false
+          description: Restrict results to one visible site.
+          schema: { type: string, format: uuid }
+        - name: agent_id
+          in: query
+          required: false
+          description: Restrict results to one visible agent.
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
+      responses:
+        "200":
+          description: A page of visible storage devices.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageDeviceListPage"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/storage-devices/{deviceId}:
+    parameters:
+      - name: deviceId
+        in: path
+        required: true
+        description: The persisted storage-device observation's id.
+        schema: { type: string, format: uuid }
+    patch:
+      operationId: updateStorageDeviceEligibility
+      summary: Update OSD eligibility
+      description: >-
+        Selects or clears this physical disk for a future Ceph OSD. Selection
+        requires `manage` on the hosting agent and is refused unless the device
+        has stable identity, is present, available, freshly observed, and its
+        agent is online. Clearing eligibility is always allowed and does not
+        mutate the disk.
+      tags: [Storage Devices]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateStorageDeviceRequest"
+      responses:
+        "200":
+          description: The updated storage device.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageDevice"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/agent-enrollments:
     get:
       operationId: listAgentEnrollments
@@ -14350,6 +14422,106 @@ components:
               - network_resolver
               - dynamic_routing
               - ceph_volumes
+    StorageDevice:
+      type: object
+      description: >-
+        One durable physical whole-disk observation. `devicePath` may change
+        across reboots; a non-null identity pair is the stable identity.
+      required:
+        - id
+        - agentId
+        - siteId
+        - devicePath
+        - sizeBytes
+        - rotational
+        - uses
+        - role
+        - state
+        - present
+        - osdEligible
+        - canMarkOsdEligible
+      properties:
+        id: { type: string, format: uuid }
+        agentId: { type: string, format: uuid }
+        siteId: { type: string, format: uuid }
+        identityKind:
+          type: string
+          enum: [wwn, serial]
+          nullable: true
+        identityValue:
+          type: string
+          nullable: true
+        devicePath: { type: string }
+        sizeBytes: { type: integer, format: int64, minimum: 0 }
+        model:
+          type: string
+          nullable: true
+        serial:
+          type: string
+          nullable: true
+        wwn:
+          type: string
+          nullable: true
+        rotational: { type: boolean }
+        uses:
+          type: array
+          items:
+            type: string
+            enum:
+              - childDevice
+              - partitionTable
+              - filesystem
+              - mounted
+              - swap
+              - lvmPhysicalVolume
+              - readOnly
+        role:
+          type: string
+          enum: [unassigned, osd, excluded]
+        state:
+          type: string
+          enum: [available, inUse, draining, faulted]
+        osdId:
+          type: integer
+          nullable: true
+        present: { type: boolean }
+        lastSeenAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        osdEligible:
+          type: boolean
+          description: Whether the operator selected this disk for a future Ceph OSD.
+        canMarkOsdEligible:
+          type: boolean
+          description: Whether a currently unselected disk passes every safety gate.
+        osdEligibilityBlockedReason:
+          type: string
+          enum:
+            - missingIdentity
+            - notPresent
+            - inUse
+            - draining
+            - faulted
+            - agentOffline
+            - staleObservation
+          nullable: true
+    UpdateStorageDeviceRequest:
+      type: object
+      additionalProperties: false
+      required: [osdEligible]
+      properties:
+        osdEligible:
+          type: boolean
+          description: Select or clear the disk for future OSD orchestration.
     AgentDetail:
       type: object
       description: A registered hypervisor node.
@@ -16667,6 +16839,21 @@ components:
         total:
           type: integer
           description: Total visible items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
+    StorageDeviceListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/StorageDevice"
+        total:
+          type: integer
+          description: Total visible devices, ignoring `limit`/`offset`.
         limit:
           type: integer
         offset:

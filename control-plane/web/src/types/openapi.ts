@@ -3678,6 +3678,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/storage-devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List storage devices
+         * @description Physical whole-disk inventory reported by agents visible to the caller. Missing disks remain in the list with `present: false`. A device path is display data; `identityKind` and `identityValue` identify a physical device across path renumbering. Devices without a WWN or serial remain visible but cannot be selected for an OSD.
+         */
+        get: operations["listStorageDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/storage-devices/{deviceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The persisted storage-device observation's id. */
+                deviceId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update OSD eligibility
+         * @description Selects or clears this physical disk for a future Ceph OSD. Selection requires `manage` on the hosting agent and is refused unless the device has stable identity, is present, available, freshly observed, and its agent is online. Clearing eligibility is always allowed and does not mutate the disk.
+         */
+        patch: operations["updateStorageDeviceEligibility"];
+        trace?: never;
+    };
     "/api/agent-enrollments": {
         parameters: {
             query?: never;
@@ -8077,6 +8120,48 @@ export interface components {
             restartCount: number;
             affectedCapabilities: ("workload_identity" | "qemu_placement" | "overlay_networking" | "sandbox_networking" | "network_resolver" | "dynamic_routing" | "ceph_volumes")[];
         };
+        /** @description One durable physical whole-disk observation. `devicePath` may change across reboots; a non-null identity pair is the stable identity. */
+        StorageDevice: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            agentId: string;
+            /** Format: uuid */
+            siteId: string;
+            /** @enum {string|null} */
+            identityKind?: "wwn" | "serial" | null;
+            identityValue?: string | null;
+            devicePath: string;
+            /** Format: int64 */
+            sizeBytes: number;
+            model?: string | null;
+            serial?: string | null;
+            wwn?: string | null;
+            rotational: boolean;
+            uses: ("childDevice" | "partitionTable" | "filesystem" | "mounted" | "swap" | "lvmPhysicalVolume" | "readOnly")[];
+            /** @enum {string} */
+            role: "unassigned" | "osd" | "excluded";
+            /** @enum {string} */
+            state: "available" | "inUse" | "draining" | "faulted";
+            osdId?: number | null;
+            present: boolean;
+            /** Format: date-time */
+            lastSeenAt?: string | null;
+            /** Format: date-time */
+            createdAt?: string | null;
+            /** Format: date-time */
+            updatedAt?: string | null;
+            /** @description Whether the operator selected this disk for a future Ceph OSD. */
+            osdEligible: boolean;
+            /** @description Whether a currently unselected disk passes every safety gate. */
+            canMarkOsdEligible: boolean;
+            /** @enum {string|null} */
+            osdEligibilityBlockedReason?: "missingIdentity" | "notPresent" | "inUse" | "draining" | "faulted" | "agentOffline" | "staleObservation" | null;
+        };
+        UpdateStorageDeviceRequest: {
+            /** @description Select or clear the disk for future OSD orchestration. */
+            osdEligible: boolean;
+        };
         /** @description A registered hypervisor node. */
         AgentDetail: {
             /** Format: uuid */
@@ -9158,6 +9243,13 @@ export interface components {
         AgentListPage: {
             items: components["schemas"]["AgentDetail"][];
             /** @description Total visible items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
+        };
+        StorageDeviceListPage: {
+            items: components["schemas"]["StorageDevice"][];
+            /** @description Total visible devices, ignoring `limit`/`offset`. */
             total: number;
             limit: number;
             offset: number;
@@ -16301,6 +16393,72 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    listStorageDevices: {
+        parameters: {
+            query?: {
+                /** @description Scope results to one organization. */
+                organization_id?: components["parameters"]["OrganizationIdQuery"];
+                /** @description Restrict results to one visible site. */
+                site_id?: string;
+                /** @description Restrict results to one visible agent. */
+                agent_id?: string;
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of visible storage devices. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageDeviceListPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    updateStorageDeviceEligibility: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The persisted storage-device observation's id. */
+                deviceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateStorageDeviceRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated storage device. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageDevice"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     listAgentEnrollments: {

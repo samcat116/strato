@@ -56,24 +56,6 @@ struct AgentController: RouteCollection {
         }
     }
 
-    /// The given canonical action on the agent itself (resolved through the
-    /// agent's parent scope in the IAM tree).
-    private func requireAgentAction(_ req: Request, agent: Agent, action: String) async throws {
-        // A pre-scoping agent belongs to no org: there is nothing to evaluate
-        // against (the evaluator fails closed on its truncated ancestor
-        // chain), so only system admins may touch it — the decision-marking
-        // gate, mirroring scopeless enrollments. This is what keeps orphaned
-        // agents repairable (deregister, reassign) at all.
-        guard agent.organizationScope != nil else {
-            _ = try await req.requireSystemAdmin("This agent has no owning organization")
-            return
-        }
-        let allowed = try await req.can(action, on: IAMNode(type: .agent, id: try agent.requireID()))
-        guard allowed else {
-            throw Abort(.forbidden, reason: "You don't have '\(action)' access on this agent")
-        }
-    }
-
     /// Whether SPIRE mTLS authentication is enabled but the registration API
     /// is not configured — the state in which agents may hold SPIRE-issued
     /// identities that this control plane cannot revoke. Revocation paths must
@@ -596,7 +578,7 @@ struct AgentController: RouteCollection {
             throw Abort(.notFound, reason: "Agent not found")
         }
 
-        try await requireAgentAction(req, agent: agent, action: "agent:read")
+        try await req.requireAgentAction("agent:read", on: agent)
 
         // Workloads this agent holds that the control plane refused to
         // authorize tearing down (STR-98). Only on the detail view: the list
@@ -684,7 +666,7 @@ struct AgentController: RouteCollection {
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
-        try await requireAgentAction(req, agent: agent, action: "agent:manage")
+        try await req.requireAgentAction("agent:manage", on: agent)
 
         let body = try req.content.decode(AdoptWorkloadsRequest.self)
         let targetId = agentId.uuidString
@@ -701,7 +683,7 @@ struct AgentController: RouteCollection {
         guard let sourceAgent = try await Agent.find(body.fromAgentId, on: req.db) else {
             throw Abort(.notFound, reason: "Source agent not found")
         }
-        try await requireAgentAction(req, agent: sourceAgent, action: "agent:manage")
+        try await req.requireAgentAction("agent:manage", on: sourceAgent)
         // Compared at the root org, not the exact scope node: re-enrolling a
         // node into a different OU of the same organization is a legitimate
         // move, while landing one tenant's workload rows on another tenant's
@@ -835,7 +817,7 @@ struct AgentController: RouteCollection {
             throw Abort(.notFound, reason: "Agent not found")
         }
 
-        try await requireAgentAction(req, agent: agent, action: "agent:manage")
+        try await req.requireAgentAction("agent:manage", on: agent)
 
         // Never delete a site's designated network controller while the site
         // still has other members: the controller reference deliberately has
@@ -945,7 +927,7 @@ struct AgentController: RouteCollection {
             throw Abort(.notFound, reason: "Agent not found")
         }
 
-        try await requireAgentAction(req, agent: agent, action: "agent:manage")
+        try await req.requireAgentAction("agent:manage", on: agent)
 
         // Force agent offline in in-memory registry
         await req.agentService.forceUnregisterAgent(agent.identity)
@@ -1028,7 +1010,7 @@ struct AgentController: RouteCollection {
         // workload through re-adoption, so this falls under the same
         // `agent:manage` check — and the same tier-1 foreign-workload forbid —
         // as force-offline and deregister.
-        try await requireAgentAction(req, agent: agent, action: "agent:manage")
+        try await req.requireAgentAction("agent:manage", on: agent)
 
         let request: AgentUpdateRequest
         if req.headers.contentType != nil {
@@ -1216,7 +1198,7 @@ struct AgentController: RouteCollection {
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
-        try await requireAgentAction(req, agent: agent, action: "agent:manage")
+        try await req.requireAgentAction("agent:manage", on: agent)
 
         guard let assigned = agent.updateDesiredVersion else {
             return try AgentResponse(
@@ -1261,7 +1243,7 @@ struct AgentController: RouteCollection {
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
-        try await requireAgentAction(req, agent: agent, action: "agent:manage")
+        try await req.requireAgentAction("agent:manage", on: agent)
 
         let patch = try req.content.decode(AgentPatchRequest.self)
 

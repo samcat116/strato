@@ -6,6 +6,10 @@ export {
 } from "./use-vms";
 export { useSites } from "./use-sites";
 export {
+  useStorageDevices,
+  useSetStorageDeviceOsdEligibility,
+} from "./use-storage-devices";
+export {
   useSandboxes,
   useSandbox,
   useSandboxSnapshots,

@@ -81,6 +81,7 @@ export const navTree: NavItem[] = [
     label: "Storage",
     icon: HardDrive,
     children: [
+      { label: "Devices", href: "/storage/devices", icon: HardDrive },
       { label: "Volumes", href: "/storage/volumes", icon: Database },
       { label: "Snapshots", href: "/storage/snapshots", icon: Camera },
     ],
