@@ -246,6 +246,24 @@ public actor StorageDeviceInventoryCache {
         inFlight = nil
     }
 
+    /// Registration and re-registration need a fresh view even when the prior
+    /// heartbeat observed the host moments ago.
+    public func refreshForRegistration(
+        now: ContinuousClock.Instant = .now
+    ) async -> [ObservedStorageDevice]? {
+        await refresh(force: true, now: now)
+        return latestOutcome
+    }
+
+    /// Heartbeats reuse the cadence gate so block-device discovery cannot turn
+    /// a fast liveness signal into an unbounded stream of subprocesses.
+    public func refreshForHeartbeat(
+        now: ContinuousClock.Instant = .now
+    ) async -> [ObservedStorageDevice]? {
+        await refresh(now: now)
+        return latestOutcome
+    }
+
     public func snapshot() -> [ObservedStorageDevice]? {
         latestOutcome
     }

@@ -381,6 +381,35 @@ struct BlockDeviceInventoryTests {
         #expect(await cache.snapshot()?.map(\.devicePath) == ["/dev/sdc"])
     }
 
+    @Test("registration forces inventory while heartbeat refreshes only when due")
+    func cacheFollowsAgentReportLifecycle() async {
+        let sequence = StorageObservationSequence([
+            [fixtureDevice(path: "/dev/sdb")],
+            [fixtureDevice(path: "/dev/sdc")],
+            [fixtureDevice(path: "/dev/sdd")],
+        ])
+        let cache = StorageDeviceInventoryCache(
+            minimumRefreshInterval: .seconds(30),
+            observer: { await sequence.next() })
+        let start = ContinuousClock.now
+
+        let registration = await cache.refreshForRegistration(now: start)
+        #expect(registration?.map(\.devicePath) == ["/dev/sdb"])
+        #expect(await sequence.calls() == 1)
+
+        let earlyHeartbeat = await cache.refreshForHeartbeat(now: start + .seconds(1))
+        #expect(earlyHeartbeat?.map(\.devicePath) == ["/dev/sdb"])
+        #expect(await sequence.calls() == 1)
+
+        let dueHeartbeat = await cache.refreshForHeartbeat(now: start + .seconds(30))
+        #expect(dueHeartbeat?.map(\.devicePath) == ["/dev/sdc"])
+        #expect(await sequence.calls() == 2)
+
+        let reconnect = await cache.refreshForRegistration(now: start + .seconds(31))
+        #expect(reconnect?.map(\.devicePath) == ["/dev/sdd"])
+        #expect(await sequence.calls() == 3)
+    }
+
     @Test("concurrent forced refreshes share one observation")
     func cacheCoalescesConcurrentRefreshes() async {
         let suspended = SuspendedStorageObservation()
