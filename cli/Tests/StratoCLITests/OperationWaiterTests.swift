@@ -15,12 +15,15 @@ private actor SleepCounter {
 struct OperationWaiterTests {
     private static let operationID = "6f9619ff-8b86-4d01-b42d-00cf4fc964ff"
 
-    private static func json(status: String, error: String? = nil) -> String {
+    private static func json(
+        status: String, error: String? = nil,
+        resourceKind: String = "virtual_machine", kind: String = "boot"
+    ) -> String {
         // Deliberately omit the deprecated `vmId`: generated clients must not require it.
         let errorField = error.map { ", \"error\": \"\($0)\"" } ?? ""
         return """
-            {"id": "\(operationID)", "resourceKind": "virtual_machine",
-             "resourceId": "\(operationID)", "kind": "boot", "status": "\(status)"\(errorField)}
+            {"id": "\(operationID)", "resourceKind": "\(resourceKind)",
+             "resourceId": "\(operationID)", "kind": "\(kind)", "status": "\(status)"\(errorField)}
             """
     }
 
@@ -47,6 +50,26 @@ struct OperationWaiterTests {
             #expect(final.succeeded)
             #expect(transport.recordedRequests.count == 2)
             #expect(transport.recordedRequests.first?.path == "/api/operations/\(Self.operationID)")
+        }
+    }
+
+    @Test("A successful volume operation decodes through the generated contract")
+    func testVolumeOperationDecodes() async throws {
+        try await withTemporaryDirectoryAsync { directory in
+            let transport = MockTransport(responses: [
+                .init(
+                    statusCode: 200,
+                    json: Self.json(
+                        status: "succeeded", resourceKind: "volume", kind: "create"))
+            ])
+            let waiter = OperationWaiter(pollInterval: 0, timeout: 60, sleeper: { _ in })
+
+            let final = try await waiter.wait(
+                for: AcceptedMutation(id: Self.operationID),
+                client: try client(transport: transport, directory: directory))
+            #expect(final.succeeded)
+            #expect(final.resourceKind == .volume)
+            #expect(final.kind == .create)
         }
     }
 
