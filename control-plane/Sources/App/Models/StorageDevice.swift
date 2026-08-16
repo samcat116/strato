@@ -11,7 +11,6 @@ enum StorageDeviceRole: String, Codable, CaseIterable, Sendable {
     case osd
     case excluded
 }
-
 /// Durable inventory for one whole physical disk observed by one agent.
 /// Device paths are display data. Only the optional kind/value pair is stable
 /// identity, so role and OSD intent must never follow a path between rows.
@@ -117,4 +116,3 @@ final class StorageDevice: Model, @unchecked Sendable {
         return StorageDeviceIdentity(kind: kind, value: identityValue)
     }
 }
-
