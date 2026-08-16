@@ -1,0 +1,30 @@
+control-plane/web/src/components/storage-devices/storage-device-model.test.ts
+  s_1dd9ddf4b6d7c1::t_a86c652fd6d49e 1-66
+control-plane/web/src/types/api.ts
+  s_1dd9ddf4b6d7c1::t_d8864d1759061a 3-10
+control-plane/web/src/lib/hooks/use-storage-devices.ts
+  s_1dd9ddf4b6d7c1::t_d8864d1759061a 1-33
+control-plane/web/src/lib/hooks/index.ts
+  s_1dd9ddf4b6d7c1::t_d8864d1759061a 9-11
+  s_1dd9ddf4b6d7c1::t_093e7116de9e2e 8
+control-plane/web/src/components/storage-devices/storage-device-model.ts
+  s_1dd9ddf4b6d7c1::t_d8864d1759061a 1-107
+control-plane/web/src/lib/api/storage-devices.ts
+  s_1dd9ddf4b6d7c1::t_d8864d1759061a 1-24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "17bc2c3cdaef1268cef8be363231fae0d16962ac",
+  "prompts": {},
+  "sessions": {
+    "s_1dd9ddf4b6d7c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a006b7-8a6c-79c2-965b-1ae759428c83",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
