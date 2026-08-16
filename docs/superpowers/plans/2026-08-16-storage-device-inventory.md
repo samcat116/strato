@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Wire protocol version 51 is an exact cutover. Do not add a v50 compatibility decoder or a dual-format registration path.
+- Wire protocol version 52 is an exact cutover. Do not add a v51 compatibility decoder or a dual-format registration path.
 - A device path is display data only. Never use `/dev/sd*` as durable identity or to retain OSD intent.
 - Normalize a WWN by trimming whitespace, lowercasing, and removing a leading `0x`. Normalize a serial by trimming whitespace only.
 - A successful empty observation means that the agent has no qualifying whole disks and marks its existing rows missing. A failed observation is `nil` and makes no database changes.
@@ -28,7 +28,7 @@
 
 | Area | Files | Responsibility |
 | --- | --- | --- |
-| Shared wire | `shared/Sources/StratoShared/StorageDeviceInventory.swift`, `ReconciliationProtocol.swift`, `WireProtocol.swift` | Canonical observation types and v51 report field |
+| Shared wire | `shared/Sources/StratoShared/StorageDeviceInventory.swift`, `ReconciliationProtocol.swift`, `WireProtocol.swift` | Canonical observation types and v52 report field |
 | Agent probe | `agent/Sources/StratoAgentCore/BlockDeviceInventory.swift` | Bounded `lsblk` launch, decoding, use classification, refresh cache |
 | Agent lifecycle | `agent/Sources/StratoAgent/Agent.swift` | Registration refresh, heartbeat refresh, report attachment |
 | Persistence | `control-plane/Sources/App/Models/StorageDevice.swift`, `Migrations/CreateStorageDevices.swift`, `configure.swift` | Durable inventory, constraints, registration |
@@ -39,7 +39,7 @@
 
 ---
 
-## Task 1: Add the v51 Storage Observation Contract
+## Task 1: Add the v52 Storage Observation Contract
 
 **Files:**
 
@@ -54,7 +54,7 @@
 
 - Produces `StorageDeviceIdentityKind`, `StorageDeviceIdentity`, `StorageDeviceUse`, `StorageDeviceState`, and `ObservedStorageDevice` for the agent and control plane.
 - Extends `ObservedStateReport` with `storageDevices: [ObservedStorageDevice]?`.
-- Raises `WireProtocol.currentVersion` from 50 to 51.
+- Raises `WireProtocol.currentVersion` from 51 to 52.
 
 - [ ] Write identity normalization and preference tests first:
 
@@ -78,8 +78,8 @@
 }
 ```
 
-- [ ] Add an observed-state round-trip test containing one identified device and one anonymous device, plus a decode test proving an omitted `storageDevices` field becomes `nil` within protocol v51.
-- [ ] Update the protocol-version assertion to expect 51 and add a retired-v50 assertion following the existing retired-discriminator/version style.
+- [ ] Add an observed-state round-trip test containing one identified device and one anonymous device, plus a decode test proving an omitted `storageDevices` field becomes `nil` within protocol v52.
+- [ ] Update the protocol-version assertion to expect 52 and add a retired-v51 assertion following the existing retired-discriminator/version style.
 - [ ] Run `cd shared && swift test --filter StorageDeviceInventoryTests`; expect failure because the types do not exist.
 - [ ] Implement the shared types as `public`, `Codable`, `Equatable`, `Hashable`, and `Sendable` where applicable:
 
@@ -129,7 +129,7 @@ public enum StorageDeviceState: String, Codable, Sendable {
 
 - [ ] Define `ObservedStorageDevice` with `identity`, `devicePath`, `sizeBytes`, `model`, `serial`, `wwn`, `rotational`, `uses`, and `state`. Its initializer must preserve the raw serial and WWN display values while accepting the preferred normalized identity separately.
 - [ ] Add `storageDevices: [ObservedStorageDevice]? = nil` to the report initializer and stored properties so existing call sites continue to compile while nil retains the explicit no-op meaning.
-- [ ] Change the current wire version to 51 without adding compatibility branches.
+- [ ] Change the current wire version to 52 without adding compatibility branches.
 - [ ] Run `cd shared && swift test --filter StorageDeviceInventoryTests` and `cd shared && swift test --filter WireProtocolTests`; expect both to pass.
 - [ ] Run `cd shared && swift test`; expect the whole shared package to pass.
 - [ ] Commit with `git add shared && git commit -m "Add storage inventory wire contract"`.

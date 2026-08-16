@@ -71,7 +71,8 @@ struct StorageDeviceInventoryTests {
         let object = try #require(
             JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         #expect(object["storageDevices"] == nil)
-        #expect(try WireProtocol.makeDecoder().decode(ObservedStateReport.self, from: encoded)
-            .storageDevices == nil)
+        #expect(
+            try WireProtocol.makeDecoder().decode(ObservedStateReport.self, from: encoded)
+                .storageDevices == nil)
     }
 }

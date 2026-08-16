@@ -114,7 +114,7 @@ public actor FileSystemStorageBackend: StorageBackend {
         // canonical name and synchronizes that directory before success.
         if FileManager.default.fileExists(atPath: path) {
             logger.debug("Volume already exists", metadata: ["volumeId": .string(volumeId)])
-            return DiskAttachment(path: path, format: format)
+            return .file(path: path, format: format)
         }
 
         logger.info(
@@ -149,7 +149,7 @@ public actor FileSystemStorageBackend: StorageBackend {
                 "path": .string(path),
             ])
 
-        return DiskAttachment(path: path, format: format)
+        return .file(path: path, format: format)
     }
 
     public func createVolumeFromImage(
@@ -189,7 +189,7 @@ public actor FileSystemStorageBackend: StorageBackend {
         // missing marker cannot safely authorize replacing them.
         if FileManager.default.fileExists(atPath: path) {
             logger.debug("Disk already materialized", metadata: ["path": .string(path)])
-            return DiskAttachment(path: path, format: format)
+            return .file(path: path, format: format)
         }
 
         guard let imageSource else {
@@ -265,7 +265,7 @@ public actor FileSystemStorageBackend: StorageBackend {
                 "targetFormat": .string(format.rawValue),
             ])
 
-        return DiskAttachment(path: path, format: format)
+        return .file(path: path, format: format)
     }
 
     /// Give a historical VM-side disk a managed volume identity without
@@ -278,7 +278,7 @@ public actor FileSystemStorageBackend: StorageBackend {
     ) async throws -> DiskAttachment {
         let canonicalPath = volumePath(volumeId: volumeId, format: format)
         if FileManager.default.fileExists(atPath: canonicalPath) {
-            return DiskAttachment(path: canonicalPath, format: format)
+            return .file(path: canonicalPath, format: format)
         }
         guard FileManager.default.fileExists(atPath: existingPath) else {
             throw StorageBackendError.volumeNotFound(existingPath)
@@ -304,7 +304,7 @@ public actor FileSystemStorageBackend: StorageBackend {
                 "existingPath": .string(existingPath),
                 "managedPath": .string(canonicalPath),
             ])
-        return DiskAttachment(path: canonicalPath, format: format)
+        return .file(path: canonicalPath, format: format)
     }
 
     // MARK: - Volume Deletion
@@ -506,7 +506,7 @@ public actor FileSystemStorageBackend: StorageBackend {
         // is observed present.
         if FileManager.default.fileExists(atPath: targetPath) {
             logger.debug("Clone target already exists", metadata: ["targetVolumeId": .string(targetVolumeId)])
-            return DiskAttachment(path: targetPath, format: format)
+            return .file(path: targetPath, format: format)
         }
 
         logger.info(
@@ -550,7 +550,7 @@ public actor FileSystemStorageBackend: StorageBackend {
                 "targetPath": .string(targetPath),
             ])
 
-        return DiskAttachment(path: targetPath, format: format)
+        return .file(path: targetPath, format: format)
     }
 
     // MARK: - Volume Info
@@ -632,7 +632,7 @@ public actor FileSystemStorageBackend: StorageBackend {
             for format in DiskFormat.allCases {
                 let path = volumePath(volumeId: entry, format: format)
                 if FileManager.default.fileExists(atPath: path) {
-                    volumes[volumeId] = DiskAttachment(path: path, format: format)
+                    volumes[volumeId] = .file(path: path, format: format)
                     break
                 }
             }

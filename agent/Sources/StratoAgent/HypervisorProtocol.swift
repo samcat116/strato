@@ -232,7 +232,10 @@ public protocol HypervisorService: Actor, Sendable {
     /// Attaches a disk to a running VM (hot-plug)
     /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot
     ///   hot-plug disks
-    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool) async throws
+    func attachDisk(
+        vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String,
+        readonly: Bool
+    ) async throws
 
     /// Detaches a disk from a running VM (hot-unplug)
     /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot

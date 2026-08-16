@@ -165,16 +165,18 @@ struct StorageDeviceController: RouteCollection {
         let agents = try await Agent.query(on: req.db)
             .filter(\.$id ~~ Array(visibleIDs))
             .all()
-        let agentByID = Dictionary(uniqueKeysWithValues: agents.compactMap { agent in
-            agent.id.map { ($0, agent) }
-        })
+        let agentByID = Dictionary(
+            uniqueKeysWithValues: agents.compactMap { agent in
+                agent.id.map { ($0, agent) }
+            })
         let siteIDs = Set(visible.map(\.siteId))
         let sites = try await Site.query(on: req.db)
             .filter(\.$id ~~ Array(siteIDs))
             .all()
-        let siteNameByID = Dictionary(uniqueKeysWithValues: sites.compactMap { site in
-            site.id.map { ($0, site.name) }
-        })
+        let siteNameByID = Dictionary(
+            uniqueKeysWithValues: sites.compactMap { site in
+                site.id.map { ($0, site.name) }
+            })
         let agentNameByID = Dictionary(uniqueKeysWithValues: visible.map { ($0.id, $0.name) })
         let now = Date()
         let devices = try await StorageDevice.query(on: req.db)

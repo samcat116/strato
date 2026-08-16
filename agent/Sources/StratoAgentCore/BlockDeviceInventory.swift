@@ -3,13 +3,14 @@ import Logging
 import StratoShared
 
 public struct BlockDeviceInventoryProbe: Sendable {
-    typealias Runner = @Sendable (
-        _ executableURL: URL,
-        _ arguments: [String],
-        _ timeout: Duration?,
-        _ environment: [String: String]?,
-        _ maxOutputBytes: Int?
-    ) async throws -> ProcessResult
+    typealias Runner =
+        @Sendable (
+            _ executableURL: URL,
+            _ arguments: [String],
+            _ timeout: Duration?,
+            _ environment: [String: String]?,
+            _ maxOutputBytes: Int?
+        ) async throws -> ProcessResult
 
     public static let timeout: Duration = .seconds(5)
     public static let maxOutputBytes = 4 * 1024 * 1024

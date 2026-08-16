@@ -115,8 +115,7 @@ public struct ObservedSnapshotArtifact: Equatable, Sendable {
 /// plans a resize, so an unprobeable volume is left alone rather than
 /// repeatedly grown.
 public struct ObservedVolumeFacts: Equatable, Sendable {
-    public let path: String
-    public let format: DiskFormat
+    public let attachment: DiskAttachment
     public let sizeBytes: Int64?
     /// Canonical uppercase UUID string of the VM this volume is attached to,
     /// from the agent's durable attachment record.
@@ -124,14 +123,12 @@ public struct ObservedVolumeFacts: Equatable, Sendable {
     public let deviceName: String?
 
     public init(
-        path: String,
-        format: DiskFormat,
+        attachment: DiskAttachment,
         sizeBytes: Int64? = nil,
         attachedVMId: String? = nil,
         deviceName: String? = nil
     ) {
-        self.path = path
-        self.format = format
+        self.attachment = attachment
         self.sizeBytes = sizeBytes
         self.attachedVMId = attachedVMId
         self.deviceName = deviceName
@@ -640,9 +637,9 @@ public protocol ReconcileActuator: Sendable {
     /// Snapshot of every volume whose data this host holds (STR-148), or nil
     /// when the agent cannot enumerate the store at all.
     ///
-    /// Entries are always `.managed`: a volume is a file, so there is no
-    /// session to lose and nothing to re-adopt — the storage backend's
-    /// directory listing is the whole truth.
+    /// Entries are always `.managed`: the storage backend's inventory is the
+    /// authority for durable volume data, so there is no hypervisor session to
+    /// lose and nothing to re-adopt.
     ///
     /// The Optional is the volume counterpart of `presenceIsComplete` and
     /// exists for the same reason: an empty inventory is *authoritative* to
@@ -859,7 +856,9 @@ extension DesiredVolumeState: ReconcilableDesired {
     /// and is attached to nothing, so the only step that can remain after a
     /// `.create` is the attach.
     var statusAfterCreate: ObservedVolumeFacts {
-        ObservedVolumeFacts(path: "", format: DiskFormat(rawValue: format) ?? .qcow2, sizeBytes: sizeBytes)
+        ObservedVolumeFacts(
+            attachment: .file(path: "", format: DiskFormat(rawValue: format) ?? .qcow2),
+            sizeBytes: sizeBytes)
     }
 
     func convergenceSteps(from observed: ObservedVolumeFacts) -> [ReconcileStep] {

@@ -158,21 +158,29 @@ struct StorageDeviceInventoryReconcilerTests {
                 [valid, observation(wwn: "0x5000CCA2", serial: nil, path: "/dev/sdb")],
                 [observation(wwn: "0x5000CCA1", serial: nil, path: "sdb")],
                 [observation(wwn: "0x5000CCA1", serial: nil, path: "/dev/sdb", sizeBytes: -1)],
-                [ObservedStorageDevice(
-                    identity: .init(kind: .serial, value: "SERIAL-1"),
-                    devicePath: "/dev/sdb", sizeBytes: 100, serial: "SERIAL-1",
-                    wwn: "0x5000CCA1", rotational: false, state: .available, uses: [])],
+                [
+                    ObservedStorageDevice(
+                        identity: .init(kind: .serial, value: "SERIAL-1"),
+                        devicePath: "/dev/sdb", sizeBytes: 100, serial: "SERIAL-1",
+                        wwn: "0x5000CCA1", rotational: false, state: .available, uses: [])
+                ],
                 [observation(wwn: "0x5000CCA1", serial: nil, path: "/dev/sdb", state: .draining)],
-                [observation(
-                    wwn: "0x5000CCA1", serial: nil, path: "/dev/sdb",
-                    state: .inUse, uses: [.filesystem, .filesystem])],
-                [observation(
-                    wwn: "0x5000CCA1", serial: nil, path: "/dev/sdb",
-                    state: .available, uses: [.filesystem])],
+                [
+                    observation(
+                        wwn: "0x5000CCA1", serial: nil, path: "/dev/sdb",
+                        state: .inUse, uses: [.filesystem, .filesystem])
+                ],
+                [
+                    observation(
+                        wwn: "0x5000CCA1", serial: nil, path: "/dev/sdb",
+                        state: .available, uses: [.filesystem])
+                ],
                 [observation(wwn: "0x5000CCA1", serial: nil, path: "/dev/sdb", state: .inUse)],
-                [observation(
-                    wwn: "0x5000CCA1", serial: nil, path: "/dev/sdb",
-                    sizeBytes: 0, state: .available)],
+                [
+                    observation(
+                        wwn: "0x5000CCA1", serial: nil, path: "/dev/sdb",
+                        sizeBytes: 0, state: .available)
+                ],
             ]
 
             for snapshot in invalidSnapshots {

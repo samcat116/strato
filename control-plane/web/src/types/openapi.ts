@@ -5563,7 +5563,7 @@ export interface components {
          * @description Which kind of resource a mutation acts on.
          * @enum {string}
          */
-        OperationResourceKind: "virtual_machine" | "sandbox";
+        OperationResourceKind: "virtual_machine" | "sandbox" | "volume" | "volume_snapshot" | "vm_checkpoint" | "sandbox_snapshot";
         /**
          * @description The lifecycle mutation an operation performs.
          * @enum {string}
@@ -6286,7 +6286,7 @@ export interface components {
             /** Format: uuid */
             poolId?: string;
             attachedAgentId?: string;
-            /** @description Every physical copy of the volume. Healthy and provisioning copies authoritatively define placement and agent-owned storage paths; other states remain visible for repair and observability. */
+            /** @description Every physical copy of the volume. Healthy and provisioning copies authoritatively define placement and agent-owned disk attachments; other states remain visible for repair and observability. */
             replicas: components["schemas"]["VolumeReplica"][];
             /** Format: uuid */
             vmId?: string;
@@ -6318,12 +6318,34 @@ export interface components {
             /** Format: uuid */
             id?: string;
             agentId: string;
-            /** @description The agent-owned location of this physical copy. Null while a provisioning replica has not reported its location yet. */
-            datasetPath?: string | null;
+            /** @description The complete storage reference reported by the owning agent. Omitted while a provisioning replica has not reported an attachment yet. */
+            diskAttachment?: components["schemas"]["DiskAttachment"];
             /** @enum {string} */
             state: "provisioning" | "healthy" | "degraded" | "resyncing" | "faulted";
             /** Format: int64 */
             generation: number;
+        };
+        /** @description The storage-backend-owned disk reference. Exactly one case is present; the control plane stores and returns it without deriving host layout. */
+        DiskAttachment: components["schemas"]["FileDiskAttachment"] | components["schemas"]["BlockDeviceDiskAttachment"] | components["schemas"]["RBDDiskAttachment"];
+        FileDiskAttachment: {
+            file: {
+                path: string;
+                /** @enum {string} */
+                format: "qcow2" | "raw";
+            };
+        };
+        BlockDeviceDiskAttachment: {
+            blockDevice: {
+                path: string;
+            };
+        };
+        RBDDiskAttachment: {
+            rbd: {
+                pool: string;
+                image: string;
+                user: string;
+                monHosts: string[];
+            };
         };
         VolumeSnapshot: {
             /** Format: uuid */

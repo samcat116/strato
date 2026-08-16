@@ -428,6 +428,10 @@ public func configure(
     // STR-79: durable captured VM command state with cold output payloads.
     app.migrations.add(CreateVMCommandExecutions())
 
+    // STR-154: preserve the attachment case and its coordinates instead of
+    // interpreting every agent-owned storage reference as a host path.
+    app.migrations.add(ReplaceVolumeReplicaDatasetPath())
+
     // STR-156: durable agent-reported physical disk inventory and operator OSD
     // eligibility intent. Missing disks remain rows until their agent is removed.
     app.migrations.add(CreateStorageDevices())

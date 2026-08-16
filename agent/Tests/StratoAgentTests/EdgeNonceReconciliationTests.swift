@@ -191,7 +191,11 @@ struct EdgeNonceReconciliationTests {
             sizeBytes: 1 << 30, format: "qcow2")
         let plan = Reconciler.planVolumes(
             desired: [desired],
-            present: [id: .managed(ObservedVolumeFacts(path: "/v", format: .qcow2, sizeBytes: 1 << 30))],
+            present: [
+                id: .managed(
+                    ObservedVolumeFacts(
+                        attachment: .file(path: "/v", format: .qcow2), sizeBytes: 1 << 30))
+            ],
             lastApplied: [id: 2])
         #expect(plan.items.isEmpty)
     }

@@ -1,17 +1,18 @@
 import Foundation
+import StratoShared
 
-/// A disk realized on this host: the agent-resolved path plus attach options.
+/// A storage-backend disk reference plus hypervisor attach options.
 ///
 /// The counterpart to `ResolvedNetworkAttachment` — what a hypervisor driver
-/// consumes after image materialization and volume resolution have run, so the
-/// driver never has to know how the path was arrived at.
+/// consumes after image materialization and volume resolution have run. The
+/// attachment stays typed so the driver cannot reinterpret a network identity
+/// as a host path.
 ///
 /// The process driver carried an identical private struct of its own; it was left
 /// alone so the libvirt work stays additive, and the `LibvirtService` issue
 /// collapses the two.
 public struct ResolvedDisk: Sendable, Equatable {
-    public let path: String
-    public let format: DiskFormat
+    public let attachment: DiskAttachment
     public let readonly: Bool
     /// Firmware boot order from `VolumeSpec.bootOrder`, when the control plane
     /// set one. Nil on every disk means no boot element is emitted at all and
@@ -33,11 +34,10 @@ public struct ResolvedDisk: Sendable, Equatable {
     public let volumeId: String?
 
     public init(
-        path: String, format: DiskFormat, readonly: Bool = false, bootOrder: Int? = nil,
+        attachment: DiskAttachment, readonly: Bool = false, bootOrder: Int? = nil,
         volumeId: String? = nil
     ) {
-        self.path = path
-        self.format = format
+        self.attachment = attachment
         self.readonly = readonly
         self.bootOrder = bootOrder
         self.volumeId = volumeId

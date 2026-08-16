@@ -300,7 +300,8 @@ struct VMManifestStoreTests {
             cpus: 2, memoryBytes: 1_073_741_824, boot: .disk(firmware: nil),
             volumes: [
                 VolumeSpec(
-                    volumeId: volumeId, deviceName: .disk(0), storagePath: legacyPath,
+                    volumeId: volumeId, deviceName: .disk(0),
+                    attachment: .file(path: legacyPath, format: .qcow2),
                     bootOrder: nil)
             ])
         store.save([
@@ -315,6 +316,8 @@ struct VMManifestStoreTests {
         var spec = try #require(entry["spec"] as? [String: Any])
         var volumes = try #require(spec["volumes"] as? [[String: Any]])
         volumes[0].removeValue(forKey: "volumeId")
+        volumes[0].removeValue(forKey: "attachment")
+        volumes[0]["storagePath"] = legacyPath
         spec["volumes"] = volumes
         entry["spec"] = spec
         raw["vm-a"] = entry
@@ -323,7 +326,8 @@ struct VMManifestStoreTests {
         let quarantined = try #require(store.load().loadedQuarantined["vm-a"])
         let desired = legacySpec.withVolumes([
             VolumeSpec(
-                volumeId: volumeId, deviceName: .disk(0), storagePath: managedPath,
+                volumeId: volumeId, deviceName: .disk(0),
+                attachment: .file(path: managedPath, format: .raw),
                 bootOrder: 0)
         ])
         let recovered = try #require(
@@ -331,7 +335,7 @@ struct VMManifestStoreTests {
         #expect(recovered.vsockCID == 19)
         #expect(recovered.spec.volumes.count == 1)
         #expect(recovered.spec.volumes[0].volumeId == volumeId)
-        #expect(recovered.spec.volumes[0].storagePath == managedPath)
+        #expect(recovered.spec.volumes[0].attachment == .file(path: managedPath, format: .raw))
     }
 
     @Test("Reserved-disk total treats missing diskBytes and sandbox entries as zero")

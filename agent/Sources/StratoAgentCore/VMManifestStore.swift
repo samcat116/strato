@@ -289,7 +289,10 @@ public struct QuarantinedManifestEntry: Sendable {
             let legacyOrder: Int? =
                 if case .int(let value)? = legacy["bootOrder"] { value } else { nil }
 
-            let pathMatches = desired.volumes.filter { $0.storagePath == legacyPath && legacyPath != nil }
+            let pathMatches = desired.volumes.filter {
+                guard case .file(let path, _) = $0.attachment else { return false }
+                return path == legacyPath && legacyPath != nil
+            }
             let identityMatches = desired.volumes.filter {
                 let sameOrder =
                     $0.bootOrder == legacyOrder
@@ -300,7 +303,15 @@ public struct QuarantinedManifestEntry: Sendable {
             guard matches.count == 1, let managed = matches.first else { return nil }
 
             legacy["volumeId"] = .string(managed.volumeId.uuidString)
-            legacy["storagePath"] = managed.storagePath.map(CodableValue.string) ?? .null
+            if let attachment = managed.attachment,
+                let data = try? JSONEncoder().encode(attachment),
+                let value = try? JSONDecoder().decode(CodableValue.self, from: data)
+            {
+                legacy["attachment"] = value
+            } else {
+                legacy["attachment"] = .null
+            }
+            legacy.removeValue(forKey: "storagePath")
             volumes[index] = .object(legacy)
             changed = true
         }

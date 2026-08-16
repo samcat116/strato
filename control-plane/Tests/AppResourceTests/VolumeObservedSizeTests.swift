@@ -144,7 +144,8 @@ final class VolumeObservedSizeTests {
                         ObservedVolumeState(
                             volumeId: volume.id!,
                             present: true,
-                            storagePath: "/var/lib/strato/volumes/v/volume.qcow2",
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/v/volume.qcow2", format: .qcow2),
                             sizeBytes: 3 << 30,
                             observedGeneration: 1)
                     ]))
@@ -213,7 +214,8 @@ final class VolumeObservedSizeTests {
                         ObservedVolumeState(
                             volumeId: try bootVolume.requireID(),
                             present: true,
-                            storagePath: "/var/lib/strato/volumes/root/volume.qcow2",
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/root/volume.qcow2", format: .qcow2),
                             sizeBytes: sourceSize,
                             attachedVMId: try vm.requireID(),
                             observedGeneration: 0,
@@ -234,7 +236,8 @@ final class VolumeObservedSizeTests {
                         ObservedVolumeState(
                             volumeId: try bootVolume.requireID(),
                             present: true,
-                            storagePath: "/var/lib/strato/volumes/root/volume.qcow2",
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/root/volume.qcow2", format: .qcow2),
                             sizeBytes: materializedSize,
                             attachedVMId: try vm.requireID(),
                             observedGeneration: 1)
@@ -264,7 +267,8 @@ final class VolumeObservedSizeTests {
                         ObservedVolumeState(
                             volumeId: try bootVolume.requireID(),
                             present: true,
-                            storagePath: "/var/lib/strato/volumes/root/volume.qcow2",
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/root/volume.qcow2", format: .qcow2),
                             sizeBytes: materializedSize,
                             attachedVMId: try vm.requireID(),
                             observedGeneration: 2)
@@ -318,7 +322,8 @@ final class VolumeObservedSizeTests {
                         ObservedVolumeState(
                             volumeId: try bootVolume.requireID(),
                             present: true,
-                            storagePath: "/var/lib/strato/volumes/quota/volume.qcow2",
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/quota/volume.qcow2", format: .qcow2),
                             sizeBytes: materializedSize,
                             attachedVMId: try vm.requireID(),
                             observedGeneration: 1)
@@ -339,7 +344,8 @@ final class VolumeObservedSizeTests {
                         ObservedVolumeState(
                             volumeId: try bootVolume.requireID(),
                             present: true,
-                            storagePath: "/var/lib/strato/volumes/quota/volume.qcow2",
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/quota/volume.qcow2", format: .qcow2),
                             sizeBytes: unsupportedSize,
                             attachedVMId: try vm.requireID(),
                             observedGeneration: 1)
@@ -375,7 +381,8 @@ final class VolumeObservedSizeTests {
                         ObservedVolumeState(
                             volumeId: volume.id!,
                             present: true,
-                            storagePath: "/var/lib/strato/volumes/v/volume.qcow2",
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/v/volume.qcow2", format: .qcow2),
                             sizeBytes: 1 << 30,
                             observedGeneration: 2,
                             lastError: "refusing to grow volume: it is attached to a running VM",
@@ -412,7 +419,8 @@ final class VolumeObservedSizeTests {
                         ObservedVolumeState(
                             volumeId: volume.id!,
                             present: true,
-                            storagePath: "/var/lib/strato/volumes/v/volume.qcow2",
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/v/volume.qcow2", format: .qcow2),
                             sizeBytes: nil,
                             observedGeneration: 1)
                     ]))

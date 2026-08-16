@@ -33,9 +33,9 @@ enum VolumeService {
         }
     }
 
-    /// Replica states that may participate in placement and path resolution.
+    /// Replica states that may participate in placement and attachment resolution.
     /// A faulted/degraded copy must never keep a volume pinned to an agent or
-    /// leak a stale path into a VM specification.
+    /// leak a stale attachment into a VM specification.
     static let authoritativeReplicaStates: [VolumeReplicaState] = [.healthy, .provisioning]
 
     // MARK: - Placement
@@ -109,7 +109,7 @@ enum VolumeService {
     }
 
     /// Every agent with a physical copy, regardless of replica health. This is
-    /// the teardown/finalizer scope and must not be used for placement or paths.
+    /// the teardown/finalizer scope and must not be used for placement or attachments.
     static func agentIDsWithPhysicalReplicas(
         of volume: Volume, on db: any Database
     ) async throws -> [String] {
@@ -130,34 +130,35 @@ enum VolumeService {
         try await replicas(of: volume, on: db).first?.agentId
     }
 
-    /// Resolve the agent-owned path for a volume. Prefer the receiving agent's
+    /// Resolve the agent-owned attachment for a volume. Prefer the receiving agent's
     /// own copy, then another healthy/provisioning copy. The latter is relevant
     /// only to a future shared pool; today's local-pool reachability guard makes
     /// the first branch mandatory before an attachment is accepted.
-    static func storagePath(
+    static func diskAttachment(
         for volume: Volume, accessibleFrom agentId: String? = nil, on db: any Database
-    ) async throws -> String? {
+    ) async throws -> DiskAttachment? {
         let replicas = try await replicas(of: volume, on: db)
         if let agentId,
-            let local = replicas.first(where: { $0.agentId == agentId && $0.datasetPath != nil })
+            let local = replicas.first(where: { $0.agentId == agentId && $0.diskAttachment != nil })
         {
-            return local.datasetPath
+            return local.diskAttachment
         }
-        return replicas.first(where: { $0.datasetPath != nil })?.datasetPath
+        return replicas.first(where: { $0.diskAttachment != nil })?.diskAttachment
     }
 
-    /// Batch path projection for VM desired-state assembly.
-    static func storagePaths(
+    /// Batch attachment projection for VM desired-state assembly.
+    static func diskAttachments(
         for volumes: [Volume], accessibleFrom agentId: String, on db: any Database
-    ) async throws -> [UUID: String] {
+    ) async throws -> [UUID: DiskAttachment] {
         let ids = volumes.compactMap(\.id)
         let grouped = try await replicas(volumeIDs: ids, on: db)
-        var result: [UUID: String] = [:]
+        var result: [UUID: DiskAttachment] = [:]
         for volumeID in ids {
             guard let replicas = grouped[volumeID] else { continue }
             let resolved =
-                replicas.first(where: { $0.agentId == agentId && $0.datasetPath != nil })?.datasetPath
-                ?? replicas.first(where: { $0.datasetPath != nil })?.datasetPath
+                replicas.first(where: { $0.agentId == agentId && $0.diskAttachment != nil })?
+                .diskAttachment
+                ?? replicas.first(where: { $0.diskAttachment != nil })?.diskAttachment
             if let resolved { result[volumeID] = resolved }
         }
         return result

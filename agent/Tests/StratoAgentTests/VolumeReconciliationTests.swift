@@ -44,7 +44,7 @@ struct VolumeReconciliationTests {
         deviceName: String? = nil
     ) -> ObservedVolumeFacts {
         ObservedVolumeFacts(
-            path: path, format: format, sizeBytes: sizeBytes,
+            attachment: .file(path: path, format: format), sizeBytes: sizeBytes,
             attachedVMId: attachedVMId, deviceName: deviceName)
     }
 
@@ -111,14 +111,15 @@ struct VolumeReconciliationTests {
             case .create:
                 volumes[item.id] = .managed(
                     ObservedVolumeFacts(
-                        path: "/var/lib/strato/volumes/\(item.id)/volume.\(desired.format)",
-                        format: DiskFormat(rawValue: desired.format) ?? .qcow2,
+                        attachment: .file(
+                            path: "/var/lib/strato/volumes/\(item.id)/volume.\(desired.format)",
+                            format: DiskFormat(rawValue: desired.format) ?? .qcow2),
                         sizeBytes: desired.sizeBytes))
             case .resize:
                 guard case .managed(let current)? = volumes[item.id] else { return }
                 volumes[item.id] = .managed(
                     ObservedVolumeFacts(
-                        path: current.path, format: current.format, sizeBytes: desired.sizeBytes,
+                        attachment: current.attachment, sizeBytes: desired.sizeBytes,
                         attachedVMId: current.attachedVMId, deviceName: current.deviceName))
             case .attach:
                 guard case .managed(let current)? = volumes[item.id],
@@ -126,13 +127,13 @@ struct VolumeReconciliationTests {
                 else { return }
                 volumes[item.id] = .managed(
                     ObservedVolumeFacts(
-                        path: current.path, format: current.format, sizeBytes: current.sizeBytes,
+                        attachment: current.attachment, sizeBytes: current.sizeBytes,
                         attachedVMId: attachment.vmId.uuidString, deviceName: attachment.deviceName.rawValue))
             case .detach:
                 guard case .managed(let current)? = volumes[item.id] else { return }
                 volumes[item.id] = .managed(
                     ObservedVolumeFacts(
-                        path: current.path, format: current.format, sizeBytes: current.sizeBytes))
+                        attachment: current.attachment, sizeBytes: current.sizeBytes))
             case .delete:
                 volumes.removeValue(forKey: item.id)
             case .adopt, .boot, .pause, .resume, .shutdown, .export, .reboot, .restore,
@@ -459,7 +460,7 @@ struct VolumeReconciliationTests {
         let bootVolume = VolumeSpec(
             volumeId: volumeId,
             deviceName: .disk(0),
-            storagePath: nil,
+            attachment: nil,
             readonly: false,
             bootOrder: 0)
         let vm = DesiredVMState(
@@ -551,7 +552,7 @@ struct VolumeReconciliationTests {
                     bootOrder: 0)
             ])
         let undersized = ObservedVolumeFacts(
-            path: "/volumes/root.qcow2", format: .qcow2, sizeBytes: 112 << 20,
+            attachment: .file(path: "/volumes/root.qcow2", format: .qcow2), sizeBytes: 112 << 20,
             attachedVMId: vmId.uuidString, deviceName: "disk0")
 
         let reason = VMBootVolumeDependency.pendingReason(
@@ -564,7 +565,7 @@ struct VolumeReconciliationTests {
         #expect(reason?.contains("waiting for the admitted \(requestedSize) bytes") == true)
 
         let readyAtRequestedSize = ObservedVolumeFacts(
-            path: "/volumes/root.qcow2", format: .qcow2, sizeBytes: requestedSize,
+            attachment: .file(path: "/volumes/root.qcow2", format: .qcow2), sizeBytes: requestedSize,
             attachedVMId: vmId.uuidString, deviceName: "disk0")
         #expect(
             VMBootVolumeDependency.pendingReason(
@@ -576,7 +577,7 @@ struct VolumeReconciliationTests {
                 observedVolumes: [volumeId.uuidString: readyAtRequestedSize]) == nil)
 
         let materializedAboveRequest = ObservedVolumeFacts(
-            path: "/volumes/root.qcow2", format: .qcow2, sizeBytes: materializedSize,
+            attachment: .file(path: "/volumes/root.qcow2", format: .qcow2), sizeBytes: materializedSize,
             attachedVMId: vmId.uuidString, deviceName: "disk0")
         #expect(
             VMBootVolumeDependency.pendingReason(

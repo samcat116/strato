@@ -1333,7 +1333,7 @@ CREATE TABLE public.volume_replicas (
     id uuid NOT NULL,
     volume_id uuid NOT NULL,
     agent_id text NOT NULL,
-    dataset_path text,
+    disk_attachment jsonb,
     state text NOT NULL,
     generation bigint NOT NULL,
     created_at timestamp with time zone,

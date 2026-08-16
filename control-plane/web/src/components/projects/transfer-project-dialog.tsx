@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,8 +20,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useTransferProject } from "@/lib/hooks";
-import { useOrganization } from "@/providers";
+import { usePermissions, useTransferProject } from "@/lib/hooks";
+import { organizationsApi } from "@/lib/api/organizations";
+import { useAuth, useOrganization } from "@/providers";
 import type { Project } from "@/lib/api/projects";
 import { toast } from "sonner";
 
@@ -35,15 +37,34 @@ export function TransferProjectDialog({
   onOpenChange,
   project,
 }: TransferProjectDialogProps) {
+  const { user } = useAuth();
   const { organizations, currentOrg } = useOrganization();
   const transferProject = useTransferProject();
   const [destinationOrgId, setDestinationOrgId] = useState("");
 
-  // Valid targets are other organizations the user administers — the backend
-  // requires admin on the destination, so offering member-only orgs would just
-  // produce a 403 on submit.
-  const destinations = organizations.filter(
-    (org) => org.id !== currentOrg?.id && org.userRole === "admin"
+  const allOrganizationsQuery = useQuery({
+    queryKey: ["organizations", "all"],
+    queryFn: ({ signal }) => organizationsApi.listAll(signal),
+    enabled: open && !!user?.isSystemAdmin,
+  });
+  const candidateOrganizations = user?.isSystemAdmin
+    ? (allOrganizationsQuery.data ?? organizations)
+    : organizations;
+  const destinationCandidates = candidateOrganizations.filter(
+    (organization) => organization.id !== currentOrg?.id
+  );
+  const { permissions } = usePermissions(
+    destinationCandidates.map((organization) => ({
+      key: `destination:${organization.id}`,
+      action: "org:update",
+      node: { type: "organization", id: organization.id },
+    }))
+  );
+  // The backend requires org:update on the destination. Ask the evaluator
+  // directly so canonical role IDs, custom roles, and system-admin bypass all
+  // produce the same decision here as they do on submit.
+  const destinations = destinationCandidates.filter(
+    (organization) => permissions[`destination:${organization.id}`]
   );
 
   // Clear the selection each time the dialog (re)opens, derived during render.

@@ -304,10 +304,10 @@ public struct VolumeSpec: Codable, Sendable {
     /// (STR-129); unique per VM, enforced by the control plane's
     /// `(vm_id, device_name)` index.
     public let deviceName: VolumeDeviceName
-    /// Host path of the volume as previously reported by the owning agent.
-    /// Nil when the agent materializes the volume itself (e.g. boot volume from an
-    /// image); the agent is the authority on paths and may ignore this hint.
-    public let storagePath: String?
+    /// Storage descriptor previously reported by the owning agent. Nil while
+    /// the volume has not been realized; the receiving agent remains the
+    /// authority and resolves the identity against its current inventory.
+    public let attachment: DiskAttachment?
     public let readonly: Bool
     /// Explicit boot order; volumes are sent pre-sorted, this is informational.
     public let bootOrder: Int?
@@ -322,14 +322,14 @@ public struct VolumeSpec: Codable, Sendable {
     public init(
         volumeId: UUID,
         deviceName: VolumeDeviceName,
-        storagePath: String? = nil,
+        attachment: DiskAttachment? = nil,
         readonly: Bool = false,
         bootOrder: Int? = nil,
         ioLimits: VolumeIOLimits? = nil
     ) {
         self.volumeId = volumeId
         self.deviceName = deviceName
-        self.storagePath = storagePath
+        self.attachment = attachment
         self.readonly = readonly
         self.bootOrder = bootOrder
         self.ioLimits = ioLimits

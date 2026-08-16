@@ -43,11 +43,11 @@ public enum DomainDeviceXML {
     /// without it, libvirt filled them with the domain's own devices, and every
     /// attach this function feeds failed with "No more available PCI slots".
     public static func hotplugDisk(
-        path: String, format: DiskFormat, target: String, readonly: Bool, volumeId: String
+        attachment: DiskAttachment, target: String, readonly: Bool, volumeId: String
     ) -> String {
         DomainXMLBuilder.diskNode(
-            path: path, format: format.rawValue, target: target, readonly: readonly,
-            bootOrder: nil, volumeId: volumeId
+            attachment: attachment, target: target, readonly: readonly, bootOrder: nil,
+            volumeId: volumeId
         ).render()
     }
 
@@ -55,13 +55,11 @@ public enum DomainDeviceXML {
     ///
     /// libvirt resolves a disk detach by `<target dev>`, but it parses the
     /// whole fragment first — so every attribute here is **echoed back from
-    /// what libvirt reported**, never asserted. Every disk this driver writes is
-    /// a file-backed virtio disk, so hardcoding `type='file'`, `device='disk'`
-    /// and `bus='virtio'` would hold today and stop holding the moment a
-    /// `type='block'` volume or another bus reaches a domain — and the failure
-    /// would be libvirt matching nothing, or the wrong device, rather than a
-    /// legible error. Deriving the fragment is the rule this whole type states;
-    /// this is the one place it was not being followed.
+    /// what libvirt reported**, never asserted. Disk attachments can be files,
+    /// block devices, or network-backed RBD images, and the bus may also change.
+    /// Hardcoding any of those values would make libvirt match nothing, or the
+    /// wrong device, rather than return a legible error. Deriving the fragment
+    /// is the rule this whole type states.
     public static func detachDisk(_ disk: DomainDisk) -> String {
         var node = DomainXMLNode(
             "disk", [("type", disk.type ?? "file"), ("device", disk.device ?? "disk")])

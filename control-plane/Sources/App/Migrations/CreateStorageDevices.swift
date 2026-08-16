@@ -7,7 +7,8 @@ struct CreateStorageDevices: AsyncMigration {
             .id()
             .field(
                 "agent_id", .uuid, .required,
-                .references(Agent.schema, "id", onDelete: .cascade))
+                .references(Agent.schema, "id", onDelete: .cascade)
+            )
             .field("identity_kind", .string)
             .field("identity_value", .string)
             .field("device_path", .string, .required)

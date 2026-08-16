@@ -72,7 +72,7 @@ is safer than transferring destructive intent across an inferred alias.
 
 ### Observed device
 
-Wire protocol version 51 adds the following shared values:
+Wire protocol version 52 adds the following shared values:
 
 ```swift
 public enum StorageDeviceUse: String, Codable, Sendable {
@@ -256,7 +256,7 @@ The semantics match the existing optional volume and snapshot inventories:
 The field is independent of workload-manifest health. An agent that cannot
 enumerate its VM manifest may still provide a valid storage-device inventory.
 Strato requires exact wire-version equality, so this change bumps
-`WireProtocol.currentVersion` from 50 to 51 with no compatibility branch.
+`WireProtocol.currentVersion` from 51 to 52 with no compatibility branch.
 
 ## Control-plane reconciliation module
 
@@ -455,7 +455,7 @@ is migrated into a guessed physical-device identity.
 
 ### Shared wire tests
 
-- Pin wire version 51.
+- Pin wire version 52.
 - Round-trip identity kinds, hardware facts, state, and sorted use reasons.
 - Decode a report with `storageDevices = nil`, `[]`, and populated devices.
 

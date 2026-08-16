@@ -41,6 +41,8 @@ interface ProjectFormDialogProps {
   folderOptions?: ProjectFolderOption[];
   /** When provided, the dialog edits this project instead of creating one. */
   project?: Project | null;
+  /** Whether edit mode may move the project to another parent. */
+  canChangeLocation?: boolean;
 }
 
 export function ProjectFormDialog({
@@ -50,8 +52,10 @@ export function ProjectFormDialog({
   organizationName,
   folderOptions = [],
   project,
+  canChangeLocation = false,
 }: ProjectFormDialogProps) {
   const isEdit = !!project;
+  const locationLocked = isEdit && !canChangeLocation;
   const createProject = useCreateProject(organizationId);
   const updateProject = useUpdateProject();
   const isPending = createProject.isPending || updateProject.isPending;
@@ -152,11 +156,11 @@ export function ProjectFormDialog({
             description,
             environments,
             defaultEnvironment,
-            ...(location === originalLocation
-              ? {}
-              : location === ORGANIZATION_ROOT
+            ...(!locationLocked && location !== originalLocation
+              ? location === ORGANIZATION_ROOT
                 ? { organizationId }
-                : { organizationalUnitId: location }),
+                : { organizationalUnitId: location }
+              : {}),
           },
         });
         toast.success("Project updated");
@@ -233,7 +237,7 @@ export function ProjectFormDialog({
               <Select
                 value={location}
                 onValueChange={setLocation}
-                disabled={isPending}
+                disabled={isPending || locationLocked}
               >
                 <SelectTrigger
                   id="projectLocation"
@@ -260,8 +264,9 @@ export function ProjectFormDialog({
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Choose where this project belongs in the organization
-                hierarchy.
+                {locationLocked
+                  ? "Project transfer and organization admin permissions are required to change location."
+                  : "Choose where this project belongs in the organization hierarchy."}
               </p>
             </div>
 

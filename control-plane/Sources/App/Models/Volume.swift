@@ -578,14 +578,14 @@ struct VolumeResponse: Content {
 struct VolumeReplicaResponse: Content {
     let id: UUID?
     let agentId: String
-    let datasetPath: String?
+    let diskAttachment: DiskAttachment?
     let state: VolumeReplicaState
     let generation: Int64
 
     init(from replica: VolumeReplica) {
         id = replica.id
         agentId = replica.agentId
-        datasetPath = replica.datasetPath
+        diskAttachment = replica.diskAttachment
         state = replica.state
         generation = replica.generation
     }

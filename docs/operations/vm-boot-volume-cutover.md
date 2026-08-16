@@ -36,7 +36,7 @@ Boot volumes whose pool or active local replica does not match the VM:
 WITH inventory AS (
     SELECT vm.id, vm.hypervisor_id, v.id AS volume_id, p.name AS pool_name,
            p.mode AS pool_mode, p.member_agent_ids,
-           r.agent_id, r.state, r.dataset_path,
+           r.agent_id, r.state, r.disk_attachment,
            COUNT(r.id) OVER (PARTITION BY v.id) AS replica_count
     FROM vms vm
     JOIN volumes v ON v.vm_id = vm.id AND v.type::text = 'boot'
@@ -45,7 +45,7 @@ WITH inventory AS (
       AND r.state::text IN ('healthy', 'provisioning')
 )
 SELECT id, hypervisor_id, volume_id, pool_name, pool_mode,
-       agent_id, state, dataset_path
+       agent_id, state, disk_attachment
 FROM inventory
 WHERE pool_mode IS DISTINCT FROM 'local'
    OR (

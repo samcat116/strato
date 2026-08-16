@@ -1,45 +1,6 @@
 import Foundation
 import StratoShared
 
-// MARK: - Disk Format
-
-/// On-disk image formats the storage layer can produce. Distinct from the
-/// wire-level format strings: parse those with `DiskFormat(rawValue:)` and
-/// reject unknown values at the boundary instead of passing free-form strings
-/// into qemu-img.
-public enum DiskFormat: String, Codable, Sendable, CaseIterable {
-    case qcow2
-    case raw
-
-    /// File extension used by the path layout (`volume.qcow2`, `rootfs.raw`).
-    public var fileExtension: String { rawValue }
-
-    /// Best-effort format inference for a disk referenced only by path. The
-    /// storage layout names files after their format, so the extension is
-    /// authoritative for backend-managed volumes; unknown extensions fall
-    /// back to qcow2 (the historical assumption for pre-existing disks).
-    public init(volumePath: String) {
-        self = DiskFormat(rawValue: (volumePath as NSString).pathExtension) ?? .qcow2
-    }
-}
-
-// MARK: - Disk Attachment Descriptor
-
-/// What the storage layer hands a hypervisor driver: a disk that exists on
-/// this host, with the format the driver must declare when attaching it.
-/// Drivers add their own attach options (readonly, device names, interfaces).
-public struct DiskAttachment: Sendable, Equatable {
-    /// Host path of the disk image.
-    public let path: String
-    /// Actual format of the image at `path`.
-    public let format: DiskFormat
-
-    public init(path: String, format: DiskFormat) {
-        self.path = path
-        self.format = format
-    }
-}
-
 // MARK: - Image Source
 
 /// Provides a local file for an image referenced by `ImageInfo` (downloading
@@ -77,8 +38,8 @@ public struct VolumeInfoResult: Codable, Sendable {
 /// `NetworkServiceProtocol` (networking).
 ///
 /// The backend owns volume placement: callers pass IDs, the backend decides
-/// paths and reports them back through `DiskAttachment` (the control plane
-/// stores whatever the agent reports and never derives paths itself).
+/// its attachment and reports it through `DiskAttachment` (the control plane
+/// stores whatever the agent reports and never derives storage layout itself).
 /// Operations that hand back a disk return a typed `DiskAttachment` so
 /// hypervisor drivers never guess at formats.
 ///
@@ -135,11 +96,11 @@ public protocol StorageBackend: Actor {
 
     /// Every volume whose data this backend currently holds, by id (STR-148).
     ///
-    /// This is the agent's presence set for volume reconciliation: a volume is
-    /// a file, so the backend's own inventory is the whole truth and there is
-    /// no manifest to keep in step with it. Must tolerate a half-written
-    /// volume — a directory whose `qemu-img create` died partway through is
-    /// *not* present, so the next sync re-drives the create over it.
+    /// This is the agent's presence set for volume reconciliation: the
+    /// backend's own inventory is the whole truth and there is no manifest to
+    /// keep in step with it. A filesystem implementation must tolerate a
+    /// half-written volume — a directory whose `qemu-img create` died partway
+    /// through is *not* present, so the next sync re-drives the create over it.
     func listVolumes() async throws -> [String: DiskAttachment]
 }
 
