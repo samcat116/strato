@@ -428,6 +428,10 @@ public func configure(
     // STR-79: durable captured VM command state with cold output payloads.
     app.migrations.add(CreateVMCommandExecutions())
 
+    // STR-156: durable agent-reported physical disk inventory and operator OSD
+    // eligibility intent. Missing disks remain rows until their agent is removed.
+    app.migrations.add(CreateStorageDevices())
+
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
     // that records it, so concurrent replica boots race the same migration and a
