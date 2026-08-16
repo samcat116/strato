@@ -1,4 +1,3 @@
-import Crypto
 import Foundation
 import Logging
 import StratoShared
@@ -138,17 +137,11 @@ public struct SnapshotArtifactTransfer: Sendable {
     }
 
     static func sha256Hex(of filePath: String) throws -> String {
-        guard let fileHandle = FileHandle(forReadingAtPath: filePath) else {
+        do {
+            return try FileHashing.sha256Hex(ofFileAt: filePath)
+        } catch {
             throw TransferError.fileNotFound(filePath)
         }
-        defer { try? fileHandle.close() }
-        var hasher = SHA256()
-        while true {
-            let data = fileHandle.readData(ofLength: 1024 * 1024)
-            if data.isEmpty { break }
-            hasher.update(data: data)
-        }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     private static func fileSize(_ path: String) -> Int64 {
