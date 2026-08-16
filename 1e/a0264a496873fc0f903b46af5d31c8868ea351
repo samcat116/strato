@@ -1,0 +1,29 @@
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_1dd9ddf4b6d7c1::t_a0a67b9c9b33cd 1610-1614,1629-1630,1645
+shared/Tests/StratoSharedTests/StorageDeviceInventoryTests.swift
+  s_1dd9ddf4b6d7c1::t_1f1886075ac85a 28-76
+  s_1dd9ddf4b6d7c1::t_ea897af810feef 1
+  s_1dd9ddf4b6d7c1::t_2a5bc86b368999 2-27,77
+shared/Sources/StratoShared/WireProtocol.swift
+  s_1dd9ddf4b6d7c1::t_902b4a56d73535 14-17,21
+shared/Sources/StratoShared/StorageDeviceInventory.swift
+  s_1dd9ddf4b6d7c1::t_a11d49ad2106b6 1-96
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_1dd9ddf4b6d7c1::t_01b23a6aefb6c2 20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "1ea0264a496873fc0f903b46af5d31c8868ea351",
+  "prompts": {},
+  "sessions": {
+    "s_1dd9ddf4b6d7c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a006b7-8a6c-79c2-965b-1ae759428c83",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
