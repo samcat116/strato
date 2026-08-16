@@ -205,6 +205,23 @@ struct ProjectsAPIService: APIProtocol {
             // race below; nothing backstops this one, and closing it needs the
             // project row locked rather than merely read.
             try await ResourceBindingCleanup.revokeBindings(forDeletedProject: projectID, on: db)
+
+            // A security group's owner-side FK cascades its rules, but a
+            // default group's ingress rules also point back to that same group
+            // through `remote_group_id` (NO ACTION). PostgreSQL checks that
+            // self-reference before the cascade can remove the row, so every
+            // otherwise-empty project became undeletable. Mirror the explicit
+            // rule teardown in SecurityGroupController before deleting the
+            // project and letting its groups cascade.
+            let securityGroupIDs = try await SecurityGroup.query(on: db)
+                .filter(\.$project.$id == projectID)
+                .all(\.$id)
+            if !securityGroupIDs.isEmpty {
+                try await SecurityGroupRule.query(on: db)
+                    .filter(\.$securityGroup.$id ~~ securityGroupIDs)
+                    .delete()
+            }
+
             // The emptiness checks above and this delete are not one atomic
             // step, and read-committed Postgres will happily commit a VM
             // created in between. `vms.project_id` is RESTRICT (STR-98), so

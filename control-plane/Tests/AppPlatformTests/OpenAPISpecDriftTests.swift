@@ -183,10 +183,42 @@ struct OpenAPISpecDriftTests {
         return ids
     }
 
+    /// Values from a schema whose enum uses the document's compact
+    /// `enum: [one, two]` form. Keeping this tiny parser beside the route
+    /// scanner avoids adding a YAML dependency solely for drift assertions.
+    private static func inlineEnumValues(
+        schema name: String, in yaml: String
+    ) throws -> Set<String> {
+        let lines = yaml.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let schemaIndex = lines.firstIndex(of: "    \(name):") else {
+            throw Abort(.internalServerError, reason: "OpenAPI schema '\(name)' is missing")
+        }
+        for line in lines.dropFirst(schemaIndex + 1) {
+            if line.hasPrefix("    "), !line.hasPrefix("     ") { break }
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("enum: ["), trimmed.hasSuffix("]") else { continue }
+            let values = trimmed.dropFirst("enum: [".count).dropLast()
+            return Set(
+                values.split(separator: ",").map {
+                    $0.trimmingCharacters(in: .whitespaces)
+                })
+        }
+        throw Abort(
+            .internalServerError,
+            reason: "OpenAPI schema '\(name)' does not declare an inline enum")
+    }
+
     @Test("openapi.yaml is bundled and served from the App resources")
     func specResourceIsBundled() async throws {
         let yaml = try #require(OpenAPISpec.yaml, "openapi.yaml was not bundled into the App target")
         #expect(yaml.contains("openapi: 3.0.3"))
+    }
+
+    @Test("Operation resource kinds stay aligned with the backend enum")
+    func operationResourceKindsMatchBackend() throws {
+        let yaml = try #require(OpenAPISpec.yaml)
+        let documented = try Self.inlineEnumValues(schema: "OperationResourceKind", in: yaml)
+        #expect(documented == Set(OperationResourceKind.allCases.map(\.rawValue)))
     }
 
     /// Phase 3 (#583) migrated the projects surface onto handlers generated from

@@ -691,6 +691,42 @@ final class ProjectTests {
         }
     }
 
+    @Test("Delete project with its self-referencing default security group")
+    func testDeleteProjectWithDefaultSecurityGroup() async throws {
+        try await withProjectTestApp { app, _, testOrganization, _, authToken in
+            let project = Project(
+                name: "Delete Default Group Project",
+                description: "The default group's own rules must not block deletion",
+                organizationID: testOrganization.id,
+                path: ""
+            )
+            try await project.save(on: app.db)
+            let projectID = try project.requireID()
+
+            let group = try await SecurityGroupService.ensureDefaultGroup(
+                projectID: projectID, on: app.db)
+            let groupID = try group.requireID()
+            let rules = try await SecurityGroupRule.query(on: app.db)
+                .filter(\.$securityGroup.$id == groupID)
+                .all()
+            #expect(rules.count == 4)
+            #expect(rules.filter { $0.$remoteGroup.id == groupID }.count == 2)
+
+            try await app.test(.DELETE, "/api/projects/\(projectID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            #expect(try await Project.find(projectID, on: app.db) == nil)
+            #expect(try await SecurityGroup.find(groupID, on: app.db) == nil)
+            #expect(
+                try await SecurityGroupRule.query(on: app.db)
+                    .filter(\.$securityGroup.$id == groupID)
+                    .count() == 0)
+        }
+    }
+
     @Test("Deleting a project refreshes ancestor quotas after its networks cascade")
     func testDeleteProjectRefreshesAncestorNetworkQuotas() async throws {
         try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
