@@ -1,4 +1,3 @@
-import Crypto
 import Foundation
 import Logging
 import StratoShared
@@ -406,21 +405,11 @@ public actor ImageCacheService {
 
     /// Computes SHA256 checksum of a file
     private func computeChecksum(filePath: String) throws -> String {
-        guard let fileHandle = FileHandle(forReadingAtPath: filePath) else {
+        do {
+            return try FileHashing.sha256Hex(ofFileAt: filePath)
+        } catch {
             throw ImageCacheError.fileNotFound(filePath)
         }
-        defer { try? fileHandle.close() }
-
-        var hasher = SHA256()
-        let bufferSize = 1024 * 1024  // 1MB chunks
-
-        while true {
-            let data = fileHandle.readData(ofLength: bufferSize)
-            if data.isEmpty { break }
-            hasher.update(data: data)
-        }
-
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
 }
