@@ -1607,6 +1607,11 @@ public struct ObservedStateReport: WebSocketMessage {
     /// Native LB programming and backend health observed by the site's
     /// topology author. Nil means no opinion, not an empty authoritative set.
     public let loadBalancers: [ObservedLoadBalancerState]?
+    /// Whole physical disks observed by this agent. A non-nil value is the
+    /// complete current inventory, including an authoritative empty list.
+    /// Nil means enumeration failed or is unsupported and must not be read as
+    /// device absence.
+    public let storageDevices: [ObservedStorageDevice]?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -1621,7 +1626,8 @@ public struct ObservedStateReport: WebSocketMessage {
         manifestStatus: ObservedManifestStatus? = nil,
         volumes: [ObservedVolumeState]? = nil,
         snapshots: [ObservedSnapshotState]? = nil,
-        loadBalancers: [ObservedLoadBalancerState]? = nil
+        loadBalancers: [ObservedLoadBalancerState]? = nil,
+        storageDevices: [ObservedStorageDevice]? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -1636,6 +1642,7 @@ public struct ObservedStateReport: WebSocketMessage {
         self.volumes = volumes
         self.snapshots = snapshots
         self.loadBalancers = loadBalancers
+        self.storageDevices = storageDevices
     }
 
 }
