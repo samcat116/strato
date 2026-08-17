@@ -106,9 +106,9 @@ exit 2
 EOF
 chmod +x "$STUB_DIR/curl"
 
-ENROLLMENT_TOKEN=enroll_v1_test
-ENROLLMENT_API_URL=https://cp.example.com/api/agent-enrollments/bootstrap
-EXPLICIT_BOOTSTRAP_VALUES=0
+export ENROLLMENT_TOKEN=enroll_v1_test
+export ENROLLMENT_API_URL=https://cp.example.com/api/agent-enrollments/bootstrap
+export EXPLICIT_BOOTSTRAP_VALUES=0
 CONTROL_PLANE_URL=""
 AGENT_NAME=""
 JOIN_TOKEN=""

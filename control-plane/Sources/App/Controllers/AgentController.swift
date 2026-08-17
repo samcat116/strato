@@ -107,9 +107,13 @@ struct AgentController: RouteCollection {
     /// failure `?skipSpireDeprovision=true` may override. "Server unreachable"
     /// deliberately still fails hard, because there retrying *is* the remedy.
     private func spireServiceForDeprovisioning(
-        _ req: Request, registry: OrgSPIREClientRegistry, trustDomain: String, action: String
+        _ req: Request,
+        registry: OrgSPIREClientRegistry,
+        trustDomain: String,
+        action: String,
+        on db: any Database
     ) async throws -> SPIRERegistrationService? {
-        if let service = try await registry.service(forTrustDomain: trustDomain, on: req.db) {
+        if let service = try await registry.service(forTrustDomain: trustDomain, on: db) {
             return service
         }
         guard req.query[Bool.self, at: "skipSpireDeprovision"] == true else {
@@ -213,60 +217,76 @@ struct AgentController: RouteCollection {
         guard let bearer = req.headers.bearerAuthorization,
             let enrollment = try await AgentEnrollment.findByBootstrapToken(bearer.token, on: req.db),
             enrollment.isValid,
-            let expiresAt = enrollment.expiresAt
+            let enrollmentID = enrollment.id
         else {
             throw Abort(.unauthorized, reason: "Enrollment token is invalid, expired, or already used")
         }
 
-        guard let registry = OrgSPIREClientRegistry.fromApplication(req.application) else {
-            throw Abort(.serviceUnavailable, reason: "Agent enrollment requires SPIRE")
-        }
-        guard
-            let selection = try await registry.bootstrapSelection(
-                forTrustDomain: enrollment.trustDomain, on: req.db)
-        else {
-            throw Abort(
-                .serviceUnavailable,
-                reason: "The SPIRE instance for this enrollment is no longer available")
-        }
+        return try await AgentEnrollment.withOperationLock(
+            enrollmentID: enrollmentID, on: req.db
+        ) { db in
+            guard
+                let lockedEnrollment = try await AgentEnrollment.findByBootstrapToken(
+                    bearer.token, on: db),
+                lockedEnrollment.id == enrollmentID,
+                lockedEnrollment.isValid,
+                let expiresAt = lockedEnrollment.expiresAt
+            else {
+                throw Abort(
+                    .unauthorized, reason: "Enrollment token is invalid, expired, or already used")
+            }
 
-        guard try await AgentEnrollment.claimBootstrapToken(bearer.token, on: req.db) else {
-            throw Abort(.unauthorized, reason: "Enrollment token is invalid, expired, or already used")
-        }
+            guard let registry = OrgSPIREClientRegistry.fromApplication(req.application) else {
+                throw Abort(.serviceUnavailable, reason: "Agent enrollment requires SPIRE")
+            }
+            guard
+                let selection = try await registry.bootstrapSelection(
+                    forTrustDomain: lockedEnrollment.trustDomain, on: db)
+            else {
+                throw Abort(
+                    .serviceUnavailable,
+                    reason: "The SPIRE instance for this enrollment is no longer available")
+            }
 
-        let remainingSeconds = max(1, Int(expiresAt.timeIntervalSinceNow.rounded(.down)))
-        let ttlSeconds = Int32(min(remainingSeconds, Int(Int32.max)))
-        let joinToken: SPIREAgentJoinToken
-        do {
-            joinToken = try await selection.service.mintAgentJoinToken(
-                named: enrollment.agentName, ttlSeconds: ttlSeconds)
-        } catch {
-            req.logger.error(
-                "SPIRE join-token minting failed while redeeming an agent enrollment",
-                metadata: [
-                    "agentName": .string(enrollment.agentName),
-                    "enrollmentId": .string(enrollment.id?.uuidString ?? "unknown"),
-                    "error": .string("\(error)"),
-                ])
-            throw Abort(
-                .badGateway,
-                reason:
-                    "SPIRE could not issue the node attestation token. The one-time enrollment token was consumed; revoke and recreate the enrollment."
+            guard try await AgentEnrollment.claimBootstrapToken(bearer.token, on: db) else {
+                throw Abort(
+                    .unauthorized, reason: "Enrollment token is invalid, expired, or already used")
+            }
+
+            let remainingSeconds = max(1, Int(expiresAt.timeIntervalSinceNow.rounded(.down)))
+            let ttlSeconds = Int32(min(remainingSeconds, Int(Int32.max)))
+            let joinToken: SPIREAgentJoinToken
+            do {
+                joinToken = try await selection.service.mintAgentJoinToken(
+                    named: lockedEnrollment.agentName, ttlSeconds: ttlSeconds)
+            } catch {
+                req.logger.error(
+                    "SPIRE join-token minting failed while redeeming an agent enrollment",
+                    metadata: [
+                        "agentName": .string(lockedEnrollment.agentName),
+                        "enrollmentId": .string(enrollmentID.uuidString),
+                        "error": .string("\(error)"),
+                    ])
+                throw Abort(
+                    .badGateway,
+                    reason:
+                        "SPIRE could not issue the node attestation token. The one-time enrollment token was consumed; revoke and recreate the enrollment."
+                )
+            }
+
+            let bundle = AgentBootstrapBundle(
+                controlPlaneURL: "\(webSocketBaseURL(req: req))/agent/ws",
+                agentName: lockedEnrollment.agentName,
+                joinToken: joinToken.value,
+                spireServerAddress: selection.service.registrationConfig.serverPublicAddress,
+                trustDomain: lockedEnrollment.trustDomain,
+                controlPlaneSPIFFEID: selection.controlPlaneSPIFFEID
             )
+            var headers = HTTPHeaders()
+            headers.replaceOrAdd(name: .contentType, value: AgentBootstrapBundle.mediaType)
+            headers.replaceOrAdd(name: .cacheControl, value: "no-store")
+            return Response(status: .ok, headers: headers, body: .init(string: bundle.serialized()))
         }
-
-        let bundle = AgentBootstrapBundle(
-            controlPlaneURL: "\(webSocketBaseURL(req: req))/agent/ws",
-            agentName: enrollment.agentName,
-            joinToken: joinToken.value,
-            spireServerAddress: selection.service.registrationConfig.serverPublicAddress,
-            trustDomain: enrollment.trustDomain,
-            controlPlaneSPIFFEID: selection.controlPlaneSPIFFEID
-        )
-        var headers = HTTPHeaders()
-        headers.replaceOrAdd(name: .contentType, value: AgentBootstrapBundle.mediaType)
-        headers.replaceOrAdd(name: .cacheControl, value: "no-store")
-        return Response(status: .ok, headers: headers, body: .init(string: bundle.serialized()))
     }
 
     func createEnrollment(req: Request) async throws -> AgentEnrollmentResponse {
@@ -544,81 +564,93 @@ struct AgentController: RouteCollection {
             try await requireSystemAdmin(req)
         }
 
-        // Revoking withdraws the SPIRE grant this enrollment created — but only
-        // while it still *owns* that grant. Once an Agent row exists for the
-        // name, the node has attested and registered, and the entries belong to
-        // that live agent: they are withdrawn by deregistering the agent
-        // instead, so deprovisioning here would sever a running node.
-        //
-        // Expiry alone does NOT make a grant inert: the join token may have
-        // been redeemed before it expired (spire-agent attests first; the Agent
-        // row only appears once strato-agent registers), leaving entries and an
-        // attested node that can still mint SVIDs. An expired enrollment with
-        // no registered agent therefore still owns — and must revoke — its grant.
-        //
-        // Fail closed: if SPIRE is unreachable the enrollment stays revocable
-        // later.
-        // Scoped to the enrollment's own trust domain: a same-named agent in
-        // another organization's domain is a different node entirely, and
-        // matching it here would leave this enrollment's SPIRE grant standing.
-        let agentIsRegistered =
-            try await Agent.query(on: req.db)
-            .filter(\.$trustDomain == enrollment.trustDomain)
-            .filter(\.$name == enrollment.agentName)
-            .first() != nil
-
-        let enrollmentOwnsGrant = !agentIsRegistered
-
-        if enrollmentOwnsGrant {
-            try await requireSPIREDeprovisioningOrOverride(req, action: "agent enrollment", grantKnown: true)
-        }
-
-        // Withdraw the grant from the SPIRE instance that actually issued it —
-        // the enrollment records its trust domain, which with per-org domains
-        // (issue #615) may not be the platform one. Deprovisioning against the
-        // wrong server deletes nothing and reports success, leaving the node
-        // able to keep renewing SVIDs.
-        if enrollmentOwnsGrant, let registry = OrgSPIREClientRegistry.fromApplication(req.application) {
-            // Resolved outside the catch below so an unknown trust domain
-            // reaches the operator as itself — and is overridable — rather than
-            // as a generic "retry when the server is reachable". The remedies
-            // are different, and only one of them can ever succeed.
-            let spire = try await spireServiceForDeprovisioning(
-                req, registry: registry, trustDomain: enrollment.trustDomain, action: "agent enrollment")
-            do {
-                try await spire?.deprovisionAgent(named: enrollment.agentName)
-            } catch {
-                req.logger.error(
-                    "SPIRE deprovisioning failed while revoking an agent enrollment",
-                    metadata: [
-                        "agentName": .string(enrollment.agentName),
-                        "error": .string("\(error)"),
-                    ])
-                throw Abort(
-                    .badGateway,
-                    reason:
-                        "SPIRE deprovisioning failed; the enrollment was not revoked. Retry when the SPIRE server is reachable."
-                )
+        return try await AgentEnrollment.withOperationLock(
+            enrollmentID: enrollmentId, on: req.db
+        ) { db in
+            guard let enrollment = try await AgentEnrollment.find(enrollmentId, on: db) else {
+                throw Abort(.notFound, reason: "Agent enrollment not found")
             }
+
+            // Revoking withdraws the SPIRE grant this enrollment created — but only
+            // while it still *owns* that grant. Once an Agent row exists for the
+            // name, the node has attested and registered, and the entries belong to
+            // that live agent: they are withdrawn by deregistering the agent
+            // instead, so deprovisioning here would sever a running node.
+            //
+            // Expiry alone does NOT make a grant inert: the join token may have
+            // been redeemed before it expired (spire-agent attests first; the Agent
+            // row only appears once strato-agent registers), leaving entries and an
+            // attested node that can still mint SVIDs. An expired enrollment with
+            // no registered agent therefore still owns — and must revoke — its grant.
+            //
+            // Fail closed: if SPIRE is unreachable the enrollment stays revocable
+            // later.
+            // Scoped to the enrollment's own trust domain: a same-named agent in
+            // another organization's domain is a different node entirely, and
+            // matching it here would leave this enrollment's SPIRE grant standing.
+            let agentIsRegistered =
+                try await Agent.query(on: db)
+                .filter(\.$trustDomain == enrollment.trustDomain)
+                .filter(\.$name == enrollment.agentName)
+                .first() != nil
+
+            let enrollmentOwnsGrant = !agentIsRegistered
+
+            if enrollmentOwnsGrant {
+                try await requireSPIREDeprovisioningOrOverride(req, action: "agent enrollment", grantKnown: true)
+            }
+
+            // Withdraw the grant from the SPIRE instance that actually issued it —
+            // the enrollment records its trust domain, which with per-org domains
+            // (issue #615) may not be the platform one. Deprovisioning against the
+            // wrong server deletes nothing and reports success, leaving the node
+            // able to keep renewing SVIDs.
+            if enrollmentOwnsGrant, let registry = OrgSPIREClientRegistry.fromApplication(req.application) {
+                // Resolved outside the catch below so an unknown trust domain
+                // reaches the operator as itself — and is overridable — rather than
+                // as a generic "retry when the server is reachable". The remedies
+                // are different, and only one of them can ever succeed.
+                let spire = try await spireServiceForDeprovisioning(
+                    req,
+                    registry: registry,
+                    trustDomain: enrollment.trustDomain,
+                    action: "agent enrollment",
+                    on: db)
+                do {
+                    try await spire?.deprovisionAgent(named: enrollment.agentName)
+                } catch {
+                    req.logger.error(
+                        "SPIRE deprovisioning failed while revoking an agent enrollment",
+                        metadata: [
+                            "agentName": .string(enrollment.agentName),
+                            "error": .string("\(error)"),
+                        ])
+                    throw Abort(
+                        .badGateway,
+                        reason:
+                            "SPIRE deprovisioning failed; the enrollment was not revoked. Retry when the SPIRE server is reachable."
+                    )
+                }
+            }
+
+            try await enrollment.delete(on: db)
+            if enrollmentOwnsGrant {
+                // No agent row exists, so any workload-registry row for the
+                // identity is an orphan of the just-revoked SPIRE grant (#491).
+                try await WorkloadRegistry.deregisterAgent(
+                    identity: AgentIdentity(trustDomain: enrollment.trustDomain, name: enrollment.agentName),
+                    on: db)
+            }
+
+            req.logger.info(
+                "Revoked agent enrollment",
+                metadata: [
+                    "enrollmentId": .string(enrollmentId.uuidString),
+                    "agentName": .string(enrollment.agentName),
+                ])
+
+            return .noContent
         }
-
-        try await enrollment.delete(on: req.db)
-        if enrollmentOwnsGrant {
-            // No agent row exists, so any workload-registry row for the
-            // identity is an orphan of the just-revoked SPIRE grant (#491).
-            try await WorkloadRegistry.deregisterAgent(
-                identity: AgentIdentity(trustDomain: enrollment.trustDomain, name: enrollment.agentName),
-                on: req.db)
-        }
-
-        req.logger.info(
-            "Revoked agent enrollment",
-            metadata: [
-                "enrollmentId": .string(enrollmentId.uuidString),
-                "agentName": .string(enrollment.agentName),
-            ])
-
-        return .noContent
     }
 
     // MARK: - Agent Management
@@ -974,7 +1006,11 @@ struct AgentController: RouteCollection {
             // reported as itself — and is overridable — rather than as an
             // unreachable server that retrying would fix.
             let spire = try await spireServiceForDeprovisioning(
-                req, registry: registry, trustDomain: agent.trustDomain, action: "agent")
+                req,
+                registry: registry,
+                trustDomain: agent.trustDomain,
+                action: "agent",
+                on: req.db)
             do {
                 try await spire?.deprovisionAgent(named: agent.name)
             } catch {

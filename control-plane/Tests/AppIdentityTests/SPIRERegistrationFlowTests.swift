@@ -219,6 +219,47 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
         }
     }
 
+    @Test("Revocation waits for an in-flight bootstrap mint and withdraws its credential")
+    func revocationSerializesWithBootstrapMint() async throws {
+        try await withApp { app in
+            let adminToken = try await makeAdmin(on: app.db)
+            let token = AgentEnrollment.generateBootstrapToken()
+            let enrollment = AgentEnrollment(
+                agentName: "node-a",
+                spiffeID: "spiffe://strato.local/agent/node-a",
+                bootstrapTokenHash: AgentEnrollment.hashBootstrapToken(token))
+            try await enrollment.save(on: app.db)
+            let enrollmentID = try enrollment.requireID()
+
+            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
+            await fake.holdNextJoinTokenRequest()
+
+            async let redemptionStatus = Self.redeemBootstrap(token, on: app)
+            await fake.waitForJoinTokenRequests(1)
+            async let revocationStatus = Self.revokeEnrollment(
+                enrollmentID, adminToken: adminToken, on: app)
+
+            // Revocation must not deprovision and delete the row while the
+            // credential mint is still suspended. Otherwise that mint can
+            // complete after the reported revocation and survive it.
+            try await Task.sleep(for: .milliseconds(100))
+            #expect(await fake.deletedSPIFFEIDs.isEmpty)
+            #expect(try await AgentEnrollment.find(enrollmentID, on: app.db) != nil)
+
+            await fake.releaseHeldJoinTokenRequest()
+            #expect(try await redemptionStatus == .ok)
+            #expect(try await revocationStatus == .noContent)
+            #expect(try await AgentEnrollment.find(enrollmentID, on: app.db) == nil)
+            #expect(
+                await fake.deletedSPIFFEIDs
+                    == [
+                        "spiffe://strato.local/agent/node-a",
+                        "spiffe://strato.local/node/node-a",
+                    ])
+            #expect(await fake.evictedAgentIDs == ["spiffe://strato.local/node/node-a"])
+        }
+    }
+
     @Test("An existing identical SPIRE entry is reused, not an error")
     func createEnrollmentReusesExistingEntry() async throws {
         try await withApp { app in
@@ -805,6 +846,18 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
         var status: HTTPStatus?
         try await app.test(.POST, "/api/agent-enrollments/bootstrap") { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: token)
+        } afterResponse: { response in
+            status = response.status
+        }
+        return try #require(status)
+    }
+
+    private static func revokeEnrollment(
+        _ enrollmentID: UUID, adminToken: String, on app: Application
+    ) async throws -> HTTPStatus {
+        var status: HTTPStatus?
+        try await app.test(.DELETE, "/api/agent-enrollments/\(enrollmentID)") { req in
+            req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
         } afterResponse: { response in
             status = response.status
         }
