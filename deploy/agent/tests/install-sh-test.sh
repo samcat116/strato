@@ -40,6 +40,10 @@ check() {
   fi
 }
 
+file_mode() {
+  stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"
+}
+
 extract_function() {
   local name="$1" body
   body="$(sed -n "/^${name}()/,/^}/p" "$INSTALL_SH")"
@@ -90,6 +94,7 @@ STUB_DIR="$WORK_DIR/bin"
 mkdir -p "$STUB_DIR"
 cat > "$STUB_DIR/curl" << 'EOF'
 #!/usr/bin/env bash
+[ "${CURL_SHOULD_FAIL:-0}" -eq 0 ] || exit 22
 while [ "$#" -gt 0 ]; do
   if [ "$1" = -o ]; then
     cp "$BOOTSTRAP_FIXTURE" "$2"
@@ -110,6 +115,8 @@ JOIN_TOKEN=""
 SPIRE_SERVER_ADDRESS=""
 TRUST_DOMAIN=""
 CONTROL_PLANE_SPIFFE_ID=""
+STRATO_STATE_DIR="$WORK_DIR/state"
+ENROLLMENT_CACHE_FILE="$STRATO_STATE_DIR/enrollment-bootstrap-v1"
 export BOOTSTRAP_FIXTURE
 PATH="$STUB_DIR:$PATH" redeem_enrollment
 check "control-plane URL comes from the exchange" \
@@ -120,6 +127,19 @@ check "SPIRE address comes from the exchange" spire.example.com:443 "$SPIRE_SERV
 check "trust domain comes from the exchange" org-a.example.com "$TRUST_DOMAIN"
 check "control-plane identity comes from the exchange" \
   spiffe://platform.example.com/control-plane "$CONTROL_PLANE_SPIFFE_ID"
+check "the winning bundle is cached with its consumed token" \
+  enroll_v1_test "$(head -n 1 "$ENROLLMENT_CACHE_FILE")"
+check "the bootstrap recovery cache is root-only" 600 "$(file_mode "$ENROLLMENT_CACHE_FILE")"
+
+CONTROL_PLANE_URL=""
+AGENT_NAME=""
+JOIN_TOKEN=""
+SPIRE_SERVER_ADDRESS=""
+TRUST_DOMAIN=""
+CONTROL_PLANE_SPIFFE_ID=""
+CURL_SHOULD_FAIL=1 PATH="$STUB_DIR:$PATH" redeem_enrollment
+check "a rerun on the same host reuses the original agent name" hv-01 "$AGENT_NAME"
+check "a rerun on the same host reuses the original join token" join-token-value "$JOIN_TOKEN"
 
 # --- set_qemu_conf_key -------------------------------------------------------
 # Returns 0 when the file changed, 1 when it already agreed. Callers use that to
@@ -149,7 +169,7 @@ chmod 600 "$STOCK"
 STOCK_COMMENTS="$(grep '^#' "$STOCK")"
 check "first run reports a change" changed "$(write_keys "$STOCK")"
 check "re-run is a no-op (no daemon restart)" unchanged "$(write_keys "$STOCK")"
-check "0600 mode survives the append path" 600 "$(stat -c %a "$STOCK")"
+check "0600 mode survives the append path" 600 "$(file_mode "$STOCK")"
 check "the agent's uid is written" 'user = "root"' "$(grep '^user' "$STOCK")"
 check "dynamic_ownership is left on" 'dynamic_ownership = 1' "$(grep '^dynamic_ownership' "$STOCK")"
 # Verbatim, not a count: those lines are the documentation an operator reads, and
@@ -174,7 +194,7 @@ chmod 600 "$WRONG"
 # must carry the original 0600 across rather than inherit whatever the caller's
 # umask would give a fresh temp file — under a strict umask that bug hides.
 check "the wrong values are corrected" changed "$(umask 022; write_keys "$WRONG")"
-check "0600 mode survives the rewrite path" 600 "$(stat -c %a "$WRONG")"
+check "0600 mode survives the rewrite path" 600 "$(file_mode "$WRONG")"
 check "dynamic_ownership = 0 is turned back on" 'dynamic_ownership = 1' "$(grep '^dynamic_ownership' "$WRONG")"
 check "AppArmor is left enabled" 'security_driver = "apparmor"' "$(grep '^security_driver' "$WRONG")"
 check "and then it settles" unchanged "$(write_keys "$WRONG")"

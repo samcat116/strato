@@ -132,6 +132,7 @@ COREDNS_VERSION="1.12.0"
 
 STRATO_CONF_DIR=/etc/strato
 STRATO_STATE_DIR=/var/lib/strato
+ENROLLMENT_CACHE_FILE="$STRATO_STATE_DIR/enrollment-bootstrap-v1"
 CONFIG_FILE="$STRATO_CONF_DIR/config.toml"
 UNIT_FILE=/etc/systemd/system/strato-agent.service
 
@@ -204,14 +205,25 @@ redeem_enrollment() {
     *) die "--enrollment-api-url must use HTTPS (plain HTTP is allowed only for localhost)" ;;
   esac
 
-  local response
+  local response fetched_from_server=0
   response="$(mktemp /tmp/strato-agent-bootstrap.XXXXXX)"
   chmod 600 "$response"
   log "Fetching server-selected enrollment configuration"
-  if ! curl -fsS -X POST \
+  if curl -fsS -X POST \
       -H "Authorization: Bearer ${ENROLLMENT_TOKEN}" \
       -H 'Accept: application/vnd.strato.agent-bootstrap.v1' \
       "$ENROLLMENT_API_URL" -o "$response"; then
+    fetched_from_server=1
+  elif [ -f "$ENROLLMENT_CACHE_FILE" ]; then
+    local cached_token
+    IFS= read -r cached_token < "$ENROLLMENT_CACHE_FILE"
+    if [ "$cached_token" != "$ENROLLMENT_TOKEN" ]; then
+      rm -f "$response"
+      die "the enrollment token was rejected and this host's cached enrollment belongs to another token"
+    fi
+    tail -n +2 "$ENROLLMENT_CACHE_FILE" > "$response"
+    warn "the bootstrap exchange was unavailable or already consumed; resuming from this host's root-only cache"
+  else
     rm -f "$response"
     die "the enrollment token was rejected or the control plane could not issue bootstrap configuration"
   fi
@@ -228,6 +240,27 @@ redeem_enrollment() {
   SPIRE_SERVER_ADDRESS="$(decode_bootstrap_value "${fields[4]}")"
   TRUST_DOMAIN="$(decode_bootstrap_value "${fields[5]}")"
   CONTROL_PLANE_SPIFFE_ID="$(decode_bootstrap_value "${fields[6]}")"
+
+  # The server issues exactly one join credential. Persist that winning bundle
+  # with the consumed bearer so rerunning the same command on this host reuses
+  # it instead of asking the control plane to mint an independent credential.
+  # This is recovery state, not an authentication path: another host has no
+  # access to this root-owned file, and the server rejects every replay.
+  if [ "$fetched_from_server" -eq 1 ]; then
+    local cache_tmp=""
+    if install -d "$STRATO_STATE_DIR" \
+        && cache_tmp="$(mktemp "${ENROLLMENT_CACHE_FILE}.XXXXXX")"; then
+      chmod 600 "$cache_tmp"
+      {
+        printf '%s\n' "$ENROLLMENT_TOKEN"
+        printf '%s\n' "${fields[@]}"
+      } > "$cache_tmp"
+      mv -f "$cache_tmp" "$ENROLLMENT_CACHE_FILE"
+    else
+      [ -z "$cache_tmp" ] || rm -f "$cache_tmp"
+      warn "could not persist the root-only bootstrap cache; this install cannot be resumed with the consumed token"
+    fi
+  fi
 }
 
 if [ -n "$ENROLLMENT_TOKEN" ]; then
@@ -1435,12 +1468,12 @@ if [ "$USE_SYSTEMD" -eq 1 ]; then
   # re-running this installer to move a node to a new control plane is exactly
   # when that matters. `restart` starts a stopped unit and restarts a running
   # one, covering fresh installs and reinstalls alike.
+  # Finish every fallible companion-unit operation before the agent can attest
+  # and register. Alloy buffers until the SVID files appear.
+  enable_telemetry
   log "Starting strato-agent"
   systemctl enable strato-agent.service
   systemctl restart strato-agent.service
-  # After the agent so the node is attested before the first pushes; harmless
-  # either way — Alloy buffers and retries until its SVID files appear.
-  enable_telemetry
   log "Done. Follow along with: journalctl -fu strato-agent"
 else
   log "Install complete (no systemd unit installed). Start the agent with:"

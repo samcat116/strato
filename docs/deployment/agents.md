@@ -118,10 +118,11 @@ server-selected value and a fresh one-time SPIRE join token.
   `{"networkControllerAgentId": "<agentId>"}` designates one. VM placement,
   VM start and site-pinned network creation refuse loudly in that state
   rather than accepting work that would never converge.
-- The enrollment token is shown **once** and stored only as a hash. It can be
-  retried until the enrollment expires or the agent registers; each successful
-  exchange mints a fresh one-time SPIRE join token that cannot outlive the
-  enrollment.
+- The enrollment token is shown **once** and stored only as a hash. Its first
+  successful exchange atomically consumes it before minting one SPIRE join
+  token, so a replay cannot create a second node credential. The installer
+  caches that winning bundle in root-only state so the same host can resume a
+  partial install without asking the control plane for another credential.
 - Enrollment fails if the control plane has no SPIRE server configured.
   There is no fallback: see [mTLS (SPIFFE/SPIRE)](#mtls-spiffe-spire) for
   the required settings.
@@ -138,6 +139,11 @@ The `bootstrapCommand` from the enrollment above has one input:
 curl -fsSL https://strato.example.com/api/agent-enrollments/install \
   | sudo bash -s -- 'enroll_v1_...'
 ```
+
+The first exchange stores the winning bootstrap bundle at
+`/var/lib/strato/enrollment-bootstrap-v1` with mode `0600`. Rerunning the same
+command on that host reuses the original SPIRE join token; another host cannot
+use the consumed bearer and needs a newly created enrollment.
 
 The wrapper binds the command to the control-plane web origin, downloads the
 versioned installer, and exchanges the opaque token for the agent name,

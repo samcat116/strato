@@ -167,8 +167,55 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             #expect(row.organizationID == orgId)
             #expect(row.siteID == siteId)
             #expect(row.isUsed == false)
-            #expect(row.bootstrapTokenHash == AgentEnrollment.hashBootstrapToken(response.bootstrapToken))
-            #expect(row.bootstrapTokenHash != response.bootstrapToken)
+            #expect(row.bootstrapTokenHash == nil)
+        }
+    }
+
+    @Test("Bootstrap redemption claims the bearer before minting a SPIRE join token")
+    func bootstrapRedemptionClaimsBeforeMinting() async throws {
+        try await withApp { app in
+            let token = AgentEnrollment.generateBootstrapToken()
+            let enrollment = AgentEnrollment(
+                agentName: "node-a",
+                spiffeID: "spiffe://strato.local/agent/node-a",
+                bootstrapTokenHash: AgentEnrollment.hashBootstrapToken(token))
+            try await enrollment.save(on: app.db)
+
+            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
+            await fake.holdNextJoinTokenRequest()
+
+            async let firstStatus = Self.redeemBootstrap(token, on: app)
+            await fake.waitForJoinTokenRequests(1)
+
+            // The first request is suspended inside SPIRE. A replay must
+            // already see the bearer as consumed rather than mint a second
+            // independent node credential.
+            let replayStatus = try await Self.redeemBootstrap(token, on: app)
+            await fake.releaseHeldJoinTokenRequest()
+
+            #expect(try await firstStatus == .ok)
+            #expect(replayStatus == .unauthorized)
+            #expect(await fake.joinTokenRequests.count == 1)
+        }
+    }
+
+    @Test("A failed SPIRE mint leaves the one-time bootstrap bearer consumed")
+    func failedBootstrapMintConsumesBearer() async throws {
+        try await withApp { app in
+            let token = AgentEnrollment.generateBootstrapToken()
+            let enrollment = AgentEnrollment(
+                agentName: "node-a",
+                spiffeID: "spiffe://strato.local/agent/node-a",
+                bootstrapTokenHash: AgentEnrollment.hashBootstrapToken(token))
+            try await enrollment.save(on: app.db)
+
+            let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
+            await fake.setFailJoinToken(true)
+            #expect(try await Self.redeemBootstrap(token, on: app) == .badGateway)
+
+            await fake.setFailJoinToken(false)
+            #expect(try await Self.redeemBootstrap(token, on: app) == .unauthorized)
+            #expect(await fake.joinTokenRequests.isEmpty)
         }
     }
 
@@ -753,6 +800,16 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             )
         )
     }
+
+    private static func redeemBootstrap(_ token: String, on app: Application) async throws -> HTTPStatus {
+        var status: HTTPStatus?
+        try await app.test(.POST, "/api/agent-enrollments/bootstrap") { req in
+            req.headers.bearerAuthorization = BearerAuthorization(token: token)
+        } afterResponse: { response in
+            status = response.status
+        }
+        return try #require(status)
+    }
 }
 
 // MARK: - Unit tests
@@ -872,6 +929,9 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
     private(set) var deletedFederationTrustDomains: [String] = []
 
     private var failJoinToken = false
+    private var holdNextJoinToken = false
+    private var heldJoinTokenContinuation: CheckedContinuation<Void, Never>?
+    private var joinTokenRequestWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var failCreateEntry = false
     private var failEntryUpdates = false
     private var failMintJWTSVID = false
@@ -887,6 +947,17 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
     private var bundle = SPIREBundle(trustDomain: "strato.local", x509Authorities: [])
 
     func setFailJoinToken(_ fail: Bool) { failJoinToken = fail }
+    func holdNextJoinTokenRequest() { holdNextJoinToken = true }
+    func waitForJoinTokenRequests(_ count: Int) async {
+        guard joinTokenRequests.count < count else { return }
+        await withCheckedContinuation { continuation in
+            joinTokenRequestWaiters.append((count, continuation))
+        }
+    }
+    func releaseHeldJoinTokenRequest() {
+        heldJoinTokenContinuation?.resume()
+        heldJoinTokenContinuation = nil
+    }
     func setFailCreateEntry(_ fail: Bool) { failCreateEntry = fail }
     func setFailDelete(_ fail: Bool) { failDelete = fail }
     func setFailMintJWTSVID(_ fail: Bool) { failMintJWTSVID = fail }
@@ -917,6 +988,17 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
             throw SPIREServerAPIError.unreachable("fake: SPIRE server down")
         }
         joinTokenRequests.append(JoinTokenRequest(ttlSeconds: ttlSeconds, agentID: agentID))
+        let readyWaiters = joinTokenRequestWaiters.filter { joinTokenRequests.count >= $0.count }
+        joinTokenRequestWaiters.removeAll { joinTokenRequests.count >= $0.count }
+        for waiter in readyWaiters {
+            waiter.continuation.resume()
+        }
+        if holdNextJoinToken {
+            holdNextJoinToken = false
+            await withCheckedContinuation { continuation in
+                heldJoinTokenContinuation = continuation
+            }
+        }
         return SPIREJoinToken(
             value: "fake-join-token",
             expiresAt: Date().addingTimeInterval(TimeInterval(ttlSeconds))

@@ -204,12 +204,11 @@ struct AgentController: RouteCollection {
 
     /// POST /api/agent-enrollments/bootstrap
     ///
-    /// Redeem the short-lived enrollment bearer for server-selected
-    /// configuration and a just-in-time SPIRE join token. Reissuing before the
-    /// agent registers is intentional: a host that loses the response or dies
-    /// midway through installation can retry without an operator creating a
-    /// second enrollment. The token stops working on registration, expiry, or
-    /// revocation.
+    /// Redeem the short-lived enrollment bearer once for server-selected
+    /// configuration and a just-in-time SPIRE join token. The database claim
+    /// happens before the external mint, so concurrent replays cannot obtain
+    /// independent credentials for the same node. The installer persists the
+    /// winning response locally for same-host recovery.
     func redeemEnrollment(req: Request) async throws -> Response {
         guard let bearer = req.headers.bearerAuthorization,
             let enrollment = try await AgentEnrollment.findByBootstrapToken(bearer.token, on: req.db),
@@ -231,6 +230,10 @@ struct AgentController: RouteCollection {
                 reason: "The SPIRE instance for this enrollment is no longer available")
         }
 
+        guard try await AgentEnrollment.claimBootstrapToken(bearer.token, on: req.db) else {
+            throw Abort(.unauthorized, reason: "Enrollment token is invalid, expired, or already used")
+        }
+
         let remainingSeconds = max(1, Int(expiresAt.timeIntervalSinceNow.rounded(.down)))
         let ttlSeconds = Int32(min(remainingSeconds, Int(Int32.max)))
         let joinToken: SPIREAgentJoinToken
@@ -245,7 +248,11 @@ struct AgentController: RouteCollection {
                     "enrollmentId": .string(enrollment.id?.uuidString ?? "unknown"),
                     "error": .string("\(error)"),
                 ])
-            throw Abort(.badGateway, reason: "SPIRE could not issue the node attestation token")
+            throw Abort(
+                .badGateway,
+                reason:
+                    "SPIRE could not issue the node attestation token. The one-time enrollment token was consumed; revoke and recreate the enrollment."
+            )
         }
 
         let bundle = AgentBootstrapBundle(

@@ -3780,7 +3780,7 @@ export interface paths {
         put?: never;
         /**
          * Redeem an agent enrollment token
-         * @description Exchanges an `enroll_v1_` bearer token for the server-selected agent bootstrap bundle and a freshly minted one-time SPIRE join token. The same enrollment token may be retried until the enrollment expires, is revoked, or the agent completes registration; each successful retry receives a new SPIRE join token bounded by the original expiry.
+         * @description Exchanges an `enroll_v1_` bearer token for the server-selected agent bootstrap bundle and a freshly minted one-time SPIRE join token. The bearer is atomically consumed before SPIRE mints the credential, so concurrent or later replays receive 401. The installer caches the winning bundle in root-only local state for same-host recovery.
          */
         post: operations["redeemAgentEnrollment"];
         delete?: never;
@@ -16612,7 +16612,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
-            /** @description SPIRE could not mint a node-attestation token. */
+            /** @description SPIRE could not mint a node-attestation token. The bootstrap bearer remains consumed; revoke and recreate the enrollment. */
             502: {
                 headers: {
                     [name: string]: unknown;

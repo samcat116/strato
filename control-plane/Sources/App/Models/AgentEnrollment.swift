@@ -1,6 +1,7 @@
 import Fluent
 import Crypto
 import Foundation
+import SQLKit
 import Vapor
 
 /// A SPIRE enrollment for one agent node.
@@ -110,8 +111,8 @@ final class AgentEnrollment: Model, Content, @unchecked Sendable {
         return nil
     }
 
-    /// Whether the bootstrap bearer can still be exchanged for configuration
-    /// and a fresh SPIRE join token.
+    /// Whether the unclaimed bootstrap bearer can still be exchanged for
+    /// configuration and its single SPIRE join token.
     var isValid: Bool {
         guard bootstrapTokenHash != nil, let expires = expiresAt else { return false }
         return !isUsed && expires > Date()
@@ -142,6 +143,32 @@ final class AgentEnrollment: Model, Content, @unchecked Sendable {
         return try await AgentEnrollment.query(on: db)
             .filter(\.$bootstrapTokenHash == hashBootstrapToken(token))
             .first()
+    }
+
+    /// Atomically claims an unexpired bearer before SPIRE mints any node
+    /// credential. The conditional update is the security boundary: concurrent
+    /// replays may all read the row, but exactly one can clear its unique hash
+    /// and proceed. A failed mint deliberately does not restore the bearer;
+    /// issuing another enrollment is safer than creating two node credentials.
+    static func claimBootstrapToken(
+        _ token: String, on db: any Database, now: Date = Date()
+    ) async throws -> Bool {
+        guard token.hasPrefix("enroll_v1_") else { return false }
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Agent enrollment requires an SQL database")
+        }
+
+        let claimed = try await sql.raw(
+            """
+            UPDATE \(ident: schema)
+            SET bootstrap_token_hash = NULL
+            WHERE bootstrap_token_hash = \(bind: hashBootstrapToken(token))
+              AND is_used = FALSE
+              AND expires_at > \(bind: now)
+            RETURNING id
+            """
+        ).all()
+        return claimed.count == 1
     }
 
     /// Record that the named agent has registered.
