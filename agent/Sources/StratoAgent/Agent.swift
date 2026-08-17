@@ -379,6 +379,9 @@ actor Agent {
     // a normal agent.
     private let simulation: SimulationConfig?
     private var isSimulationMode: Bool { simulation?.enabled ?? false }
+    // The observed-state report reads this cache without starting subprocesses.
+    // Registration forces a scan; heartbeats refresh it on a bounded cadence.
+    private let storageDeviceInventory: StorageDeviceInventoryCache
 
     // SPIFFE/SPIRE support
     private let spiffeConfig: SPIFFEConfig?
@@ -480,6 +483,13 @@ actor Agent {
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
         self.qemuMemoryOverheadBytes = qemuMemoryOverheadBytes
         self.simulation = simulation
+        if simulation?.enabled == true {
+            self.storageDeviceInventory = StorageDeviceInventoryCache(observer: { nil })
+        } else {
+            let storageDeviceProbe = BlockDeviceInventoryProbe()
+            self.storageDeviceInventory = StorageDeviceInventoryCache(
+                observer: { await storageDeviceProbe.observe() })
+        }
         self.installMode = installMode
         self.spiffeConfig = spiffeConfig
         self.teardownGuard = teardownGuard
@@ -1486,6 +1496,7 @@ actor Agent {
         // Give the control plane a fresh baseline right away — it will also
         // serve us its desired state on the first poll, and the two together
         // converge any drift accumulated while disconnected.
+        _ = await storageDeviceInventory.refreshForRegistration()
         await sendObservedStateReport()
 
         // Resume sandbox log shipping suspended while disconnected (issue
@@ -2148,6 +2159,10 @@ actor Agent {
             try await client.sendMessage(message)
         }
         logger.debug("Heartbeat sent", metadata: ["agentId": .string(effectiveAgentID)])
+
+        // The beat is already on the wire before this bounded host probe runs,
+        // so a slow lsblk cannot make the control plane mark the agent offline.
+        _ = await storageDeviceInventory.refreshForHeartbeat()
 
         // Refresh the guest-agent view on the slow-poll cadence before the
         // report reads it (issue #563). Throttled and bounded, so most
@@ -5840,7 +5855,8 @@ extension Agent: ReconcileActuator {
             // every checkpoint row it holds for this agent, and a checkpoint is
             // a point in time nothing can recreate (STR-150).
             snapshots: await observedSnapshotStates(reconciler: reconciler),
-            loadBalancers: await networkService?.observedLoadBalancers()
+            loadBalancers: await networkService?.observedLoadBalancers(),
+            storageDevices: await storageDeviceInventory.snapshot()
         )
         // A newer report started while this one was assembling — which is
         // exactly what happens when this one overran its budget and was

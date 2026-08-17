@@ -50,7 +50,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 51). The required registration fields
+currently 52). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -94,6 +94,13 @@ the control plane stores it on `VolumeReplica`, and `VMSpec.volumes` returns it
 verbatim to the VM's agent. This is a coordinated exact-version cutover, not a
 host capability: capability answers whether a node can use Ceph, while v51
 answers whether both peers can decode the attachment value at all.
+
+Wire v52 adds the agent's optional complete whole-disk inventory. A missing
+`storageDevices` field means enumeration failed and the control plane retains
+its last observation; an empty list means enumeration succeeded and found no
+whole disks. WWN or serial identifies a physical disk across path renumbering,
+while devices without either identifier remain visible but cannot become
+OSD-eligible.
 
 Two consequences worth knowing:
 

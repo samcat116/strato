@@ -534,18 +534,11 @@ public actor OCIRegistryClient {
     }
 
     static func sha256Hex(ofFileAt path: String) throws -> String {
-        guard let fileHandle = FileHandle(forReadingAtPath: path) else {
+        do {
+            return try FileHashing.sha256Hex(ofFileAt: path)
+        } catch {
             throw OCIError.transferFailed(detail: "downloaded file missing at \(path)")
         }
-        defer { try? fileHandle.close() }
-
-        var hasher = SHA256()
-        while true {
-            let chunk = fileHandle.readData(ofLength: 1024 * 1024)
-            if chunk.isEmpty { break }
-            hasher.update(data: chunk)
-        }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
 

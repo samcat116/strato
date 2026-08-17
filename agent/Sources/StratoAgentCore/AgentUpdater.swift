@@ -1,4 +1,3 @@
-import Crypto
 import Foundation
 import Logging
 import StratoShared
@@ -309,15 +308,11 @@ public struct AgentUpdater: Sendable {
 
     /// Streaming SHA-256 so a multi-hundred-MB artifact is never held in memory.
     static func sha256Hex(ofFileAt path: String) throws -> String {
-        guard let handle = FileHandle(forReadingAtPath: path) else {
+        do {
+            return try FileHashing.sha256Hex(ofFileAt: path)
+        } catch {
             throw AgentUpdateError.downloadFailed("downloaded artifact missing at \(path)")
         }
-        defer { try? handle.close() }
-        var hasher = SHA256()
-        while let chunk = try handle.read(upToCount: 4 << 20), !chunk.isEmpty {
-            hasher.update(data: chunk)
-        }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     @Sendable

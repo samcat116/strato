@@ -1,5 +1,13 @@
 // API Types - matches Vapor backend response types
 
+import type { components } from "./openapi";
+
+type OpenAPISchemas = components["schemas"];
+
+/** Agent-reported physical whole disk; generated contract is the source of truth. */
+export type StorageDevice = OpenAPISchemas["StorageDevice"];
+export type UpdateStorageDeviceRequest = OpenAPISchemas["UpdateStorageDeviceRequest"];
+
 /** Paged envelope returned by every resource list endpoint (issue #700). */
 export interface Page<T> {
   items: T[];

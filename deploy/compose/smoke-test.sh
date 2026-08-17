@@ -154,7 +154,7 @@ else
       "${ORIGIN}/api/projects/${PROJECT_ID}/images/${IMAGE_ID}/artifacts")
     expect_eq "upload ${BLOB_SIZE}-byte disk artifact -> 200" "$code" "200"
 
-    DOWNLOAD="${ORIGIN}/api/projects/${PROJECT_ID}/images/${IMAGE_ID}/download"
+    DOWNLOAD="${ORIGIN}/api/projects/${PROJECT_ID}/images/${IMAGE_ID}/download?artifact=disk-image"
 
     # --- 5. Full download through the proxy -----------------------------------
     code=$(curl -sS -D "$TMP/h_full" -o "$TMP/out_full" -w '%{http_code}' "${AUTH[@]}" "$DOWNLOAD")

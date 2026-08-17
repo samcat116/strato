@@ -49,6 +49,8 @@ func routes(_ app: Application) throws {
     try app.register(collection: AgentController())
     // Sites (availability zones) grouping agents into shared OVN deployments
     try app.register(collection: SiteController())
+    // Agent-reported physical disks and operator OSD eligibility.
+    try app.register(collection: StorageDeviceController())
 
     // SCIM controllers
     try app.register(collection: SCIMController())

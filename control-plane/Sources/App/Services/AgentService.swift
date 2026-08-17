@@ -2239,6 +2239,22 @@ actor AgentService {
         // alongside, mirroring the heartbeat path.
         await refreshAgentPresenceIfNeeded(agentKey: agentKey)
 
+        // Storage inventory has its own completeness contract and transaction.
+        // A malformed or unavailable disk snapshot must not prevent valid VM,
+        // sandbox, volume, or network observations in this report from applying.
+        if let storageDevices = report.storageDevices {
+            do {
+                try await StorageDeviceInventoryReconciler(application: app).apply(
+                    storageDevices,
+                    for: agent,
+                    receivedAt: Date())
+            } catch {
+                app.logger.error(
+                    "Failed to apply storage-device inventory: \(error)",
+                    metadata: ["agentId": .string(report.agentId)])
+            }
+        }
+
         do {
             let outcome = try await app.observedStateApplier.apply(report)
             // Level-triggered, and recorded here because this is where the
