@@ -379,7 +379,7 @@ services:
       # The socat bridge shares this container's network namespace, so it is on
       # loopback (never exposed to the compose network).
       SPIRE_SERVER_API_ADDRESS: 127.0.0.1:8081
-      SPIRE_TRUST_BUNDLE_PATH: /run/spire/handoff/bundle.pem
+      SPIRE_TRUST_BUNDLE_PATH: /handoff/bundle.pem
       # JWT-SVIDs as programmatic credentials (issue #495). Uncomment to let
       # registered service accounts and workloads authenticate to the HTTP API
       # with a short-lived JWT-SVID bearer token instead of an API key. Off by
@@ -411,7 +411,7 @@ services:
       - "${AGENT_MTLS_PORT:-8443}:8443"
     volumes:
       - image_storage:/app/images
-      - spire_handoff:/run/spire/handoff:ro
+      - spire_handoff:/handoff:ro
       # Named volume, not a host bind mount. It contains only admin.sock and is
       # readable by the registered control-plane delegate group.
       - spire_cp_admin:/var/run/spire:ro
