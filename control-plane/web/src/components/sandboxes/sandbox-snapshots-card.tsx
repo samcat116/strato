@@ -19,6 +19,8 @@ import { Label } from "@/components/ui/label";
 import { sandboxesApi } from "@/lib/api/sandboxes";
 import { useSandboxSnapshots } from "@/lib/hooks";
 import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
+import { usePermissions } from "@/lib/hooks/use-permissions";
+import { sandboxCanBeSnapshotted } from "@/lib/sandbox-guards";
 import { useProjectContext } from "@/providers";
 import type { Sandbox, SandboxSnapshot } from "@/types/api";
 import { formatMemory } from "@/lib/format-bytes";
@@ -36,14 +38,14 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
   const { isLoading: isCreating, run: runCreate } = useAcceptedMutation();
   const { isLoading: isForking, run: runFork } = useAcceptedMutation();
   const { busyKey: exportingId, run: runExport } = useAcceptedMutation();
-
-  // Mirrors the server's snapshot admission states. Starting/stopping guests
-  // do not have one stable state to capture, while Error/Unknown means the
-  // control plane cannot safely say what would be captured.
-  const canSnapshot =
-    sandbox.status === "Running" ||
-    sandbox.status === "Stopped" ||
-    sandbox.status === "Exited";
+  const { permissions } = usePermissions([
+    {
+      key: "snapshot",
+      action: "sandbox:snapshot",
+      node: { type: "sandbox", id: sandbox.id },
+    },
+  ]);
+  const canSnapshot = sandboxCanBeSnapshotted(sandbox);
 
   const submitCreate = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -145,19 +147,21 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
               Memory, device state, and the root filesystem captured together.
             </p>
           </div>
-          <Button
-            size="sm"
-            disabled={!canSnapshot}
-            onClick={() => setShowCreate(true)}
-            title={
-              canSnapshot
-                ? "Capture the sandbox's current state"
-                : "Wait for the sandbox to reach a stable state before taking a snapshot"
-            }
-          >
-            <Camera className="h-4 w-4 mr-2" />
-            Take snapshot
-          </Button>
+          {permissions.snapshot && (
+            <Button
+              size="sm"
+              disabled={!canSnapshot}
+              onClick={() => setShowCreate(true)}
+              title={
+                canSnapshot
+                  ? "Capture the sandbox's current state"
+                  : "Wait for an agent to place and confirm the sandbox before taking a snapshot"
+              }
+            >
+              <Camera className="h-4 w-4 mr-2" />
+              Take snapshot
+            </Button>
+          )}
         </CardHeader>
         <CardContent>
           {isLoading ? (
