@@ -1,0 +1,103 @@
+cli/Package.swift
+  s_63c1dd6657215d::t_069445fcda81dd 25-26,40-43
+cli/Sources/StratoCLICore/API/CLIError.swift
+  s_63c1dd6657215d::t_c2c3dfa6a52a64 20-22,40
+  s_63c1dd6657215d::t_b5459ff9ab504f 41
+cli/Sources/StratoCLI/Commands/SandboxCommand.swift
+  s_63c1dd6657215d::t_969b16e7301984 206,216,267-270,286
+  s_63c1dd6657215d::t_d79c1ff26d23c0 273-274,276,278-281,283-285,287-297,313
+  s_63c1dd6657215d::t_930f9e63049855 196
+  s_63c1dd6657215d::t_d03d1ecccea0eb 10-13,180-195,197-205,207-208,211-215,217-257,263-264,266,271-272,282,319,324-325,327-331
+  s_63c1dd6657215d::t_c41f3e624e25fa 209-210
+  s_63c1dd6657215d::t_cc5f7e5d872b04 258-262,265,275,277,298-312,314-318,320-323,326
+control-plane/Sources/App/openapi.yaml
+  s_63c1dd6657215d::t_2117d7cf04e3c1 10108
+  s_63c1dd6657215d::t_6d60574759bb03 112,114-117,939-967,10066-10107,10109-10111
+cli/Sources/StratoCLICore/Exec/GuestExecSession.swift
+  s_63c1dd6657215d::t_43f6ead66199ea 136-137,139-142
+  s_63c1dd6657215d::t_1edd80ff5031c4 551-565,567,569-570,572,574-585
+  s_63c1dd6657215d::t_78d96938c04bc3 26,431
+  s_63c1dd6657215d::t_c2c3dfa6a52a64 1-25,27-135,138,143-430,432-550,566,568,571,573,586-604
+clients/swift/Tests/StratoAPIClientTests/StratoAPIClientTests.swift
+  s_63c1dd6657215d::t_9e579361465d5d 96-123
+cli/Sources/StratoCLI/GlobalOptions.swift
+  s_63c1dd6657215d::t_87cc7ebc099747 7,13-16,32-35
+  s_63c1dd6657215d::t_d03d1ecccea0eb 82-86
+docs/architecture/sandboxes.md
+  s_63c1dd6657215d::t_fd18132f4753dd 449-451,455-457,478-480
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_63c1dd6657215d::t_3d55b8c76cf659 493-494
+docs/api-reference.md
+  s_63c1dd6657215d::t_fd18132f4753dd 195-199
+control-plane/Sources/App/Controllers/VMController.swift
+  s_63c1dd6657215d::t_3d55b8c76cf659 1966-1967,1975-1976
+control-plane/Tests/AppResourceTests/GuestExecAttachIntegrationTests.swift
+  s_63c1dd6657215d::t_17f6409e710853 23-29,111-114,121,167-176,184-197,217-225,227,251,258-260,262-272
+  s_63c1dd6657215d::t_9256c34a069845 261
+  s_63c1dd6657215d::t_f2458f2703ffe9 123-134
+  s_63c1dd6657215d::t_29bdcd5376c886 226
+  s_63c1dd6657215d::t_ca0d7d6e5ff365 122
+docs/guide/getting-started.md
+  s_63c1dd6657215d::t_fd18132f4753dd 147-159
+control-plane/Sources/App/Controllers/GuestExecWebSocketController.swift
+  s_63c1dd6657215d::t_fab4343094d9ce 52-53,55-56
+  s_63c1dd6657215d::t_3d55b8c76cf659 14,23-30,36-38,222-227,257-258,260-267,305,309,311-317,320,322,326-332
+  s_006994cc89f4f7::t_b01f8749931697 333-334
+control-plane/web/src/lib/hooks/use-sandbox-exec.ts
+  s_63c1dd6657215d::t_fab4343094d9ce 11
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_63c1dd6657215d::t_3d55b8c76cf659 918-919,927-928
+cli/Package.resolved
+  s_63c1dd6657215d::t_a64a6ff2826e07 2,31-93,112-156,184-201,211-219
+control-plane/web/src/types/api.ts
+  s_63c1dd6657215d::t_fab4343094d9ce 1600-1601,1610-1611
+control-plane/Sources/App/Services/GuestExecSessionManager.swift
+  s_63c1dd6657215d::t_45517f40ed0f18 349-351,353,360-362,378,380,396,402-404,409-411,418-420,426-428,438-442,445,465-466
+  s_63c1dd6657215d::t_3d55b8c76cf659 70,81,104,119,197,356-359,379,381-395,397
+cli/Sources/StratoCLICore/API/StratoClient.swift
+  s_63c1dd6657215d::t_069445fcda81dd 15-22,40-51,57,64
+cli/Sources/StratoCLICore/Exec/TerminalIO.swift
+  s_63c1dd6657215d::t_cc5f7e5d872b04 160-162,164-165,168-172,176-185,193,199-206
+  s_63c1dd6657215d::t_d79c1ff26d23c0 51-67,70
+  s_63c1dd6657215d::t_c55d7a19aebb05 1-46,68-69,71-110,112-114,117-159,163,166-167,173-175,186-192,194-198,207
+  s_63c1dd6657215d::t_2b4f2bef3a09f8 47-50,111,115-116
+cli/Tests/StratoCLITests/GuestExecSessionTests.swift
+  s_63c1dd6657215d::t_54b8bf5c1bc31d 25-40,521-542
+  s_63c1dd6657215d::t_8719251f4965fe 131-202,393-401
+  s_63c1dd6657215d::t_d177d5e033a158 412-413,425-428
+  s_63c1dd6657215d::t_3b5da637064fe2 333-338
+  s_63c1dd6657215d::t_82f463d93b8a67 96-100
+  s_63c1dd6657215d::t_b92ef5466f1107 270-297
+  s_63c1dd6657215d::t_c45d7f182643b9 239-269,506-520,543
+  s_63c1dd6657215d::t_de8515389c791a 298-329,461-467,470,477-479,501
+  s_63c1dd6657215d::t_08bb4873f0cffe 459
+  s_63c1dd6657215d::t_2d74c346b459bd 370,407
+  s_63c1dd6657215d::t_c41f3e624e25fa 48-54,80-87,330-332,339
+  s_63c1dd6657215d::t_54e5bf3c0feb49 1-24,41-47,55-79,88-95,101-130,203-238,340-369,371-392,402-406,408-411,414-424,429-458,460,468-469,471-476,480-500,502-505,544
+control-plane/web/src/types/openapi.ts
+  s_63c1dd6657215d::t_a382761a274a02 635-657,5890-5913,10988-11020
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "dc36d8b560ae030f73611412e2d05573910cefc1",
+  "prompts": {},
+  "sessions": {
+    "s_006994cc89f4f7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00d06-57d2-7862-8053-e4feb2cafb1e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_63c1dd6657215d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00cf5-d9dd-7a13-8786-f6cdc1d697e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
