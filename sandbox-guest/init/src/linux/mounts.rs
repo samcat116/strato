@@ -119,18 +119,22 @@ pub fn switch_into_rootfs() -> Result<()> {
 }
 
 /// Mount the remaining API filesystems a typical container expects, inside the
-/// new root. Best effort: a missing mount point or an already-satisfied mount
-/// must not abort the workload launch.
+/// new root. `devpts` is required because interactive exec cannot allocate a
+/// PTY without it. The other convenience filesystems remain best effort.
 pub fn mount_container_api() -> Result<()> {
-    if Path::new("/dev/pts").exists() {
-        let _ = mount(
-            Some("devpts"),
-            "/dev/pts",
-            Some("devpts"),
-            MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC,
-            Some("gid=5,mode=0620"),
-        );
-    }
+    // A bare devtmpfs contains device nodes, not the /dev/pts directory that a
+    // normal userspace creates. Testing for the directory therefore skipped
+    // this mount in every sandbox and made openpty(3) fail with ENOENT.
+    ensure_dir("/dev/pts")?;
+    mount(
+        Some("devpts"),
+        "/dev/pts",
+        Some("devpts"),
+        MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC,
+        Some("gid=5,mode=0620"),
+    )
+    .map_err(|e| format!("mount devpts on /dev/pts: {e}"))?;
+
     if Path::new("/dev/shm").exists() {
         let _ = mount(
             Some("shm"),

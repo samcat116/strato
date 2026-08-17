@@ -8,7 +8,7 @@
 # License: per the repository LICENSE.md (Functional Source License 1.1).
 [package]
 name = "strato-sandbox-init"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 rust-version = "1.74"
 description = "Strato sandbox guest init / guest-agent for OCI-image Firecracker microVMs"
