@@ -60,6 +60,9 @@ let package = Package(
                 .product(name: "StratoAPIClient", package: "strato-api-client"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "WebSocketKit", package: "websocket-kit"),
             ],
             swiftSettings: swiftSettings
         ),

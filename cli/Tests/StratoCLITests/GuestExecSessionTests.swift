@@ -1,7 +1,10 @@
 import Foundation
+import NIOCore
+import NIOHTTP1
 import StratoAPIClient
 import Synchronization
 import Testing
+import WebSocketKit
 
 @testable import StratoCLICore
 
@@ -34,6 +37,29 @@ struct GuestExecSessionTests {
         }
         while !started.withLock({ $0 }) { await Task.yield() }
         task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(terminal.transitions() == [.entered, .restored])
+    }
+
+    @Test("Cancellation aborts a stalled WebSocket handshake")
+    func stalledHandshakeCancellation() async {
+        let started = Mutex(false)
+        let terminal = FakeGuestExecTerminal()
+        let connector = WebSocketKitGuestExecConnector { _, _, _, group, _ in
+            started.withLock { $0 = true }
+            return group.next().makePromise(of: Void.self).futureResult
+        }
+        let task = Task {
+            try await withRawTerminal(terminal) {
+                try await connector.connect(
+                    url: URL(string: "wss://strato.example.com/session")!,
+                    bearerToken: "st_test")
+            }
+        }
+
+        while !started.withLock({ $0 }) { await Task.yield() }
+        task.cancel()
+
         await #expect(throws: CancellationError.self) { try await task.value }
         #expect(terminal.transitions() == [.entered, .restored])
     }

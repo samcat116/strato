@@ -424,7 +424,33 @@ protocol GuestExecSocketConnecting: Sendable {
     func connect(url: URL, bearerToken: String) async throws -> any GuestExecSocket
 }
 
-private struct WebSocketKitGuestExecConnector: GuestExecSocketConnecting {
+typealias GuestExecWebSocketConnect =
+    @Sendable (
+        URL,
+        HTTPHeaders,
+        WebSocketClient.Configuration,
+        any EventLoopGroup,
+        @Sendable @escaping (WebSocket) -> Void
+    ) -> EventLoopFuture<Void>
+
+struct WebSocketKitGuestExecConnector: GuestExecSocketConnecting {
+    private let startConnect: GuestExecWebSocketConnect
+
+    init(
+        startConnect: @escaping GuestExecWebSocketConnect = {
+            url, headers, configuration, group,
+            onUpgrade in
+            WebSocket.connect(
+                to: url,
+                headers: headers,
+                configuration: configuration,
+                on: group,
+                onUpgrade: onUpgrade)
+        }
+    ) {
+        self.startConnect = startConnect
+    }
+
     func connect(url: URL, bearerToken: String) async throws -> any GuestExecSocket {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         var headers = HTTPHeaders()
@@ -433,39 +459,104 @@ private struct WebSocketKitGuestExecConnector: GuestExecSocketConnecting {
         configuration.maxFrameSize = 1 << 20
 
         do {
-            return try await withCheckedThrowingContinuation { continuation in
-                let resumed = Mutex(false)
-                let future = WebSocket.connect(
-                    to: url,
-                    headers: headers,
-                    configuration: configuration,
-                    on: group
-                ) { socket in
-                    let shouldResume = resumed.withLock { value -> Bool in
-                        guard !value else { return false }
-                        value = true
-                        return true
+            let attempt = GuestExecWebSocketConnectAttempt()
+            let socket = try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                return try await withCheckedThrowingContinuation { continuation in
+                    guard attempt.install(continuation) else { return }
+                    let future = startConnect(url, headers, configuration, group) { socket in
+                        if !attempt.succeed(with: socket) {
+                            _ = socket.close(code: .goingAway)
+                        }
                     }
-                    if shouldResume {
-                        continuation.resume(
-                            returning: WebSocketKitGuestExecSocket(socket: socket, group: group))
+                    future.whenFailure { error in
+                        attempt.fail(with: error)
                     }
                 }
-                future.whenFailure { error in
-                    let shouldResume = resumed.withLock { value -> Bool in
-                        guard !value else { return false }
-                        value = true
-                        return true
-                    }
-                    if shouldResume {
-                        continuation.resume(throwing: error)
-                    }
+            } onCancel: {
+                attempt.cancel()
+                group.shutdownGracefully { _ in
                 }
             }
+
+            if Task.isCancelled {
+                try? await socket.close(code: .goingAway)
+                throw CancellationError()
+            }
+            return WebSocketKitGuestExecSocket(socket: socket, group: group)
         } catch {
             try? await group.shutdownGracefully()
             throw error
         }
+    }
+}
+
+private final class GuestExecWebSocketConnectAttempt: Sendable {
+    private enum State {
+        case pending
+        case waiting(CheckedContinuation<WebSocket, any Error>)
+        case cancelled
+        case finished
+    }
+
+    private let state = Mutex(State.pending)
+
+    func install(_ continuation: CheckedContinuation<WebSocket, any Error>) -> Bool {
+        let installed = state.withLock { state -> Bool in
+            switch state {
+            case .pending:
+                state = .waiting(continuation)
+                return true
+            case .cancelled:
+                return false
+            case .waiting, .finished:
+                preconditionFailure("WebSocket continuation installed more than once")
+            }
+        }
+        if !installed {
+            continuation.resume(throwing: CancellationError())
+        }
+        return installed
+    }
+
+    func succeed(with socket: WebSocket) -> Bool {
+        resolve { $0.resume(returning: socket) }
+    }
+
+    func fail(with error: any Error) {
+        _ = resolve { $0.resume(throwing: error) }
+    }
+
+    func cancel() {
+        let continuation = state.withLock { state -> CheckedContinuation<WebSocket, any Error>? in
+            switch state {
+            case .pending, .waiting:
+                let continuation: CheckedContinuation<WebSocket, any Error>?
+                if case .waiting(let waiting) = state {
+                    continuation = waiting
+                } else {
+                    continuation = nil
+                }
+                state = .cancelled
+                return continuation
+            case .cancelled, .finished:
+                return nil
+            }
+        }
+        continuation?.resume(throwing: CancellationError())
+    }
+
+    private func resolve(
+        _ body: (CheckedContinuation<WebSocket, any Error>) -> Void
+    ) -> Bool {
+        let continuation = state.withLock { state -> CheckedContinuation<WebSocket, any Error>? in
+            guard case .waiting(let continuation) = state else { return nil }
+            state = .finished
+            return continuation
+        }
+        guard let continuation else { return false }
+        body(continuation)
+        return true
     }
 }
 
