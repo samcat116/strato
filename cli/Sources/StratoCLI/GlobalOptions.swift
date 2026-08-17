@@ -4,12 +4,16 @@ import StratoAPIClient
 import StratoCLICore
 
 /// Options shared by every command that talks to a control plane.
-struct GlobalOptions: ParsableArguments {
+struct ConnectionOptions: ParsableArguments {
     @Option(name: .long, help: "Named context from the config file (defaults to current-context).")
     var context: String?
 
     @Option(name: .long, help: "Control plane URL, overriding the context's server.")
     var server: String?
+}
+
+struct GlobalOptions: ParsableArguments {
+    @OptionGroup var connection: ConnectionOptions
 
     @Option(name: [.customShort("o"), .customLong("output")], help: "Output format: table or json.")
     var output: OutputFormat = .table
@@ -25,6 +29,10 @@ struct CLIEnvironment {
     let serverURL: URL
 
     static func resolve(_ options: GlobalOptions) throws -> CLIEnvironment {
+        try resolve(options.connection)
+    }
+
+    static func resolve(_ options: ConnectionOptions) throws -> CLIEnvironment {
         let directory = ConfigStore.defaultDirectory()
         let configStore = ConfigStore(directory: directory)
         let credentialStore = CredentialStore(directory: directory)
@@ -71,7 +79,11 @@ struct CLIEnvironment {
     }
 
     func makeClient() -> any APIProtocol {
-        StratoClient.authenticated(
+        makeAuthenticatedSession().client
+    }
+
+    func makeAuthenticatedSession() -> StratoClient.AuthenticatedSession {
+        StratoClient.authenticatedSession(
             serverURL: serverURL, contextName: contextName, credentialStore: credentialStore)
     }
 }

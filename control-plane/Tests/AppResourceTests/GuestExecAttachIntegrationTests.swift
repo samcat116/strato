@@ -20,9 +20,13 @@ import AppTestSupport
 struct GuestExecAttachIntegrationTests {
 
     @Test(
-        "VM and sandbox routes mint a session and relay the identical browser frame contract",
-        arguments: [GuestResourceKind.sandbox, GuestResourceKind.virtualMachine])
-    func attachRelaysExecStartAndFrames(resourceKind: GuestResourceKind) async throws {
+        "VM and sandbox routes preserve raw framing and support multiplexed framing",
+        arguments: [GuestResourceKind.sandbox, GuestResourceKind.virtualMachine],
+        ExecTestOutputMode.allCases)
+    func attachRelaysExecStartAndFrames(
+        resourceKind: GuestResourceKind,
+        outputMode: ExecTestOutputMode
+    ) async throws {
         try await withRunningExecApp { app, port in
             // A real agent socket, registered through the production handshake:
             // SPIFFE/mTLS, the only way an agent authenticates. SPIRE is enabled
@@ -104,13 +108,30 @@ struct GuestExecAttachIntegrationTests {
                 try req.content.encode(
                     ExecMintRequest(
                         command: ["/bin/echo", "hello"], env: nil, workingDir: nil,
-                        tty: true, rows: 24, cols: 80))
+                        tty: true, rows: 24, cols: 80,
+                        // Omission is deliberate: it proves the existing
+                        // browser request remains raw without opting in.
+                        outputMode: outputMode == .raw ? nil : outputMode.rawValue))
             }
             #expect(mintResponse.status == .created)
             let session = try mintResponse.content.decode(ExecMintResponse.self)
             #expect(
                 session.websocketPath
                     == "/api/\(collection)/\(resourceId)/exec/\(session.sessionId)/attach")
+            #expect(session.outputMode == outputMode.rawValue)
+
+            // WebSocket authentication is checked before the single-use
+            // token is consumed, so a rejected attach cannot burn a valid
+            // session minted by the user.
+            let unauthenticated = try await ExecWSClient.connect(
+                url: "ws://127.0.0.1:\(port)\(session.websocketPath)",
+                headers: HTTPHeaders(),
+                on: app.eventLoopGroup)
+            let authenticationError = try await unauthenticated.nextControlFrame()
+            #expect(authenticationError.type == "error")
+            #expect(authenticationError.message == "Authentication required")
+            try await unauthenticated.waitForClose()
+            #expect(app.guestExecSessionManager.hasPendingSession(sessionId: session.sessionId))
 
             // The browser attaches over a real WebSocket upgrade.
             var browserHeaders = HTTPHeaders()
@@ -143,6 +164,16 @@ struct GuestExecAttachIntegrationTests {
             let ready = try await browser.nextControlFrame()
             #expect(ready.type == "ready")
 
+            // A session token is single-use even while the first attachment
+            // remains active.
+            let duplicate = try await ExecWSClient.connect(
+                url: "ws://127.0.0.1:\(port)\(session.websocketPath)",
+                headers: browserHeaders,
+                on: app.eventLoopGroup)
+            let duplicateError = try await duplicate.nextControlFrame()
+            #expect(duplicateError.type == "error")
+            try await duplicate.waitForClose()
+
             // Output bytes flow to the browser as a binary frame.
             agent.send(
                 text: try encodeEnvelope(
@@ -150,7 +181,20 @@ struct GuestExecAttachIntegrationTests {
                         sessionId: session.sessionId, stream: "stdout",
                         rawData: Data("hello\n".utf8))))
             let output = try await browser.nextFrame()
-            #expect(output == .binary(Data("hello\n".utf8)))
+            #expect(
+                output
+                    == .binary(
+                        outputMode.frame(streamTag: 0x01, payload: Data("hello\n".utf8))))
+            agent.send(
+                text: try encodeEnvelope(
+                    GuestExecOutputMessage(
+                        sessionId: session.sessionId, stream: "stderr",
+                        rawData: Data("warning\n".utf8))))
+            let errorOutput = try await browser.nextFrame()
+            #expect(
+                errorOutput
+                    == .binary(
+                        outputMode.frame(streamTag: 0x02, payload: Data("warning\n".utf8))))
 
             // Unknown text controls are ignored; the following valid resize
             // is the only agent-bound event produced by this pair of frames.
@@ -170,6 +214,17 @@ struct GuestExecAttachIntegrationTests {
             let input = try inputEnvelope.decode(as: GuestExecInputMessage.self)
             #expect(input.sessionId == session.sessionId)
             #expect(input.rawData == Data("ls\n".utf8))
+            #expect(input.eof == false)
+
+            // Redirected stdin completion is an explicit control frame, not
+            // an empty data frame.
+            browser.send(text: #"{"type":"stdin_eof"}"#)
+            let eofEnvelope = try await agent.nextEnvelope(skipping: [.desiredState])
+            #expect(eofEnvelope.type == .guestExecInput)
+            let eof = try eofEnvelope.decode(as: GuestExecInputMessage.self)
+            #expect(eof.sessionId == session.sessionId)
+            #expect(eof.rawData == nil)
+            #expect(eof.eof == true)
 
             // Exit tears the session down and closes the browser socket.
             agent.send(
@@ -193,12 +248,28 @@ private struct ExecMintRequest: Content {
     let tty: Bool?
     let rows: Int?
     let cols: Int?
+    let outputMode: String?
 }
 
 private struct ExecMintResponse: Content {
     let sessionId: String
     let websocketPath: String
     let expiresAt: Date
+    let outputMode: String?
+}
+
+enum ExecTestOutputMode: String, CaseIterable, Sendable {
+    case raw
+    case multiplexed
+
+    func frame(streamTag: UInt8, payload: Data) -> Data {
+        switch self {
+        case .raw:
+            payload
+        case .multiplexed:
+            Data([streamTag]) + payload
+        }
+    }
 }
 
 // MARK: - Running-server harness (mirrors AgentWebSocketIntegrationTests)

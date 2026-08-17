@@ -446,12 +446,15 @@ endpoint.
   `actionVerbs` entry in `AuthorizationMiddleware`, plus the in-handler check).
   Requires the sandbox running, placed, its agent socketed to **this replica**,
   and the agent at protocol ≥ 8. Returns `201 {sessionId, websocketPath,
-  expiresAt}`; pending sessions expire unattached after 60s.
+  expiresAt, outputMode}`; pending sessions expire unattached after 60s.
+  `outputMode` is `raw` by default or `multiplexed` when requested. The latter
+  prefixes each binary output frame with `0x01` for stdout or `0x02` for stderr.
 - `GET /api/sandboxes/:id/exec/:sessionId/attach` — WebSocket upgrade,
   modeled on the VM console tunnel (in-handler `exec` re-check through the
   evaluator, same-user binding to the pending session). Browser→CP: binary frames are
-  stdin, text frames carry JSON `resize`. CP→browser: binary frames are
-  output; text frames carry JSON `ready`/`exit`/`error` controls.
+  stdin, text frames carry JSON `resize` or `stdin_eof`. CP→browser: binary
+  frames use the selected output mode; text frames carry JSON
+  `ready`/`exit`/`error` controls.
 - `POST /api/vms/:id/exec` and `GET
   /api/vms/:id/exec/:sessionId/attach` — the same mint/attach exchange for a
   running VM, guarded and re-checked with `vm:exec`. The pending session keeps
@@ -472,6 +475,9 @@ tunnels; the POST fails fast with 503 when the agent is socketed elsewhere.
 The frontend's sandbox detail page has Terminal and Logs tabs mirroring the
 VM page — the terminal drives exec sessions (default `/bin/sh`, PTY, resize
 wired to xterm's fit addon), and the logs tab tails the Loki-backed endpoint.
+The CLI uses the same exchange: `sandbox exec` selects multiplexed non-PTY
+output and preserves remote exit status, while `sandbox attach` selects raw PTY
+output and starts a fresh shell.
 
 ## Snapshots, warm start, fork, and mobility
 

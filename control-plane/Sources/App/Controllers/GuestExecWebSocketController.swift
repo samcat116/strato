@@ -11,6 +11,7 @@ struct GuestExecRequest: Content {
     let tty: Bool?
     let rows: Int?
     let cols: Int?
+    let outputMode: GuestExecOutputMode?
 
     func validate() throws {
         guard !command.isEmpty else {
@@ -19,11 +20,22 @@ struct GuestExecRequest: Content {
     }
 }
 
+/// Browser-facing output framing. Raw mode is the original terminal contract;
+/// multiplexed mode keeps stdout and stderr distinct for script-oriented CLI
+/// callers without changing the agent wire protocol.
+enum GuestExecOutputMode: String, Content, Sendable {
+    case raw
+    case multiplexed
+}
+
 /// Shared response contract consumed by the reusable browser terminal flow.
 struct GuestExecSessionResponse: Content {
     let sessionId: String
     let websocketPath: String
     let expiresAt: Date
+    /// Echoed so a client never silently assumes multiplexing against an older
+    /// control plane that ignored the request field.
+    let outputMode: GuestExecOutputMode?
 }
 
 /// WebSocket endpoints attaching a browser to a VM or sandbox exec session,
@@ -37,10 +49,11 @@ struct GuestExecSessionResponse: Content {
 ///
 /// Browser frame contract:
 /// - browser → CP: binary frames are stdin bytes; text frames are JSON
-///   control messages (`{"type":"resize","cols":C,"rows":R}`); unknown text
-///   frames are ignored.
+///   control messages (`{"type":"resize","cols":C,"rows":R}` or
+///   `{"type":"stdin_eof"}`); unknown text frames are ignored.
 /// - CP → browser: `{"type":"ready"}` once the process spawned; binary frames
-///   are output bytes (stdout/stderr interleaved);
+///   are raw output bytes or a stream tag (0x01 stdout, 0x02 stderr) followed
+///   by output bytes when the session selected multiplexed mode;
 ///   `{"type":"exit","exitCode":N}` then a normal close when it exits;
 ///   `{"type":"error","message":"..."}` then a close on abnormal end.
 struct GuestExecWebSocketController: RouteCollection {
@@ -206,6 +219,12 @@ struct GuestExecWebSocketController: RouteCollection {
                         } catch {
                             req.logger.error("Failed to route exec resize to agent: \(error)")
                         }
+                    case .stdinEOF:
+                        do {
+                            try await manager.routeInput(sessionId: sessionId, data: nil, eof: true)
+                        } catch {
+                            req.logger.error("Failed to route exec stdin EOF to agent: \(error)")
+                        }
                     case .browserClosed:
                         // Tell the agent to tear the exec down before removing
                         // the session. A no-op if the agent already reported
@@ -235,11 +254,17 @@ struct GuestExecWebSocketController: RouteCollection {
                     eventContinuation.yield(.input(Data(bytes)))
                 }
 
-                // Text frames are JSON control messages; only resize is defined.
-                // Unknown or malformed frames are ignored.
+                // Text frames are JSON control messages. Unknown or malformed
+                // frames are ignored for forward compatibility.
                 ws.onText { _, text in
-                    guard let resize = Self.decodeResizeFrame(text) else { return }
-                    eventContinuation.yield(.resize(rows: resize.rows, cols: resize.cols))
+                    switch Self.decodeClientControlFrame(text) {
+                    case .resize(let rows, let cols):
+                        eventContinuation.yield(.resize(rows: rows, cols: cols))
+                    case .stdinEOF:
+                        eventContinuation.yield(.stdinEOF)
+                    case nil:
+                        break
+                    }
                 }
             }
 
@@ -277,23 +302,36 @@ struct GuestExecWebSocketController: RouteCollection {
         case start
         case input(Data)
         case resize(rows: Int, cols: Int)
+        case stdinEOF
         case browserClosed
     }
 
-    private struct ResizeFrame: Decodable {
+    private struct ClientControlFrame: Decodable {
         let type: String
-        let cols: Int
-        let rows: Int
+        let cols: Int?
+        let rows: Int?
     }
 
-    private static func decodeResizeFrame(_ text: String) -> ResizeFrame? {
+    private enum ClientControl: Sendable {
+        case resize(rows: Int, cols: Int)
+        case stdinEOF
+    }
+
+    private static func decodeClientControlFrame(_ text: String) -> ClientControl? {
         guard let data = text.data(using: .utf8),
-            let frame = try? JSONDecoder().decode(ResizeFrame.self, from: data),
-            frame.type == "resize"
+            let frame = try? JSONDecoder().decode(ClientControlFrame.self, from: data)
         else {
             return nil
         }
-        return frame
+        switch frame.type {
+        case "resize":
+            guard let rows = frame.rows, let cols = frame.cols else { return nil }
+            return .resize(rows: rows, cols: cols)
+        case "stdin_eof":
+            return .stdinEOF
+        default:
+            return nil
+        }
     }
 
     /// Authenticates the request and re-checks the resource's exec permission.

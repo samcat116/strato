@@ -17,6 +17,9 @@ public enum CLIError: Error, CustomStringConvertible, Sendable {
     /// A polled operation reached the `failed` state.
     case operationFailed(kind: String, message: String)
     case timedOut(String)
+    /// A remote guest process or its interactive session failed after the
+    /// HTTP request had already succeeded.
+    case guestExec(String)
 
     public var description: String {
         switch self {
@@ -33,6 +36,8 @@ public enum CLIError: Error, CustomStringConvertible, Sendable {
         case .operationFailed(let kind, let message):
             return "Operation '\(kind)' failed: \(message)"
         case .timedOut(let detail):
+            return detail
+        case .guestExec(let detail):
             return detail
         }
     }

@@ -144,6 +144,19 @@ strato vm list
 `login` opens your browser to approve the device code and stores the token
 per context, so `strato context` can switch between control planes.
 
+For a running sandbox, execute a script-grade command or open a fresh
+interactive shell:
+
+```bash
+strato sandbox exec --env MODE=check --workdir /workspace <sandbox-id> -- make test
+strato sandbox attach --shell /bin/bash <sandbox-id>
+```
+
+`exec` keeps stdout and stderr separate, forwards redirected stdin, and exits
+with the command's status. `attach` requires a local terminal and starts a new
+PTY shell; it does not reconnect to the sandbox's main process or an earlier
+session.
+
 ## Add a hypervisor
 
 VMs run on agents — Linux hosts with KVM.
