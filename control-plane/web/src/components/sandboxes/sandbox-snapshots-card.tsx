@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { CloudUpload, GitFork, Loader2 } from "lucide-react";
+import { Camera, CloudUpload, GitFork, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,6 +19,8 @@ import { Label } from "@/components/ui/label";
 import { sandboxesApi } from "@/lib/api/sandboxes";
 import { useSandboxSnapshots } from "@/lib/hooks";
 import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
+import { usePermissions } from "@/lib/hooks/use-permissions";
+import { sandboxCanBeSnapshotted } from "@/lib/sandbox-guards";
 import { useProjectContext } from "@/providers";
 import type { Sandbox, SandboxSnapshot } from "@/types/api";
 import { formatMemory } from "@/lib/format-bytes";
@@ -28,10 +30,50 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
   const router = useRouter();
   const { data: snapshots, isLoading, error } = useSandboxSnapshots(sandbox.id);
   const { currentProject } = useProjectContext();
+  const [showCreate, setShowCreate] = useState(false);
+  const [snapshotName, setSnapshotName] = useState("");
+  const [stopAfterSnapshot, setStopAfterSnapshot] = useState(false);
   const [selected, setSelected] = useState<SandboxSnapshot | null>(null);
   const [name, setName] = useState("");
+  const { isLoading: isCreating, run: runCreate } = useAcceptedMutation();
   const { isLoading: isForking, run: runFork } = useAcceptedMutation();
   const { busyKey: exportingId, run: runExport } = useAcceptedMutation();
+  const { permissions } = usePermissions([
+    {
+      key: "snapshot",
+      action: "sandbox:snapshot",
+      node: { type: "sandbox", id: sandbox.id },
+    },
+  ]);
+  const canSnapshot = sandboxCanBeSnapshotted(sandbox);
+
+  const submitCreate = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const trimmedName = snapshotName.trim();
+
+    await runCreate({
+      request: () =>
+        sandboxesApi.createSnapshot(sandbox.id, {
+          name: trimmedName || undefined,
+          stop: stopAfterSnapshot || undefined,
+        }),
+      watch: {
+        snapshot: true,
+        kind: "create",
+        resourceKind: "sandbox_snapshot",
+        resourceName: trimmedName || `${sandbox.name} snapshot`,
+      },
+      errorMessage: "Failed to snapshot sandbox",
+      successMessage: stopAfterSnapshot
+        ? `Snapshotting and stopping “${sandbox.name}”`
+        : `Snapshotting “${sandbox.name}”`,
+      onSuccess: () => {
+        setShowCreate(false);
+        setSnapshotName("");
+        setStopAfterSnapshot(false);
+      },
+    });
+  };
 
   const beginFork = (snapshot: SandboxSnapshot) => {
     setSelected(snapshot);
@@ -96,10 +138,30 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
   return (
     <>
       <Card className="bg-card border-border">
-        <CardHeader>
-          <CardTitle className="text-lg font-semibold text-foreground">
-            Snapshots
-          </CardTitle>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle className="text-lg font-semibold text-foreground">
+              Snapshots
+            </CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Memory, device state, and the root filesystem captured together.
+            </p>
+          </div>
+          {permissions.snapshot && (
+            <Button
+              size="sm"
+              disabled={!canSnapshot}
+              onClick={() => setShowCreate(true)}
+              title={
+                canSnapshot
+                  ? "Capture the sandbox's current state"
+                  : "Wait for an agent to place and confirm the sandbox before taking a snapshot"
+              }
+            >
+              <Camera className="h-4 w-4 mr-2" />
+              Take snapshot
+            </Button>
+          )}
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -177,11 +239,77 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">
-              No snapshots are available to fork.
+              No snapshots yet.
             </p>
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={showCreate} onOpenChange={setShowCreate}>
+        <DialogContent className="bg-card border-border text-foreground">
+          <DialogHeader>
+            <DialogTitle>Take a snapshot</DialogTitle>
+            <DialogDescription>
+              Capture “{sandbox.name}” as it is now, including its memory,
+              device state, and root filesystem.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={submitCreate}>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="sandbox-snapshot-name">Name (optional)</Label>
+                <Input
+                  id="sandbox-snapshot-name"
+                  value={snapshotName}
+                  onChange={(event) => setSnapshotName(event.target.value)}
+                  placeholder="before-upgrade"
+                  disabled={isCreating}
+                  autoFocus
+                />
+              </div>
+              <label className="flex items-start gap-3 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  checked={stopAfterSnapshot}
+                  onChange={(event) =>
+                    setStopAfterSnapshot(event.target.checked)
+                  }
+                  disabled={isCreating}
+                  className="mt-0.5 h-4 w-4 rounded border-input bg-background accent-blue-600"
+                />
+                <span>
+                  <span className="font-medium">Stop after snapshot</span>
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    Leave the sandbox stopped after its state is captured.
+                    Otherwise it resumes automatically.
+                  </span>
+                </span>
+              </label>
+              <p className="text-xs text-muted-foreground">
+                The snapshot starts on this sandbox&apos;s agent. Export it
+                afterward to keep a copy in object storage and use it on other
+                compatible agents.
+              </p>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowCreate(false)}
+                disabled={isCreating}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isCreating}>
+                {isCreating && (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                )}
+                {stopAfterSnapshot ? "Snapshot and stop" : "Take snapshot"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={selected != null}
