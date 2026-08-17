@@ -1605,6 +1605,8 @@ export interface SandboxExecRequest {
   tty?: boolean;
   rows?: number;
   cols?: number;
+  /** Omitted keeps the browser-compatible raw binary framing. */
+  outputMode?: "raw" | "multiplexed";
 }
 
 export interface SandboxExecSession {
@@ -1613,6 +1615,8 @@ export interface SandboxExecSession {
   websocketPath: string;
   /** When the pending (unattached) session expires. */
   expiresAt: string;
+  /** Echoes the selected framing; absent only when talking to an older server. */
+  outputMode?: "raw" | "multiplexed";
 }
 
 // Sandbox workload logs (stdout/stderr shipped to Loki). Same envelope as VM

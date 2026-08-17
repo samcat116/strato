@@ -490,7 +490,8 @@ struct AgentWebSocketController: RouteCollection {
                         stream: message.stream, data: data))
                     {
                         req.guestExecSessionManager.handleOutput(
-                            sessionId: message.sessionId, fromAgentKey: agentKey, data: data)
+                            sessionId: message.sessionId, fromAgentKey: agentKey,
+                            stream: message.stream, data: data)
                     }
                 }
 

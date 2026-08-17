@@ -915,7 +915,8 @@ struct SandboxController: RouteCollection {
             workingDir: execRequest.workingDir,
             tty: execRequest.tty ?? false,
             rows: execRequest.rows,
-            cols: execRequest.cols
+            cols: execRequest.cols,
+            outputMode: execRequest.outputMode ?? .raw
         )
 
         let response = Response(status: .created)
@@ -923,7 +924,8 @@ struct SandboxController: RouteCollection {
             GuestExecSessionResponse(
                 sessionId: session.sessionId,
                 websocketPath: "/api/sandboxes/\(sandboxID.uuidString)/exec/\(session.sessionId)/attach",
-                expiresAt: session.expiresAt
+                expiresAt: session.expiresAt,
+                outputMode: session.outputMode
             ))
         return response
     }

@@ -109,11 +109,12 @@ info:
       its WebSocket half because the two are one exchange — the POST exists
       only to give the upgrade's pre-flight failures real status codes.
     - `POST /api/vms/{vmID}/exec` + `GET
-      /api/vms/{vmID}/exec/{sessionID}/attach`, and `POST
-      /api/sandboxes/{sandboxID}/exec` + `GET
+      /api/vms/{vmID}/exec/{sessionID}/attach`, and `GET
       /api/sandboxes/{sandboxID}/exec/{sessionID}/attach` — guest exec
-      (WebSocket attach). Both resource kinds use the same binary stdin/output
-      and JSON control-frame contract. VM minting is fail-closed unless the VM
+      WebSocket attaches. The sandbox POST half is modeled below because CLI
+      clients mint sessions through it; OpenAPI 3.0 still cannot express the
+      upgrade itself. Both resource kinds use the same binary stdin/output and
+      JSON control-frame contract. VM minting is fail-closed unless the VM
       opted into the Strato guest agent and its assigned hypervisor explicitly
       advertises a node-agent guest-exec bridge.
 
@@ -937,6 +938,35 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/sandboxes/{sandboxID}/exec:
+    parameters:
+      - $ref: "#/components/parameters/SandboxID"
+    post:
+      operationId: createSandboxExecSession
+      summary: Create a sandbox exec session
+      description: >-
+        Mints a short-lived, single-use session. Attach the authenticated
+        WebSocket at `websocketPath` before `expiresAt` to start the command.
+      tags: [Sandboxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GuestExecRequest"
+      responses:
+        "201":
+          description: The pending exec session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GuestExecSession"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /api/sandboxes/{sandboxID}/status:
     parameters:
       - $ref: "#/components/parameters/SandboxID"
@@ -10105,6 +10135,52 @@ components:
           items:
             type: string
             format: uuid
+    GuestExecOutputMode:
+      type: string
+      enum: [raw, multiplexed]
+      description: >-
+        Browser-facing output framing. Raw sends agent output bytes unchanged.
+        Multiplexed prefixes each binary frame with 0x01 for stdout or 0x02 for
+        stderr. Omission selects raw for compatibility with browser terminals.
+    GuestExecRequest:
+      type: object
+      required: [command]
+      properties:
+        command:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        workingDir:
+          type: string
+        tty:
+          type: boolean
+        rows:
+          type: integer
+        cols:
+          type: integer
+        outputMode:
+          $ref: "#/components/schemas/GuestExecOutputMode"
+    GuestExecSession:
+      type: object
+      required: [sessionId, websocketPath, expiresAt]
+      properties:
+        sessionId:
+          type: string
+        websocketPath:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        outputMode:
+          $ref: "#/components/schemas/GuestExecOutputMode"
+          description: >-
+            The selected output framing. Missing means a legacy server using
+            raw framing; multiplexed CLI exec must fail closed in that case.
     UpdateSandboxRequest:
       type: object
       properties:

@@ -67,6 +67,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
         let tty: Bool
         let rows: Int?
         let cols: Int?
+        let outputMode: GuestExecOutputMode
         let createdAt: Date
         let expiresAt: Date
     }
@@ -77,6 +78,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
         let resourceId: String
         let agentKey: String
         let userId: String
+        let outputMode: GuestExecOutputMode
         let attachedAt: Date
     }
 
@@ -99,6 +101,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
         tty: Bool,
         rows: Int?,
         cols: Int?,
+        outputMode: GuestExecOutputMode = .raw,
         now: Date = Date()
     ) -> PendingExecSession {
         let session = PendingExecSession(
@@ -113,6 +116,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
             tty: tty,
             rows: rows,
             cols: cols,
+            outputMode: outputMode,
             createdAt: now,
             expiresAt: now.addingTimeInterval(Self.pendingSessionTTL)
         )
@@ -190,6 +194,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
                 resourceId: pending.resourceId,
                 agentKey: pending.agentKey,
                 userId: pending.userId,
+                outputMode: pending.outputMode,
                 attachedAt: now
             )
             if let websocket {
@@ -341,15 +346,20 @@ final class GuestExecSessionManager: @unchecked Sendable {
 
     /// The exec process spawned: tell the browser it may start sending input.
     func handleStarted(sessionId: String, fromAgentKey agentKey: String) {
-        guard let ws = frontendConnection(sessionId: sessionId, fromAgentKey: agentKey, event: "started")
+        guard
+            let connection = frontendConnection(
+                sessionId: sessionId, fromAgentKey: agentKey, event: "started")
         else { return }
-        ws.send(Self.controlFrame(BrowserControlFrame(type: "ready")))
+        connection.websocket.send(Self.controlFrame(BrowserControlFrame(type: "ready")))
     }
 
-    /// Output bytes from the exec process, relayed to the browser as a binary
-    /// frame (stdout and stderr interleaved).
-    func handleOutput(sessionId: String, fromAgentKey agentKey: String, data: Data) {
-        guard let ws = frontendConnection(sessionId: sessionId, fromAgentKey: agentKey, event: "output")
+    /// Output bytes from the exec process. Raw sessions retain the browser
+    /// terminal contract; multiplexed sessions receive one stream tag byte
+    /// followed by the exact agent payload.
+    func handleOutput(sessionId: String, fromAgentKey agentKey: String, stream: String, data: Data) {
+        guard
+            let connection = frontendConnection(
+                sessionId: sessionId, fromAgentKey: agentKey, event: "output")
         else {
             // An entirely unknown session (control-plane restart, or the
             // session was already cleaned up) means the agent is streaming
@@ -365,32 +375,57 @@ final class GuestExecSessionManager: @unchecked Sendable {
             }
             return
         }
-        ws.send([UInt8](data))
+        switch connection.outputMode {
+        case .raw:
+            connection.websocket.send([UInt8](data))
+        case .multiplexed:
+            let tag: UInt8
+            switch stream {
+            case "stdout": tag = 0x01
+            case "stderr": tag = 0x02
+            default:
+                app.logger.warning(
+                    "Dropping guest exec output with unknown stream",
+                    metadata: ["sessionId": .string(sessionId), "stream": .string(stream)])
+                return
+            }
+            var frame = [UInt8]()
+            frame.reserveCapacity(data.count + 1)
+            frame.append(tag)
+            frame.append(contentsOf: data)
+            connection.websocket.send(frame)
+        }
     }
 
     /// The exec process ended: report the exit code and close normally.
     func handleExit(sessionId: String, fromAgentKey agentKey: String, exitCode: Int) {
-        guard let ws = frontendConnection(sessionId: sessionId, fromAgentKey: agentKey, event: "exit")
+        guard
+            let connection = frontendConnection(
+                sessionId: sessionId, fromAgentKey: agentKey, event: "exit")
         else {
             removeSessionIfOwned(sessionId: sessionId, byAgentKey: agentKey)
             return
         }
-        ws.send(Self.controlFrame(BrowserControlFrame(type: "exit", exitCode: exitCode)))
-        _ = ws.close(code: .normalClosure)
+        connection.websocket.send(
+            Self.controlFrame(BrowserControlFrame(type: "exit", exitCode: exitCode)))
+        _ = connection.websocket.close(code: .normalClosure)
         removeSession(sessionId: sessionId)
     }
 
     /// The exec session ended without an exit code (spawn failure, vsock
     /// died, sandbox stopped): report the error and close.
     func handleClosed(sessionId: String, fromAgentKey agentKey: String, reason: String?) {
-        guard let ws = frontendConnection(sessionId: sessionId, fromAgentKey: agentKey, event: "closed")
+        guard
+            let connection = frontendConnection(
+                sessionId: sessionId, fromAgentKey: agentKey, event: "closed")
         else {
             removeSessionIfOwned(sessionId: sessionId, byAgentKey: agentKey)
             return
         }
         let message = reason ?? "exec session closed by agent"
-        ws.send(Self.controlFrame(BrowserControlFrame(type: "error", message: message)))
-        _ = ws.close(code: .normalClosure)
+        connection.websocket.send(
+            Self.controlFrame(BrowserControlFrame(type: "error", message: message)))
+        _ = connection.websocket.close(code: .normalClosure)
         removeSession(sessionId: sessionId)
     }
 
@@ -400,9 +435,14 @@ final class GuestExecSessionManager: @unchecked Sendable {
     /// the reporting agent is the one the session was created against —
     /// otherwise a compromised agent could inject frames into another
     /// tenant's exec session by guessing session ids.
+    private struct FrontendConnection {
+        let websocket: WebSocket
+        let outputMode: GuestExecOutputMode
+    }
+
     private func frontendConnection(
         sessionId: String, fromAgentKey agentKey: String, event: String
-    ) -> WebSocket? {
+    ) -> FrontendConnection? {
         let (session, websocket) = lock.withLock {
             (sessions[sessionId], frontendConnections[sessionId])
         }
@@ -422,7 +462,8 @@ final class GuestExecSessionManager: @unchecked Sendable {
                 ])
             return nil
         }
-        return websocket
+        guard let websocket else { return nil }
+        return FrontendConnection(websocket: websocket, outputMode: session.outputMode)
     }
 
     /// Best-effort `GuestExecCloseMessage` to an agent that reported output

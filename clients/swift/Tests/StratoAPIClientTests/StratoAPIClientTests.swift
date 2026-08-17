@@ -93,4 +93,32 @@ struct StratoAPIClientTests {
         let payload = try notFound.body.json
         #expect(payload.reason == "Project not found")
     }
+
+    @Test("Creates a typed multiplexed sandbox exec session")
+    func createsSandboxExecSession() async throws {
+        let body = """
+            {"sessionId":"session-1",
+             "websocketPath":"/api/sandboxes/sandbox-1/exec/session-1/attach",
+             "expiresAt":"2099-01-01T00:00:00Z",
+             "outputMode":"multiplexed"}
+            """
+        let transport = RecordingTransport(
+            response: HTTPResponse(status: .created, headerFields: [.contentType: "application/json"]),
+            responseBody: HTTPBody(body)
+        )
+        let client = Client(
+            serverURL: URL(string: "https://strato.example.com")!, transport: transport)
+
+        let session = try await client.createSandboxExecSession(
+            path: .init(sandboxID: "sandbox-1"),
+            body: .json(
+                .init(
+                    command: ["/bin/echo", "hello"], tty: false,
+                    outputMode: .multiplexed))
+        ).created.body.json
+
+        #expect(session.sessionId == "session-1")
+        #expect(session.outputMode == .multiplexed)
+        #expect(transport.lastRequest?.path == "/api/sandboxes/sandbox-1/exec")
+    }
 }

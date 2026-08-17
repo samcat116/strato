@@ -22,6 +22,8 @@ let package = Package(
         // transitively through the generated client.
         .package(url: "https://github.com/apple/swift-openapi-runtime.git", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-http-types.git", from: "1.0.0"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
+        .package(url: "https://github.com/vapor/websocket-kit.git", from: "2.16.0"),
     ],
     targets: [
         // Core library with all testable logic: config/credentials, HTTP
@@ -35,6 +37,10 @@ let package = Package(
                 .product(name: "StratoAPIClient", package: "strato-api-client"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "WebSocketKit", package: "websocket-kit"),
             ],
             swiftSettings: swiftSettings
         ),
@@ -54,6 +60,9 @@ let package = Package(
                 .product(name: "StratoAPIClient", package: "strato-api-client"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "WebSocketKit", package: "websocket-kit"),
             ],
             swiftSettings: swiftSettings
         ),

@@ -1963,7 +1963,8 @@ struct VMController: RouteCollection {
             workingDir: execRequest.workingDir,
             tty: execRequest.tty ?? false,
             rows: execRequest.rows,
-            cols: execRequest.cols
+            cols: execRequest.cols,
+            outputMode: execRequest.outputMode ?? .raw
         )
 
         let response = Response(status: .created)
@@ -1971,7 +1972,8 @@ struct VMController: RouteCollection {
             GuestExecSessionResponse(
                 sessionId: session.sessionId,
                 websocketPath: "/api/vms/\(vmID.uuidString)/exec/\(session.sessionId)/attach",
-                expiresAt: session.expiresAt
+                expiresAt: session.expiresAt,
+                outputMode: session.outputMode
             ))
         return response
     }

@@ -8,6 +8,7 @@ import { sandboxesApi } from "@/lib/api/sandboxes";
 // same-origin `websocketPath` is attached. Frames:
 //   browser -> server: binary = raw stdin bytes;
 //                      text  = {"type":"resize","cols":C,"rows":R}
+//                              | {"type":"stdin_eof"}
 //   server -> browser: binary = terminal output bytes;
 //                      text  = {"type":"ready"} | {"type":"exit","exitCode":N}
 //                              | {"type":"error","message":"..."}

@@ -7,7 +7,10 @@ struct SandboxCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "sandbox",
         abstract: "Manage sandboxes (OCI-image microVMs).",
-        subcommands: [List.self, Get.self, Create.self, Delete.self, Start.self, Stop.self, Restart.self],
+        subcommands: [
+            List.self, Get.self, Create.self, Delete.self, Start.self, Stop.self, Restart.self,
+            Exec.self, Attach.self,
+        ],
         defaultSubcommand: List.self
     )
 
@@ -173,5 +176,157 @@ struct SandboxCommand: AsyncParsableCommand {
         @OptionGroup var global: GlobalOptions
         @Argument(help: "Sandbox id.") var id: String
         @Flag(name: .long, help: "Return immediately instead of waiting.") var noWait = false
+    }
+
+    struct Exec: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Run a non-interactive command inside a sandbox.")
+
+        @OptionGroup var connection: ConnectionOptions
+
+        @Argument(help: "Sandbox id.")
+        var id: String
+
+        @Option(name: .long, help: "Environment override in KEY=VALUE form; repeatable.")
+        var env: [String] = []
+
+        @Option(name: .long, help: "Working directory inside the sandbox.")
+        var workdir: String?
+
+        @Argument(parsing: .postTerminator, help: "Command and arguments to execute after '--'.")
+        var command: [String] = []
+
+        func run() async throws {
+            var remoteExitCode: Int32 = 0
+            try await runHandlingCLIErrors {
+                guard !command.isEmpty else {
+                    throw CLIError.config(
+                        "Missing command. Usage: strato sandbox exec <sandbox-id> -- <command> [args...]")
+                }
+                let environmentOverrides = try parseGuestExecEnvironment(env)
+                let environment = try CLIEnvironment.resolve(connection)
+                let authenticated = environment.makeAuthenticatedSession()
+                let input =
+                    standardInputIsTerminal()
+                    ? nil
+                    : fileHandleDataStream(.standardInput)
+                let invocation = GuestExecInvocation(
+                    sandboxID: id,
+                    command: command,
+                    environment: environmentOverrides,
+                    workingDirectory: workdir,
+                    tty: false,
+                    outputMode: .multiplexed,
+                    input: input,
+                    closeStdinWhenInputEnds: true
+                )
+                let session = GuestExecSessionClient(
+                    serverURL: environment.serverURL,
+                    client: authenticated.client,
+                    credentials: authenticated.credentials)
+                remoteExitCode = try await session.run(invocation) { output in
+                    switch output {
+                    case .stdout(let data): FileHandle.standardOutput.write(data)
+                    case .stderr(let data): FileHandle.standardError.write(data)
+                    }
+                }
+            }
+            if remoteExitCode != 0 {
+                throw ExitCode(remoteExitCode)
+            }
+        }
+    }
+
+    struct Attach: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Open a fresh interactive shell inside a sandbox.")
+
+        @OptionGroup var connection: ConnectionOptions
+
+        @Argument(help: "Sandbox id.")
+        var id: String
+
+        @Option(name: .long, help: "Shell executable inside the sandbox.")
+        var shell = "/bin/sh"
+
+        @Option(name: .long, help: "Environment override in KEY=VALUE form; repeatable.")
+        var env: [String] = []
+
+        @Option(name: .long, help: "Working directory inside the sandbox.")
+        var workdir: String?
+
+        private enum RunOutcome: Sendable {
+            case exited(Int32)
+            case terminated(Int32)
+        }
+
+        func run() async throws {
+            var remoteExitCode: Int32 = 0
+            var terminationSignal: Int32?
+            try await runHandlingCLIErrors {
+                guard !shell.isEmpty else {
+                    throw CLIError.config("Sandbox attach requires a non-empty --shell value.")
+                }
+                let environmentOverrides = try parseGuestExecEnvironment(env)
+                let terminal = try RawTerminal()
+                let initialSize = try terminal.size()
+                let environment = try CLIEnvironment.resolve(connection)
+                let authenticated = environment.makeAuthenticatedSession()
+                let outcome = try await withRawTerminal(terminal) {
+                    let resizeMonitor = TerminalResizeMonitor(terminal: terminal)
+                    let terminationMonitor = TerminalTerminationMonitor()
+                    defer {
+                        withExtendedLifetime(resizeMonitor) {}
+                        withExtendedLifetime(terminationMonitor) {}
+                    }
+
+                    let invocation = GuestExecInvocation(
+                        sandboxID: id,
+                        command: [shell],
+                        environment: environmentOverrides,
+                        workingDirectory: workdir,
+                        tty: true,
+                        initialSize: initialSize,
+                        outputMode: .raw,
+                        input: fileHandleDataStream(.standardInput),
+                        resizes: resizeMonitor.sizes
+                    )
+                    let session = GuestExecSessionClient(
+                        serverURL: environment.serverURL,
+                        client: authenticated.client,
+                        credentials: authenticated.credentials)
+                    return try await withThrowingTaskGroup(of: RunOutcome.self) { group in
+                        group.addTask {
+                            let exitCode = try await session.run(invocation) { output in
+                                switch output {
+                                case .stdout(let data), .stderr(let data):
+                                    FileHandle.standardOutput.write(data)
+                                }
+                            }
+                            return .exited(exitCode)
+                        }
+                        group.addTask {
+                            for await signalNumber in terminationMonitor.signals {
+                                return .terminated(signalNumber)
+                            }
+                            return .terminated(0)
+                        }
+                        guard let first = try await group.next() else {
+                            throw CLIError.guestExec("Sandbox attach ended without a result.")
+                        }
+                        group.cancelAll()
+                        return first
+                    }
+                }
+                switch outcome {
+                case .exited(let code): remoteExitCode = code
+                case .terminated(let signalNumber): terminationSignal = signalNumber
+                }
+            }
+            if let terminationSignal { reraiseTerminationSignal(terminationSignal) }
+            if remoteExitCode != 0 {
+                throw ExitCode(remoteExitCode)
+            }
+        }
     }
 }

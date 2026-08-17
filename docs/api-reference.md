@@ -192,10 +192,11 @@ enforces both directions: no registered route may go undocumented, and no
 operation may describe a route that does not exist. There is no quarantine list
 — adding a route without documenting it fails the build.
 
-WebSocket endpoints (the agent channel, VM consoles, and VM/sandbox guest exec) are
-intentionally **not** modeled as OpenAPI operations, since OpenAPI 3.0 cannot
-express a protocol upgrade; they are documented as prose in the specification's
-description.
+WebSocket upgrades (the agent channel, VM consoles, and VM/sandbox guest-exec
+attach routes) are intentionally **not** modeled as OpenAPI operations, since
+OpenAPI 3.0 cannot express a protocol upgrade. The sandbox guest-exec POST that
+mints an attach session is modeled normally so generated clients can use its
+shared request and response schemas.
 
 ## Generated code
 

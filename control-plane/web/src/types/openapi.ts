@@ -632,6 +632,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sandboxes/{sandboxID}/exec": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The sandbox's id. */
+                sandboxID: components["parameters"]["SandboxID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a sandbox exec session
+         * @description Mints a short-lived, single-use session. Attach the authenticated WebSocket at `websocketPath` before `expiresAt` to start the command.
+         */
+        post: operations["createSandboxExecSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sandboxes/{sandboxID}/status": {
         parameters: {
             query?: never;
@@ -5907,6 +5930,30 @@ export interface components {
             /** @description Security groups for the sandbox's NIC. Omitting them attaches the project's default group — never "no groups"; supplying them without a network is a 400, since there would be no NIC to attach them to. See `securityGroupsEnforced` on the sandbox for whether they filter anything yet. */
             securityGroupIds?: string[];
         };
+        /**
+         * @description Browser-facing output framing. Raw sends agent output bytes unchanged. Multiplexed prefixes each binary frame with 0x01 for stdout or 0x02 for stderr. Omission selects raw for compatibility with browser terminals.
+         * @enum {string}
+         */
+        GuestExecOutputMode: "raw" | "multiplexed";
+        GuestExecRequest: {
+            command: string[];
+            env?: {
+                [key: string]: string;
+            };
+            workingDir?: string;
+            tty?: boolean;
+            rows?: number;
+            cols?: number;
+            outputMode?: components["schemas"]["GuestExecOutputMode"];
+        };
+        GuestExecSession: {
+            sessionId: string;
+            websocketPath: string;
+            /** Format: date-time */
+            expiresAt: string;
+            /** @description The selected output framing. Missing means a legacy server using raw framing; multiplexed CLI exec must fail closed in that case. */
+            outputMode?: components["schemas"]["GuestExecOutputMode"];
+        };
         UpdateSandboxRequest: {
             name?: string;
             ttlSeconds?: number;
@@ -11028,6 +11075,39 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    createSandboxExecSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The sandbox's id. */
+                sandboxID: components["parameters"]["SandboxID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GuestExecRequest"];
+            };
+        };
+        responses: {
+            /** @description The pending exec session. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuestExecSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     getSandboxStatus: {
