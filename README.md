@@ -54,21 +54,18 @@ upgrades (stored in the `<release>-strato-credentials` secret). See the
 ### Adding a hypervisor
 
 In the web UI: **Agents → Add Agent** (or `POST /api/agent-enrollments`),
-which provisions the node's identity in SPIRE and returns a
-`bootstrapCommand` — a single pre-filled line to run on the hypervisor host:
+which prepares the node's identity in SPIRE and returns a
+`bootstrapCommand` — one short-lived token to run on the hypervisor host:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh \
-  | sudo bash -s -- \
-  --control-plane-url 'wss://your-control-plane/agent/ws' \
-  --agent-name 'hv-01' \
-  --spire-join-token '...' \
-  --spire-server-address 'your-control-plane:8085' \
-  --trust-domain 'strato.local'
+curl -fsSL https://your-control-plane/api/agent-enrollments/install \
+  | sudo bash -s -- 'enroll_v1_...'
 ```
 
-The script installs the agent and its host dependencies (QEMU, libvirt, OVN,
-swtpm/OVMF), attests the node to SPIRE, and enables `strato-agent.service`.
+The script exchanges that token for the server-selected agent name, trust
+domain, endpoints, and a fresh one-time SPIRE join token. It then installs the
+agent and its host dependencies (QEMU, libvirt, OVN, swtpm/OVMF), attests the
+node to SPIRE, and enables `strato-agent.service`.
 Agents authenticate only with SPIFFE/SPIRE X.509 SVIDs over mTLS — there is
 no token or password join, and no long-lived shared secret sits on disk, so
 restarts and reboots just work. See the

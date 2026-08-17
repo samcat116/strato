@@ -183,6 +183,34 @@ struct OrgSPIREClientRegistry: Sendable {
         return try adminService(row: row)
     }
 
+    /// Resolve the exact trust domain already recorded on an enrollment.
+    /// Bootstrap must not re-run scope selection: an enrollment that fell back
+    /// to the platform domain must stay there even if its organization's own
+    /// domain becomes active before the host redeems the token.
+    func bootstrapSelection(forTrustDomain trustDomain: String, on db: Database) async throws
+        -> OrgSPIRESelection?
+    {
+        if trustDomain == platformTrustDomain {
+            return platformSelection(reason: .featureDisabled)
+        }
+
+        guard
+            let row = try await OrgTrustDomain.query(on: db)
+                .filter(\.$trustDomain == trustDomain)
+                .first()
+        else {
+            return nil
+        }
+        guard row.acceptsIdentities else {
+            throw Abort(
+                .serviceUnavailable,
+                reason:
+                    "Organization trust domain \(trustDomain) is no longer active, so this enrollment cannot be bootstrapped"
+            )
+        }
+        return try orgSelection(row: row)
+    }
+
     /// Whether an organization whose trust domain isn't ready may still be
     /// enrolled into the platform domain, as configured.
     ///

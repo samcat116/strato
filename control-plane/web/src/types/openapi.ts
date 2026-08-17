@@ -3687,19 +3687,59 @@ export interface paths {
         };
         /**
          * List agent enrollments
-         * @description Outstanding and redeemed node enrollments. The SPIRE join token is never echoed here — it is returned exactly once, from the create endpoint. Enrollments with no organization scope are visible to system admins only.
+         * @description Outstanding and redeemed node enrollments. The bootstrap token is never echoed here — it is returned exactly once, from the create endpoint. SPIRE join tokens are minted only when the host redeems that bootstrap token. Enrollments with no organization scope are visible to system admins only.
          */
         get: operations["listAgentEnrollments"];
         put?: never;
         /**
          * Enroll a hypervisor node
-         * @description Provisions the node in SPIRE (join token + workload entry) and returns a copy-paste `bootstrapCommand` that installs `strato-agent` and `spire-agent`, attests the node, and points it at this control plane.
+         * @description Prepares the node's workload grant in SPIRE and returns a copy-paste `bootstrapCommand` that installs `strato-agent` and `spire-agent`, attests the node, and points it at this control plane.
          *
-         *     This is an operator-facing call authenticated with a normal user credential; the agent it provisions subsequently authenticates only with its SPIFFE/SPIRE X.509 SVID over mTLS. The response's `spire.joinToken` is a one-time bearer secret and is never returned again.
+         *     This is an operator-facing call authenticated with a normal user credential. The response's `bootstrapToken` is stored only as a hash; the host redeems it to mint a just-in-time SPIRE join token and fetch every server-selected identity and network value. The installed agent subsequently authenticates only with its SPIFFE/SPIRE X.509 SVID over mTLS.
          *
          *     Requires `manage_agents` on the target organization scope (system admins always pass), plus `manage` on the required `siteId`. One enrollment per agent name: revoke the existing one before re-enrolling.
          */
         post: operations["createAgentEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agent-enrollments/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download the agent enrollment installer wrapper
+         * @description Returns a small shell wrapper bound to this control-plane origin. Pipe it to `sudo bash -s -- <bootstrap-token>`; the wrapper downloads the versioned agent installer and supplies the private bootstrap exchange URL internally.
+         */
+        get: operations["getAgentEnrollmentInstaller"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agent-enrollments/bootstrap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Redeem an agent enrollment token
+         * @description Exchanges an `enroll_v1_` bearer token for the server-selected agent bootstrap bundle and a freshly minted one-time SPIRE join token. The same enrollment token may be retried until the enrollment expires, is revoked, or the agent completes registration; each successful retry receives a new SPIRE join token bounded by the original expiry.
+         */
+        post: operations["redeemAgentEnrollment"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8316,7 +8356,7 @@ export interface components {
             /** @description Unique agent name, restricted to characters SPIRE accepts in a SPIFFE ID path segment. */
             agentName: string;
             /**
-             * @description Lifetime of the enrollment and its SPIRE join token.
+             * @description Lifetime of the bootstrap bearer and the maximum expiry of any SPIRE join token minted from it.
              * @default 1
              */
             expirationHours: number;
@@ -8330,7 +8370,7 @@ export interface components {
             /** Format: uuid */
             organizationalUnitId?: string | null;
         };
-        /** @description A newly created enrollment. Returned only from the create endpoint, because it carries one-time SPIRE node-attestation material. */
+        /** @description A newly created enrollment. Returned only from the create endpoint, because it carries the one-time bootstrap bearer. */
         AgentEnrollmentDetail: {
             /** Format: uuid */
             id: string;
@@ -8338,21 +8378,16 @@ export interface components {
             spiffeId: string;
             /** Format: date-time */
             expiresAt: string;
-            spire: components["schemas"]["SPIREProvisioning"];
-            /** @description Copy-paste one-liner that installs strato-agent and spire-agent, attests the node with the join token, and points it at this control plane's mTLS listener. */
+            /** @description The server-selected SPIFFE trust domain for this agent. */
+            trustDomain: string;
+            /** @description The server-selected SPIRE node-attestation address. */
+            spireServerAddress: string;
+            /** @description Short-lived bearer shown once and stored only as a hash. It carries no configuration; the installer exchanges it for the bootstrap bundle. */
+            bootstrapToken: string;
+            /** @description Copy-paste one-liner that installs strato-agent and spire-agent, redeems the bootstrap token, attests the node with the resulting join token, and points it at this control plane's mTLS listener. */
             bootstrapCommand: string;
         };
-        /** @description SPIRE material handed back once, at enrollment creation. `joinToken` is a one-time bearer secret that is never persisted or re-exposed. */
-        SPIREProvisioning: {
-            joinToken: string;
-            /** Format: date-time */
-            joinTokenExpiresAt: string;
-            spiffeId: string;
-            nodeId: string;
-            trustDomain: string;
-            serverAddress: string;
-        };
-        /** @description List-safe view of an enrollment. Deliberately omits the whole `spire` block: the join token is shown exactly once, at creation time. */
+        /** @description List-safe view of an enrollment. Deliberately omits the bootstrap token, which is shown exactly once at creation time. */
         AgentEnrollmentListItem: {
             /** Format: uuid */
             id: string;
@@ -8362,7 +8397,7 @@ export interface components {
             expiresAt: string;
             /** @description Whether the named agent has registered. */
             isUsed: boolean;
-            /** @description Unused and not yet expired. */
+            /** @description Has a bootstrap credential, unused and not yet expired. */
             isValid: boolean;
             /** Format: uuid */
             organizationId?: string | null;
@@ -16345,7 +16380,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The enrollment, including one-time SPIRE material. */
+            /** @description The enrollment, including the one-time bootstrap token. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -16368,6 +16403,67 @@ export interface operations {
                 };
             };
             /** @description SPIRE is not configured on this control plane, so no node can be enrolled. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getAgentEnrollmentInstaller: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A shell installer wrapper. */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/x-shellscript": string;
+                };
+            };
+        };
+    };
+    redeemAgentEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Versioned, line-oriented bootstrap data consumed by install.sh. The first line is `STRATO_AGENT_BOOTSTRAP_V1`; the remaining six lines are base64-encoded values. */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.strato.agent-bootstrap.v1": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description SPIRE could not mint a node-attestation token. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The enrollment's SPIRE instance is unavailable. */
             503: {
                 headers: {
                     [name: string]: unknown;

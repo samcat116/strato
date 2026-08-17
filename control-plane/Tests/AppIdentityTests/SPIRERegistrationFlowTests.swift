@@ -10,8 +10,9 @@ import AppTestSupport
 @testable import App
 
 /// Tests for the agent enrollment flow, which *is* SPIRE provisioning: creating
-/// an enrollment provisions the node in SPIRE (join token + workload entry) and
-/// is refused outright when SPIRE is unconfigured, while revoking one
+/// an enrollment prepares the workload entry, bootstrap redemption mints the
+/// one-time join token, and an unconfigured SPIRE instance is refused. Revoking
+/// an enrollment
 /// deprovisions the grant it still owns and fails closed when the SPIRE server
 /// is unreachable.
 @Suite("SPIRE Registration Flow Tests")
@@ -82,7 +83,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
 
     // MARK: - Enrollment creation
 
-    @Test("Creating an enrollment provisions SPIRE and returns the join token once")
+    @Test("Creating an enrollment returns one opaque token and redemption derives SPIRE configuration")
     func createEnrollmentProvisionsSPIRE() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app.db)
@@ -90,6 +91,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let siteId = try await makeSite(on: app.db, org: orgId)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
+            var created: AgentEnrollmentResponse?
             try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
                 try req.content.encode(
@@ -101,44 +103,54 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
 
                 #expect(response.agentName == "node-a")
                 #expect(response.spiffeId == "spiffe://strato.local/agent/node-a")
-
-                // `spire` is no longer optional: enrollment *is* SPIRE
-                // provisioning, so a response without it cannot exist.
-                let spire = response.spire
-                #expect(spire.joinToken == "fake-join-token")
-                #expect(spire.spiffeId == "spiffe://strato.local/agent/node-a")
-                #expect(spire.nodeId == "spiffe://strato.local/node/node-a")
-                #expect(spire.trustDomain == "strato.local")
-                #expect(spire.serverAddress == "spire.example.com:8085")
+                #expect(response.trustDomain == "strato.local")
+                #expect(response.spireServerAddress == "spire.example.com:8085")
+                #expect(response.bootstrapToken.hasPrefix("enroll_v1_"))
 
                 let command = response.bootstrapCommand
-                // The curl-able installer (deploy/agent/install.sh) is the one
-                // node-onboarding entry point; the command must fetch it and
-                // pass through the control plane and SPIRE parameters.
+                // The host sees one opaque token, never the individual
+                // identity and network values the server owns.
                 #expect(command.hasPrefix("curl -fsSL"))
-                #expect(command.contains("deploy/agent/install.sh"))
+                #expect(command.contains("/api/agent-enrollments/install"))
                 #expect(command.contains("| sudo bash -s --"))
-                // Agents dial the Envoy mTLS listener, which is always TLS — the
-                // URL must be wss:// even though this request arrived over
-                // plain HTTP.
-                #expect(command.contains("--control-plane-url 'wss://"))
-                #expect(command.contains("/agent/ws'"))
-                #expect(command.contains("--agent-name 'node-a'"))
-                #expect(command.contains("fake-join-token"))
-                #expect(command.contains("spire.example.com:8085"))
-                #expect(command.contains("--trust-domain 'strato.local'"))
-                // Always explicit, even in the single-trust-domain case (issue
-                // #615): the agent's own default derives the pin from *its*
-                // trust domain, which stops being the control plane's the
-                // moment per-org domains are switched on.
-                #expect(
-                    command.contains("--control-plane-spiffe-id 'spiffe://strato.local/control-plane'"))
+                #expect(command.contains(response.bootstrapToken))
+                #expect(!command.contains("node-a"))
+                #expect(!command.contains("fake-join-token"))
+                #expect(!command.contains("spire.example.com:8085"))
+                #expect(!command.contains("strato.local"))
+                created = response
             }
 
-            // The join token lifetime matches the enrollment's expirationHours
+            // Creation prepares the workload entry but does not mint a SPIRE
+            // bearer that would then need storing or pasting.
+            #expect(await fake.joinTokenRequests.isEmpty)
+
+            let response = try #require(created)
+            try await app.test(.POST, "/api/agent-enrollments/bootstrap") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: response.bootstrapToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                #expect(res.headers.first(name: .contentType) == AgentBootstrapBundle.mediaType)
+                let lines = res.body.string.split(separator: "\n").map(String.init)
+                #expect(lines.count == 7)
+                #expect(lines.first == "STRATO_AGENT_BOOTSTRAP_V1")
+                let decoded = try lines.dropFirst().map { line in
+                    let data = try #require(Data(base64Encoded: line))
+                    return String(decoding: data, as: UTF8.self)
+                }
+                #expect(decoded[0].hasPrefix("wss://"))
+                #expect(decoded[0].hasSuffix("/agent/ws"))
+                #expect(decoded[1] == "node-a")
+                #expect(decoded[2] == "fake-join-token")
+                #expect(decoded[3] == "spire.example.com:8085")
+                #expect(decoded[4] == "strato.local")
+                #expect(decoded[5] == "spiffe://strato.local/control-plane")
+            }
+
+            // The just-in-time join token cannot outlive the enrollment.
             let joinTokenRequests = await fake.joinTokenRequests
             #expect(joinTokenRequests.count == 1)
-            #expect(joinTokenRequests.first?.ttlSeconds == 7200)
+            #expect((7190...7200).contains(Int(joinTokenRequests.first?.ttlSeconds ?? 0)))
             #expect(joinTokenRequests.first?.agentID == "spiffe://strato.local/node/node-a")
 
             // The workload entry matches what the mTLS WebSocket path expects
@@ -155,6 +167,8 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             #expect(row.organizationID == orgId)
             #expect(row.siteID == siteId)
             #expect(row.isUsed == false)
+            #expect(row.bootstrapTokenHash == AgentEnrollment.hashBootstrapToken(response.bootstrapToken))
+            #expect(row.bootstrapTokenHash != response.bootstrapToken)
         }
     }
 
@@ -175,7 +189,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let response = try res.content.decode(AgentEnrollmentResponse.self)
-                #expect(response.spire.joinToken == "fake-join-token")
+                #expect(response.bootstrapToken.hasPrefix("enroll_v1_"))
             }
         }
     }
@@ -187,7 +201,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let orgId = try await makeOrg(on: app.db)
             let siteId = try await makeSite(on: app.db, org: orgId)
             let fake = FakeSPIREServerAPI()
-            await fake.setFailJoinToken(true)
+            await fake.setFailCreateEntry(true)
             installFakeSPIRE(on: app, fake: fake)
 
             try await app.test(.POST, "/api/agent-enrollments") { req in
@@ -745,6 +759,53 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
 
 @Suite("SPIRE Registration Service Unit Tests")
 struct SPIRERegistrationServiceUnitTests {
+
+    @Test("Bootstrap tokens are opaque, hashed at rest, and consumed by registration")
+    func bootstrapTokenLifecycle() {
+        let first = AgentEnrollment.generateBootstrapToken()
+        let second = AgentEnrollment.generateBootstrapToken()
+        #expect(first.hasPrefix("enroll_v1_"))
+        #expect(second.hasPrefix("enroll_v1_"))
+        #expect(first != second)
+
+        let hash = AgentEnrollment.hashBootstrapToken(first)
+        #expect(hash.count == 64)
+        #expect(hash != first)
+
+        let enrollment = AgentEnrollment(
+            agentName: "node-a",
+            spiffeID: "spiffe://strato.local/agent/node-a",
+            bootstrapTokenHash: hash)
+        #expect(enrollment.isValid)
+        enrollment.markAsUsed()
+        #expect(!enrollment.isValid)
+        #expect(enrollment.bootstrapTokenHash == nil)
+    }
+
+    @Test("Bootstrap bundle is versioned and safely base64-encodes every value")
+    func bootstrapBundleWireFormat() throws {
+        let expected = [
+            "wss://agents.example.com/agent/ws", "node-a", "join-token",
+            "spire.example.com:443", "org-a.example.com",
+            "spiffe://platform.example.com/control-plane",
+        ]
+        let serialized = AgentBootstrapBundle(
+            controlPlaneURL: expected[0],
+            agentName: expected[1],
+            joinToken: expected[2],
+            spireServerAddress: expected[3],
+            trustDomain: expected[4],
+            controlPlaneSPIFFEID: expected[5]
+        ).serialized()
+        let lines = serialized.split(separator: "\n").map(String.init)
+        #expect(lines.count == 7)
+        #expect(lines.first == "STRATO_AGENT_BOOTSTRAP_V1")
+        let decoded = try lines.dropFirst().map { line in
+            let data = try #require(Data(base64Encoded: line))
+            return String(decoding: data, as: UTF8.self)
+        }
+        #expect(decoded == expected)
+    }
 
     @Test("Agent names are restricted to SPIFFE path segment characters")
     func agentNameValidation() {

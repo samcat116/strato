@@ -12,6 +12,8 @@ struct AgentController: RouteCollection {
         // would put the constant `enrollments` in the slot that otherwise holds
         // an agent id, producing ambiguous path templates (issue #595).
         let enrollmentRoutes = routes.grouped("api", "agent-enrollments")
+        enrollmentRoutes.get("install", use: installAgent)
+        enrollmentRoutes.post("bootstrap", use: redeemEnrollment)
         enrollmentRoutes.post(use: createEnrollment)
         enrollmentRoutes.get(use: listEnrollments)
         enrollmentRoutes.delete(":enrollmentId", use: revokeEnrollment)
@@ -179,6 +181,105 @@ struct AgentController: RouteCollection {
         return host
     }
 
+    /// GET /api/agent-enrollments/install
+    ///
+    /// A tiny public wrapper rather than a second copy of the real installer.
+    /// Its URL fixes the control-plane origin, so the operator only passes the
+    /// opaque token and the token itself carries no network or identity facts.
+    func installAgent(req: Request) async throws -> Response {
+        let bootstrapURL =
+            "\(OAuthController.publicOrigin(configuration: req.controlPlaneConfiguration))"
+            + "/api/agent-enrollments/bootstrap"
+        let encodedBootstrapURL = Data(bootstrapURL.utf8).base64EncodedString()
+        let script =
+            """
+            #!/bin/sh
+            set -eu
+
+            if [ "$#" -ne 1 ]; then
+              echo "usage: curl -fsSL <strato-origin>/api/agent-enrollments/install | sudo bash -s -- <enrollment-token>" >&2
+              exit 2
+            fi
+
+            token=$1
+            case "$token" in
+              enroll_v1_*) ;;
+              *) echo "invalid Strato enrollment token" >&2; exit 2 ;;
+            esac
+
+            installer=$(mktemp /tmp/strato-agent-install.XXXXXX)
+            trap 'rm -f "$installer"' EXIT HUP INT TERM
+            curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh -o "$installer"
+            bootstrap_url=$(printf '%s' '\(encodedBootstrapURL)' | base64 --decode)
+            bash "$installer" --enrollment-token "$token" --enrollment-api-url "$bootstrap_url"
+            """
+
+        var headers = HTTPHeaders()
+        headers.replaceOrAdd(name: .contentType, value: "text/x-shellscript; charset=utf-8")
+        headers.replaceOrAdd(name: .cacheControl, value: "no-store")
+        return Response(status: .ok, headers: headers, body: .init(string: script + "\n"))
+    }
+
+    /// POST /api/agent-enrollments/bootstrap
+    ///
+    /// Redeem the short-lived enrollment bearer for server-selected
+    /// configuration and a just-in-time SPIRE join token. Reissuing before the
+    /// agent registers is intentional: a host that loses the response or dies
+    /// midway through installation can retry without an operator creating a
+    /// second enrollment. The token stops working on registration, expiry, or
+    /// revocation.
+    func redeemEnrollment(req: Request) async throws -> Response {
+        guard let bearer = req.headers.bearerAuthorization,
+            let enrollment = try await AgentEnrollment.findByBootstrapToken(bearer.token, on: req.db),
+            enrollment.isValid,
+            let expiresAt = enrollment.expiresAt
+        else {
+            throw Abort(.unauthorized, reason: "Enrollment token is invalid, expired, or already used")
+        }
+
+        guard let registry = OrgSPIREClientRegistry.fromApplication(req.application) else {
+            throw Abort(.serviceUnavailable, reason: "Agent enrollment requires SPIRE")
+        }
+        guard
+            let selection = try await registry.bootstrapSelection(
+                forTrustDomain: enrollment.trustDomain, on: req.db)
+        else {
+            throw Abort(
+                .serviceUnavailable,
+                reason: "The SPIRE instance for this enrollment is no longer available")
+        }
+
+        let remainingSeconds = max(1, Int(expiresAt.timeIntervalSinceNow.rounded(.down)))
+        let ttlSeconds = Int32(min(remainingSeconds, Int(Int32.max)))
+        let joinToken: SPIREAgentJoinToken
+        do {
+            joinToken = try await selection.service.mintAgentJoinToken(
+                named: enrollment.agentName, ttlSeconds: ttlSeconds)
+        } catch {
+            req.logger.error(
+                "SPIRE join-token minting failed while redeeming an agent enrollment",
+                metadata: [
+                    "agentName": .string(enrollment.agentName),
+                    "enrollmentId": .string(enrollment.id?.uuidString ?? "unknown"),
+                    "error": .string("\(error)"),
+                ])
+            throw Abort(.badGateway, reason: "SPIRE could not issue the node attestation token")
+        }
+
+        let bundle = AgentBootstrapBundle(
+            controlPlaneURL: "\(webSocketBaseURL(req: req))/agent/ws",
+            agentName: enrollment.agentName,
+            joinToken: joinToken.value,
+            spireServerAddress: selection.service.registrationConfig.serverPublicAddress,
+            trustDomain: enrollment.trustDomain,
+            controlPlaneSPIFFEID: selection.controlPlaneSPIFFEID
+        )
+        var headers = HTTPHeaders()
+        headers.replaceOrAdd(name: .contentType, value: AgentBootstrapBundle.mediaType)
+        headers.replaceOrAdd(name: .cacheControl, value: "no-store")
+        return Response(status: .ok, headers: headers, body: .init(string: bundle.serialized()))
+    }
+
     func createEnrollment(req: Request) async throws -> AgentEnrollmentResponse {
         let createRequest = try req.content.decode(CreateAgentEnrollmentRequest.self)
         try createRequest.validate()
@@ -279,17 +380,17 @@ struct AgentController: RouteCollection {
             throw Abort(.forbidden, reason: "You don't have 'manage' permission on site \(siteId)")
         }
 
-        // Provision the node in SPIRE first (join token + workload entry).
+        // Prepare the node's durable workload grant in SPIRE first. The
+        // one-time node-attestation token is deliberately minted later, when a
+        // host presents the enrollment's bootstrap token.
         // SPIRE is not transactional with our database, so order matters: if
         // provisioning fails nothing was persisted here, and if the save below
-        // fails the provisioning is rolled back best-effort (a leftover entry
-        // is reused on retry; the unredeemed join token just expires). The join
-        // token shares the enrollment's expiry — one provisioning window.
-        let provisioning: SPIREAgentProvisioning
+        // fails the prepared entry is rolled back best-effort. A leftover entry
+        // is safe and reused on retry; no join token exists at this point.
+        let provisioning: SPIREAgentConfiguration
         do {
-            provisioning = try await spire.provisionAgent(
+            provisioning = try await spire.prepareAgent(
                 named: createRequest.agentName,
-                joinTokenTTLSeconds: Int32(expirationHours * 3600),
                 federatesWith: selection.federatesWith
             )
         } catch let error as SPIRERegistrationError {
@@ -307,10 +408,13 @@ struct AgentController: RouteCollection {
             )
         }
 
+        let bootstrapToken = AgentEnrollment.generateBootstrapToken()
+
         let enrollment = AgentEnrollment(
             agentName: createRequest.agentName,
             spiffeID: provisioning.spiffeID,
             trustDomain: provisioning.trustDomain,
+            bootstrapTokenHash: AgentEnrollment.hashBootstrapToken(bootstrapToken),
             expirationHours: expirationHours,
             siteID: createRequest.siteId,
             organizationScope: scope
@@ -362,9 +466,9 @@ struct AgentController: RouteCollection {
 
         return try AgentEnrollmentResponse(
             from: enrollment,
-            webSocketBaseURL: webSocketBaseURL(req: req),
-            spire: provisioning,
-            controlPlaneSPIFFEID: selection.controlPlaneSPIFFEID
+            publicOrigin: OAuthController.publicOrigin(configuration: req.controlPlaneConfiguration),
+            bootstrapToken: bootstrapToken,
+            spire: provisioning
         )
     }
 
@@ -430,8 +534,8 @@ struct AgentController: RouteCollection {
             return manageable.contains(scope.checkNode)
         }
 
-        // Never echo the SPIRE join token in a list response — it is shown
-        // exactly once, at creation time.
+        // Never echo the bootstrap token in a list response — it is shown
+        // exactly once, at creation time. SPIRE join tokens are not persisted.
         return try visible.map { try AgentEnrollmentListItem(from: $0) }
     }
 

@@ -160,6 +160,9 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         // `/agent/desired-state-history` public too.
         let exactPublic: Set<String> = [
             "/api/docs", "/api/openapi.yaml", "/agent/desired-state",
+            // The wrapper has no secret; the bootstrap exchange authenticates
+            // its own short-lived `enroll_v1_` bearer in the handler.
+            "/api/agent-enrollments/install", "/api/agent-enrollments/bootstrap",
         ]
         // `/ssf/events` is the RFC 8935 push-delivery endpoint: transmitters
         // authenticate with a per-stream bearer token checked in-handler.

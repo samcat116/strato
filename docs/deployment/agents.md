@@ -93,10 +93,10 @@ curl -X POST https://strato.example.com/api/agent-enrollments \
   -d '{"agentName": "hv-01", "organizationId": "<uuid>", "siteId": "<uuid>"}'
 ```
 
-The control plane provisions the node in SPIRE — a one-time **join token**
-for `spire-agent` node attestation and a **workload registration entry**
-entitling the node's `strato-agent` to its SPIFFE ID — and returns a
-`bootstrapCommand`: a single copy-paste line to run on the new host.
+The control plane prepares the node's **workload registration entry** in SPIRE
+and returns a `bootstrapCommand`: a single copy-paste line containing one
+short-lived enrollment token. The host exchanges that token for every
+server-selected value and a fresh one-time SPIRE join token.
 
 - `GET /api/agent-enrollments` lists enrollments; `DELETE
   /api/agent-enrollments/:id` revokes one, removing its SPIRE entries.
@@ -118,32 +118,31 @@ entitling the node's `strato-agent` to its SPIFFE ID — and returns a
   `{"networkControllerAgentId": "<agentId>"}` designates one. VM placement,
   VM start and site-pinned network creation refuse loudly in that state
   rather than accepting work that would never converge.
-- The join token is a one-time secret shown **once**, at creation time. It
-  is redeemed the first time `spire-agent` attests and is inert afterwards.
+- The enrollment token is shown **once** and stored only as a hash. It can be
+  retried until the enrollment expires or the agent registers; each successful
+  exchange mints a fresh one-time SPIRE join token that cannot outlive the
+  enrollment.
 - Enrollment fails if the control plane has no SPIRE server configured.
   There is no fallback: see [mTLS (SPIFFE/SPIRE)](#mtls-spiffe-spire) for
   the required settings.
+- Enrollments created before the one-token flow are not silently converted:
+  the control plane never stored enough secret material to reconstruct a
+  bootstrap bearer. A previously copied long command remains usable until its
+  original expiry; otherwise revoke and recreate the enrollment.
 
 ## One-command install
 
-The `bootstrapCommand` from the enrollment above is the install script,
-pre-filled:
+The `bootstrapCommand` from the enrollment above has one input:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh \
-  | sudo bash -s -- \
-  --control-plane-url 'wss://strato.example.com/agent/ws' \
-  --agent-name 'hv-01' \
-  --spire-join-token '...' \
-  --spire-server-address 'strato.example.com:8085' \
-  --trust-domain 'strato.local'
+curl -fsSL https://strato.example.com/api/agent-enrollments/install \
+  | sudo bash -s -- 'enroll_v1_...'
 ```
 
-All five flags are required. `--agent-name` must match the name the
-enrollment was created for — the control plane resolves the enrollment row
-by name, and names are restricted to ASCII letters, digits, `-`, `_`, and
-`.`. `--control-plane-url` is the agent WebSocket endpoint, always `wss://`
-in a SPIRE deployment since Envoy terminates mTLS in front of it.
+The wrapper binds the command to the control-plane web origin, downloads the
+versioned installer, and exchanges the opaque token for the agent name,
+WebSocket endpoint, SPIRE address, trust domain, control-plane SPIFFE ID, and
+one-time SPIRE join token. The host no longer supplies or derives those values.
 
 On a fresh Linux host with nothing installed, it downloads the `strato-agent`
 and `spire-agent` binaries, installs the host dependencies (QEMU and libvirtd,
@@ -582,22 +581,20 @@ Enrollment requires the control plane to have access to the SPIRE server
 registration API (`SPIRE_ENABLED=true` plus `SPIRE_SERVER_API_ADDRESS`,
 e.g. `unix:///run/spire/server/api.sock` on a shared socket volume);
 without it, `POST /api/agent-enrollments` fails. Creating an enrollment
-provisions the node in SPIRE:
+prepares the durable SPIRE workload grant:
 
-- a one-time **join token** for `spire-agent` node attestation, bound to
-  the stable node identity `spiffe://<trust-domain>/node/<name>`, and
 - a **workload registration entry** entitling the node's `strato-agent`
   to `spiffe://<trust-domain>/agent/<name>` (selectors configurable via
   `SPIRE_AGENT_SELECTORS`, default `unix:uid:0`).
 
 The API response (and the UI dialog) then includes a ready-to-paste
-bootstrap command that curls
-[`deploy/agent/install.sh`](https://github.com/samcat116/strato/blob/main/deploy/agent/install.sh)
-with the SPIRE flags: it downloads the `strato-agent` and `spire-agent`
-binaries, writes the spire-agent config, waits for the Workload API
-socket, starts the agent, and brings up host telemetry — one command per
-new hypervisor node. The join token is shown exactly once, at creation
-time.
+bootstrap command carrying only a hashed-at-rest enrollment bearer. The public
+wrapper downloads
+[`deploy/agent/install.sh`](https://github.com/samcat116/strato/blob/main/deploy/agent/install.sh),
+which exchanges that bearer for the server-owned configuration and a one-time
+join token, writes the spire-agent config, waits for the Workload API socket,
+starts the agent, and brings up host telemetry — one command per new
+hypervisor node.
 
 ### Host telemetry (Alloy)
 

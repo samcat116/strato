@@ -432,6 +432,11 @@ public func configure(
     // interpreting every agent-owned storage reference as a host path.
     app.migrations.add(ReplaceVolumeReplicaDatasetPath())
 
+    // Agent enrollment now hands the host one opaque bearer and derives every
+    // identity/network value server-side when it is redeemed. Existing rows
+    // stay on their issued bootstrap commands; no secret can be backfilled.
+    app.migrations.add(AddAgentEnrollmentBootstrapTokens())
+
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
     // that records it, so concurrent replica boots race the same migration and a

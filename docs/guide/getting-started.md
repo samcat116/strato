@@ -152,10 +152,8 @@ VMs run on agents — Linux hosts with KVM.
 2. Run the generated bootstrap command on the hypervisor host:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh \
-     | sudo bash -s -- --control-plane-url 'wss://your-control-plane/agent/ws' \
-     --agent-name 'hv-01' --spire-join-token '...' \
-     --spire-server-address '...' --trust-domain '...'
+   curl -fsSL https://your-control-plane/api/agent-enrollments/install \
+     | sudo bash -s -- 'enroll_v1_...'
    ```
 
 That one command installs the agent and its host dependencies, attests the

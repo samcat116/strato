@@ -10,8 +10,8 @@
 #
 # Covers helpers with real logic and real consequences: the qemu.conf writer
 # (which edits a 0600 root-owned file that can hold VNC/TLS secrets), the
-# version comparison behind the libvirt floor, and the default-off SPIRE
-# delegate grant.
+# version comparison behind the libvirt floor, the default-off SPIRE delegate
+# grant, and the one-token bootstrap response parser.
 #
 #   bash deploy/agent/tests/install-sh-test.sh
 
@@ -61,12 +61,65 @@ HARNESS="$WORK_DIR/harness.sh"
   echo 'set -uo pipefail'
   echo 'log() { :; }'
   echo 'warn() { :; }'
+  echo 'die() { echo "error: $*" >&2; exit 1; }'
+  extract_function decode_bootstrap_value
+  extract_function redeem_enrollment
   extract_function set_qemu_conf_key
   extract_function version_ge
   extract_function render_spire_guest_identity_config
 } > "$HARNESS"
 # shellcheck source=/dev/null
 . "$HARNESS"
+
+# --- redeem_enrollment ------------------------------------------------------
+# A fresh host has no jq or Strato binary yet. Pin the line protocol and prove
+# the parser fills every formerly pasted value without evaluating shell text.
+
+echo "redeem_enrollment: one token derives every bootstrap value"
+BOOTSTRAP_FIXTURE="$WORK_DIR/bootstrap.txt"
+{
+  echo STRATO_AGENT_BOOTSTRAP_V1
+  printf '%s' 'wss://agents.example.com/agent/ws' | base64
+  printf '%s' 'hv-01' | base64
+  printf '%s' 'join-token-value' | base64
+  printf '%s' 'spire.example.com:443' | base64
+  printf '%s' 'org-a.example.com' | base64
+  printf '%s' 'spiffe://platform.example.com/control-plane' | base64
+} > "$BOOTSTRAP_FIXTURE"
+STUB_DIR="$WORK_DIR/bin"
+mkdir -p "$STUB_DIR"
+cat > "$STUB_DIR/curl" << 'EOF'
+#!/usr/bin/env bash
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -o ]; then
+    cp "$BOOTSTRAP_FIXTURE" "$2"
+    exit 0
+  fi
+  shift
+done
+exit 2
+EOF
+chmod +x "$STUB_DIR/curl"
+
+ENROLLMENT_TOKEN=enroll_v1_test
+ENROLLMENT_API_URL=https://cp.example.com/api/agent-enrollments/bootstrap
+EXPLICIT_BOOTSTRAP_VALUES=0
+CONTROL_PLANE_URL=""
+AGENT_NAME=""
+JOIN_TOKEN=""
+SPIRE_SERVER_ADDRESS=""
+TRUST_DOMAIN=""
+CONTROL_PLANE_SPIFFE_ID=""
+export BOOTSTRAP_FIXTURE
+PATH="$STUB_DIR:$PATH" redeem_enrollment
+check "control-plane URL comes from the exchange" \
+  'wss://agents.example.com/agent/ws' "$CONTROL_PLANE_URL"
+check "agent name comes from the exchange" hv-01 "$AGENT_NAME"
+check "SPIRE join token comes from the exchange" join-token-value "$JOIN_TOKEN"
+check "SPIRE address comes from the exchange" spire.example.com:443 "$SPIRE_SERVER_ADDRESS"
+check "trust domain comes from the exchange" org-a.example.com "$TRUST_DOMAIN"
+check "control-plane identity comes from the exchange" \
+  spiffe://platform.example.com/control-plane "$CONTROL_PLANE_SPIFFE_ID"
 
 # --- set_qemu_conf_key -------------------------------------------------------
 # Returns 0 when the file changed, 1 when it already agreed. Callers use that to

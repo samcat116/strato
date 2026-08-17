@@ -6,20 +6,16 @@
 # networking), attests this node to SPIRE, writes the agent config, and starts
 # everything under systemd. Designed to be curled and piped:
 #
-#   curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh \
-#     | sudo bash -s -- \
-#     --control-plane-url 'wss://cp.example.com/agent/ws' \
-#     --agent-name 'hv-01' \
-#     --spire-join-token '...' \
-#     --spire-server-address 'cp.example.com:8085' \
-#     --trust-domain 'strato.local'
+#   curl -fsSL https://cp.example.com/api/agent-enrollments/install \
+#     | sudo bash -s -- 'enroll_v1_...'
 #
 # That invocation is exactly what the Strato UI emits when you enroll a node
 # (Agents -> Enroll node, or POST /api/agent-enrollments): enrollment
-# provisions the node in SPIRE and hands back this command with the join token
-# filled in. Agents authenticate to the control plane ONLY by SPIFFE X.509 SVID
-# over mTLS, so all five flags above are required — there is no token join and
-# no unauthenticated path.
+# prepares the node in SPIRE and hands back this command with one short-lived
+# enrollment token. The wrapper fixes the control-plane origin; this installer
+# redeems the token for the agent name, SPIRE join token and every other
+# server-owned value. Agents authenticate after installation ONLY by SPIFFE
+# X.509 SVID over mTLS — the enrollment bearer is bootstrap-only.
 #
 # Unless --no-telemetry, the script also installs Grafana Alloy +
 # spiffe-helper, which push node metrics and journal logs to the control
@@ -33,7 +29,11 @@
 #
 # Linux only: spire-agent, systemd, and KVM all are.
 #
-# Flags (all five below are required):
+# Enrollment flags (normally supplied by the public wrapper above):
+#   --enrollment-token TOK       Short-lived token returned by enrollment
+#   --enrollment-api-url URL     Control-plane bootstrap exchange endpoint
+#
+# Explicit bootstrap flags (legacy/manual alternative to an enrollment token):
 #   --control-plane-url URL  Agent WebSocket endpoint (ws:// or wss://; always
 #                            wss:// in a SPIRE deployment, since Envoy
 #                            terminates mTLS in front of the control plane)
@@ -84,6 +84,9 @@ set -euo pipefail
 
 CONTROL_PLANE_URL=""
 AGENT_NAME=""
+ENROLLMENT_TOKEN=""
+ENROLLMENT_API_URL=""
+EXPLICIT_BOOTSTRAP_VALUES=0
 VERSION="latest"
 REPO="samcat116/strato"
 BIN_DIR="/usr/local/bin"
@@ -149,8 +152,10 @@ die() { echo "error: $*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --control-plane-url) CONTROL_PLANE_URL="$2"; shift 2 ;;
-    --agent-name)       AGENT_NAME="$2"; shift 2 ;;
+    --enrollment-token)   ENROLLMENT_TOKEN="$2"; shift 2 ;;
+    --enrollment-api-url) ENROLLMENT_API_URL="$2"; shift 2 ;;
+    --control-plane-url) CONTROL_PLANE_URL="$2"; EXPLICIT_BOOTSTRAP_VALUES=1; shift 2 ;;
+    --agent-name)       AGENT_NAME="$2"; EXPLICIT_BOOTSTRAP_VALUES=1; shift 2 ;;
     --version)          VERSION="$2"; shift 2 ;;
     --repo)             REPO="$2"; shift 2 ;;
     --bin-dir)          BIN_DIR="$2"; shift 2 ;;
@@ -161,12 +166,12 @@ while [ $# -gt 0 ]; do
     --no-systemd)       USE_SYSTEMD=0; shift ;;
     --skip-preflight)   RUN_PREFLIGHT=0; shift ;;
     --sandbox-guest)    INSTALL_SANDBOX_GUEST=1; shift ;;
-    --spire-join-token)      JOIN_TOKEN="$2"; shift 2 ;;
-    --spire-server-address)  SPIRE_SERVER_ADDRESS="$2"; shift 2 ;;
-    --trust-domain)          TRUST_DOMAIN="$2"; shift 2 ;;
+    --spire-join-token)      JOIN_TOKEN="$2"; EXPLICIT_BOOTSTRAP_VALUES=1; shift 2 ;;
+    --spire-server-address)  SPIRE_SERVER_ADDRESS="$2"; EXPLICIT_BOOTSTRAP_VALUES=1; shift 2 ;;
+    --trust-domain)          TRUST_DOMAIN="$2"; EXPLICIT_BOOTSTRAP_VALUES=1; shift 2 ;;
     --trust-bundle)          TRUST_BUNDLE="$2"; shift 2 ;;
     --enable-guest-identity) ENABLE_GUEST_IDENTITY=1; shift ;;
-    --control-plane-spiffe-id) CONTROL_PLANE_SPIFFE_ID="$2"; shift 2 ;;
+    --control-plane-spiffe-id) CONTROL_PLANE_SPIFFE_ID="$2"; EXPLICIT_BOOTSTRAP_VALUES=1; shift 2 ;;
     --no-telemetry)          INSTALL_TELEMETRY=0; shift ;;
     --ingest-url)            INGEST_URL="$2"; shift 2 ;;
     --spire-version)         SPIRE_VERSION="${2#v}"; shift 2 ;;
@@ -176,6 +181,60 @@ while [ $# -gt 0 ]; do
     *)                  die "unknown option: $1 (see --help)" ;;
   esac
 done
+
+decode_bootstrap_value() {
+  local decoded
+  if decoded="$(printf '%s' "$1" | base64 --decode 2>/dev/null)"; then
+    printf '%s' "$decoded"
+  elif decoded="$(printf '%s' "$1" | base64 -D 2>/dev/null)"; then
+    # BSD base64 (useful when exercising the parser from a macOS dev host).
+    printf '%s' "$decoded"
+  else
+    die "the control plane returned malformed bootstrap configuration"
+  fi
+}
+
+redeem_enrollment() {
+  [ "$EXPLICIT_BOOTSTRAP_VALUES" -eq 0 ] \
+    || die "--enrollment-token cannot be combined with explicit agent, SPIRE, or control-plane values"
+  [ -n "$ENROLLMENT_API_URL" ] \
+    || die "--enrollment-api-url is required with --enrollment-token (use the install command returned by Strato)"
+  case "$ENROLLMENT_API_URL" in
+    https://*|http://localhost:*|http://127.0.0.1:*|http://localhost/*|http://127.0.0.1/*) ;;
+    *) die "--enrollment-api-url must use HTTPS (plain HTTP is allowed only for localhost)" ;;
+  esac
+
+  local response
+  response="$(mktemp /tmp/strato-agent-bootstrap.XXXXXX)"
+  chmod 600 "$response"
+  log "Fetching server-selected enrollment configuration"
+  if ! curl -fsS -X POST \
+      -H "Authorization: Bearer ${ENROLLMENT_TOKEN}" \
+      -H 'Accept: application/vnd.strato.agent-bootstrap.v1' \
+      "$ENROLLMENT_API_URL" -o "$response"; then
+    rm -f "$response"
+    die "the enrollment token was rejected or the control plane could not issue bootstrap configuration"
+  fi
+
+  local -a fields
+  mapfile -t fields < "$response"
+  rm -f "$response"
+  [ "${#fields[@]}" -eq 7 ] && [ "${fields[0]}" = "STRATO_AGENT_BOOTSTRAP_V1" ] \
+    || die "the control plane returned an unsupported bootstrap response"
+
+  CONTROL_PLANE_URL="$(decode_bootstrap_value "${fields[1]}")"
+  AGENT_NAME="$(decode_bootstrap_value "${fields[2]}")"
+  JOIN_TOKEN="$(decode_bootstrap_value "${fields[3]}")"
+  SPIRE_SERVER_ADDRESS="$(decode_bootstrap_value "${fields[4]}")"
+  TRUST_DOMAIN="$(decode_bootstrap_value "${fields[5]}")"
+  CONTROL_PLANE_SPIFFE_ID="$(decode_bootstrap_value "${fields[6]}")"
+}
+
+if [ -n "$ENROLLMENT_TOKEN" ]; then
+  redeem_enrollment
+elif [ -n "$ENROLLMENT_API_URL" ]; then
+  die "--enrollment-api-url requires --enrollment-token"
+fi
 
 case "$NETWORK_MODE" in
   ovn|user) ;;
