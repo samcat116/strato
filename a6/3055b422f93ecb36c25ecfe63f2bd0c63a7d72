@@ -1,0 +1,20 @@
+control-plane/web/src/components/sandboxes/sandbox-snapshots-card.tsx
+  s_b80d99746c6514::t_8677f67b7925e4 5,31-33,36,40-75,139-160,238,244-308
+  s_b80d99746c6514::t_55c60412906189 309
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a63055b422f93ecb36c25ecfe63f2bd0c63a7d72",
+  "prompts": {},
+  "sessions": {
+    "s_b80d99746c6514": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00de5-38d2-7852-9df1-c7cd58688b5a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
