@@ -1,0 +1,32 @@
+control-plane/Sources/App/Controllers/VMSnapshotController.swift
+  s_ae0a43bccee8b4::t_4562ca3ac5e6d6 110
+control-plane/Sources/App/Models/VolumeSnapshot.swift
+  s_ae0a43bccee8b4::t_1beaca35206f33 249-251
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_ae0a43bccee8b4::t_4562ca3ac5e6d6 109
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_ae0a43bccee8b4::t_4562ca3ac5e6d6 189-191
+control-plane/Sources/App/Controllers/SandboxSnapshotTransferController.swift
+  s_ae0a43bccee8b4::t_4562ca3ac5e6d6 87
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_ae0a43bccee8b4::t_4562ca3ac5e6d6 903
+control-plane/Tests/AppResourceTests/WorkloadSizeValidationTests.swift
+  s_ae0a43bccee8b4::t_468507f2116c6d 123-124
+  s_ae0a43bccee8b4::t_4562ca3ac5e6d6 133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c3b82fbbfd296349af4cc05a9d8878fe3c19f86f",
+  "prompts": {},
+  "sessions": {
+    "s_ae0a43bccee8b4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00fea-fc07-7da1-9ea7-ca44b6255f26",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
