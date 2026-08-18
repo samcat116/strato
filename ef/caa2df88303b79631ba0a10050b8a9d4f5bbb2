@@ -1,0 +1,23 @@
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_006994cc89f4f7::t_aa95df977a54b4 193-194,199,209
+  s_006994cc89f4f7::t_677e13a92ea405 179-187,189
+control-plane/Tests/AppIdentityTests/SPIRERegistrationFlowTests.swift
+  s_006994cc89f4f7::t_aa95df977a54b4 86,96-97
+  s_006994cc89f4f7::t_677e13a92ea405 87-95
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "efcaa2df88303b79631ba0a10050b8a9d4f5bbb2",
+  "prompts": {},
+  "sessions": {
+    "s_006994cc89f4f7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00d06-57d2-7862-8053-e4feb2cafb1e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
