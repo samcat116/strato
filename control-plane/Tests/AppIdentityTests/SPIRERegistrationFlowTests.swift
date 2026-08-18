@@ -83,16 +83,26 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
 
     // MARK: - Enrollment creation
 
-    @Test("The enrollment installer wrapper forwards optional installer arguments")
-    func enrollmentInstallerForwardsArguments() {
+    @Test("The enrollment installer wrapper pins its revision and forwards arguments")
+    func enrollmentInstallerPinsRevisionAndForwardsArguments() throws {
+        let gitSHA = String(repeating: "a", count: 40)
+        let installerURL = try AgentController.installerURL(gitSHA: gitSHA)
         let script = AgentController.installerScript(
-            bootstrapURL: "https://strato.example.com/api/agent-enrollments/bootstrap")
+            bootstrapURL: "https://strato.example.com/api/agent-enrollments/bootstrap",
+            installerURL: installerURL)
 
         #expect(script.contains("if [ \"$#\" -lt 1 ]; then"))
         #expect(script.contains("token=$1\nshift"))
         #expect(
             script.contains(
+                "https://raw.githubusercontent.com/samcat116/strato/\(gitSHA)/deploy/agent/install.sh"))
+        #expect(!script.contains("/main/deploy/agent/install.sh"))
+        #expect(
+            script.contains(
                 "--enrollment-api-url \"$bootstrap_url\" \"$@\""))
+        #expect(throws: Abort.self) {
+            try AgentController.installerURL(gitSHA: "unknown")
+        }
     }
 
     @Test("Creating an enrollment returns one opaque token and redemption derives SPIRE configuration")

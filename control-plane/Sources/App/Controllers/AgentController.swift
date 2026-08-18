@@ -176,7 +176,10 @@ struct AgentController: RouteCollection {
         let bootstrapURL =
             "\(OAuthController.publicOrigin(configuration: req.controlPlaneConfiguration))"
             + "/api/agent-enrollments/bootstrap"
-        let script = Self.installerScript(bootstrapURL: bootstrapURL)
+        let installerURL = try Self.installerURL(
+            gitSHA: BuildInfo.gitSHA(configuration: req.controlPlaneConfiguration))
+        let script = Self.installerScript(
+            bootstrapURL: bootstrapURL, installerURL: installerURL)
 
         var headers = HTTPHeaders()
         headers.replaceOrAdd(name: .contentType, value: "text/x-shellscript; charset=utf-8")
@@ -184,7 +187,16 @@ struct AgentController: RouteCollection {
         return Response(status: .ok, headers: headers, body: .init(string: script + "\n"))
     }
 
-    static func installerScript(bootstrapURL: String) -> String {
+    static func installerURL(gitSHA: String) throws -> String {
+        guard gitSHA.count == 40, gitSHA.allSatisfy(\.isHexDigit) else {
+            throw Abort(
+                .serviceUnavailable,
+                reason: "STRATO_GIT_SHA must identify the deployed control-plane revision")
+        }
+        return "https://raw.githubusercontent.com/samcat116/strato/\(gitSHA)/deploy/agent/install.sh"
+    }
+
+    static func installerScript(bootstrapURL: String, installerURL: String) -> String {
         let encodedBootstrapURL = Data(bootstrapURL.utf8).base64EncodedString()
         return """
             #!/bin/sh
@@ -204,7 +216,7 @@ struct AgentController: RouteCollection {
 
             installer=$(mktemp /tmp/strato-agent-install.XXXXXX)
             trap 'rm -f "$installer"' EXIT HUP INT TERM
-            curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh -o "$installer"
+            curl -fsSL "\(installerURL)" -o "$installer"
             bootstrap_url=$(printf '%s' '\(encodedBootstrapURL)' | base64 --decode)
             bash "$installer" --enrollment-token "$token" --enrollment-api-url "$bootstrap_url" "$@"
             """
