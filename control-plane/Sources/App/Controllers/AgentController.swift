@@ -176,18 +176,27 @@ struct AgentController: RouteCollection {
         let bootstrapURL =
             "\(OAuthController.publicOrigin(configuration: req.controlPlaneConfiguration))"
             + "/api/agent-enrollments/bootstrap"
+        let script = Self.installerScript(bootstrapURL: bootstrapURL)
+
+        var headers = HTTPHeaders()
+        headers.replaceOrAdd(name: .contentType, value: "text/x-shellscript; charset=utf-8")
+        headers.replaceOrAdd(name: .cacheControl, value: "no-store")
+        return Response(status: .ok, headers: headers, body: .init(string: script + "\n"))
+    }
+
+    static func installerScript(bootstrapURL: String) -> String {
         let encodedBootstrapURL = Data(bootstrapURL.utf8).base64EncodedString()
-        let script =
-            """
+        return """
             #!/bin/sh
             set -eu
 
-            if [ "$#" -ne 1 ]; then
-              echo "usage: curl -fsSL <strato-origin>/api/agent-enrollments/install | sudo bash -s -- <enrollment-token>" >&2
+            if [ "$#" -lt 1 ]; then
+              echo "usage: curl -fsSL <strato-origin>/api/agent-enrollments/install | sudo bash -s -- <enrollment-token> [installer-options...]" >&2
               exit 2
             fi
 
             token=$1
+            shift
             case "$token" in
               enroll_v1_*) ;;
               *) echo "invalid Strato enrollment token" >&2; exit 2 ;;
@@ -197,13 +206,8 @@ struct AgentController: RouteCollection {
             trap 'rm -f "$installer"' EXIT HUP INT TERM
             curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh -o "$installer"
             bootstrap_url=$(printf '%s' '\(encodedBootstrapURL)' | base64 --decode)
-            bash "$installer" --enrollment-token "$token" --enrollment-api-url "$bootstrap_url"
+            bash "$installer" --enrollment-token "$token" --enrollment-api-url "$bootstrap_url" "$@"
             """
-
-        var headers = HTTPHeaders()
-        headers.replaceOrAdd(name: .contentType, value: "text/x-shellscript; charset=utf-8")
-        headers.replaceOrAdd(name: .cacheControl, value: "no-store")
-        return Response(status: .ok, headers: headers, body: .init(string: script + "\n"))
     }
 
     /// POST /api/agent-enrollments/bootstrap
