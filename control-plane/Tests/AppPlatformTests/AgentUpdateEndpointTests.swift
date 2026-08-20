@@ -41,7 +41,7 @@ final class AgentUpdateEndpointTests {
             )
             let org = try await builder.createOrganization(name: "Update Org")
             try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             try await test(app, builder, org, token)
         } catch {
@@ -72,10 +72,10 @@ final class AgentUpdateEndpointTests {
             ),
             architecture: .x86_64,
             lastHeartbeat: online ? Date() : Date(timeIntervalSinceNow: -3600)
-        )
-        agent.wireProtocolVersion = wireProtocolVersion
-        agent.operatingSystem = operatingSystem
-        agent.organizationScope = .organization(try org.requireID())
+        ).replacing(
+            operatingSystem: .some(operatingSystem),
+            wireProtocolVersion: .some(wireProtocolVersion)
+        ).replacingOrganizationScope(.organization(try org.requireID()))
         try await agent.save(on: app.db)
         return agent
     }
@@ -307,7 +307,7 @@ final class AgentUpdateEndpointTests {
                 isSystemAdmin: false
             )
             try await builder.addUserToOrganization(user: delegated, organization: org, role: "admin")
-            let delegatedToken = try await delegated.generateAPIKey(on: app.db)
+            let delegatedToken = try await delegated.generateAPIKey(on: app)
 
             let agent = try await self.makeAgent(app: app, org: org)
 

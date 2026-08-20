@@ -1,8 +1,23 @@
+import ControlPlanePostgres
 import Fluent
 import Vapor
 import SwiftSCIM
 
 struct SCIMController: RouteCollection {
+    private let scimTokens: SCIMTokensPersistence
+    private let externalIDs: SCIMExternalIDsPersistence
+    private let groups: GroupsPersistence
+
+    init(
+        scimTokens: SCIMTokensPersistence,
+        externalIDs: SCIMExternalIDsPersistence,
+        groups: GroupsPersistence
+    ) {
+        self.scimTokens = scimTokens
+        self.externalIDs = externalIDs
+        self.groups = groups
+    }
+
     func boot(routes: RoutesBuilder) throws {
         // SCIM routes: /organizations/:organizationID/scim/v2/...
         let scim = routes.grouped("organizations", ":organizationID", "scim", "v2")
@@ -87,17 +102,21 @@ struct SCIMController: RouteCollection {
         }
 
         // Find and validate token
-        guard let scimToken = try await SCIMToken.findByToken(token, on: req.db) else {
+        guard
+            let scimToken = try await scimTokens.token(
+                tokenHash: SCIMTokenCredential.hashToken(token)
+            )
+        else {
             return nil
         }
 
         // Verify token belongs to this organization
-        guard scimToken.$organization.id == organizationID else {
+        guard scimToken.organizationID == organizationID else {
             return nil
         }
 
         // Check if token is valid
-        guard scimToken.isValid else {
+        guard scimToken.isValid() else {
             return nil
         }
 
@@ -105,12 +124,45 @@ struct SCIMController: RouteCollection {
         // wait on it). The address comes from the shared proxy-trust config, as
         // it does for API keys and CLI sessions; the raw socket peer this used
         // to record is the ingress proxy in every supported deployment.
-        scimToken.recordUsage(ip: req.trustedClientIP, on: req.application)
+        recordUsage(
+            for: scimToken,
+            sourceIP: req.trustedClientIP,
+            on: req.application
+        )
 
         return SCIMAuthContext(
-            principal: "scim-token:\(scimToken.id?.uuidString ?? "unknown")",
+            principal: "scim-token:\(scimToken.id.uuidString)",
             tenantId: organizationID.uuidString
         )
+    }
+
+    private func recordUsage(
+        for token: SCIMTokenSnapshot,
+        sourceIP: String?,
+        on app: Application,
+        now: Date = Date()
+    ) {
+        if let lastUsedAt = token.lastUsedAt,
+            now.timeIntervalSince(lastUsedAt) < SCIMTokenCredential.lastUsedDebounceWindow
+        {
+            return
+        }
+
+        let staleBefore = now.addingTimeInterval(-SCIMTokenCredential.lastUsedDebounceWindow)
+        app.backgroundTasks.spawn {
+            do {
+                _ = try await scimTokens.recordUsage(
+                    id: token.id,
+                    usedAt: now,
+                    sourceIP: sourceIP,
+                    staleBefore: staleBefore
+                )
+            } catch {
+                app.logger.debug(
+                    "Failed to record last-used for scim_tokens \(token.id): \(String(reflecting: error))"
+                )
+            }
+        }
     }
 
     // MARK: - Request/Response Conversion
@@ -227,10 +279,19 @@ struct SCIMController: RouteCollection {
         let processor = SCIMRequestProcessor(configuration: config, authenticator: authenticator)
 
         // Register handlers
-        let userHandler = UserSCIMHandler(db: req.db, organizationID: organizationID)
+        let userHandler = UserSCIMHandler(
+            db: req.db,
+            externalIDs: externalIDs,
+            organizationID: organizationID
+        )
         await processor.register(userHandler)
 
-        let groupHandler = GroupSCIMHandler(db: req.db, organizationID: organizationID)
+        let groupHandler = GroupSCIMHandler(
+            groups: groups,
+            externalIDs: externalIDs,
+            organizationID: organizationID,
+            logger: req.logger
+        )
         await processor.register(groupHandler)
 
         return processor

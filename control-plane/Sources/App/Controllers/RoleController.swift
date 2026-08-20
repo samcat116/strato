@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 /// The role-definition API (issue #605): creating and editing the roles a
@@ -18,6 +18,8 @@ import Vapor
 /// — and not the policy text, which can describe the org's security posture
 /// and stays an `iam:readPolicy` act to read.
 struct RoleController: RouteCollection {
+    let iam: IAMPersistence
+
     func boot(routes: RoutesBuilder) throws {
         let iam = routes.grouped("api", "iam")
 
@@ -56,11 +58,11 @@ struct RoleController: RouteCollection {
         let createdAt: Date?
         let updatedAt: Date?
 
-        init(_ role: IAMRoleDefinition) throws {
-            guard let id = role.id, let ownerType = IAMRoleOwnerType(rawValue: role.ownerType) else {
+        init(_ role: IAMRoleSnapshot) throws {
+            guard let ownerType = IAMRoleOwnerType(rawValue: role.ownerType) else {
                 throw Abort(.internalServerError, reason: "Role row is missing its id or names an unknown owner type")
             }
-            self.id = id
+            self.id = role.id
             self.name = role.name
             self.description = role.description
             self.ownerType = ownerType
@@ -150,11 +152,11 @@ struct RoleController: RouteCollection {
         let actions: [String]
         let managed: Bool
 
-        init(_ role: IAMRoleDefinition) throws {
-            guard let id = role.id, let ownerType = IAMRoleOwnerType(rawValue: role.ownerType) else {
+        init(_ role: IAMRoleSnapshot) throws {
+            guard let ownerType = IAMRoleOwnerType(rawValue: role.ownerType) else {
                 throw Abort(.internalServerError, reason: "Role row is missing its id or names an unknown owner type")
             }
-            self.id = id
+            self.id = role.id
             self.name = role.name
             self.description = role.description
             self.ownerType = ownerType
@@ -218,7 +220,7 @@ struct RoleController: RouteCollection {
         let owner = try IAMPolicySetOwner(type: ownerType, id: ownerId, kind: .role)
         try await owner.requirePolicyAdmin(write: false, req: req)
 
-        let roles = try await RoleStore.owned(by: owner.type, ownerID: owner.id, on: req.db)
+        let roles = try await RoleStore.owned(by: owner.type, ownerID: owner.id, using: iam)
         return RoleListResponse(roles: try roles.map(RoleDTO.init))
     }
 
@@ -239,14 +241,14 @@ struct RoleController: RouteCollection {
         let user = try req.auth.require(User.self)
         let payload = try req.content.decodeValidated(CreateRoleRequest.self)
         let owner = try IAMPolicySetOwner(creating: payload.ownerType, id: payload.ownerId, kind: .role)
-        try await owner.requireExists(on: req.db)
+        try await owner.requireExists(using: iam)
         try await owner.requirePolicyAdmin(write: true, req: req)
 
         let id = payload.id ?? UUID()
         let prepared = try await prepare(
             id: id, actions: payload.actions, cedarText: payload.cedarText, req: req)
 
-        let role = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
+        let role = try await iam.withPolicySetChange { transaction in
             let role = try await RoleStore.create(
                 id: id,
                 name: payload.name,
@@ -255,10 +257,10 @@ struct RoleController: RouteCollection {
                 ownerID: owner.id,
                 prepared: prepared,
                 createdBy: user.id,
-                on: db
+                in: transaction
             )
-            try await PolicySetVersionService.bump(
-                reason: "role created: \(payload.name)", changedBy: user.id, on: db)
+            try await transaction.bumpPolicySetVersion(
+                reason: "role created: \(payload.name)", changedBy: user.id)
             return role
         }
         await req.application.announcePolicySetChange()
@@ -273,9 +275,10 @@ struct RoleController: RouteCollection {
         let user = try req.auth.require(User.self)
         let existing = try await find(req)
         try requireUnmanaged(existing)
-        guard let owner = try owner(of: existing), let id = existing.id else {
+        guard let owner = try owner(of: existing) else {
             throw RoleError.managedRoleImmutable(existing.name)
         }
+        let id = existing.id
         try await owner.requirePolicyAdmin(write: true, req: req)
 
         let payload = try req.content.decodeValidated(UpdateRoleRequest.self)
@@ -288,27 +291,36 @@ struct RoleController: RouteCollection {
             : nil
 
         let name = payload.name ?? existing.name
-        let updated = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
+        let updated = try await iam.withPolicySetChange { transaction in
             // Re-read inside the transaction so the edit and the bump see the
             // same row, and a retried attempt starts from the row as it is now.
-            guard let role = try await IAMRoleDefinition.find(id, on: db) else {
+            guard let role = try await transaction.role(id: id) else {
                 throw Abort(.notFound, reason: "Role not found")
             }
             try requireUnmanaged(role)
-            if let newName = payload.name { role.name = newName }
-            if let description = payload.description { role.description = description }
-            if let prepared {
-                role.cedarText = prepared.cedarText
-                role.actions = prepared.actions
-            }
+            let replacement = IAMRoleSnapshot(
+                id: role.id,
+                name: payload.name ?? role.name,
+                description: payload.description ?? role.description,
+                ownerType: role.ownerType,
+                ownerID: role.ownerID,
+                cedarText: prepared?.cedarText ?? role.cedarText,
+                actions: prepared?.actions ?? role.actions,
+                managed: role.managed,
+                createdBy: role.createdBy,
+                createdAt: role.createdAt,
+                updatedAt: role.updatedAt
+            )
             do {
-                try await role.save(on: db)
-            } catch let error as any DatabaseError where error.isConstraintFailure {
+                guard let saved = try await transaction.replaceRole(replacement) else {
+                    throw Abort(.notFound, reason: "Role not found")
+                }
+                try await transaction.bumpPolicySetVersion(
+                    reason: "role updated: \(name)", changedBy: user.id)
+                return saved
+            } catch IAMPersistenceError.duplicateRoleName {
                 throw RoleError.duplicateName(name)
             }
-            try await PolicySetVersionService.bump(
-                reason: "role updated: \(name)", changedBy: user.id, on: db)
-            return role
         }
         await req.application.announcePolicySetChange()
 
@@ -320,22 +332,23 @@ struct RoleController: RouteCollection {
         let user = try req.auth.require(User.self)
         let role = try await find(req)
         try requireUnmanaged(role)
-        guard let owner = try owner(of: role), let id = role.id else {
+        guard let owner = try owner(of: role) else {
             throw RoleError.managedRoleImmutable(role.name)
         }
+        let id = role.id
         try await owner.requirePolicyAdmin(write: true, req: req)
 
         // Refused rather than cascaded: dropping a role out from under live
         // bindings would silently revoke whatever they grant, with nothing in
         // the bindings list to show it happened.
-        let bindings = try await RoleStore.activeBindingCount(roleID: id, on: req.db)
+        let bindings = try await RoleStore.activeBindingCount(roleID: id, using: iam)
         guard bindings == 0 else { throw RoleError.roleInUse(role.name, bindings) }
 
         let name = role.name
-        try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
-            try await IAMRoleDefinition.query(on: db).filter(\.$id == id).delete()
-            try await PolicySetVersionService.bump(
-                reason: "role deleted: \(name)", changedBy: user.id, on: db)
+        try await iam.withPolicySetChange { transaction in
+            _ = try await transaction.deleteRole(id: id)
+            try await transaction.bumpPolicySetVersion(
+                reason: "role deleted: \(name)", changedBy: user.id)
         }
         await req.application.announcePolicySetChange()
 
@@ -377,8 +390,8 @@ struct RoleController: RouteCollection {
         let node = try IAMNode(resourceType: nodeType, resourceId: nodeId)
         try await requireNodeRead(node, req: req)
 
-        let ancestors = try await IAMResourceTree.ancestors(of: node, on: req.db)
-        let roles = try await RoleStore.bindable(along: ancestors, on: req.db)
+        let ancestors = try await IAMResourceTree.ancestors(of: node, using: iam)
+        let roles = try await RoleStore.bindable(along: ancestors, using: iam)
         return BindableRolesResponse(
             node: node, ancestors: ancestors, roles: try roles.map(BindableRoleDTO.init))
     }
@@ -423,11 +436,11 @@ struct RoleController: RouteCollection {
         )
     }
 
-    private func find(_ req: Request) async throws -> IAMRoleDefinition {
+    private func find(_ req: Request) async throws -> IAMRoleSnapshot {
         guard let id = req.parameters.get("roleID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Role id must be a UUID")
         }
-        guard let role = try await IAMRoleDefinition.find(id, on: req.db) else {
+        guard let role = try await iam.role(id: id) else {
             throw Abort(.notFound, reason: "Role not found")
         }
         return role
@@ -435,7 +448,7 @@ struct RoleController: RouteCollection {
 
     /// The owner of a role, or nil for a platform row (which has no node to
     /// gate on and no owner to scope it to).
-    private func owner(of role: IAMRoleDefinition) throws -> IAMPolicySetOwner? {
+    private func owner(of role: IAMRoleSnapshot) throws -> IAMPolicySetOwner? {
         guard let type = IAMRoleOwnerType(rawValue: role.ownerType) else {
             throw Abort(.internalServerError, reason: "Role row names an unknown owner type '\(role.ownerType)'")
         }
@@ -443,14 +456,14 @@ struct RoleController: RouteCollection {
         return IAMPolicySetOwner(type: type, id: role.ownerID, kind: .role)
     }
 
-    private func requireUnmanaged(_ role: IAMRoleDefinition) throws {
+    private func requireUnmanaged(_ role: IAMRoleSnapshot) throws {
         guard !role.managed else { throw RoleError.managedRoleImmutable(role.name) }
     }
 
     private func prepare(
         id: UUID, actions: [String]?, cedarText: String?, req: Request
     ) async throws -> RoleStore.Prepared {
-        let existing = try await RoleStore.allDescriptors(on: req.db)
+        let existing = try await RoleStore.allDescriptors(using: iam)
         return try RoleStore.prepare(
             id: id,
             actions: actions,

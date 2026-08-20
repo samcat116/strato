@@ -1,4 +1,5 @@
 import Fluent
+import ControlPlanePostgres
 import Foundation
 import StratoShared
 import Vapor
@@ -17,6 +18,8 @@ import Vapor
 /// the grant can never be tighter or later than what the agent is handed.
 struct DesiredStateAssembler {
     let app: Application
+    let workloads: WorkloadsPersistence
+    let floatingIPAllocations: FloatingIPAllocationsPersistence
 
     private struct NetworkAssemblyScope {
         let networkIDs: Set<UUID>
@@ -53,24 +56,22 @@ struct DesiredStateAssembler {
         // `networkAssemblyScope` because two things need it now: topology
         // authority, and the `region` every VM's instance metadata carries. One
         // row read either way; a missing agent still queries no site.
-        let site = try await Site.find(agent?.$site.id, on: db)
-        let vms = try await VM.query(on: db)
-            .filter(\.$hypervisorId == agentId)
-            .with(\.$volumes)
-            .with(\.$networkInterfaces) { $0.with(\.$addresses) }
-            // Artifacts are required so buildImageInfo can emit the explicit
-            // typed set each hypervisor selects from.
-            .with(\.$sourceImage) { image in
-                image.with(\.$artifacts)
-            }
-            .all()
+        let site = try await LegacySiteStore.site(id: agent?.siteID, on: db)
+        let baseVMs = try await LegacyVMStore.vms(hypervisorID: agentId, on: db)
+        let loadedVolumes = try await LegacyVolumeStore.volumes(
+            attachment: .attachedToAny(baseVMs.compactMap(\.id)), on: db)
+        let volumesByVMID = Dictionary(grouping: loadedVolumes, by: \.vmID)
+        let vmsWithVolumes = baseVMs.map {
+            $0.loadingVolumes($0.id.flatMap { volumesByVMID[$0] } ?? [])
+        }
+        let vmsWithInterfaces = try await LegacyVMNetworkInterfaceStore.loadingWithAddresses(
+            vmsWithVolumes, on: db)
+        let vms = try await LegacyImageStore.loadingSourceImages(vmsWithInterfaces, on: db)
 
         // The agent's authoritative sandbox set (issue #413). Loaded before
         // network scope so sandbox-only network references are included.
-        let sandboxes = try await Sandbox.query(on: db)
-            .filter(\.$hypervisorId == agentId)
-            .with(\.$networkInterfaces) { $0.with(\.$addresses) }
-            .all()
+        let sandboxes = try await LegacySandboxNetworkInterfaceStore.loadingWithAddresses(
+            LegacySandboxStore.sandboxes(hypervisorID: agentId, on: db), on: db)
 
         let scope = try await networkAssemblyScope(
             agentId: agentId, agent: agent, site: site, ownVMs: vms, ownSandboxes: sandboxes, on: db)
@@ -196,7 +197,7 @@ struct DesiredStateAssembler {
                             "error": .string(error.localizedDescription),
                         ])
                 }
-            } else if vm.$sourceImage.id != nil {
+            } else if vm.sourceImageID != nil {
                 app.logger.warning(
                     "VM references an image that is missing or not ready; syncing without image info",
                     metadata: ["vmId": .string(vmId.uuidString)])
@@ -252,8 +253,7 @@ struct DesiredStateAssembler {
         // attach API refuses new attachments against such agents.
         let floatingIPsByNetwork = try await desiredFloatingIPs(
             forAgentIDs: scope.floatingIPAgentIDs,
-            networkIDs: scope.networkIDs,
-            on: db)
+            networkIDs: scope.networkIDs)
         let loadBalancersByNetwork = try await desiredLoadBalancers(
             networkIDs: scope.networkIDs, on: db)
         // Sorted by id: names are no longer unique, so only the id gives the
@@ -292,15 +292,15 @@ struct DesiredStateAssembler {
         //
         // One credential fetch for all the sandboxes' projects; matched per
         // sandbox by the image's registry host.
-        let sandboxProjectIDs = Set(sandboxes.map { $0.$project.id })
-        let pullSecretsByProject: [UUID: [RegistryPullSecret]]
+        let sandboxProjectIDs = Set(sandboxes.map(\.projectID))
+        let pullSecretsByProject: [UUID: [RegistryPullSecretSnapshot]]
         if sandboxProjectIDs.isEmpty {
             pullSecretsByProject = [:]
         } else {
-            let rows = try await RegistryPullSecret.query(on: db)
-                .filter(\.$project.$id ~~ sandboxProjectIDs)
-                .all()
-            pullSecretsByProject = Dictionary(grouping: rows) { $0.$project.id }
+            let rows = try await app.registryPullSecretsPersistence.secrets(
+                projectIDs: sandboxProjectIDs
+            )
+            pullSecretsByProject = Dictionary(grouping: rows, by: \.projectID)
         }
 
         var sandboxEntries: [DesiredSandboxState] = []
@@ -316,15 +316,14 @@ struct DesiredStateAssembler {
         if restoreSnapshotIDs.isEmpty {
             restoreSnapshots = [:]
         } else {
-            let rows = try await SandboxSnapshot.query(on: db)
-                .filter(\.$id ~~ restoreSnapshotIDs)
-                .all()
+            let rows = try await LegacySandboxSnapshotStore.snapshots(
+                ids: Array(restoreSnapshotIDs), on: db)
             restoreSnapshots = Dictionary(
                 uniqueKeysWithValues: rows.compactMap { snapshot in
                     snapshot.id.map { ($0, snapshot) }
                 })
         }
-        for sandbox in sandboxes {
+        for var sandbox in sandboxes {
             guard let sandboxId = sandbox.id else { continue }
             let restoreFrom = sandbox.restoredFromSnapshotId.flatMap { snapshotID -> SandboxSnapshotRef? in
                 guard let snapshot = restoreSnapshots[snapshotID] else { return nil }
@@ -348,17 +347,19 @@ struct DesiredStateAssembler {
                     }
                 }
                 return SandboxSnapshotRef(
-                    snapshotId: snapshotID, sourceSandboxId: snapshot.$sandbox.id, artifacts: artifacts)
+                    snapshotId: snapshotID, sourceSandboxId: snapshot.sandboxID, artifacts: artifacts)
             }
             // Registry material first: digest pinning mutates the in-memory
             // model that buildSpec() reads. A fork already has its rootfs in
             // the checkpoint archive and must not depend on registry access.
             let registryCredential: RegistryCredential?
             if restoreFrom == nil {
-                registryCredential = await sandboxRegistryMaterial(
+                let material = await sandboxRegistryMaterial(
                     sandbox,
-                    secrets: pullSecretsByProject[sandbox.$project.id] ?? [],
+                    secrets: pullSecretsByProject[sandbox.projectID] ?? [],
                     on: db)
+                registryCredential = material.credential
+                if let digest = material.imageDigest { sandbox.imageDigest = digest }
             } else {
                 registryCredential = nil
             }
@@ -516,18 +517,19 @@ struct DesiredStateAssembler {
         -> [DesiredDNSZone]
     {
         guard !networkIDs.isEmpty else { return [] }
-        let attachments = try await DNSZoneNetwork.query(on: db)
-            .filter(\.$logicalNetwork.$id ~~ Array(networkIDs))
-            .all()
+        let attachments = try await DNSZoneNetworkStore.attachments(
+            networkIDs: Array(networkIDs), on: db)
         guard !attachments.isEmpty else { return [] }
 
         var networksByZone: [UUID: [UUID]] = [:]
         for attachment in attachments {
-            networksByZone[attachment.$zone.id, default: []].append(attachment.$logicalNetwork.id)
+            networksByZone[attachment.zoneID, default: []].append(attachment.logicalNetworkID)
         }
         var names: [UUID: String] = [:]
-        for zone in try await DNSZone.query(on: db).filter(\.$id ~~ Array(networksByZone.keys)).all() {
-            guard let zoneID = zone.id else { continue }
+        for zone in try await LegacyDNSZoneStore.zones(
+            ids: Array(networksByZone.keys), on: db)
+        {
+            let zoneID = zone.id
             names[zoneID] = zone.name
         }
 
@@ -608,9 +610,9 @@ struct DesiredStateAssembler {
         // N+1 here is a per-sync cost that grows with the host's snapshot count.
         var attachedVMIds: [UUID: UUID] = [:]
         if !volumeSnapshots.isEmpty {
-            let volumeIDs = Set(volumeSnapshots.map(\.$volume.id))
-            for volume in try await Volume.query(on: db).filter(\.$id ~~ Array(volumeIDs)).all() {
-                guard let volumeID = volume.id, let vmID = volume.$vm.id else { continue }
+            let volumeIDs = Set(volumeSnapshots.map(\.volumeID))
+            for volume in try await LegacyVolumeStore.volumes(ids: Array(volumeIDs), on: db) {
+                guard let volumeID = volume.id, let vmID = volume.vmID else { continue }
                 attachedVMIds[volumeID] = vmID
             }
         }
@@ -620,7 +622,7 @@ struct DesiredStateAssembler {
                 DesiredSnapshotState(
                     snapshotId: snapshotId,
                     kind: .volumeSnapshot,
-                    parentId: snapshot.$volume.id,
+                    parentId: snapshot.volumeID,
                     desiredStatus: snapshot.desiredStatus,
                     generation: snapshot.generation,
                     // The capture strategy, read by the agent only when the
@@ -631,7 +633,7 @@ struct DesiredStateAssembler {
                     // outlives the request that made it, and the volume may have
                     // been attached since.
                     capture: DesiredSnapshotCapture(
-                        attachedVMId: attachedVMIds[snapshot.$volume.id])))
+                        attachedVMId: attachedVMIds[snapshot.volumeID])))
         }
 
         for snapshot in try await VMSnapshot.placed(onAgent: agentId, on: db) {
@@ -640,7 +642,7 @@ struct DesiredStateAssembler {
                 DesiredSnapshotState(
                     snapshotId: snapshotId,
                     kind: .vmCheckpoint,
-                    parentId: snapshot.$vm.id,
+                    parentId: snapshot.vmID,
                     desiredStatus: snapshot.desiredStatus,
                     generation: snapshot.generation))
         }
@@ -659,14 +661,14 @@ struct DesiredStateAssembler {
                         SandboxSnapshotArtifactUploadTarget(
                             kind: kind,
                             uploadURL: SandboxSnapshot.artifactTransferPath(
-                                sandboxId: snapshot.$sandbox.id, snapshotId: snapshotId, kind: kind))
+                                sandboxId: snapshot.sandboxID, snapshotId: snapshotId, kind: kind))
                     })
             }
             entries.append(
                 DesiredSnapshotState(
                     snapshotId: snapshotId,
                     kind: .sandboxSnapshot,
-                    parentId: snapshot.$sandbox.id,
+                    parentId: snapshot.sandboxID,
                     desiredStatus: snapshot.desiredStatus,
                     generation: snapshot.generation,
                     capture: DesiredSnapshotCapture(sandboxMode: snapshot.captureMode),
@@ -687,36 +689,33 @@ struct DesiredStateAssembler {
     private func desiredVolumes(agentId: String, on db: any Database) async throws -> [DesiredVolumeState] {
         let replicaScope = try await VolumeService.replicaScope(onAgent: agentId, on: db)
         guard !replicaScope.allVolumeIDs.isEmpty else { return [] }
-        let volumes = try await Volume.query(on: db)
-            .filter(\.$id ~~ Array(replicaScope.allVolumeIDs))
-            .with(\.$sourceImage) { $0.with(\.$artifacts) }
-            .all()
-            .filter(replicaScope.includes)
-        let attachedVMIDs = Array(Set(volumes.compactMap(\.$vm.id)))
+        let volumes = try await LegacyImageStore.loadingSourceImages(
+            try await LegacyVolumeStore.volumes(
+                ids: Array(replicaScope.allVolumeIDs), on: db)
+                .filter(replicaScope.includes),
+            on: db)
+        let attachedVMIDs = Array(Set(volumes.compactMap(\.vmID)))
         let attachmentVMs: [UUID: (agentId: String, hypervisorType: HypervisorType)]
         if attachedVMIDs.isEmpty {
             attachmentVMs = [:]
         } else {
             attachmentVMs = Dictionary(
-                uniqueKeysWithValues: try await VM.query(on: db)
-                    .filter(\.$id ~~ attachedVMIDs)
-                    .all()
+                uniqueKeysWithValues: try await LegacyVMStore.vms(ids: attachedVMIDs, on: db)
                     .compactMap { vm in
                         guard let vmID = vm.id, let vmAgentID = vm.hypervisorId else { return nil }
                         return (vmID, (vmAgentID, vm.hypervisorType))
                     })
         }
-        let cloneSourceIDs = Array(Set(volumes.compactMap(\.$sourceVolume.id)))
+        let cloneSourceIDs = Array(Set(volumes.compactMap(\.sourceVolumeID)))
         let cloneSourceVMIDs: [UUID: UUID]
         if cloneSourceIDs.isEmpty {
             cloneSourceVMIDs = [:]
         } else {
             cloneSourceVMIDs = Dictionary(
-                uniqueKeysWithValues: try await Volume.query(on: db)
-                    .filter(\.$id ~~ cloneSourceIDs)
-                    .all()
+                uniqueKeysWithValues: try await LegacyVolumeStore.volumes(
+                    ids: cloneSourceIDs, on: db)
                     .compactMap { source in
-                        guard let sourceID = source.id, let sourceVMID = source.$vm.id else { return nil }
+                        guard let sourceID = source.id, let sourceVMID = source.vmID else { return nil }
                         return (sourceID, sourceVMID)
                     })
         }
@@ -730,7 +729,7 @@ struct DesiredStateAssembler {
             // both are set, because a clone's bytes come from the source volume
             // and its image lineage is only provenance.
             var source: DesiredVolumeSource?
-            if let sourceVolumeID = volume.$sourceVolume.id {
+            if let sourceVolumeID = volume.sourceVolumeID {
                 source = .clone(
                     from: sourceVolumeID,
                     sourceVMId: cloneSourceVMIDs[sourceVolumeID],
@@ -739,7 +738,7 @@ struct DesiredStateAssembler {
                 do {
                     let artifactKind: ArtifactKind =
                         volume.volumeType == .boot
-                            && volume.$vm.id.flatMap { attachmentVMs[$0]?.hypervisorType } == .firecracker
+                            && volume.vmID.flatMap { attachmentVMs[$0]?.hypervisorType } == .firecracker
                         ? .rootfs : .diskImage
                     source = .image(
                         try VMSpecBuilder.buildImageInfo(from: image),
@@ -759,7 +758,7 @@ struct DesiredStateAssembler {
                             "error": .string(error.localizedDescription),
                         ])
                 }
-            } else if volume.$sourceImage.id != nil {
+            } else if volume.sourceImageID != nil {
                 app.logger.warning(
                     "Volume references an image that is missing or not ready; syncing without image info",
                     metadata: ["volumeId": .string(volumeId.uuidString)])
@@ -785,7 +784,7 @@ struct DesiredStateAssembler {
             // it is the one not sent — loudly, because a row that reached this
             // state is a broken invariant, not a routine skip.
             var attachment: DesiredVolumeAttachment?
-            if let vmID = volume.$vm.id,
+            if let vmID = volume.vmID,
                 attachmentVMs[vmID]?.agentId == agentId,
                 let raw = volume.deviceName
             {
@@ -832,10 +831,8 @@ struct DesiredStateAssembler {
     private func tombstones(agentId: String, on db: any Database) async throws
         -> [DesiredWorkloadTombstone]
     {
-        try await AgentWorkloadClaim.query(on: db)
-            .filter(\.$agentId == agentId)
-            .filter(\.$disposition == .tombstoned)
-            .all()
+        try await workloads.claims(agentID: agentId, disposition: .tombstoned)
+            .map(AgentWorkloadClaimRecord.init)
             .compactMap { claim in
                 guard let generation = claim.tombstoneGeneration else { return nil }
                 return DesiredWorkloadTombstone(
@@ -912,9 +909,8 @@ struct DesiredStateAssembler {
     ) async throws -> [UUID: LogicalNetwork] {
         guard !ids.isEmpty else { return [:] }
         return Dictionary(
-            uniqueKeysWithValues: try await LogicalNetwork.query(on: db)
-                .filter(\.$id ~~ Array(ids))
-                .all()
+            uniqueKeysWithValues: try await LegacyLogicalNetworkStore.networks(
+                ids: Array(ids), on: db)
                 .compactMap { network in network.id.map { ($0, network) } })
     }
 
@@ -933,12 +929,12 @@ struct DesiredStateAssembler {
     /// not re-converge ones that have.
     private func sandboxRegistryMaterial(
         _ sandbox: Sandbox,
-        secrets: [RegistryPullSecret],
+        secrets: [RegistryPullSecretSnapshot],
         on db: any Database
-    ) async -> RegistryCredential? {
+    ) async -> (credential: RegistryCredential?, imageDigest: String?) {
         // A sandbox on its way out pulls nothing: no digest pin, no
         // credential material toward the agent tearing it down.
-        guard sandbox.desiredStatus != .absent else { return nil }
+        guard sandbox.desiredStatus != .absent else { return (nil, nil) }
 
         guard let ref = OCIImageReference.parse(sandbox.image) else {
             app.logger.warning(
@@ -947,7 +943,7 @@ struct DesiredStateAssembler {
                     "sandboxId": .string(sandbox.id?.uuidString ?? ""),
                     "image": .string(sandbox.image),
                 ])
-            return nil
+            return (nil, nil)
         }
 
         let secretRow = secrets.first { $0.registry == ref.registry }
@@ -956,7 +952,7 @@ struct DesiredStateAssembler {
             do {
                 basic = RegistryBasicCredential(
                     username: secretRow.username,
-                    password: try app.secretsEncryption.decrypt(secretRow.secret))
+                    password: try app.secretsEncryption.decrypt(secretRow.encryptedSecret))
             } catch {
                 app.logger.error(
                     "Failed to decrypt registry pull secret; treating the image as public",
@@ -979,15 +975,15 @@ struct DesiredStateAssembler {
             let backoffKey = RegistryOperationBackoff.Key(
                 operation: .resolveDigest, registry: ref.registry, repository: ref.repository)
             guard await app.registryOperationBackoff.shouldAttempt(backoffKey) else {
-                return await registryCredential(ref: ref, secretRow: secretRow, basic: basic)
+                return (
+                    await registryCredential(ref: ref, secretRow: secretRow, basic: basic), nil)
             }
+            var pinnedDigest: String?
             do {
                 if let digest = try await app.registryClient.resolveDigest(for: ref, credential: basic) {
-                    sandbox.imageDigest = digest
-                    try await Sandbox.query(on: db)
-                        .filter(\.$id == sandboxId)
-                        .set(\.$imageDigest, to: digest)
-                        .update()
+                    pinnedDigest = digest
+                    try await LegacySandboxStore.updateImageDigest(
+                        id: sandboxId, digest: digest, on: db)
                     app.logger.info(
                         "Pinned sandbox image tag to digest",
                         metadata: [
@@ -1010,16 +1006,20 @@ struct DesiredStateAssembler {
                         "error": .string(error.localizedDescription),
                     ])
             }
+            return (
+                await registryCredential(ref: ref, secretRow: secretRow, basic: basic),
+                pinnedDigest)
         }
 
-        return await registryCredential(ref: ref, secretRow: secretRow, basic: basic)
+        return (
+            await registryCredential(ref: ref, secretRow: secretRow, basic: basic), nil)
     }
 
     /// The pull credential half of `sandboxRegistryMaterial`, split out so the
     /// digest-pin backoff can skip straight to it.
     private func registryCredential(
         ref: OCIImageReference,
-        secretRow: RegistryPullSecret?,
+        secretRow: RegistryPullSecretSnapshot?,
         basic: RegistryBasicCredential?
     ) async -> RegistryCredential? {
         guard let secretRow, let basic else { return nil }
@@ -1028,7 +1028,7 @@ struct DesiredStateAssembler {
             registry: ref.registry,
             repository: ref.repository,
             username: secretRow.username,
-            encryptedSecret: secretRow.secret)
+            encryptedSecret: secretRow.encryptedSecret)
         if let cached = await app.registryCredentialCache.credential(for: cacheKey) {
             return cached
         }
@@ -1088,7 +1088,7 @@ struct DesiredStateAssembler {
     /// authorize the pull. Agents hold it in memory only (wire contract).
     private static func storedCredential(
         ref: OCIImageReference,
-        secretRow: RegistryPullSecret,
+        secretRow: RegistryPullSecretSnapshot,
         basic: RegistryBasicCredential
     ) -> RegistryCredential {
         RegistryCredential(
@@ -1134,13 +1134,13 @@ struct DesiredStateAssembler {
         // the legacy per-node scope, which is what a missing row already does.
         guard let agent,
             let agentUUID = agent.id,
-            let site, site.id == agent.$site.id
+            let site, site.id == agent.siteID
         else {
             throw Abort(.internalServerError, reason: "Cannot assemble topology without an agent site")
         }
-        let siteID = agent.$site.id
+        let siteID = agent.siteID
 
-        guard let controllerID = site.$networkControllerAgent.id else {
+        guard let controllerID = site.networkControllerAgentID else {
             // No designated controller: nobody may author topology, so the
             // site's networks are realized nowhere until one is set. Loud —
             // this is a misconfiguration, not a transient.
@@ -1163,28 +1163,20 @@ struct DesiredStateAssembler {
                 coveredSandboxes: [])
         }
 
-        let siteAgentIDs = try await Agent.query(on: db)
-            .filter(\.$site.$id == siteID)
-            .all()
+        let siteAgentIDs = try await LegacyAgentStore.agents(siteID: siteID, on: db)
             .compactMap { $0.id?.uuidString }
-        let siteVMs = try await VM.query(on: db)
-            .filter(\.$hypervisorId ~~ siteAgentIDs)
-            .with(\.$networkInterfaces)
-            .all()
+        let siteVMs = try await LegacyVMNetworkInterfaceStore.loading(
+            LegacyVMStore.vms(hypervisorIDs: siteAgentIDs, on: db), on: db)
         var ids = Set(siteVMs.flatMap { $0.networkInterfaces.map(\.logicalNetworkID) })
         // Sandboxes placed anywhere in the site reference networks the
         // controller must realize too (issue #416) — and, since STR-102, the
         // security groups whose port groups it must author. Both come off this
         // one query: it already loads the NICs, so `coveredSandboxes` below is
         // a reuse of these rows, not a second read of them.
-        let siteSandboxes = try await Sandbox.query(on: db)
-            .filter(\.$hypervisorId ~~ siteAgentIDs)
-            .with(\.$networkInterfaces)
-            .all()
+        let siteSandboxes = try await LegacySandboxNetworkInterfaceStore.loading(
+            LegacySandboxStore.sandboxes(hypervisorIDs: siteAgentIDs, on: db), on: db)
         ids.formUnion(siteSandboxes.flatMap { $0.networkInterfaces.map(\.logicalNetworkID) })
-        let pinned = try await LogicalNetwork.query(on: db)
-            .filter(\.$site.$id == siteID)
-            .all()
+        let pinned = try await LegacyLogicalNetworkStore.networks(siteID: siteID, on: db)
         ids.formUnion(pinned.compactMap(\.id))
         return NetworkAssemblyScope(
             networkIDs: ids,
@@ -1200,14 +1192,8 @@ struct DesiredStateAssembler {
         interfaceIDs: [UUID], on db: any Database
     ) async throws -> [UUID: [UUID]] {
         guard !interfaceIDs.isEmpty else { return [:] }
-        let memberships = try await VMInterfaceSecurityGroup.query(on: db)
-            .filter(\.$interface.$id ~~ interfaceIDs)
-            .all()
-        var byInterface: [UUID: [UUID]] = [:]
-        for membership in memberships {
-            byInterface[membership.$interface.id, default: []].append(membership.$securityGroup.id)
-        }
-        return byInterface.mapValues { $0.sorted { $0.uuidString < $1.uuidString } }
+        return try await LegacyInterfaceSecurityGroupStore.securityGroupIDsByInterface(
+            kind: .vm, interfaceIDs: interfaceIDs, on: db)
     }
 
     /// The sandbox twin (STR-102), reading the sandbox NICs' own join table.
@@ -1231,14 +1217,8 @@ struct DesiredStateAssembler {
         interfaceIDs: [UUID], on db: any Database
     ) async throws -> [UUID: [UUID]] {
         guard !interfaceIDs.isEmpty else { return [:] }
-        let memberships = try await SandboxInterfaceSecurityGroup.query(on: db)
-            .filter(\.$interface.$id ~~ interfaceIDs)
-            .all()
-        var byInterface: [UUID: [UUID]] = [:]
-        for membership in memberships {
-            byInterface[membership.$interface.id, default: []].append(membership.$securityGroup.id)
-        }
-        return byInterface.mapValues { $0.sorted { $0.uuidString < $1.uuidString } }
+        return try await LegacyInterfaceSecurityGroupStore.securityGroupIDsByInterface(
+            kind: .sandbox, interfaceIDs: interfaceIDs, on: db)
     }
 
     /// The security groups the desired-state sync should carry for a topology
@@ -1268,17 +1248,15 @@ struct DesiredStateAssembler {
         var groupIDs: Set<UUID> = []
         if !vmInterfaceIDs.isEmpty {
             groupIDs.formUnion(
-                try await VMInterfaceSecurityGroup.query(on: db)
-                    .filter(\.$interface.$id ~~ vmInterfaceIDs)
-                    .all()
-                    .map { $0.$securityGroup.id })
+                try await LegacyInterfaceSecurityGroupStore.memberships(
+                    kind: .vm, interfaceIDs: vmInterfaceIDs, on: db
+                ).map(\.securityGroupID))
         }
         if !sandboxInterfaceIDs.isEmpty {
             groupIDs.formUnion(
-                try await SandboxInterfaceSecurityGroup.query(on: db)
-                    .filter(\.$interface.$id ~~ sandboxInterfaceIDs)
-                    .all()
-                    .map { $0.$securityGroup.id })
+                try await LegacyInterfaceSecurityGroupStore.memberships(
+                    kind: .sandbox, interfaceIDs: sandboxInterfaceIDs, on: db
+                ).map(\.securityGroupID))
         }
 
         // Reference closure: rules pointing at groups outside the attached
@@ -1287,35 +1265,32 @@ struct DesiredStateAssembler {
         // them). Bounded by the per-project group cap.
         var frontier = groupIDs
         while !frontier.isEmpty {
-            let referenced = Set(
-                try await SecurityGroupRule.query(on: db)
-                    .filter(\.$securityGroup.$id ~~ Array(frontier))
-                    .all()
-                    .compactMap { $0.$remoteGroup.id })
+            let referenced = Set(try await LegacySecurityGroupRuleStore.remoteGroupIDs(
+                securityGroupIDs: Array(frontier), on: db))
             frontier = referenced.subtracting(groupIDs)
             groupIDs.formUnion(frontier)
         }
         guard !groupIDs.isEmpty else { return [] }
 
-        let groups = try await SecurityGroup.query(on: db)
-            .filter(\.$id ~~ Array(groupIDs))
-            .with(\.$rules)
-            .all()
+        let groups = try await LegacySecurityGroupStore.groups(
+            ids: Array(groupIDs), on: db)
+        let rules = try await LegacySecurityGroupRuleStore.rules(
+            securityGroupIDs: Array(groupIDs), on: db)
+        let rulesByGroup = Dictionary(grouping: rules, by: \.securityGroupID)
         return
             groups
-            .compactMap { group -> DesiredSecurityGroup? in
-                guard let groupId = group.id else { return nil }
-                let rules = group.rules.compactMap { rule -> DesiredSecurityGroupRule? in
-                    guard let ruleId = rule.id else { return nil }
+            .map { group -> DesiredSecurityGroup in
+                let groupId = group.id
+                let rules = (rulesByGroup[groupId] ?? []).map { rule in
                     return DesiredSecurityGroupRule(
-                        id: ruleId,
+                        id: rule.id,
                         direction: rule.direction.rawValue,
                         ethertype: rule.ethertype.rawValue,
                         protocolName: rule.protocolName,
                         portRangeMin: rule.portRangeMin,
                         portRangeMax: rule.portRangeMax,
                         remoteCIDR: rule.remoteCIDR,
-                        remoteGroupId: rule.$remoteGroup.id,
+                        remoteGroupId: rule.remoteGroupID,
                         log: rule.log
                     )
                 }
@@ -1334,37 +1309,32 @@ struct DesiredStateAssembler {
         networkIDs: Set<UUID>, on db: any Database
     ) async throws -> [UUID: [DesiredLoadBalancer]] {
         guard !networkIDs.isEmpty else { return [:] }
-        let rows = try await LoadBalancer.query(on: db)
-            .filter(\.$logicalNetwork.$id ~~ networkIDs)
-            .sort(\.$id)
-            .all()
+        let rows = try await LegacyLoadBalancerStore.rows(
+            networkIDs: Array(networkIDs), on: db
+        ).sorted { $0.id.uuidString < $1.id.uuidString }
         var byNetwork: [UUID: [DesiredLoadBalancer]] = [:]
         var gatewaysByNetwork: [UUID: String?] = [:]
         for row in rows {
-            guard let loadBalancerID = row.id else { continue }
-            let listeners = try await LoadBalancerListener.query(on: db)
-                .filter(\.$loadBalancer.$id == loadBalancerID)
-                .sort(\.$port)
-                .sort(\.$id)
-                .all()
-            let backendRows = try await LoadBalancerBackend.query(on: db)
-                .filter(\.$loadBalancer.$id == loadBalancerID)
-                .sort(\.$id)
-                .all()
+            let loadBalancerID = row.id
+            let listeners = try await LegacyLoadBalancerTargetStore.listeners(
+                loadBalancerID: loadBalancerID, on: db)
+            let backendRows = try await LegacyLoadBalancerTargetStore.backends(
+                loadBalancerID: loadBalancerID, on: db
+            ).sorted { $0.id.uuidString < $1.id.uuidString }
             var backends: [DesiredLoadBalancerBackend] = []
             for backend in backendRows {
-                guard let backendID = backend.id else { continue }
+                let backendID = backend.id
                 if let address = backend.address {
                     backends.append(DesiredLoadBalancerBackend(id: backendID, ipAddress: address))
                     continue
                 }
-                guard let interfaceID = backend.$interface.id,
-                    let interface = try await VMNetworkInterface.query(on: db)
-                        .filter(\.$id == interfaceID)
-                        .with(\.$addresses)
-                        .first(),
+                guard let interfaceID = backend.interfaceID,
+                    let interface = try await LegacyVMNetworkInterfaceStore.interface(
+                        id: interfaceID, on: db),
                     interface.detachGeneration == nil,
-                    let address = interface.ipv4Address?.address
+                    let address = try await LegacyInterfaceAddressStore.addresses(
+                        kind: .vm, interfaceIDs: [interfaceID], family: .ipv4, on: db
+                    ).first?.address
                 else {
                     // SET NULL on NIC deletion deliberately leaves the backend
                     // record as history, but it no longer participates in the
@@ -1384,7 +1354,7 @@ struct DesiredStateAssembler {
                     DesiredLoadBalancerBackend(
                         id: backendID,
                         ipAddress: address,
-                        vmId: interface.$vm.id,
+                        vmId: interface.vmID,
                         nicIndex: interface.orderIndex,
                         networkId: backendNetworkID,
                         healthCheckSourceIP: healthCheckSourceIP))
@@ -1401,90 +1371,58 @@ struct DesiredStateAssembler {
                     timeoutSeconds: row.healthCheckTimeoutSeconds,
                     successThreshold: row.healthCheckSuccessThreshold,
                     failureThreshold: row.healthCheckFailureThreshold),
-                listeners: listeners.compactMap { listener in
-                    listener.id.map {
-                        DesiredLoadBalancerListener(
-                            id: $0, port: listener.port, backendPort: listener.backendPort)
-                    }
+                listeners: listeners.map { listener in
+                    DesiredLoadBalancerListener(
+                        id: listener.id, port: listener.port, backendPort: listener.backendPort)
                 },
                 backends: backends)
-            byNetwork[row.$logicalNetwork.id, default: []].append(desired)
+            byNetwork[row.logicalNetworkID, default: []].append(desired)
         }
         return byNetwork
     }
 
     private func desiredFloatingIPs(
-        forAgentIDs agentIDs: Set<String>, networkIDs: Set<UUID>, on db: any Database
+        forAgentIDs agentIDs: Set<String>, networkIDs: Set<UUID>
     ) async throws -> [UUID: [DesiredFloatingIP]] {
         guard !agentIDs.isEmpty, !networkIDs.isEmpty else { return [:] }
-        let attached = try await FloatingIP.query(on: db)
-            .filter(\.$interface.$id != nil)
-            .with(\.$interface)
-            .all()
-
-        // Load the owning VMs (scoped to the covered agents) with their NIC
-        // address rows. The NAT target uses each row's stable `orderIndex`,
-        // which is also the slot encoded in its OVN logical-port name.
-        let vmIDs = Set(attached.compactMap { $0.interface?.$vm.id })
-        let vmsByID = try await Dictionary(
-            VM.query(on: db)
-                .filter(\.$id ~~ vmIDs)
-                .filter(\.$hypervisorId ~~ agentIDs)
-                .with(\.$networkInterfaces) { $0.with(\.$addresses) }
-                .all()
-                .compactMap { vm in vm.id.map { ($0, vm) } },
-            uniquingKeysWith: { first, _ in first }
-        )
-
         var byNetwork: [UUID: [DesiredFloatingIP]] = [:]
-        for floatingIP in attached {
-            guard let interface = floatingIP.interface,
-                let vm = vmsByID[interface.$vm.id],
-                let vmId = vm.id
-            else { continue }
-            guard let desiredInterface = vm.networkInterfaces.first(where: { $0.id == interface.id }),
-                desiredInterface.detachGeneration == nil,
-                let logicalIP = desiredInterface.ipv4Address?.address
-            else {
+        let attachments = try await floatingIPAllocations.desiredAttachments(
+            forAgentIDs: Array(agentIDs), networkIDs: Array(networkIDs))
+        for attachment in attachments {
+            guard let logicalIP = attachment.logicalIP else {
                 app.logger.warning(
                     "Floating IP attached to a NIC without an IPv4 address; skipping its NAT rule",
-                    metadata: ["address": .string(floatingIP.address)])
+                    metadata: ["address": .string(attachment.externalIP)])
                 continue
             }
-            byNetwork[desiredInterface.logicalNetworkID, default: []].append(
+            byNetwork[attachment.networkID, default: []].append(
                 DesiredFloatingIP(
-                    externalIP: floatingIP.address,
+                    externalIP: attachment.externalIP,
                     logicalIP: logicalIP,
-                    vmId: vmId,
-                    nicIndex: desiredInterface.orderIndex))
-        }
-        let loadBalancerFloatingIPs = try await FloatingIP.query(on: db)
-            .filter(\.$loadBalancer.$id != nil)
-            .with(\.$loadBalancer)
-            .all()
-        for floatingIP in loadBalancerFloatingIPs {
-            guard let loadBalancer = floatingIP.loadBalancer,
-                networkIDs.contains(loadBalancer.$logicalNetwork.id)
-            else { continue }
-            byNetwork[loadBalancer.$logicalNetwork.id, default: []].append(
-                DesiredFloatingIP(
-                    externalIP: floatingIP.address,
-                    logicalIP: loadBalancer.vip))
+                    vmId: attachment.vmID,
+                    nicIndex: attachment.nicIndex))
         }
         return byNetwork.mapValues { $0.sorted { $0.externalIP < $1.externalIP } }
     }
 }
 
 extension Application {
+    private struct DesiredStateAssemblerKey: StorageKey {
+        typealias Value = DesiredStateAssembler
+    }
+
     private struct RegistryCredentialCacheKey: StorageKey, LockKey {
         typealias Value = RegistryCredentialCache
     }
 
-    /// The desired-state sync assembler. Stateless and cheap to construct (it
-    /// holds a reference), so it is materialized per access rather than
-    /// stored — the same idiom as `resourceOperationCoordinator`.
     var desiredStateAssembler: DesiredStateAssembler {
-        DesiredStateAssembler(app: self)
+        get {
+            guard let assembler = storage[DesiredStateAssemblerKey.self] else {
+                preconditionFailure("Desired-state assembler has not been configured")
+            }
+            return assembler
+        }
+        set { storage[DesiredStateAssemblerKey.self] = newValue }
     }
 
     /// Bearer material is shared across all assemblies on this replica and

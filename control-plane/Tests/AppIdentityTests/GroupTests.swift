@@ -13,7 +13,7 @@ final class GroupTests: BaseTestCase {
     @Test("Create group successfully")
     func testCreateGroup() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/groups") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -37,15 +37,14 @@ final class GroupTests: BaseTestCase {
     @Test("Create group with duplicate name fails")
     func testCreateDuplicateGroup() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
-            // Create first group
-            let firstGroup = Group(
+            let builder = TestDataBuilder(app: app)
+            _ = try await builder.createGroup(
                 name: "Duplicate Group",
                 description: "First group",
-                organizationID: testOrganization.id!
+                organization: testOrganization
             )
-            try await firstGroup.save(on: app.db)
 
             // Try to create second group with same name
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/groups") { req in
@@ -64,7 +63,7 @@ final class GroupTests: BaseTestCase {
     @Test("Create group without admin access fails")
     func testCreateGroupWithoutAdminAccess() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             // Create member user: a bare "member" with no admin binding, so
             // the Cedar evaluator denies group creation.
@@ -75,14 +74,13 @@ final class GroupTests: BaseTestCase {
             )
             try await memberUser.save(on: app.db)
 
-            let memberOrg = UserOrganization(
+            _ = try await OrganizationMembershipStore.insert(
                 userID: memberUser.id!,
                 organizationID: testOrganization.id!,
-                roleID: nil
+                on: app.db
             )
-            try await memberOrg.save(on: app.db)
 
-            let memberToken = try await memberUser.generateAPIKey(on: app.db)
+            let memberToken = try await memberUser.generateAPIKey(on: app)
 
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/groups") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
@@ -102,22 +100,13 @@ final class GroupTests: BaseTestCase {
     @Test("List groups in organization")
     func testListGroups() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
-            // Create test groups
-            let group1 = Group(
-                name: "Group A",
-                description: "First group",
-                organizationID: testOrganization.id!
-            )
-            try await group1.save(on: app.db)
-
-            let group2 = Group(
-                name: "Group B",
-                description: "Second group",
-                organizationID: testOrganization.id!
-            )
-            try await group2.save(on: app.db)
+            let builder = TestDataBuilder(app: app)
+            _ = try await builder.createGroup(
+                name: "Group A", description: "First group", organization: testOrganization)
+            _ = try await builder.createGroup(
+                name: "Group B", description: "Second group", organization: testOrganization)
 
             try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/groups") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -137,14 +126,14 @@ final class GroupTests: BaseTestCase {
     @Test("Add members to group")
     func testAddMembersToGroup() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
-            let group = Group(
+            let builder = TestDataBuilder(app: app)
+            let group = try await builder.createGroup(
                 name: "Member Test Group",
                 description: "Group for membership testing",
-                organizationID: testOrganization.id!
+                organization: testOrganization
             )
-            try await group.save(on: app.db)
 
             // Create test users
             let user1 = User(
@@ -163,12 +152,11 @@ final class GroupTests: BaseTestCase {
 
             // Add users to organization
             for user in [user1, user2] {
-                let userOrg = UserOrganization(
+                _ = try await OrganizationMembershipStore.insert(
                     userID: user.id!,
                     organizationID: testOrganization.id!,
-                    roleID: nil
+                    on: app.db
                 )
-                try await userOrg.save(on: app.db)
             }
 
             // Add members to group
@@ -183,7 +171,7 @@ final class GroupTests: BaseTestCase {
             }
 
             // Verify members were added
-            let memberCount = try await group.getMemberCount(on: app.db)
+            let memberCount = try await app.groupsPersistence.members(groupID: group.requireID()).count
             #expect(memberCount == 2)
         }
     }
@@ -191,14 +179,14 @@ final class GroupTests: BaseTestCase {
     @Test("Remove member from group")
     func testRemoveMemberFromGroup() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
-            let group = Group(
+            let builder = TestDataBuilder(app: app)
+            let group = try await builder.createGroup(
                 name: "Remove Test Group",
                 description: "Group for removal testing",
-                organizationID: testOrganization.id!
+                organization: testOrganization
             )
-            try await group.save(on: app.db)
 
             // Create and add test user
             let user = User(
@@ -208,15 +196,14 @@ final class GroupTests: BaseTestCase {
             )
             try await user.save(on: app.db)
 
-            let userOrg = UserOrganization(
+            _ = try await OrganizationMembershipStore.insert(
                 userID: user.id!,
                 organizationID: testOrganization.id!,
-                roleID: nil
+                on: app.db
             )
-            try await userOrg.save(on: app.db)
 
             // Add user to group
-            try await group.addMember(user.id!, on: app.db)
+            try await builder.addUserToGroup(user: user, group: group)
 
             // Remove member from group
             try await app.test(
@@ -228,7 +215,7 @@ final class GroupTests: BaseTestCase {
             }
 
             // Verify member was removed
-            let memberCount = try await group.getMemberCount(on: app.db)
+            let memberCount = try await app.groupsPersistence.members(groupID: group.requireID()).count
             #expect(memberCount == 0)
         }
     }
@@ -238,14 +225,13 @@ final class GroupTests: BaseTestCase {
     @Test("Update group details")
     func testUpdateGroup() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
-            let group = Group(
+            let group = try await TestDataBuilder(app: app).createGroup(
                 name: "Original Name",
                 description: "Original description",
-                organizationID: testOrganization.id!
+                organization: testOrganization
             )
-            try await group.save(on: app.db)
 
             try await app.test(.PUT, "/api/organizations/\(testOrganization.id!)/groups/\(group.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -269,14 +255,13 @@ final class GroupTests: BaseTestCase {
     @Test("Delete group")
     func testDeleteGroup() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
-            let group = Group(
+            let group = try await TestDataBuilder(app: app).createGroup(
                 name: "Delete Test Group",
                 description: "Group to be deleted",
-                organizationID: testOrganization.id!
+                organization: testOrganization
             )
-            try await group.save(on: app.db)
 
             try await app.test(.DELETE, "/api/organizations/\(testOrganization.id!)/groups/\(group.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -285,8 +270,36 @@ final class GroupTests: BaseTestCase {
             }
 
             // Verify group was deleted
-            let deletedGroup = try await Group.find(group.id, on: app.db)
+            let deletedGroup = try await app.groupsPersistence.group(id: group.requireID())
             #expect(deletedGroup == nil)
+        }
+    }
+
+    @Test("A group addressed through another organization remains a bad request")
+    func testWrongOrganizationKeepsCompatibilityStatus() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app)
+            let builder = TestDataBuilder(app: app)
+            let group = try await builder.createGroup(
+                name: "Scoped Group",
+                description: "Must stay in its organization",
+                organization: testOrganization
+            )
+            let otherOrganization = try await builder.createOrganization(name: "Other Organization")
+            try await builder.addUserToOrganization(
+                user: testUser,
+                organization: otherOrganization,
+                role: "admin"
+            )
+
+            try await app.test(
+                .GET,
+                "/api/organizations/\(otherOrganization.id!)/groups/\(group.id!)"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { response in
+                #expect(response.status == .badRequest)
+            }
         }
     }
 }

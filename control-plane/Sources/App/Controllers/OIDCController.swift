@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import SQLKit
 import Vapor
@@ -6,6 +7,20 @@ import Crypto
 import Foundation
 
 struct OIDCController: RouteCollection {
+    private let providers: OIDCProvidersPersistence
+    private let groups: GroupsPersistence
+    private let externalIDs: SCIMExternalIDsPersistence
+
+    init(
+        providers: OIDCProvidersPersistence,
+        groups: GroupsPersistence,
+        externalIDs: SCIMExternalIDsPersistence
+    ) {
+        self.providers = providers
+        self.groups = groups
+        self.externalIDs = externalIDs
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let organizations = routes.grouped("api", "organizations", ":organizationID")
         let oidcRoutes = organizations.grouped("oidc-providers")
@@ -44,9 +59,7 @@ struct OIDCController: RouteCollection {
         // Verify user has access to this organization
         try await verifyOrganizationAccess(req: req, organizationID: organizationID)
 
-        let providers = try await OIDCProvider.query(on: req.db)
-            .filter(\.$organization.$id == organizationID)
-            .all()
+        let providers = try await providers.providers(organizationID: organizationID)
 
         // Claim mappings are authorization configuration; only admins see them.
         let isAdmin = await isOrganizationAdmin(req: req, organizationID: organizationID)
@@ -64,7 +77,7 @@ struct OIDCController: RouteCollection {
         let createRequest = try req.content.decode(CreateOIDCProviderRequest.self)
 
         // Validate the provider configuration
-        try await validateProviderConfiguration(createRequest, on: req.db, organizationID: organizationID)
+        try await validateProviderConfiguration(createRequest, organizationID: organizationID)
 
         // Validate URL fields
         try OIDCValidation.validateURLFields(request: createRequest)
@@ -79,11 +92,11 @@ struct OIDCController: RouteCollection {
             on: req.db
         )
 
-        let provider = OIDCProvider(
+        var provider = try await providers.create(OIDCProviderWrite(
             organizationID: organizationID,
             name: createRequest.name,
             clientID: createRequest.clientID,
-            clientSecret: try req.secretsEncryption.encrypt(createRequest.clientSecret),
+            encryptedClientSecret: try req.secretsEncryption.encrypt(createRequest.clientSecret),
             discoveryURL: createRequest.discoveryURL,
             authorizationEndpoint: createRequest.authorizationEndpoint,
             tokenEndpoint: createRequest.tokenEndpoint,
@@ -94,13 +107,11 @@ struct OIDCController: RouteCollection {
             enabled: createRequest.enabled ?? true,
             useNonce: createRequest.useNonce ?? true,
             groupsClaim: normalizedGroupsClaim(createRequest.groupsClaim),
-            groupMappings: createRequest.groupMappings ?? [],
+            groupMappings: (createRequest.groupMappings ?? []).map(\.persistenceValue),
             adminClaimValues: createRequest.adminClaimValues ?? [],
-            roleMappings: createRequest.roleMappings ?? [],
+            roleMappings: (createRequest.roleMappings ?? []).map(\.persistenceValue),
             defaultRoleID: createRequest.defaultRoleID
-        )
-
-        try await provider.save(on: req.db)
+        ))
 
         // If discovery URL is provided, attempt to fetch configuration.
         // discoveryChanged is false here: omission-clearing exists to purge
@@ -110,7 +121,7 @@ struct OIDCController: RouteCollection {
         // an IdP whose metadata omits end_session_endpoint) must survive the
         // initial discovery fetch.
         if let discoveryURL = createRequest.discoveryURL, !discoveryURL.isEmpty {
-            try await fetchAndUpdateProviderConfiguration(
+            provider = try await fetchAndUpdateProviderConfiguration(
                 provider: provider, discoveryURL: discoveryURL, discoveryChanged: false, on: req)
         }
 
@@ -126,12 +137,7 @@ struct OIDCController: RouteCollection {
 
         try await verifyOrganizationAccess(req: req, organizationID: organizationID)
 
-        guard
-            let provider = try await OIDCProvider.query(on: req.db)
-                .filter(\.$id == providerID)
-                .filter(\.$organization.$id == organizationID)
-                .first()
-        else {
+        guard let provider = try await providers.ownedProvider(id: providerID, organizationID: organizationID) else {
             throw Abort(.notFound, reason: "OIDC provider not found")
         }
 
@@ -149,27 +155,23 @@ struct OIDCController: RouteCollection {
 
         try await verifyOrganizationAdminAccess(req: req, organizationID: organizationID)
 
-        guard
-            let provider = try await OIDCProvider.query(on: req.db)
-                .filter(\.$id == providerID)
-                .filter(\.$organization.$id == organizationID)
-                .first()
-        else {
+        guard let existing = try await providers.ownedProvider(id: providerID, organizationID: organizationID) else {
             throw Abort(.notFound, reason: "OIDC provider not found")
         }
 
         let updateRequest = try req.content.decode(UpdateOIDCProviderRequest.self)
+        var provider = OIDCProviderDraft(existing)
 
         if let name = updateRequest.name { provider.name = name }
         if let clientID = updateRequest.clientID { provider.clientID = clientID }
         if let clientSecret = updateRequest.clientSecret {
-            provider.clientSecret = try req.secretsEncryption.encrypt(clientSecret)
+            provider.encryptedClientSecret = try req.secretsEncryption.encrypt(clientSecret)
         }
         // Optional URL fields: omitted keeps the stored value, an empty string
         // clears it. Without a clear path, a provider switched from discovery
         // to manual config would keep resending the stale discovery URL and
         // overwrite the manual endpoints on every subsequent edit.
-        func applyOptionalURL(_ value: String?, to keyPath: ReferenceWritableKeyPath<OIDCProvider, String?>) {
+        func applyOptionalURL(_ value: String?, to keyPath: WritableKeyPath<OIDCProviderDraft, String?>) {
             guard let value else { return }
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
             provider[keyPath: keyPath] = trimmed.isEmpty ? nil : trimmed
@@ -197,7 +199,7 @@ struct OIDCController: RouteCollection {
         if (provider.discoveryURL ?? "").isEmpty {
             provider.issuer = nil
         }
-        if let scopes = updateRequest.scopes { provider.setScopesArray(scopes) }
+        if let scopes = updateRequest.scopes { provider.scopes = scopes }
         if let enabled = updateRequest.enabled { provider.enabled = enabled }
         if let useNonce = updateRequest.useNonce { provider.useNonce = useNonce }
 
@@ -213,11 +215,15 @@ struct OIDCController: RouteCollection {
         if let groupsClaim = updateRequest.groupsClaim {
             provider.groupsClaim = normalizedGroupsClaim(groupsClaim)
         }
-        if let groupMappings = updateRequest.groupMappings { provider.setGroupMappingsArray(groupMappings) }
-        if let adminClaimValues = updateRequest.adminClaimValues {
-            provider.setAdminClaimValuesArray(adminClaimValues)
+        if let groupMappings = updateRequest.groupMappings {
+            provider.groupMappings = groupMappings.map(\.persistenceValue)
         }
-        if let roleMappings = updateRequest.roleMappings { provider.setRoleMappingsArray(roleMappings) }
+        if let adminClaimValues = updateRequest.adminClaimValues {
+            provider.adminClaimValues = adminClaimValues
+        }
+        if let roleMappings = updateRequest.roleMappings {
+            provider.roleMappings = roleMappings.map(\.persistenceValue)
+        }
         if updateRequest.updatesDefaultRoleID { provider.defaultRoleID = updateRequest.defaultRoleID }
 
         // Same HTTPS validation the create path applies — the login flow posts
@@ -228,7 +234,7 @@ struct OIDCController: RouteCollection {
         // The resulting configuration must still be loginable: either a
         // discovery URL, or the full manual endpoint set.
         let hasDiscovery = !(provider.discoveryURL ?? "").isEmpty
-        guard hasDiscovery || provider.hasRequiredEndpoints() else {
+        guard hasDiscovery || provider.hasRequiredEndpoints else {
             throw Abort(
                 .badRequest,
                 reason:
@@ -236,28 +242,30 @@ struct OIDCController: RouteCollection {
             )
         }
 
-        try await provider.save(on: req.db)
+        guard var persisted = try await providers.replace(provider.write) else {
+            throw Abort(.notFound, reason: "OIDC provider not found")
+        }
 
         // Mirror creation: when a discovery URL is (re)submitted, refresh the
         // stored endpoints from its document. Without this, rotating to a new
         // issuer saves fine but logins keep using the previous issuer's
         // endpoints. Fetch failures are logged, not fatal, same as on create.
-        if let discoveryURL = provider.discoveryURL, updateRequest.discoveryURL != nil, !discoveryURL.isEmpty {
+        if let discoveryURL = persisted.discoveryURL, updateRequest.discoveryURL != nil, !discoveryURL.isEmpty {
             // A field this request set to a NEW non-empty value is an explicit
             // manual fallback and survives metadata omission; an unchanged
             // resubmitted form value is not explicit, so a discovery change
             // still purges it (it may belong to the previous IdP).
-            try await fetchAndUpdateProviderConfiguration(
-                provider: provider, discoveryURL: discoveryURL,
+            persisted = try await fetchAndUpdateProviderConfiguration(
+                provider: persisted, discoveryURL: discoveryURL,
                 discoveryChanged: discoveryURL != previousDiscoveryURL,
-                explicitUserinfoEndpoint: provider.userinfoEndpoint != nil
-                    && provider.userinfoEndpoint != previousUserinfoEndpoint,
-                explicitEndSessionEndpoint: provider.endSessionEndpoint != nil
-                    && provider.endSessionEndpoint != previousEndSessionEndpoint,
+                explicitUserinfoEndpoint: persisted.userinfoEndpoint != nil
+                    && persisted.userinfoEndpoint != previousUserinfoEndpoint,
+                explicitEndSessionEndpoint: persisted.endSessionEndpoint != nil
+                    && persisted.endSessionEndpoint != previousEndSessionEndpoint,
                 on: req)
         }
 
-        return OIDCProviderResponse(from: provider)
+        return OIDCProviderResponse(from: persisted)
     }
 
     func deleteProvider(req: Request) async throws -> HTTPStatus {
@@ -269,28 +277,15 @@ struct OIDCController: RouteCollection {
 
         try await verifyOrganizationAdminAccess(req: req, organizationID: organizationID)
 
-        guard
-            let provider = try await OIDCProvider.query(on: req.db)
-                .filter(\.$id == providerID)
-                .filter(\.$organization.$id == organizationID)
-                .first()
-        else {
+        switch try await providers.deleteIfUnused(id: providerID, organizationID: organizationID) {
+        case .notFound:
             throw Abort(.notFound, reason: "OIDC provider not found")
-        }
-
-        // Check if any users are linked to this provider
-        let linkedUserCount = try await User.query(on: req.db)
-            .filter(\.$oidcProvider.$id == providerID)
-            .count()
-
-        if linkedUserCount > 0 {
+        case .inUse(let linkedUserCount):
             throw Abort(
                 .badRequest, reason: "Cannot delete provider: \(linkedUserCount) users are linked to this provider")
+        case .deleted:
+            return .noContent
         }
-
-        try await provider.delete(on: req.db)
-
-        return .noContent
     }
 
     // MARK: - Provider Testing
@@ -304,12 +299,7 @@ struct OIDCController: RouteCollection {
 
         try await verifyOrganizationAdminAccess(req: req, organizationID: organizationID)
 
-        guard
-            let provider = try await OIDCProvider.query(on: req.db)
-                .filter(\.$id == providerID)
-                .filter(\.$organization.$id == organizationID)
-                .first()
-        else {
+        guard var provider = try await providers.ownedProvider(id: providerID, organizationID: organizationID) else {
             throw Abort(.notFound, reason: "OIDC provider not found")
         }
 
@@ -324,8 +314,12 @@ struct OIDCController: RouteCollection {
                 // redirect from the STORED fields, so a passing test must
                 // leave them usable. This also heals providers whose create-
                 // time discovery fetch failed non-fatally and stored nothing.
-                applyDiscoveredConfiguration(discovery, to: provider, discoveryChanged: false)
-                try await provider.save(on: req.db)
+                var draft = OIDCProviderDraft(provider)
+                applyDiscoveredConfiguration(discovery, to: &draft, discoveryChanged: false)
+                guard let refreshed = try await providers.replace(draft.write) else {
+                    throw Abort(.notFound, reason: "OIDC provider not found")
+                }
+                provider = refreshed
                 return OIDCProviderTestResponse(valid: true, message: "Provider configuration is valid")
             } catch let abort as AbortError {
                 return OIDCProviderTestResponse(
@@ -337,7 +331,7 @@ struct OIDCController: RouteCollection {
         }
 
         // If no discovery URL, check that required endpoints are configured
-        if provider.hasRequiredEndpoints() {
+        if provider.hasRequiredEndpoints {
             return OIDCProviderTestResponse(valid: true, message: "Provider endpoints are configured")
         }
         return OIDCProviderTestResponse(
@@ -354,10 +348,7 @@ struct OIDCController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
 
-        let providers = try await OIDCProvider.query(on: req.db)
-            .filter(\.$organization.$id == organizationID)
-            .filter(\.$enabled == true)
-            .all()
+        let providers = try await providers.providers(organizationID: organizationID, enabledOnly: true)
 
         return providers.map { OIDCProviderPublicResponse(from: $0) }
     }
@@ -373,9 +364,9 @@ struct OIDCController: RouteCollection {
 
         // Case-insensitive name match. Exact match first, then a fallback scan
         // (org counts are small, so the scan is cheap).
-        var organization = try await Organization.query(on: req.db)
-            .filter(\.$name == rawName)
-            .first()
+        var organization = try await LegacyOrganizationStore.organizations(
+            name: rawName, on: req.db
+        ).first
         if organization == nil, let sql = req.db as? SQLDatabase {
             // Case-insensitive fallback done in SQL (LOWER) with LIMIT 2 —
             // enough to detect ambiguity without scanning the org table on a
@@ -384,7 +375,7 @@ struct OIDCController: RouteCollection {
             // tenant's IdP — exact casing is required in that situation.
             let rows = try await sql.select()
                 .column("id")
-                .from(Organization.schema)
+                .from("organizations")
                 .where(SQLFunction("LOWER", args: SQLColumn("name")), .equal, SQLBind(rawName.lowercased()))
                 .limit(2)
                 .all()
@@ -398,10 +389,7 @@ struct OIDCController: RouteCollection {
             return SSOLookupResponse(organizationID: nil, providers: [])
         }
 
-        let providers = try await OIDCProvider.query(on: req.db)
-            .filter(\.$organization.$id == organizationID)
-            .filter(\.$enabled == true)
-            .all()
+        let providers = try await providers.providers(organizationID: organizationID, enabledOnly: true)
 
         // Indistinguishable from an unknown org so the endpoint doesn't
         // confirm which organization names exist.
@@ -425,12 +413,8 @@ struct OIDCController: RouteCollection {
         }
 
         // Fetch the OIDC provider
-        guard
-            let provider = try await OIDCProvider.query(on: req.db)
-                .filter(\.$id == providerID)
-                .filter(\.$organization.$id == organizationID)
-                .filter(\.$enabled == true)
-                .first()
+        guard let provider = try await providers.ownedProvider(id: providerID, organizationID: organizationID),
+            provider.enabled
         else {
             throw Abort(.notFound, reason: "OIDC provider not found or disabled")
         }
@@ -443,7 +427,7 @@ struct OIDCController: RouteCollection {
         let state = UUID().uuidString
         // Only mint a nonce for providers that echo it back. When disabled we
         // send none and store none, so the callback's nonce check is skipped
-        // (see `OIDCProvider.useNonce`; e.g. Discord never returns the nonce).
+        // (see the provider's `useNonce`; e.g. Discord never returns the nonce).
         let nonce = provider.useNonce ? UUID().uuidString : nil
         let codeVerifier = OIDCValidation.generateCodeVerifier()
 
@@ -506,12 +490,8 @@ struct OIDCController: RouteCollection {
         }
 
         // Fetch the OIDC provider
-        guard
-            let provider = try await OIDCProvider.query(on: req.db)
-                .filter(\.$id == providerID)
-                .filter(\.$organization.$id == organizationID)
-                .with(\.$organization)
-                .first()
+        guard let provider = try await providers.ownedProvider(id: providerID, organizationID: organizationID),
+            let organization = try await Organization.find(organizationID, on: req.db)
         else {
             throw Abort(.notFound, reason: "OIDC provider not found")
         }
@@ -540,12 +520,18 @@ struct OIDCController: RouteCollection {
 
             // Resolve the user and converge identity/authz state with the
             // token's claims (issue #363).
-            let identity = OIDCIdentityService(db: req.db, logger: req.logger)
+            let identity = OIDCIdentityService(
+                db: req.db,
+                providers: providers,
+                groups: groups,
+                externalIDs: externalIDs,
+                logger: req.logger
+            )
 
             let user = try await identity.resolveUser(
                 userInfo: userInfo,
                 provider: provider,
-                organization: provider.organization,
+                organization: organization,
                 groupValues: userInfo.groupValues
             )
 
@@ -651,13 +637,10 @@ struct OIDCController: RouteCollection {
     }
 
     private func validateProviderConfiguration(
-        _ request: CreateOIDCProviderRequest, on database: Database, organizationID: UUID
+        _ request: CreateOIDCProviderRequest, organizationID: UUID
     ) async throws {
         // Check for duplicate provider names within the organization
-        let existingProvider = try await OIDCProvider.query(on: database)
-            .filter(\.$organization.$id == organizationID)
-            .filter(\.$name == request.name)
-            .first()
+        let existingProvider = try await providers.providerNamed(request.name, organizationID: organizationID)
 
         if existingProvider != nil {
             throw Abort(.badRequest, reason: "A provider with this name already exists in the organization")
@@ -692,7 +675,7 @@ struct OIDCController: RouteCollection {
     /// different IdP. `discoveryChanged` is the caller's knowledge of whether
     /// the discovery URL itself was newly added or changed.
     func applyDiscoveredConfiguration(
-        _ discovery: OIDCDiscoveryDocument, to provider: OIDCProvider, discoveryChanged: Bool,
+        _ discovery: OIDCDiscoveryDocument, to provider: inout OIDCProviderDraft, discoveryChanged: Bool,
         explicitUserinfoEndpoint: Bool = false, explicitEndSessionEndpoint: Bool = false
     ) {
         // Optional endpoints the document omits are cleared when the provider
@@ -717,7 +700,9 @@ struct OIDCController: RouteCollection {
         // names, so they become fetchable for this provider only (Google serves
         // JWKS from www.googleapis.com, not accounts.google.com). Recorded from
         // the document itself, never from a manually-set endpoint.
-        provider.setDiscoveredHosts(from: discovery)
+        provider.discoveredHosts = [discovery.tokenEndpoint, discovery.userinfoEndpoint, discovery.jwksURI]
+            .compactMap { $0 }
+            .compactMap { URL(string: $0)?.host?.lowercased() }
         if discovery.userinfoEndpoint != nil {
             provider.userinfoEndpoint = discovery.userinfoEndpoint
         } else if clearOmittedOptionals && !explicitUserinfoEndpoint {
@@ -731,12 +716,10 @@ struct OIDCController: RouteCollection {
     }
 
     private func fetchAndUpdateProviderConfiguration(
-        provider: OIDCProvider, discoveryURL: String, discoveryChanged: Bool,
+        provider: OIDCProviderSnapshot, discoveryURL: String, discoveryChanged: Bool,
         explicitUserinfoEndpoint: Bool = false, explicitEndSessionEndpoint: Bool = false,
         on req: Request
-    )
-        async throws
-    {
+    ) async throws -> OIDCProviderSnapshot {
         do {
             let discovery = try await fetchDiscoveryDocument(url: discoveryURL, on: req)
 
@@ -744,15 +727,20 @@ struct OIDCController: RouteCollection {
             // assignment so a bad document leaves the provider untouched.
             try OIDCValidation.validateDiscoveredEndpoints(discovery)
 
+            var draft = OIDCProviderDraft(provider)
             applyDiscoveredConfiguration(
-                discovery, to: provider, discoveryChanged: discoveryChanged,
+                discovery, to: &draft, discoveryChanged: discoveryChanged,
                 explicitUserinfoEndpoint: explicitUserinfoEndpoint,
                 explicitEndSessionEndpoint: explicitEndSessionEndpoint)
 
-            try await provider.save(on: req.db)
+            guard let refreshed = try await providers.replace(draft.write) else {
+                throw Abort(.notFound, reason: "OIDC provider not found")
+            }
+            return refreshed
         } catch {
             req.logger.warning("Failed to fetch OIDC discovery document from discovery URL: \(error)")
             // Don't fail the creation if discovery fails, just log the warning
+            return provider
         }
     }
 
@@ -784,7 +772,7 @@ struct OIDCController: RouteCollection {
     }
 
     private func exchangeCodeForTokens(
-        provider: OIDCProvider,
+        provider: OIDCProviderSnapshot,
         code: String,
         codeVerifier: String?,
         organizationID: UUID,
@@ -812,7 +800,7 @@ struct OIDCController: RouteCollection {
         var body = [
             "grant_type": "authorization_code",
             "client_id": provider.clientID,
-            "client_secret": try req.secretsEncryption.decrypt(provider.clientSecret),
+            "client_secret": try req.secretsEncryption.decrypt(provider.encryptedClientSecret),
             "code": code,
             "redirect_uri": redirectURI,
         ]
@@ -833,7 +821,7 @@ struct OIDCController: RouteCollection {
 
     private func extractUserInfo(
         tokenResponse: OIDCTokenResponse,
-        provider: OIDCProvider,
+        provider: OIDCProviderSnapshot,
         nonce: String?,
         on req: Request
     ) async throws -> OIDCUserInfo {
@@ -905,7 +893,7 @@ struct OIDCController: RouteCollection {
     private func fetchUserInfo(
         endpoint: String,
         accessToken: String,
-        provider: OIDCProvider,
+        provider: OIDCProviderSnapshot,
         on req: Request
     ) async throws -> OIDCUserInfoResponse {
         // Same two gates as the discovery fetch: HTTPS + host allow-list here,
@@ -926,7 +914,7 @@ struct OIDCController: RouteCollection {
 
     private func validateIDToken(
         idToken: String,
-        provider: OIDCProvider,
+        provider: OIDCProviderSnapshot,
         expectedNonce: String?,
         on req: Request
     ) async throws -> OIDCIDTokenClaims {
@@ -962,7 +950,7 @@ struct OIDCController: RouteCollection {
         req.logger.info(
             "Successfully validated JWT signature for OIDC token",
             metadata: [
-                "provider_id": .string(provider.id?.uuidString ?? "unknown"),
+                "provider_id": .string(provider.id.uuidString),
                 "subject": .string(claims.sub),
                 "issuer": .string(claims.iss),
             ])
@@ -973,7 +961,7 @@ struct OIDCController: RouteCollection {
     /// Fetches the provider's JWKS document as raw JSON; decoding happens
     /// per-key in `OIDCTokenVerification.makeSigners` so one unsupported key
     /// can't invalidate the whole set.
-    private func fetchJWKS(uri: String, provider: OIDCProvider, on req: Request) async throws -> Data {
+    private func fetchJWKS(uri: String, provider: OIDCProviderSnapshot, on req: Request) async throws -> Data {
         // Same two gates as the discovery fetch: HTTPS + host allow-list here,
         // address classification and connection pinning in the guarded client.
         try OIDCValidation.validateAllowedFetchURL(
@@ -998,7 +986,7 @@ struct OIDCController: RouteCollection {
 
     private func validateIDTokenClaims(
         _ claims: OIDCIDTokenClaims,
-        provider: OIDCProvider,
+        provider: OIDCProviderSnapshot,
         expectedNonce: String?
     ) throws {
         // Expiration and issued-at time validation is handled by JWTPayload.verify()
@@ -1148,10 +1136,10 @@ struct OIDCController: RouteCollection {
         }
 
         let groupIDs = Set(groupMappings.map { $0.groupID })
-        let orgGroupCount = try await Group.query(on: db)
-            .filter(\.$organization.$id == organizationID)
-            .filter(\.$id ~~ Array(groupIDs))
-            .count()
+        let orgGroupCount = try await groups.countOwnedGroups(
+            ids: Array(groupIDs),
+            organizationID: organizationID
+        )
         guard orgGroupCount == groupIDs.count else {
             throw Abort(.badRequest, reason: "Group mappings must reference groups in this organization")
         }
@@ -1163,4 +1151,84 @@ struct OIDCController: RouteCollection {
         (error as? any AbortError)?.reason ?? String(describing: error)
     }
 
+}
+
+/// Request-local mutable assembly state. Persistence inputs and outputs remain
+/// immutable values; this draft never crosses the controller operation.
+struct OIDCProviderDraft: OIDCProviderURLConfiguration {
+    var id: UUID
+    var organizationID: UUID
+    var name: String
+    var clientID: String
+    var encryptedClientSecret: String
+    var discoveryURL: String?
+    var issuer: String?
+    var authorizationEndpoint: String?
+    var tokenEndpoint: String?
+    var userinfoEndpoint: String?
+    var jwksURI: String?
+    var endSessionEndpoint: String?
+    var discoveredHosts: [String]
+    var scopes: [String]
+    var enabled: Bool
+    var useNonce: Bool
+    var groupsClaim: String?
+    var groupMappings: [OIDCGroupMappingValue]
+    var adminClaimValues: [String]
+    var roleMappings: [OIDCRoleMappingValue]
+    var defaultRoleID: UUID?
+
+    init(_ provider: OIDCProviderSnapshot) {
+        id = provider.id
+        organizationID = provider.organizationID
+        name = provider.name
+        clientID = provider.clientID
+        encryptedClientSecret = provider.encryptedClientSecret
+        discoveryURL = provider.discoveryURL
+        issuer = provider.issuer
+        authorizationEndpoint = provider.authorizationEndpoint
+        tokenEndpoint = provider.tokenEndpoint
+        userinfoEndpoint = provider.userinfoEndpoint
+        jwksURI = provider.jwksURI
+        endSessionEndpoint = provider.endSessionEndpoint
+        discoveredHosts = provider.discoveredHosts
+        scopes = provider.scopes
+        enabled = provider.enabled
+        useNonce = provider.useNonce
+        groupsClaim = provider.groupsClaim
+        groupMappings = provider.groupMappings
+        adminClaimValues = provider.adminClaimValues
+        roleMappings = provider.roleMappings
+        defaultRoleID = provider.defaultRoleID
+    }
+
+    var hasRequiredEndpoints: Bool {
+        authorizationEndpoint != nil && tokenEndpoint != nil && jwksURI != nil
+    }
+
+    var write: OIDCProviderWrite {
+        OIDCProviderWrite(
+            id: id,
+            organizationID: organizationID,
+            name: name,
+            clientID: clientID,
+            encryptedClientSecret: encryptedClientSecret,
+            discoveryURL: discoveryURL,
+            issuer: issuer,
+            authorizationEndpoint: authorizationEndpoint,
+            tokenEndpoint: tokenEndpoint,
+            userinfoEndpoint: userinfoEndpoint,
+            jwksURI: jwksURI,
+            endSessionEndpoint: endSessionEndpoint,
+            discoveredHosts: discoveredHosts,
+            scopes: scopes,
+            enabled: enabled,
+            useNonce: useNonce,
+            groupsClaim: groupsClaim,
+            groupMappings: groupMappings,
+            adminClaimValues: adminClaimValues,
+            roleMappings: roleMappings,
+            defaultRoleID: defaultRoleID
+        )
+    }
 }

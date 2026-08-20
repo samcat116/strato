@@ -21,17 +21,13 @@ struct VolumeStatusTests {
         observedGeneration: Int64 = 1,
         failedGeneration: Int64? = nil
     ) -> Volume {
-        let volume = Volume()
-        volume.$vm.id = vmID
-        volume.desiredStatus = desired
-        volume.status = status
-        volume.generation = generation
-        volume.observedGeneration = observedGeneration
-        if let failedGeneration {
-            volume.errorMessage = "resize failed: no space left on device"
-            volume.failedGeneration = failedGeneration
-        }
-        return volume
+        Volume(
+            name: "status-test", description: "", projectID: UUID(),
+            environment: "development", size: 10 << 30, status: status,
+            desiredStatus: desired, generation: generation,
+            observedGeneration: observedGeneration,
+            errorMessage: failedGeneration == nil ? nil : "resize failed: no space left on device",
+            failedGeneration: failedGeneration, createdByID: UUID(), vmID: vmID)
     }
 
     @Test("canDelete admits everything except an attached volume")
@@ -136,10 +132,9 @@ struct VolumeStatusTests {
 
     @Test("Desired-state helpers leave generation assignment to the SQL writer")
     func mutatorsAreStateOnly() {
-        let volume = volume(generation: 4)
-        volume.setDesiredStatus(.absent)
-        #expect(volume.generation == 4)
-        #expect(volume.desiredStatus == .absent)
+        let changed = volume(generation: 4).replacingDesiredStatus(.absent)
+        #expect(changed.generation == 4)
+        #expect(changed.desiredStatus == .absent)
     }
 
     /// The failure resolution asymmetry, which is deliberate and easy to
@@ -150,19 +145,21 @@ struct VolumeStatusTests {
     @Test("A stuck attach reverts; a stuck resize does not")
     func stuckResolutionRevertsAttachmentOnly() {
         let attaching = volume(attachedTo: UUID(), status: .available, generation: 4)
-        attaching.deviceName = "disk1"
-        attaching.readonly = true
-        #expect(attaching.resolveForStuckOperation(mutation: .attach, telemetryReason: "t"))
-        #expect(attaching.$vm.id == nil)
-        #expect(attaching.deviceName == nil)
-        #expect(attaching.readonly == false)
-        #expect(attaching.generation == 4)
+            .replacing(deviceName: "disk1", readonly: true)
+        let attachResolution = attaching.resolvingForStuckOperation(
+            mutation: .attach, telemetryReason: "t")
+        #expect(attachResolution.desiredStateChanged)
+        #expect(attachResolution.resource.vmID == nil)
+        #expect(attachResolution.resource.deviceName == nil)
+        #expect(attachResolution.resource.readonly == false)
+        #expect(attachResolution.resource.generation == 4)
 
-        let resizing = volume(generation: 4)
-        resizing.size = 20 << 30
-        #expect(resizing.resolveForStuckOperation(mutation: .resize, telemetryReason: "t") == false)
-        #expect(resizing.size == 20 << 30)
-        #expect(resizing.generation == 4)
+        let resizing = volume(generation: 4).replacing(size: 20 << 30)
+        let resizeResolution = resizing.resolvingForStuckOperation(
+            mutation: .resize, telemetryReason: "t")
+        #expect(resizeResolution.desiredStateChanged == false)
+        #expect(resizeResolution.resource.size == 20 << 30)
+        #expect(resizeResolution.resource.generation == 4)
     }
 
     /// A stuck *delete* keeps its `.absent`, for the same reason a VM's does:
@@ -172,7 +169,9 @@ struct VolumeStatusTests {
     @Test("A stuck delete is never reverted")
     func stuckDeleteKeepsItsIntent() {
         let deleting = volume(desired: .absent, generation: 4)
-        #expect(deleting.resolveForStuckOperation(mutation: .delete, telemetryReason: "t") == false)
-        #expect(deleting.desiredStatus == .absent)
+        let resolution = deleting.resolvingForStuckOperation(
+            mutation: .delete, telemetryReason: "t")
+        #expect(resolution.desiredStateChanged == false)
+        #expect(resolution.resource.desiredStatus == .absent)
     }
 }

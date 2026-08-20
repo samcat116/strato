@@ -66,7 +66,7 @@ final class ProjectListVisibilityTests {
             rootProject: rootProject,
             folderProject: folderProject,
             member: member,
-            token: try await member.generateAPIKey(on: app.db)
+            token: try await member.generateAPIKey(on: app)
         )
     }
 
@@ -196,7 +196,7 @@ final class ProjectListVisibilityTests {
             let admin = try await builder.createUser(
                 username: "guardrail-lister", email: "guardrail-lister@example.com")
             try await builder.addUserToOrganization(user: admin, organization: organization, role: "admin")
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             #expect(
                 try await projectNames(app, "/api/projects", token: token)
@@ -259,7 +259,7 @@ final class ProjectListVisibilityTests {
                 username: "tree-admin", email: "tree-admin@example.com")
             try await builder.addUserToOrganization(
                 user: admin, organization: fixture.organization, role: "admin")
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/organizations/\(fixture.organization.id!)/hierarchy") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -342,7 +342,7 @@ final class ProjectListVisibilityTests {
                 username: "folder-admin", email: "folder-admin@example.com")
             try await builder.addUserToOrganization(
                 user: admin, organization: fixture.organization, role: "admin")
-            let adminToken = try await admin.generateAPIKey(on: app.db)
+            let adminToken = try await admin.generateAPIKey(on: app)
 
             #expect(try await folderNames(topLevel, token: adminToken) == ["Folder Folder"])
             #expect(try await folderNames(children, token: adminToken) == [nested.name])
@@ -416,7 +416,7 @@ final class ProjectListVisibilityTests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: outsider.id!, role: .viewer,
                 nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
-            let token = try await outsider.generateAPIKey(on: app.db)
+            let token = try await outsider.generateAPIKey(on: app)
 
             // `GET /api/projects` still bounds its candidate set by membership
             // rows (#879), so it does not yet answer this caller — tracked
@@ -456,7 +456,7 @@ final class ProjectListVisibilityTests {
 
             let admin = try await builder.createUser(
                 username: "quota-admin", email: "quota-admin@example.com", isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/quotas") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -488,7 +488,7 @@ final class ProjectListVisibilityTests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: member.id!, role: .viewer,
                 nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
-            let token = try await member.generateAPIKey(on: app.db)
+            let token = try await member.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/organizations/\(organization.id!)/resources") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)

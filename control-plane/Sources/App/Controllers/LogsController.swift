@@ -1,5 +1,4 @@
 import Vapor
-import Fluent
 import StratoShared
 
 struct LogsController: RouteCollection {

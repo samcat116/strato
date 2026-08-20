@@ -19,7 +19,7 @@ final class ListPaginationTests: BaseTestCase {
     @Test("GET /api/vms pages with the envelope: defaults, slices, clamping, validation")
     func vmListPages() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let builder = TestDataBuilder(db: app.db)
             let project = try await builder.createProject(
                 name: "Paging Project", description: "pagination coverage", organization: testOrganization)
@@ -88,16 +88,15 @@ final class ListPaginationTests: BaseTestCase {
     @Test("total counts only the rows the caller is authorized to read")
     func totalRespectsAuthorization() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let builder = TestDataBuilder(db: app.db)
 
             let member = try await builder.createUser(
                 username: "pagingmember", email: "pagingmember@example.com", isSystemAdmin: false)
             try await builder.addUserToOrganization(
                 user: member, organization: testOrganization, role: "member")
-            member.currentOrganizationId = testOrganization.id
-            try await member.save(on: app.db)
-            let memberToken = try await member.generateAPIKey(on: app.db)
+            try await member.replacingCurrentOrganization(testOrganization.id).save(on: app.db)
+            let memberToken = try await member.generateAPIKey(on: app)
 
             let granted = try await builder.createProject(
                 name: "Granted", description: "readable", organization: testOrganization)

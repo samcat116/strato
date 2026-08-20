@@ -1,5 +1,5 @@
-import Fluent
 import Vapor
+import Fluent
 
 extension Request {
     /// The project named by a path parameter, or a 400/404 (issue #760).

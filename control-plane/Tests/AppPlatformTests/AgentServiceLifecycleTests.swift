@@ -19,6 +19,14 @@ final class AgentServiceLifecycleTests {
     func heartbeatMonitorMarksStaleAgentsOffline() async throws {
         try await withTestApp { app in
             let checkedAt = Date()
+            let organization = Organization(
+                name: "Heartbeat lifecycle org",
+                description: "organization fixture for the stale agent")
+            try await organization.save(on: app.db)
+            let site = Site(
+                name: "heartbeat-lifecycle-dc",
+                organizationScope: .organization(try organization.requireID()))
+            try await site.save(on: app.db)
             let dependency = NodeDependencyObservation(
                 id: .libvirt,
                 role: .compute,
@@ -44,7 +52,9 @@ final class AgentServiceLifecycleTests {
                     availableDisk: 100_000_000_000),
                 dependencyObservations: [dependency],
                 dependencyObservationsReceivedAt: checkedAt,
-                lastHeartbeat: Date().addingTimeInterval(-120))
+                lastHeartbeat: Date().addingTimeInterval(-120)
+            ).replacing(siteID: try site.requireID())
+                .replacingOrganizationScope(.organization(try organization.requireID()))
             try await agent.save(on: app.db)
 
             let metrics = TestMetrics()
@@ -78,9 +88,11 @@ final class AgentServiceLifecycleTests {
             try await app.autoMigrate()
 
             service = app.agentService
+            await service.start()
 
-            // The loop is armed from AgentService.init's detached task; give it a
-            // moment to run so the assertion isn't racing initialization.
+            // Production calls this boundary from didBoot after migration and
+            // reconciliation. Give the loop a moment to arm so the assertion
+            // is not racing the lifecycle callback.
             for _ in 0..<50 where await !service.isHeartbeatActive {
                 try await Task.sleep(for: .milliseconds(10))
             }

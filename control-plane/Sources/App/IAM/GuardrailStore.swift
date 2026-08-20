@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import Foundation
 import Vapor
@@ -69,7 +70,7 @@ enum GuardrailStore {
         enabled: Bool = true,
         createdBy: UUID?,
         on db: any Database
-    ) async throws -> Guardrail {
+    ) async throws -> IAMGuardrailSnapshot {
         try validateEffect(effect)
         guard attachableNodeTypes.contains(node.type) else {
             throw GuardrailError.unattachableNode(node.type.rawValue)
@@ -78,26 +79,111 @@ enum GuardrailStore {
         try validateNotSelfLocking(
             actions: canonicalActions, principalMatch: principalMatch, resourceMatch: resourceMatch)
 
-        let guardrail = Guardrail(
+        let provisional = IAMGuardrailSnapshot(
             id: UUID(),
             name: name,
             description: description,
-            nodeType: node.type,
+            nodeType: node.type.rawValue,
             nodeID: node.id,
+            effect: GuardrailEffect.forbid.rawValue,
             actions: canonicalActions,
-            principalMatch: principalMatch,
-            resourceMatch: resourceMatch,
-            authored: false,
+            principalMatchKind: principalMatch.kind.rawValue,
+            principalMatchID: principalMatch.subjectID,
+            resourceMatchKind: resourceMatch.kind.rawValue,
+            resourceMatchValue: resourceMatch.value,
             enabled: enabled,
-            createdBy: createdBy
+            createdBy: createdBy,
+            cedarText: nil,
+            authored: false
         )
-        guardrail.cedarText = try await GuardrailRendering.cedarText(for: guardrail, on: db)
+        let guardrail = IAMGuardrailSnapshot(
+            id: provisional.id,
+            name: provisional.name,
+            description: provisional.description,
+            nodeType: provisional.nodeType,
+            nodeID: provisional.nodeID,
+            effect: provisional.effect,
+            actions: provisional.actions,
+            principalMatchKind: provisional.principalMatchKind,
+            principalMatchID: provisional.principalMatchID,
+            resourceMatchKind: provisional.resourceMatchKind,
+            resourceMatchValue: provisional.resourceMatchValue,
+            enabled: provisional.enabled,
+            createdBy: provisional.createdBy,
+            cedarText: try await GuardrailRendering.cedarText(for: provisional, on: db),
+            authored: provisional.authored
+        )
         do {
-            try await guardrail.create(on: db)
+            return try await LegacyGuardrailStore.insert(guardrail, on: db)
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw GuardrailError.duplicateName(name)
         }
-        return guardrail
+    }
+
+    static func create(
+        name: String,
+        description: String?,
+        effect: String?,
+        node: IAMNode,
+        actions: [String],
+        principalMatch: GuardrailPrincipalMatch,
+        resourceMatch: GuardrailResourceMatch,
+        enabled: Bool = true,
+        createdBy: UUID?,
+        using iam: IAMPersistence,
+        in transaction: IAMPolicySetTransaction,
+    ) async throws -> IAMGuardrailSnapshot {
+        try validateEffect(effect)
+        guard attachableNodeTypes.contains(node.type) else {
+            throw GuardrailError.unattachableNode(node.type.rawValue)
+        }
+        let canonicalActions = try GuardrailActions.canonicalize(actions)
+        try validateNotSelfLocking(
+            actions: canonicalActions,
+            principalMatch: principalMatch,
+            resourceMatch: resourceMatch
+        )
+
+        let provisional = IAMGuardrailSnapshot(
+            id: UUID(),
+            name: name,
+            description: description,
+            nodeType: node.type.rawValue,
+            nodeID: node.id,
+            effect: GuardrailEffect.forbid.rawValue,
+            actions: canonicalActions,
+            principalMatchKind: principalMatch.kind.rawValue,
+            principalMatchID: principalMatch.subjectID,
+            resourceMatchKind: resourceMatch.kind.rawValue,
+            resourceMatchValue: resourceMatch.value,
+            enabled: enabled,
+            createdBy: createdBy,
+            cedarText: nil,
+            authored: false
+        )
+        let rendered = try await GuardrailRendering.cedarText(for: provisional, using: iam)
+        let guardrail = IAMGuardrailSnapshot(
+            id: provisional.id,
+            name: provisional.name,
+            description: provisional.description,
+            nodeType: provisional.nodeType,
+            nodeID: provisional.nodeID,
+            effect: provisional.effect,
+            actions: provisional.actions,
+            principalMatchKind: provisional.principalMatchKind,
+            principalMatchID: provisional.principalMatchID,
+            resourceMatchKind: provisional.resourceMatchKind,
+            resourceMatchValue: provisional.resourceMatchValue,
+            enabled: provisional.enabled,
+            createdBy: provisional.createdBy,
+            cedarText: rendered,
+            authored: provisional.authored
+        )
+        do {
+            return try await transaction.createGuardrail(guardrail)
+        } catch IAMPersistenceError.duplicateGuardrailName {
+            throw GuardrailError.duplicateName(name)
+        }
     }
 
     /// Create a guardrail from a hand-authored Cedar forbid (#610), held to the
@@ -116,7 +202,7 @@ enum GuardrailStore {
         createdBy: UUID?,
         engine: any CedarEngine,
         on db: any Database
-    ) async throws -> Guardrail {
+    ) async throws -> IAMGuardrailSnapshot {
         guard attachableNodeTypes.contains(node.type) else {
             throw GuardrailError.unattachableNode(node.type.rawValue)
         }
@@ -124,26 +210,74 @@ enum GuardrailStore {
         let prepared = try await GuardrailText.prepare(
             cedarText: cedarText, guardrailID: id, attachNode: node, engine: engine, on: db)
 
-        let guardrail = Guardrail(
+        let guardrail = IAMGuardrailSnapshot(
             id: id,
             name: name,
             description: description,
-            nodeType: node.type,
+            nodeType: node.type.rawValue,
             nodeID: node.id,
+            effect: GuardrailEffect.forbid.rawValue,
             actions: [GuardrailActions.wildcard],
-            principalMatch: .any,
-            resourceMatch: .any,
-            cedarText: prepared.cedarText,
-            authored: true,
+            principalMatchKind: GuardrailPrincipalMatchKind.any.rawValue,
+            principalMatchID: nil,
+            resourceMatchKind: GuardrailResourceMatchKind.any.rawValue,
+            resourceMatchValue: nil,
             enabled: enabled,
-            createdBy: createdBy
+            createdBy: createdBy,
+            cedarText: prepared.cedarText,
+            authored: true
         )
         do {
-            try await guardrail.create(on: db)
+            return try await LegacyGuardrailStore.insert(guardrail, on: db)
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw GuardrailError.duplicateName(name)
         }
-        return guardrail
+    }
+
+    static func createAuthored(
+        name: String,
+        description: String?,
+        node: IAMNode,
+        cedarText: String,
+        enabled: Bool = true,
+        createdBy: UUID?,
+        engine: any CedarEngine,
+        using iam: IAMPersistence,
+        in transaction: IAMPolicySetTransaction
+    ) async throws -> IAMGuardrailSnapshot {
+        guard attachableNodeTypes.contains(node.type) else {
+            throw GuardrailError.unattachableNode(node.type.rawValue)
+        }
+        let id = UUID()
+        let prepared = try await GuardrailText.prepare(
+            cedarText: cedarText,
+            guardrailID: id,
+            attachNode: node,
+            engine: engine,
+            using: iam
+        )
+        let guardrail = IAMGuardrailSnapshot(
+            id: id,
+            name: name,
+            description: description,
+            nodeType: node.type.rawValue,
+            nodeID: node.id,
+            effect: GuardrailEffect.forbid.rawValue,
+            actions: [GuardrailActions.wildcard],
+            principalMatchKind: GuardrailPrincipalMatchKind.any.rawValue,
+            principalMatchID: nil,
+            resourceMatchKind: GuardrailResourceMatchKind.any.rawValue,
+            resourceMatchValue: nil,
+            enabled: enabled,
+            createdBy: createdBy,
+            cedarText: prepared.cedarText,
+            authored: true
+        )
+        do {
+            return try await transaction.createGuardrail(guardrail)
+        } catch IAMPersistenceError.duplicateGuardrailName {
+            throw GuardrailError.duplicateName(name)
+        }
     }
 
     /// The action that removes a guardrail. A ceiling covering this one is a
@@ -184,7 +318,7 @@ enum GuardrailStore {
     /// is a `400` rather than a silent no-op — the caller thinks it changed
     /// something.
     static func update(
-        _ guardrail: Guardrail,
+        _ guardrail: IAMGuardrailSnapshot,
         description: String?,
         actions: [String]?,
         principalMatch: GuardrailPrincipalMatch?,
@@ -193,9 +327,14 @@ enum GuardrailStore {
         enabled: Bool?,
         engine: any CedarEngine,
         on db: any Database
-    ) async throws -> Guardrail {
-        if let description { guardrail.description = description }
-        if let enabled { guardrail.enabled = enabled }
+    ) async throws -> IAMGuardrailSnapshot {
+        var updatedDescription = guardrail.description
+        var updatedActions = guardrail.actions
+        var updatedPrincipal = try guardrail.principalMatch()
+        var updatedResource = try guardrail.resourceMatch()
+        var updatedCedarText = guardrail.cedarText
+
+        if let description { updatedDescription = description }
 
         if guardrail.authored {
             guard actions == nil, principalMatch == nil, resourceMatch == nil else {
@@ -204,12 +343,17 @@ enum GuardrailStore {
                 )
             }
             if let cedarText {
-                guard let node = guardrail.node, let id = guardrail.id else {
-                    throw GuardrailError.rejectedByCedar("guardrail row is missing its id or node")
+                guard let node = guardrail.node else {
+                    throw GuardrailError.rejectedByCedar("guardrail row names an unknown node type")
                 }
                 let prepared = try await GuardrailText.prepare(
-                    cedarText: cedarText, guardrailID: id, attachNode: node, engine: engine, on: db)
-                guardrail.cedarText = prepared.cedarText
+                    cedarText: cedarText,
+                    guardrailID: guardrail.id,
+                    attachNode: node,
+                    engine: engine,
+                    on: db
+                )
+                updatedCedarText = prepared.cedarText
             }
         } else {
             guard cedarText == nil else {
@@ -217,27 +361,169 @@ enum GuardrailStore {
                     "This guardrail is assembled from matchers; edit its matchers, or delete it and create an authored guardrail to write Cedar directly."
                 )
             }
-            if let actions { guardrail.actions = try GuardrailActions.canonicalize(actions) }
-            if let principalMatch {
-                guardrail.principalMatchKind = principalMatch.kind.rawValue
-                guardrail.principalMatchID = principalMatch.subjectID
-            }
-            if let resourceMatch {
-                guardrail.resourceMatchKind = resourceMatch.kind.rawValue
-                guardrail.resourceMatchValue = resourceMatch.value
-            }
+            if let actions { updatedActions = try GuardrailActions.canonicalize(actions) }
+            if let principalMatch { updatedPrincipal = principalMatch }
+            if let resourceMatch { updatedResource = resourceMatch }
             try validateNotSelfLocking(
-                actions: guardrail.actions,
-                principalMatch: try guardrail.principalMatch(),
-                resourceMatch: try guardrail.resourceMatch()
+                actions: updatedActions,
+                principalMatch: updatedPrincipal,
+                resourceMatch: updatedResource
             )
-            // Regenerate the stored forbid from the (possibly changed) matchers,
-            // so the source of truth tracks them.
-            guardrail.cedarText = try await GuardrailRendering.cedarText(for: guardrail, on: db)
         }
 
-        try await guardrail.save(on: db)
-        return guardrail
+        var replacement = IAMGuardrailSnapshot(
+            id: guardrail.id,
+            name: guardrail.name,
+            description: updatedDescription,
+            nodeType: guardrail.nodeType,
+            nodeID: guardrail.nodeID,
+            effect: guardrail.effect,
+            actions: updatedActions,
+            principalMatchKind: updatedPrincipal.kind.rawValue,
+            principalMatchID: updatedPrincipal.subjectID,
+            resourceMatchKind: updatedResource.kind.rawValue,
+            resourceMatchValue: updatedResource.value,
+            enabled: enabled ?? guardrail.enabled,
+            createdBy: guardrail.createdBy,
+            createdAt: guardrail.createdAt,
+            updatedAt: guardrail.updatedAt,
+            cedarText: updatedCedarText,
+            authored: guardrail.authored
+        )
+        if !replacement.authored {
+            let rendered = try await GuardrailRendering.cedarText(for: replacement, on: db)
+            replacement = IAMGuardrailSnapshot(
+                id: replacement.id,
+                name: replacement.name,
+                description: replacement.description,
+                nodeType: replacement.nodeType,
+                nodeID: replacement.nodeID,
+                effect: replacement.effect,
+                actions: replacement.actions,
+                principalMatchKind: replacement.principalMatchKind,
+                principalMatchID: replacement.principalMatchID,
+                resourceMatchKind: replacement.resourceMatchKind,
+                resourceMatchValue: replacement.resourceMatchValue,
+                enabled: replacement.enabled,
+                createdBy: replacement.createdBy,
+                createdAt: replacement.createdAt,
+                updatedAt: replacement.updatedAt,
+                cedarText: rendered,
+                authored: replacement.authored
+            )
+        }
+        do {
+            guard let saved = try await LegacyGuardrailStore.replace(replacement, on: db) else {
+                throw Abort(.notFound, reason: "Guardrail not found")
+            }
+            return saved
+        } catch let error as any DatabaseError where error.isConstraintFailure {
+            throw GuardrailError.duplicateName(guardrail.name)
+        }
+    }
+
+    static func update(
+        _ guardrail: IAMGuardrailSnapshot,
+        description: String?,
+        actions: [String]?,
+        principalMatch: GuardrailPrincipalMatch?,
+        resourceMatch: GuardrailResourceMatch?,
+        cedarText: String?,
+        enabled: Bool?,
+        engine: any CedarEngine,
+        using iam: IAMPersistence,
+        in transaction: IAMPolicySetTransaction
+    ) async throws -> IAMGuardrailSnapshot {
+        var updatedDescription = guardrail.description
+        var updatedActions = guardrail.actions
+        var updatedPrincipal = try guardrail.principalMatch()
+        var updatedResource = try guardrail.resourceMatch()
+        var updatedCedarText = guardrail.cedarText
+
+        if let description { updatedDescription = description }
+        if guardrail.authored {
+            guard actions == nil, principalMatch == nil, resourceMatch == nil else {
+                throw GuardrailError.modeMismatch(
+                    "This guardrail was authored as Cedar text; edit it through 'cedarText', not the structured matchers."
+                )
+            }
+            if let cedarText {
+                guard let node = guardrail.node else {
+                    throw GuardrailError.rejectedByCedar("guardrail row names an unknown node type")
+                }
+                updatedCedarText = try await GuardrailText.prepare(
+                    cedarText: cedarText,
+                    guardrailID: guardrail.id,
+                    attachNode: node,
+                    engine: engine,
+                    using: iam
+                ).cedarText
+            }
+        } else {
+            guard cedarText == nil else {
+                throw GuardrailError.modeMismatch(
+                    "This guardrail is assembled from matchers; edit its matchers, or delete it and create an authored guardrail to write Cedar directly."
+                )
+            }
+            if let actions { updatedActions = try GuardrailActions.canonicalize(actions) }
+            if let principalMatch { updatedPrincipal = principalMatch }
+            if let resourceMatch { updatedResource = resourceMatch }
+            try validateNotSelfLocking(
+                actions: updatedActions,
+                principalMatch: updatedPrincipal,
+                resourceMatch: updatedResource
+            )
+        }
+
+        var replacement = IAMGuardrailSnapshot(
+            id: guardrail.id,
+            name: guardrail.name,
+            description: updatedDescription,
+            nodeType: guardrail.nodeType,
+            nodeID: guardrail.nodeID,
+            effect: guardrail.effect,
+            actions: updatedActions,
+            principalMatchKind: updatedPrincipal.kind.rawValue,
+            principalMatchID: updatedPrincipal.subjectID,
+            resourceMatchKind: updatedResource.kind.rawValue,
+            resourceMatchValue: updatedResource.value,
+            enabled: enabled ?? guardrail.enabled,
+            createdBy: guardrail.createdBy,
+            createdAt: guardrail.createdAt,
+            updatedAt: guardrail.updatedAt,
+            cedarText: updatedCedarText,
+            authored: guardrail.authored
+        )
+        if !replacement.authored {
+            let rendered = try await GuardrailRendering.cedarText(for: replacement, using: iam)
+            replacement = IAMGuardrailSnapshot(
+                id: replacement.id,
+                name: replacement.name,
+                description: replacement.description,
+                nodeType: replacement.nodeType,
+                nodeID: replacement.nodeID,
+                effect: replacement.effect,
+                actions: replacement.actions,
+                principalMatchKind: replacement.principalMatchKind,
+                principalMatchID: replacement.principalMatchID,
+                resourceMatchKind: replacement.resourceMatchKind,
+                resourceMatchValue: replacement.resourceMatchValue,
+                enabled: replacement.enabled,
+                createdBy: replacement.createdBy,
+                createdAt: replacement.createdAt,
+                updatedAt: replacement.updatedAt,
+                cedarText: rendered,
+                authored: replacement.authored
+            )
+        }
+        do {
+            guard let saved = try await transaction.replaceGuardrail(replacement) else {
+                throw Abort(.notFound, reason: "Guardrail not found")
+            }
+            return saved
+        } catch IAMPersistenceError.duplicateGuardrailName {
+            throw GuardrailError.duplicateName(guardrail.name)
+        }
     }
 
     /// Boot-time backfill that populates `iam_guardrails.cedar_text` for rows
@@ -258,7 +544,7 @@ enum GuardrailStore {
     /// carries the text it was written with.
     @discardableResult
     static func backfillCedarText(on db: any Database, logger: Logger) async throws -> Int {
-        let rows = try await Guardrail.query(on: db).filter(\.$cedarText == nil).all()
+        let rows = try await LegacyGuardrailStore.missingCedarText(on: db)
         guard !rows.isEmpty else { return 0 }
 
         var filled = 0
@@ -268,9 +554,40 @@ enum GuardrailStore {
             // — the same row the compiled set leaves out either way — rather than
             // being written a text the generator refused to produce.
             guard let text = try await GuardrailRendering.cedarText(for: row, on: db) else { continue }
-            row.cedarText = text
-            try await row.save(on: db)
-            filled += 1
+            if try await LegacyGuardrailStore.setCedarText(
+                id: row.id,
+                cedarText: text,
+                onlyIfMissing: true,
+                on: db
+            ) {
+                filled += 1
+            }
+        }
+        if filled > 0 {
+            logger.info(
+                "Backfilled guardrail cedar_text from matchers",
+                metadata: ["count": .stringConvertible(filled)])
+        }
+        return filled
+    }
+
+    @discardableResult
+    static func backfillCedarText(
+        using iam: IAMPersistence,
+        hierarchyDB: any Database,
+        logger: Logger
+    ) async throws -> Int {
+        let rows = try await iam.guardrailsMissingCedarText()
+        guard !rows.isEmpty else { return 0 }
+
+        var filled = 0
+        for row in rows {
+            guard let text = try await GuardrailRendering.cedarText(for: row, on: hierarchyDB) else {
+                continue
+            }
+            if try await iam.backfillGuardrailCedarText(id: row.id, cedarText: text) {
+                filled += 1
+            }
         }
         if filled > 0 {
             logger.info(
@@ -284,12 +601,20 @@ enum GuardrailStore {
 
     /// The guardrails attached directly to a node, enabled or not — what an
     /// admin of that node manages.
-    static func attached(to node: IAMNode, on db: any Database) async throws -> [Guardrail] {
-        try await Guardrail.query(on: db)
-            .filter(\.$nodeType == node.type.rawValue)
-            .filter(\.$nodeID == node.id)
-            .sort(\.$name)
-            .all()
+    static func attached(
+        to node: IAMNode,
+        on db: any Database
+    ) async throws -> [IAMGuardrailSnapshot] {
+        try await LegacyGuardrailStore.attached(to: node, on: db)
+    }
+
+    static func attached(
+        to node: IAMNode,
+        using iam: IAMPersistence
+    ) async throws -> [IAMGuardrailSnapshot] {
+        try await iam.guardrails(
+            attachedTo: IAMNodeReference(type: node.type.rawValue, id: node.id)
+        )
     }
 
     /// Every enabled guardrail in force at `node`: those attached to it and
@@ -298,26 +623,29 @@ enum GuardrailStore {
     /// All of them apply. There is no precedence rule to consult and no
     /// "nearest wins" — ceilings intersect, so the effective ceiling is the
     /// conjunction of the whole chain.
-    static func effective(at node: IAMNode, on db: any Database) async throws -> [Guardrail] {
+    static func effective(
+        at node: IAMNode,
+        on db: any Database
+    ) async throws -> [IAMGuardrailSnapshot] {
         let chain = try await IAMResourceTree.ancestors(of: node, on: db)
         return try await effective(along: chain, on: db)
     }
 
     /// `effective(at:)` for a chain the caller already walked.
-    static func effective(along chain: [IAMNode], on db: any Database) async throws -> [Guardrail] {
-        guard !chain.isEmpty else { return [] }
-        return try await Guardrail.query(on: db)
-            .filter(\.$enabled == true)
-            .group(.or) { anyNode in
-                for node in chain {
-                    anyNode.group(.and) { thisNode in
-                        thisNode.filter(\.$nodeType == node.type.rawValue)
-                        thisNode.filter(\.$nodeID == node.id)
-                    }
-                }
-            }
-            .sort(\.$name)
-            .all()
+    static func effective(
+        along chain: [IAMNode],
+        on db: any Database
+    ) async throws -> [IAMGuardrailSnapshot] {
+        try await LegacyGuardrailStore.enabled(along: chain, on: db)
+    }
+
+    static func effective(
+        along chain: [IAMNode],
+        using iam: IAMPersistence
+    ) async throws -> [IAMGuardrailSnapshot] {
+        try await iam.enabledGuardrails(
+            along: chain.map { IAMNodeReference(type: $0.type.rawValue, id: $0.id) }
+        )
     }
 
     // MARK: - Evaluation
@@ -333,7 +661,7 @@ enum GuardrailStore {
         principalID: UUID,
         node: IAMNode,
         on db: any Database
-    ) async throws -> [Guardrail] {
+    ) async throws -> [IAMGuardrailSnapshot] {
         let resolution = try await IAMResourceTree.resolve(node, on: db)
         let chain = resolution.chain
         let candidates = try await effective(along: chain, on: db)
@@ -344,7 +672,7 @@ enum GuardrailStore {
         let environment = resolution.leaf.environment
         let organizationID = chain.first(where: { $0.type == .organization })?.id
 
-        var matched: [Guardrail] = []
+        var matched: [IAMGuardrailSnapshot] = []
         for guardrail in candidates {
             // Authored rows (#610) carry placeholder matchers — their forbid is
             // the stored Cedar text, which the structured matchers here cannot
@@ -364,6 +692,40 @@ enum GuardrailStore {
                     principalID: principalID,
                     organizationID: organizationID,
                     on: db
+                )
+            else { continue }
+            matched.append(guardrail)
+        }
+        return matched
+    }
+
+    static func forbidding(
+        action: String,
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        node: IAMNode,
+        using iam: IAMPersistence,
+        hierarchyDB: any Database
+    ) async throws -> [IAMGuardrailSnapshot] {
+        let resolution = try await IAMResourceTree.resolve(node, on: hierarchyDB)
+        let chain = resolution.chain
+        let candidates = try await effective(along: chain, using: iam)
+        guard !candidates.isEmpty else { return [] }
+
+        let environment = resolution.leaf.environment
+        let organizationID = chain.first(where: { $0.type == .organization })?.id
+        var matched: [IAMGuardrailSnapshot] = []
+        for guardrail in candidates {
+            guard !guardrail.authored else { continue }
+            let rendering = try GuardrailRendering(guardrail)
+            guard rendering.covers(action: action) else { continue }
+            guard rendering.covers(environment: environment) else { continue }
+            guard
+                try await rendering.covers(
+                    principalType: principalType,
+                    principalID: principalID,
+                    organizationID: organizationID,
+                    on: hierarchyDB
                 )
             else { continue }
             matched.append(guardrail)

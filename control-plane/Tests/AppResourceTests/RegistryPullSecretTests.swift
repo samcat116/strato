@@ -1,4 +1,5 @@
 import Crypto
+import ControlPlanePostgres
 import Fluent
 import Foundation
 import NIOConcurrencyHelpers
@@ -42,8 +43,7 @@ final class RegistryPullSecretTests {
             )
             let org = try await builder.createOrganization(name: "Pull Secret Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "Pull Secret Project",
@@ -52,7 +52,7 @@ final class RegistryPullSecretTests {
             )
             let sandbox = try await builder.createSandbox(
                 name: "private-sandbox", project: project, image: "ghcr.io/acme/worker:v3")
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, project, sandbox, token)
         } catch {
@@ -66,6 +66,7 @@ final class RegistryPullSecretTests {
     /// Registers an in-memory Firecracker-capable agent and places the
     /// sandbox on it, so the desired-state assembly carries it.
     private func registerAgent(app: Application, sandbox: Sandbox) async throws -> String {
+        var sandbox = sandbox
         let message = AgentRegisterMessage(
             agentId: "pull-secret-agent",
             hostname: "test-host",
@@ -77,7 +78,7 @@ final class RegistryPullSecretTests {
             ),
             protocolVersion: WireProtocol.currentVersion
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.db).first?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: "pull-secret-agent",
             organizationScope: orgID.map { .organization($0) })
@@ -91,6 +92,23 @@ final class RegistryPullSecretTests {
     }
 
     private let sampleDigest = "sha256:6c3c624b58dbbcd3c0dd82b4c53f04194d1247c6eebdaab7c610cf7d66709b3b"
+
+    private func createPullSecret(
+        app: Application,
+        projectID: UUID,
+        registry: String = "ghcr.io",
+        username: String = "acme-bot",
+        encryptedSecret: String = "ghp_supersecret"
+    ) async throws -> RegistryPullSecretSnapshot {
+        try await app.registryPullSecretsPersistence.create(
+            RegistryPullSecretWrite(
+                projectID: projectID,
+                registry: registry,
+                username: username,
+                encryptedSecret: encryptedSecret
+            )
+        )
+    }
 
     // MARK: - CRUD
 
@@ -134,9 +152,14 @@ final class RegistryPullSecretTests {
                 #expect(updated.username == "acme-bot-2")
             }
 
-            let stored = try #require(await RegistryPullSecret.find(secretID, on: app.db))
+            let stored = try #require(
+                try await app.registryPullSecretsPersistence.secret(
+                    id: secretID,
+                    projectID: project.id!
+                )
+            )
             // Works in pass-through and encrypted modes alike.
-            let recoverable = try app.secretsEncryption.decrypt(stored.secret)
+            let recoverable = try app.secretsEncryption.decrypt(stored.encryptedSecret)
             #expect(recoverable == "ghp_rotated")
 
             try await app.test(.DELETE, "\(credentialsPath(project))/\(secretID.uuidString)") { req in
@@ -144,7 +167,7 @@ final class RegistryPullSecretTests {
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            let remaining = try await RegistryPullSecret.query(on: app.db).count()
+            let remaining = try await app.registryPullSecretsPersistence.all().count
             #expect(remaining == 0)
         }
     }
@@ -170,9 +193,14 @@ final class RegistryPullSecretTests {
 
             let response = try #require(created)
             let secretID = try #require(response.id)
-            let stored = try #require(await RegistryPullSecret.find(secretID, on: app.db))
-            #expect(stored.secret.hasPrefix(SecretsEncryptionService.encryptedPrefix))
-            let decrypted = try encryption.decrypt(stored.secret)
+            let stored = try #require(
+                try await app.registryPullSecretsPersistence.secret(
+                    id: secretID,
+                    projectID: project.id!
+                )
+            )
+            #expect(stored.encryptedSecret.hasPrefix(SecretsEncryptionService.encryptedPrefix))
+            let decrypted = try encryption.decrypt(stored.encryptedSecret)
             #expect(decrypted == "ghp_supersecret")
         }
     }
@@ -180,16 +208,30 @@ final class RegistryPullSecretTests {
     @Test("Startup sweep encrypts plaintext pull secrets once a key exists")
     func startupSweepEncrypts() async throws {
         try await withPullSecretTestApp { app, _, project, _, _ in
-            let row = RegistryPullSecret(
-                projectID: project.id!, registry: "ghcr.io", username: "bot", secret: "plaintext")
-            try await row.save(on: app.db)
+            let row = try await createPullSecret(
+                app: app,
+                projectID: project.id!,
+                username: "bot",
+                encryptedSecret: "plaintext"
+            )
 
             let encryption = SecretsEncryptionService(key: SymmetricKey(size: .bits256))
-            try await encryption.encryptStoredSecrets(on: app.db, logger: app.logger)
+            try await encryption.encryptStoredSecrets(
+                oidcProviders: app.oidcProvidersPersistence,
+                ssfStreams: app.ssfStreamsPersistence,
+                registryPullSecrets: app.registryPullSecretsPersistence,
+                webhookSubscriptions: app.webhookSubscriptionsPersistence,
+                logger: app.logger
+            )
 
-            let stored = try #require(await RegistryPullSecret.find(row.id, on: app.db))
-            #expect(stored.secret.hasPrefix(SecretsEncryptionService.encryptedPrefix))
-            let decrypted = try encryption.decrypt(stored.secret)
+            let stored = try #require(
+                try await app.registryPullSecretsPersistence.secret(
+                    id: row.id,
+                    projectID: project.id!
+                )
+            )
+            #expect(stored.encryptedSecret.hasPrefix(SecretsEncryptionService.encryptedPrefix))
+            let decrypted = try encryption.decrypt(stored.encryptedSecret)
             #expect(decrypted == "plaintext")
         }
     }
@@ -238,7 +280,7 @@ final class RegistryPullSecretTests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: editor.id!, role: .editor,
                 nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
-            let editorToken = try await editor.generateAPIKey(on: app.db)
+            let editorToken = try await editor.generateAPIKey(on: app)
 
             try await app.test(.POST, credentialsPath(project)) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: editorToken)
@@ -248,7 +290,7 @@ final class RegistryPullSecretTests {
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
-            let count = try await RegistryPullSecret.query(on: app.db).count()
+            let count = try await app.registryPullSecretsPersistence.all().count
             #expect(count == 0)
         }
     }
@@ -441,10 +483,7 @@ final class RegistryPullSecretTests {
     @Test("Assembly pins the digest, persists it, and mints a bearer credential")
     func assemblyPinsDigestAndMintsToken() async throws {
         try await withPullSecretTestApp { app, _, project, sandbox, _ in
-            let row = RegistryPullSecret(
-                projectID: project.id!, registry: "ghcr.io", username: "acme-bot",
-                secret: "ghp_supersecret")
-            try await row.save(on: app.db)
+            _ = try await createPullSecret(app: app, projectID: project.id!)
 
             let scripted = ScriptedRegistryClient(
                 digest: sampleDigest,
@@ -479,10 +518,7 @@ final class RegistryPullSecretTests {
     @Test("Assembly falls back to the stored Basic credential when no token mints")
     func assemblyBasicFallback() async throws {
         try await withPullSecretTestApp { app, _, project, sandbox, _ in
-            let row = RegistryPullSecret(
-                projectID: project.id!, registry: "ghcr.io", username: "acme-bot",
-                secret: "ghp_supersecret")
-            try await row.save(on: app.db)
+            _ = try await createPullSecret(app: app, projectID: project.id!)
 
             // Token minting yields nothing (Basic-only registry).
             app.registryClient = ScriptedRegistryClient(digest: sampleDigest, token: nil)
@@ -516,12 +552,10 @@ final class RegistryPullSecretTests {
     @Test("Sandboxes on their way out get neither resolution nor credentials")
     func assemblySkipsAbsentSandboxes() async throws {
         try await withPullSecretTestApp { app, _, project, sandbox, _ in
+            var sandbox = sandbox
             // Even with a matching pull secret, an absent-desired sandbox
             // must not receive credential material.
-            let row = RegistryPullSecret(
-                projectID: project.id!, registry: "ghcr.io", username: "acme-bot",
-                secret: "ghp_supersecret")
-            try await row.save(on: app.db)
+            _ = try await createPullSecret(app: app, projectID: project.id!)
 
             let scripted = ScriptedRegistryClient(
                 digest: sampleDigest,
@@ -545,10 +579,7 @@ final class RegistryPullSecretTests {
     @Test("A policy refusal from token minting sends no credential at all")
     func assemblyPolicyRefusalSendsNothing() async throws {
         try await withPullSecretTestApp { app, _, project, sandbox, _ in
-            let row = RegistryPullSecret(
-                projectID: project.id!, registry: "ghcr.io", username: "acme-bot",
-                secret: "ghp_supersecret")
-            try await row.save(on: app.db)
+            _ = try await createPullSecret(app: app, projectID: project.id!)
 
             // An insecure-realm refusal must NOT degrade into the Basic
             // fallback — that would hand the agent the stored secret to

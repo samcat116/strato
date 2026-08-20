@@ -1,8 +1,23 @@
 import Fluent
+import ControlPlanePostgres
 import Vapor
 import StratoShared
 
 struct VolumeController: RouteCollection {
+    private let storagePools: StoragePoolsPersistence
+    private let iam: IAMPersistence
+    private let projects: ProjectsPersistence
+
+    init(
+        storagePools: StoragePoolsPersistence,
+        iam: IAMPersistence,
+        projects: ProjectsPersistence
+    ) {
+        self.storagePools = storagePools
+        self.iam = iam
+        self.projects = projects
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let volumes = routes.grouped("api", "volumes")
         let volumeSnapshots = routes.grouped("api", "volume-snapshots")
@@ -49,11 +64,10 @@ struct VolumeController: RouteCollection {
     func visibleVolumes(req: Request) async throws -> [VolumeResponse] {
         _ = try req.auth.require(User.self)
 
-        // Build query
-        var query = Volume.query(on: req.db)
-
         // Filter by project if specified
         var visibility: ProjectVisibility?
+        var projectID: UUID?
+        var projectIDs: [UUID]?
         if let projectIdString = req.query[String.self, at: "project_id"],
             let projectId = UUID(uuidString: projectIdString)
         {
@@ -64,40 +78,32 @@ struct VolumeController: RouteCollection {
                 throw Abort(.forbidden, reason: "You don't have access to this project")
             }
 
-            query = query.filter(\.$project.$id == projectId)
+            projectID = projectId
         } else {
             // Narrow to the projects the caller could reach, then let the
             // evaluator decide the ones that carry rows (`ProjectVisibility`).
-            let resolved = try await ProjectVisibility.resolve(on: req)
+            let resolved = try await ProjectVisibility.resolve(on: req, using: iam, projects: projects)
             guard !resolved.reachesNoProject else { return [] }
-            if let candidates = resolved.candidateProjectIDs {
-                query = query.filter(\.$project.$id ~~ candidates)
-            }
+            projectIDs = resolved.candidateProjectIDs
             visibility = resolved
         }
 
-        // Filter by status if specified
-        if let statusString = req.query[String.self, at: "status"],
-            let status = VolumeStatus(rawValue: statusString)
-        {
-            query = query.filter(\.$status == status)
+        let status = req.query[String.self, at: "status"].flatMap(VolumeStatus.init(rawValue:))
+        let volumeType = req.query[String.self, at: "type"].flatMap(VolumeType.init(rawValue:))
+        var volumes = try await LegacyVolumeStore.volumes(
+            projectID: projectID, projectIDs: projectIDs, on: req.db
+        ).filter { volume in
+            (status == nil || volume.status == status)
+                && (volumeType == nil || volume.volumeType == volumeType)
+        }.sorted {
+            let lhsDate = $0.createdAt ?? .distantPast
+            let rhsDate = $1.createdAt ?? .distantPast
+            if lhsDate != rhsDate { return lhsDate > rhsDate }
+            return ($0.id?.uuidString ?? "") > ($1.id?.uuidString ?? "")
         }
-
-        // Filter by volume type if specified
-        if let typeString = req.query[String.self, at: "type"],
-            let volumeType = VolumeType(rawValue: typeString)
-        {
-            query = query.filter(\.$volumeType == volumeType)
-        }
-
-        var volumes =
-            try await query
-            .sort(\.$createdAt, .descending)
-            .sort(\.$id, .descending)
-            .all()
 
         if let visibility {
-            volumes = try await visibility.readableRows(volumes, projectID: { $0.$project.id }, on: req)
+            volumes = try await visibility.readableRows(volumes, projectID: \.projectID, on: req)
         }
 
         return try await VolumeService.responses(for: volumes, on: req.db)
@@ -134,7 +140,7 @@ struct VolumeController: RouteCollection {
         // the request instead of surfacing later as a failed volume.
         var sourceImage: Image?
         if let sourceImageId = request.sourceImageId {
-            guard let image = try await Image.find(sourceImageId, on: req.db) else {
+            guard var image = try await LegacyImageStore.image(id: sourceImageId, on: req.db) else {
                 throw Abort(.notFound, reason: "Source image not found")
             }
 
@@ -152,7 +158,7 @@ struct VolumeController: RouteCollection {
             guard image.status == .ready else {
                 throw Abort(.badRequest, reason: "Source image is not ready (status: '\(image.status.rawValue)')")
             }
-            try await image.$artifacts.load(on: req.db)
+            image = try await LegacyImageArtifactStore.loading(image, on: req.db)
             guard image.usableDiskArtifact != nil else {
                 throw Abort(
                     .badRequest,
@@ -181,7 +187,7 @@ struct VolumeController: RouteCollection {
 
         // Every volume lives in a pool; without a pool-selection API yet,
         // that's the default local pool seeded by migration.
-        let pool = try await StoragePool.defaultPool(on: req.db)
+        let pool = try await storagePools.defaultPool()
         guard pool.mode == .local else {
             throw Abort(
                 .conflict,
@@ -200,39 +206,37 @@ struct VolumeController: RouteCollection {
             format: format,
             volumeType: volumeType,
             status: .creating,
+            desiredStatus: .present,
+            generation: 1,
+            convergenceDeadline: Date().addingTimeInterval(
+                OperationResourceKind.volume.completionBudgetSeconds(for: .create)),
             createdByID: user.id!,
             poolID: pool.id,
+            iopsTotal: request.iopsTotal,
+            bpsTotal: request.bpsTotal,
             sourceImageID: request.sourceImageId
         )
-        // Set before the insert rather than through a follow-up mutation, so a
-        // volume never exists uncapped even briefly (STR-19).
-        volume.iopsTotal = request.iopsTotal
-        volume.bpsTotal = request.bpsTotal
 
         let app = req.application
         let userID = try user.requireID()
         // Bind to a `let` so the `@Sendable` dispatch closure captures an
         // immutable copy rather than the mutable `sourceImage` var.
-        let poolMemberIds = pool.memberAgentIds
+        let poolMemberIds = pool.memberAgentIDs
 
         // How long the create has to converge before the stuck-convergence
         // sweep marks the volume degraded, stamped with the insert so a
         // control-plane crash between here and placement still leaves a
         // resource the sweep can judge.
-        volume.extendConvergenceDeadline(
-            by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))
-        volume.setDesiredStatus(.present)
-        volume.generation = 1
-
         // The first visible desired state is generation 1. Reserve storage
         // first, then commit the insert, creator binding, and attribution
         // together. Create cannot use `ResourceMutation.accept`, because that
         // service operates on a row that already exists.
-        let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+        let (createdVolume, accepted) = try await req.db.transaction {
+            db -> (Volume, ResourceMutation.Accepted) in
             try await QuotaEnforcementService.reserveVolume(
                 for: project, environment: environment, size: sizeBytes, on: db)
-            try await volume.save(on: db)
-            let volumeID = try volume.requireID()
+            let created = try await volume.persisted(on: db)
+            let volumeID = try created.requireID()
             try await RoleBindingService.grant(
                 principalType: .user,
                 principalID: userID,
@@ -245,11 +249,13 @@ struct VolumeController: RouteCollection {
             let event = try await ResourceEvent.record(
                 .create, resourceKind: .volume, resourceID: volumeID,
                 actor: .user(userID), on: db)
-            return ResourceMutation.Accepted(
-                mutationID: try event.requireID(), targetGeneration: volume.generation)
+            return (
+                created,
+                ResourceMutation.Accepted(
+                    mutationID: try event.requireID(), targetGeneration: created.generation))
         }
 
-        let volumeId = try volume.requireID()
+        let volumeId = try createdVolume.requireID()
 
         // Placement is a `.placement` dispatch rather than something resolved
         // in-band, and it has to *commit* before the sync can carry the volume:
@@ -269,9 +275,12 @@ struct VolumeController: RouteCollection {
                         "No agent is available to host this volume: it needs an online, "
                             + "QEMU-capable agent in the volume's local pool.")
                 }
-                try await VolumeReplica(
-                    volumeID: volumeId, agentId: agentId, state: .provisioning
-                ).create(on: db)
+                _ = try await LegacyVolumeReplicaStore.insert(
+                    volumeID: volumeId,
+                    agentId: agentId,
+                    state: .provisioning,
+                    on: db
+                )
                 await app.agentService.syncDesiredState(agentId: agentId)
             },
             app: app)
@@ -287,7 +296,7 @@ struct VolumeController: RouteCollection {
             ])
 
         return try await AcceptedMutation(
-            VolumeService.response(for: volume, on: req.db), accepted
+            VolumeService.response(for: createdVolume, on: req.db), accepted
         ).acceptedResponse()
     }
 
@@ -310,23 +319,20 @@ struct VolumeController: RouteCollection {
         let volume = try await fetchVolumeWithAction(req: req, action: "volume:update")
         let request = try req.content.decodeValidated(UpdateVolumeRequest.self)
 
-        if let name = request.name {
-            volume.name = name
-        }
-        if let description = request.description {
-            volume.description = description
-        }
-
-        try await volume.save(on: req.db)
+        let updated = try await volume.replacing(
+            name: request.name,
+            description: request.description
+        ).persisted(on: req.db)
+        let updatedID = try updated.requireID()
 
         req.logger.info(
             "Volume updated",
             metadata: [
-                "volumeId": .string(volume.id!.uuidString),
-                "name": .string(volume.name),
+                "volumeId": .string(updatedID.uuidString),
+                "name": .string(updated.name),
             ])
 
-        return try await VolumeService.response(for: volume, on: req.db)
+        return try await VolumeService.response(for: updated, on: req.db)
     }
 
     // MARK: - Delete Volume
@@ -379,10 +385,13 @@ struct VolumeController: RouteCollection {
                     }
                     return false
                 }
+                guard let current = try await Volume.find(volumeID, on: db) else {
+                    return true
+                }
                 let outcome: ResourceFinalizerService.ClearOutcome
                 do {
                     outcome = try await ResourceFinalizerService.clear(
-                        .agentAbsent, from: volume, on: db, app: app)
+                        .agentAbsent, from: current, on: db, app: app)
                 } catch {
                     throw ResourceMutation.WorkError(
                         "Failed to delete volume record: \(error.localizedDescription)")
@@ -398,20 +407,21 @@ struct VolumeController: RouteCollection {
                 return outcome.isRemoved
             }
 
-        let accepted = try await req.resourceMutation.accept(
+        let mutation = try await req.resourceMutation.acceptValue(
             .delete, on: volume, actor: .user(userID), dispatch: strategy,
             on: req.db, app: app
-        ) { @Sendable db in
+        ) { @Sendable current, db in
             // Volume teardown is scoped to every physical replica, not only
             // the healthy/provisioning set used by generic placement. Stamp
             // before the mark, and never re-stamp a terminating volume: doing
             // so would resurrect a token its participants already cleared.
-            if !volume.isTerminating {
-                volume.finalizers =
+            var updated = current
+            if !current.isTerminating {
+                updated = updated.replacingFinalizers(
                     try await VolumeService.agentIDsWithPhysicalReplicas(of: volume, on: db).isEmpty
-                    ? [] : [ResourceFinalizer.agentAbsent.rawValue]
+                    ? [] : [ResourceFinalizer.agentAbsent.rawValue])
             }
-            volume.setDesiredStatus(.absent)
+            return updated.replacingDesiredStatus(.absent)
         }
 
         req.logger.info(
@@ -419,7 +429,7 @@ struct VolumeController: RouteCollection {
             metadata: ["volumeId": .string(volumeID.uuidString)])
 
         return try await AcceptedMutation(
-            VolumeService.response(for: volume, on: req.db), accepted
+            VolumeService.response(for: mutation.resource, on: req.db), mutation.accepted
         ).acceptedResponse()
     }
 
@@ -458,8 +468,8 @@ struct VolumeController: RouteCollection {
         // networks and security groups (issue #766), answered the same way at
         // every site (issue #777).
         try ProjectContainment.require(
-            "Volume", in: volume.$project.id,
-            sameProjectAs: "the VM", in: vm.$project.id)
+            "Volume", in: volume.projectID,
+            sameProjectAs: "the VM", in: vm.projectID)
 
         // Environment-scoped quotas make the environment part of containment,
         // not merely display metadata (STR-181). Letting a development volume
@@ -492,12 +502,17 @@ struct VolumeController: RouteCollection {
         // `202` that degrades a minute later, and the same-agent constraint is
         // a fact about the request, not about convergence.
         if let vmHypervisorId = vm.hypervisorId {
-            let pool = try await volume.$pool.get(on: req.db)
+            let pool: StoragePoolSnapshot?
+            if let poolID = volume.poolID {
+                pool = try await storagePools.pool(id: poolID)
+            } else {
+                pool = nil
+            }
             let replicaAgentIds = try await VolumeService.agentIDs(holding: volume, on: req.db)
 
             guard
-                StoragePool.agentCanReach(
-                    agentId: vmHypervisorId, pool: pool, replicaAgentIds: replicaAgentIds)
+                StoragePoolsPersistence.agentCanReach(
+                    agentID: vmHypervisorId, pool: pool, replicaAgentIDs: replicaAgentIds)
             else {
                 throw Abort(
                     .badRequest,
@@ -522,22 +537,23 @@ struct VolumeController: RouteCollection {
         let readonly = request.readonly ?? false
         let bootOrder = request.bootOrder
         let vmID = try vm.requireID()
-        guard let project = try await Project.find(volume.$project.id, on: req.db) else {
+        guard let project = try await Project.find(volume.projectID, on: req.db) else {
             throw Abort(.internalServerError, reason: "The volume's project no longer exists")
         }
 
-        let accepted = try await req.resourceMutation.accept(
+        let mutation = try await req.resourceMutation.acceptValue(
             .attach, on: volume, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable tx in
+        ) { @Sendable current, tx in
+            var updated = current
             // A cloned or image-backed volume is materialized at the source's
             // virtual size, which can exceed the size the caller requested.
             // Wait until the owning agent has measured it, then reserve any
             // excess before attachment gives a guest the chance to grow the
             // sparse file. Raising the desired size in the same transaction
             // also turns the agent's refused shrink into a convergent no-op.
-            if volume.$sourceImage.id != nil || volume.$sourceVolume.id != nil {
-                guard volume.observedSizeBytes != nil else {
+            if current.sourceImageID != nil || current.sourceVolumeID != nil {
+                guard current.observedSizeBytes != nil else {
                     throw Abort(
                         .conflict,
                         reason:
@@ -545,7 +561,7 @@ struct VolumeController: RouteCollection {
                     )
                 }
             }
-            if let materializedSize = volume.observedSizeBytes, materializedSize > volume.size {
+            if let materializedSize = current.observedSizeBytes, materializedSize > current.size {
                 guard materializedSize <= WorkloadSizeLimits.maxDiskBytes else {
                     throw Abort(
                         .conflict,
@@ -554,10 +570,10 @@ struct VolumeController: RouteCollection {
                     )
                 }
                 try await QuotaEnforcementService.reserveVolumeResize(
-                    for: project, environment: volume.environment,
-                    sizeDelta: materializedSize - volume.size,
+                    for: project, environment: current.environment,
+                    sizeDelta: materializedSize - current.size,
                     reason: "the materialized volume", on: tx)
-                volume.size = materializedSize
+                updated = updated.replacing(size: materializedSize)
             }
 
             // The desired attachment, and nothing else. There is no
@@ -569,12 +585,12 @@ struct VolumeController: RouteCollection {
             // generating the next free `disk<N>` is a read-then-write, and two
             // attaches that read before either wrote both picked the same slot
             // (STR-129).
-            try await VolumeAttachmentService.claim(
-                volume, to: vm,
+            return try await VolumeAttachmentService.claim(
+                updated, to: vm,
                 deviceName: requestedDeviceName,
                 bootOrder: bootOrder,
                 readonly: readonly,
-                on: tx)
+                on: tx).volume
         }
 
         req.logger.info(
@@ -582,11 +598,11 @@ struct VolumeController: RouteCollection {
             metadata: [
                 "volumeId": .string(volume.id!.uuidString),
                 "vmId": .string(vmID.uuidString),
-                "deviceName": .string(volume.deviceName ?? ""),
+                "deviceName": .string(mutation.resource.deviceName ?? ""),
             ])
 
         return try await AcceptedMutation(
-            VolumeService.response(for: volume, on: req.db), accepted
+            VolumeService.response(for: mutation.resource, on: req.db), mutation.accepted
         ).acceptedResponse()
     }
 
@@ -605,7 +621,7 @@ struct VolumeController: RouteCollection {
                 reason: "A VM's canonical boot volume cannot be detached independently")
         }
 
-        guard volume.canDetach, let vmId = volume.$vm.id else {
+        guard volume.canDetach, let vmId = volume.vmID else {
             throw Abort(.conflict, reason: "Volume is not attached to any VM")
         }
 
@@ -624,14 +640,14 @@ struct VolumeController: RouteCollection {
         }
 
         let userID = try user.requireID()
-        let accepted = try await req.resourceMutation.accept(
+        let mutation = try await req.resourceMutation.acceptValue(
             .detach, on: volume, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable _ in
+        ) { @Sendable current, _ in
             // Every attachment column at once, through the one function that
             // owns the transition, so the row can never come to rest describing
             // half an attachment (STR-129).
-            VolumeAttachmentService.clearAttachment(volume)
+            return VolumeAttachmentService.clearAttachment(current)
         }
 
         req.logger.info(
@@ -642,7 +658,7 @@ struct VolumeController: RouteCollection {
             ])
 
         return try await AcceptedMutation(
-            VolumeService.response(for: volume, on: req.db), accepted
+            VolumeService.response(for: mutation.resource, on: req.db), mutation.accepted
         ).acceptedResponse()
     }
 
@@ -697,23 +713,23 @@ struct VolumeController: RouteCollection {
 
         let previousSize = volume.size
         let userID = try user.requireID()
-        guard let project = try await Project.find(volume.$project.id, on: req.db) else {
+        guard let project = try await Project.find(volume.projectID, on: req.db) else {
             throw Abort(.internalServerError, reason: "The volume's project no longer exists")
         }
         let environment = volume.environment
-        let accepted = try await req.resourceMutation.accept(
+        let mutation = try await req.resourceMutation.acceptValue(
             .resize, on: volume, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable db in
+        ) { @Sendable current, db in
             // Re-check against the row under the lock, not the one the request
             // read: `lockAndRefresh` adopts the committed size, so a resize that
             // landed in between is visible here and this one may now be a
             // shrink. The guard above cannot see that race.
-            guard newSizeBytes > volume.size else {
+            guard newSizeBytes > current.size else {
                 throw Abort(
                     .conflict,
                     reason:
-                        "The volume was resized to \(volume.sizeGB) GB while this request was in flight; a resize must grow it."
+                        "The volume was resized to \(current.sizeGB) GB while this request was in flight; a resize must grow it."
                 )
             }
             // Only the delta, and *before* the size write below, so the resync
@@ -722,11 +738,11 @@ struct VolumeController: RouteCollection {
             // after locking the row, so a rejection unwinds the whole mutation.
             try await QuotaEnforcementService.reserveVolumeResize(
                 for: project, environment: environment,
-                sizeDelta: newSizeBytes - volume.size, on: db)
+                sizeDelta: newSizeBytes - current.size, on: db)
             // The size on the row is the *desired* size from here on. The agent
             // grows the disk and confirms by generation, which is what makes a
             // resize whose sync was dropped simply happen on the next one.
-            volume.size = newSizeBytes
+            return current.replacing(size: newSizeBytes)
         }
 
         req.logger.info(
@@ -738,7 +754,7 @@ struct VolumeController: RouteCollection {
             ])
 
         return try await AcceptedMutation(
-            VolumeService.response(for: volume, on: req.db), accepted
+            VolumeService.response(for: mutation.resource, on: req.db), mutation.accepted
         ).acceptedResponse()
     }
 
@@ -795,14 +811,14 @@ struct VolumeController: RouteCollection {
         }
 
         let userID = try user.requireID()
-        let accepted = try await req.resourceMutation.accept(
+        let mutation = try await req.resourceMutation.acceptValue(
             .throttle, on: volume, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable _ in
+        ) { @Sendable current, _ in
             // The requested pair is desired state from here on; the applied
             // pair is only ever written by an agent's observed report.
-            volume.iopsTotal = request.iopsTotal
-            volume.bpsTotal = request.bpsTotal
+            return current.replacing(
+                iopsTotal: .some(request.iopsTotal), bpsTotal: .some(request.bpsTotal))
         }
 
         req.logger.info(
@@ -814,7 +830,7 @@ struct VolumeController: RouteCollection {
             ])
 
         return try await AcceptedMutation(
-            VolumeService.response(for: volume, on: req.db), accepted
+            VolumeService.response(for: mutation.resource, on: req.db), mutation.accepted
         ).acceptedResponse()
     }
 
@@ -825,7 +841,7 @@ struct VolumeController: RouteCollection {
     /// convergence window; desired state also carries the VM id so the agent
     /// holds that VM's reconciliation lane for the entire copy.
     private func requireReadableCloneSource(_ volume: Volume, on db: any Database) async throws {
-        guard let vmID = volume.$vm.id else { return }
+        guard let vmID = volume.vmID else { return }
         guard let vm = try await VM.find(vmID, on: db) else {
             throw Abort(.conflict, reason: "The volume's attached VM no longer exists")
         }
@@ -852,7 +868,7 @@ struct VolumeController: RouteCollection {
         let request = try req.content.decodeValidated(CreateSnapshotRequest.self)
 
         guard volume.canSnapshot else {
-            if volume.$vm.id != nil {
+            if volume.vmID != nil {
                 throw Abort(
                     .conflict,
                     reason: "Attached volumes cannot be snapshotted; detach the volume first")
@@ -878,19 +894,18 @@ struct VolumeController: RouteCollection {
             name: request.name,
             description: request.description ?? "",
             volumeID: try volume.requireID(),
-            projectID: volume.$project.id,
+            projectID: volume.projectID,
             environment: volume.environment,
             size: volume.size,
             agentId: agentId,
+            convergenceDeadline: Date().addingTimeInterval(
+                OperationResourceKind.volumeSnapshot.completionBudgetSeconds(for: .create)),
             expiresAt: try SnapshotRetention.expiry(
                 requested: request.ttlSeconds,
                 defaultTTLSeconds: req.controlPlaneConfiguration.int(.snapshotDefaultTTLSeconds)),
             createdByID: userID
         )
-        snapshot.extendConvergenceDeadline(
-            by: OperationResourceKind.volumeSnapshot.completionBudgetSeconds(for: .create))
-
-        guard let project = try await Project.find(volume.$project.id, on: req.db) else {
+        guard let project = try await Project.find(volume.projectID, on: req.db) else {
             throw Abort(.internalServerError, reason: "The volume's project no longer exists")
         }
 
@@ -967,7 +982,7 @@ struct VolumeController: RouteCollection {
         let newVolume = Volume(
             name: request.name,
             description: request.description ?? "Clone of \(sourceVolume.name)",
-            projectID: sourceVolume.$project.id,
+            projectID: sourceVolume.projectID,
             environment: sourceVolume.environment,
             size: sourceVolume.size,
             format: sourceVolume.format,
@@ -975,28 +990,28 @@ struct VolumeController: RouteCollection {
             // canonical boot volume and attach it as disk0.
             volumeType: .data,
             status: .creating,
+            desiredStatus: .present,
+            generation: 1,
+            convergenceDeadline: Date().addingTimeInterval(
+                OperationResourceKind.volume.completionBudgetSeconds(for: .create)),
             createdByID: user.id!,
-            poolID: sourceVolume.$pool.id,
+            poolID: sourceVolume.poolID,
             sourceVolumeID: sourceVolume.id
         )
-        newVolume.extendConvergenceDeadline(
-            by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))
-        newVolume.setDesiredStatus(.present)
-        newVolume.generation = 1
-
         let userID = try user.requireID()
         // Same create-only transaction as the ordinary volume path: reserve
         // the clone's full storage footprint first, then make generation 1,
         // attribution, and creator access visible together.
-        guard let sourceProject = try await Project.find(sourceVolume.$project.id, on: req.db) else {
+        guard let sourceProject = try await Project.find(sourceVolume.projectID, on: req.db) else {
             throw Abort(.internalServerError, reason: "The volume's project no longer exists")
         }
-        let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+        let (createdVolume, accepted) = try await req.db.transaction {
+            db -> (Volume, ResourceMutation.Accepted) in
             try await QuotaEnforcementService.reserveVolume(
                 for: sourceProject, environment: sourceVolume.environment,
                 size: sourceVolume.size, on: db)
-            try await newVolume.save(on: db)
-            let newVolumeID = try newVolume.requireID()
+            let created = try await newVolume.persisted(on: db)
+            let newVolumeID = try created.requireID()
             try await RoleBindingService.grant(
                 principalType: .user,
                 principalID: userID,
@@ -1009,15 +1024,17 @@ struct VolumeController: RouteCollection {
             let event = try await ResourceEvent.record(
                 .create, resourceKind: .volume, resourceID: newVolumeID,
                 actor: .user(userID), on: db)
-            return ResourceMutation.Accepted(
-                mutationID: try event.requireID(), targetGeneration: newVolume.generation)
+            return (
+                created,
+                ResourceMutation.Accepted(
+                    mutationID: try event.requireID(), targetGeneration: created.generation))
         }
 
         // The clone is a create *strategy* on the new volume's desired entry,
         // not an operation on the source (ADR 0001 stage 5). The source is
         // therefore never marked busy and never has to be restored afterwards —
         // it is simply read, by an agent that already holds it.
-        let newVolumeID = try newVolume.requireID()
+        let newVolumeID = try createdVolume.requireID()
         let app = req.application
         req.resourceMutation.dispatch(
             .create, resourceType: Volume.self, resourceID: newVolumeID,
@@ -1025,9 +1042,12 @@ struct VolumeController: RouteCollection {
             strategy: .placement { @Sendable db in
                 try await db.transaction { tx in
                     for agentId in sourceAgentIds {
-                        try await VolumeReplica(
-                            volumeID: newVolumeID, agentId: agentId, state: .provisioning
-                        ).create(on: tx)
+                        _ = try await LegacyVolumeReplicaStore.insert(
+                            volumeID: newVolumeID,
+                            agentId: agentId,
+                            state: .provisioning,
+                            on: tx
+                        )
                     }
                 }
                 for agentId in sourceAgentIds {
@@ -1041,11 +1061,11 @@ struct VolumeController: RouteCollection {
             metadata: [
                 "sourceVolumeId": .string(sourceVolume.id!.uuidString),
                 "newVolumeId": .string(newVolumeID.uuidString),
-                "name": .string(newVolume.name),
+                "name": .string(createdVolume.name),
             ])
 
         return try await AcceptedMutation(
-            VolumeService.response(for: newVolume, on: req.db), accepted
+            VolumeService.response(for: createdVolume, on: req.db), accepted
         ).acceptedResponse()
     }
 
@@ -1064,18 +1084,15 @@ struct VolumeController: RouteCollection {
             throw Abort(.forbidden, reason: "You don't have access to this project")
         }
 
-        let snapshots = try await VolumeSnapshot.query(on: req.db)
-            .filter(\.$project.$id == projectID)
-            .sort(\.$createdAt, .descending)
-            .sort(\.$id, .descending)
-            .all()
+        let snapshots = try await LegacyVolumeSnapshotStore.snapshots(
+            projectID: projectID, orderByCreatedDescending: true, on: req.db)
 
         let volumeNodes = Set(
-            snapshots.map { IAMNode(type: .volume, id: $0.$volume.id) })
+            snapshots.map { IAMNode(type: .volume, id: $0.volumeID) })
         let readableVolumes = try await req.canFilter(
             "volume:read", on: Array(volumeNodes))
         let visibleSnapshots = snapshots.filter {
-            readableVolumes.contains(IAMNode(type: .volume, id: $0.$volume.id))
+            readableVolumes.contains(IAMNode(type: .volume, id: $0.volumeID))
         }
 
         return paging.page(visibleSnapshots.map { SnapshotResponse(from: $0) })
@@ -1089,11 +1106,8 @@ struct VolumeController: RouteCollection {
         let paging = try ListPaging.decode(from: req)
         let volume = try await fetchVolumeWithAction(req: req, action: "volume:read")
 
-        let snapshots = try await VolumeSnapshot.query(on: req.db)
-            .filter(\.$volume.$id == volume.id!)
-            .sort(\.$createdAt, .descending)
-            .sort(\.$id, .descending)
-            .all()
+        let snapshots = try await LegacyVolumeSnapshotStore.snapshots(
+            volumeID: try volume.requireID(), orderByCreatedDescending: true, on: req.db)
 
         return paging.page(snapshots.map { SnapshotResponse(from: $0) })
     }
@@ -1118,10 +1132,8 @@ struct VolumeController: RouteCollection {
         }
 
         guard
-            let snapshot = try await VolumeSnapshot.query(on: req.db)
-                .filter(\.$id == snapshotId)
-                .filter(\.$volume.$id == volume.id!)
-                .first()
+            let snapshot = try await VolumeSnapshot.find(snapshotId, on: req.db),
+            snapshot.volumeID == volume.id
         else {
             throw Abort(.notFound, reason: "Snapshot not found")
         }

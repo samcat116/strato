@@ -26,65 +26,45 @@ public enum ImageStatus: String, Codable, CaseIterable, Sendable {
     case error = "error"  // An error occurred
 }
 
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class Image: Model, @unchecked Sendable {
+/// Immutable application snapshot of an image aggregate.
+package struct Image: Equatable, Sendable {
     static let schema = "images"
 
-    @ID(key: .id)
-    var id: UUID?
+    let id: UUID?
 
     // Basic metadata
-    @Field(key: "name")
-    var name: String
+    let name: String
 
-    @Field(key: "description")
-    var description: String
+    let description: String
 
     // Project ownership
-    @Parent(key: "project_id")
-    var project: Project
+    let projectID: UUID
 
     /// Guest CPU architecture. Authoritative for scheduling — the scheduler reads
     /// this single value rather than reconciling per-artifact architectures.
-    @Enum(key: "architecture")
-    var architecture: CPUArchitecture
+    let architecture: CPUArchitecture
 
-    /// Typed artifact set backing this image (disk-image, kernel, rootfs, ...).
-    /// Must be eager-loaded (`.with(\.$artifacts)`) before calling
-    /// `compatibleHypervisors()` / `isUsable(by:)` or building `ImageInfo`.
-    @Children(for: \.$image)
-    var artifacts: [ImageArtifact]
+    /// Typed artifacts explicitly loaded through `LegacyImageArtifactStore`.
+    package let loadedArtifacts: [ImageArtifactSnapshot]?
 
     // Status tracking
-    @Enum(key: "status")
-    var status: ImageStatus
+    let status: ImageStatus
 
     // Default VM configuration (optional)
-    @OptionalField(key: "default_cpu")
-    var defaultCpu: Int?
+    let defaultCpu: Int?
 
-    @OptionalField(key: "default_memory")
-    var defaultMemory: Int64?
+    let defaultMemory: Int64?
 
-    @OptionalField(key: "default_disk")
-    var defaultDisk: Int64?
+    let defaultDisk: Int64?
 
-    @OptionalField(key: "default_cmdline")
-    var defaultCmdline: String?
+    let defaultCmdline: String?
 
     // Upload tracking
-    @Parent(key: "uploaded_by_id")
-    var uploadedBy: User
+    let uploadedByID: UUID
 
     // Timestamps
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
+    let createdAt: Date?
+    let updatedAt: Date?
 
     init(
         id: UUID? = nil,
@@ -97,23 +77,57 @@ final class Image: Model, @unchecked Sendable {
         defaultCpu: Int? = nil,
         defaultMemory: Int64? = nil,
         defaultDisk: Int64? = nil,
-        defaultCmdline: String? = nil
+        defaultCmdline: String? = nil,
+        loadedArtifacts: [ImageArtifactSnapshot]? = nil,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
     ) {
-        self.id = id
+        self.id = id ?? UUID()
         self.name = name
         self.description = description
-        self.$project.id = projectID
+        self.projectID = projectID
         self.architecture = architecture
         self.status = status
-        self.$uploadedBy.id = uploadedByID
+        self.uploadedByID = uploadedByID
         self.defaultCpu = defaultCpu
         self.defaultMemory = defaultMemory
         self.defaultDisk = defaultDisk
         self.defaultCmdline = defaultCmdline
+        self.loadedArtifacts = loadedArtifacts
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    func requireID() throws -> UUID {
+        guard let id else {
+            throw Abort(.internalServerError, reason: "Image has no identifier")
+        }
+        return id
+    }
+
+    package func loading(artifacts: [ImageArtifactSnapshot]) -> Self {
+        Self(
+            id: id,
+            name: name,
+            description: description,
+            projectID: projectID,
+            architecture: architecture,
+            status: status,
+            uploadedByID: uploadedByID,
+            defaultCpu: defaultCpu,
+            defaultMemory: defaultMemory,
+            defaultDisk: defaultDisk,
+            defaultCmdline: defaultCmdline,
+            loadedArtifacts: artifacts,
+            createdAt: createdAt,
+            updatedAt: updatedAt)
+    }
+
+    @discardableResult
+    func save(on database: any Database) async throws -> Self {
+        try await LegacyImageStore.insert(self, on: database)
     }
 }
-
-extension Image: Content {}
 
 // MARK: - Computed Properties
 
@@ -121,13 +135,13 @@ extension Image {
     /// The disk artifact that backs the API's historical single-file convenience
     /// fields. Those fields remain useful to callers, but are never persisted on
     /// the image row.
-    var diskArtifact: ImageArtifact? {
-        ($artifacts.value ?? []).first { $0.kind == .diskImage }
+    var diskArtifact: ImageArtifactSnapshot? {
+        (loadedArtifacts ?? []).first { $0.kind == .diskImage }
     }
 
     /// The disk artifact that is complete and architecture-compatible enough
     /// to seed a managed volume.
-    var usableDiskArtifact: ImageArtifact? {
+    var usableDiskArtifact: ImageArtifactSnapshot? {
         diskArtifact.flatMap { artifact in
             artifact.architecture == architecture && artifact.isUsable ? artifact : nil
         }
@@ -136,8 +150,8 @@ extension Image {
     /// The artifact whose state explains the aggregate image lifecycle.
     /// Falls back to the disk convenience projection outside active/error
     /// states so existing single-disk API fields retain their meaning.
-    var lifecycleArtifact: ImageArtifact? {
-        let artifacts = $artifacts.value ?? []
+    var lifecycleArtifact: ImageArtifactSnapshot? {
+        let artifacts = loadedArtifacts ?? []
         switch status {
         case .downloading:
             return artifacts.first { $0.status == .downloading }
@@ -157,14 +171,14 @@ extension Image {
     /// - Firecracker needs a `kernel` + `rootfs` pair (of matching arch);
     ///   `initramfs` is optional.
     ///
-    /// Requires `$artifacts` to be eager-loaded; an image with no loaded
+    /// Requires artifacts to be explicitly loaded; an image with no loaded
     /// artifacts is compatible with nothing.
     func compatibleHypervisors() -> Set<HypervisorType> {
-        // `$artifacts.value` is nil when the relation isn't eager-loaded, which
+        // `loadedArtifacts` is nil when the caller did not request them, which
         // reads as "no known artifacts" rather than crashing on access. Only
         // `.ready` artifacts count — a still-downloading rootfs must not make the
         // image look bootable (or get sent to an agent).
-        let loaded = $artifacts.value ?? []
+        let loaded = loadedArtifacts ?? []
         let matching = loaded.filter { $0.architecture == architecture && $0.isUsable }
         let kinds = Set(matching.map(\.kind))
 
@@ -179,7 +193,7 @@ extension Image {
     }
 
     /// Whether this image can be run by the given hypervisor type. Requires
-    /// `$artifacts` to be eager-loaded.
+    /// artifacts to be explicitly loaded.
     func isUsable(by hypervisorType: HypervisorType) -> Bool {
         compatibleHypervisors().contains(hypervisorType)
     }
@@ -187,9 +201,9 @@ extension Image {
     /// Recompute the aggregate image status from the authoritative artifact
     /// rows. A complete bootable set wins even when an optional artifact failed;
     /// otherwise expose the most actionable in-progress/error state.
-    func recomputeStatus(on database: any Database) async throws {
-        try await $artifacts.load(on: database)
-        let loaded = $artifacts.value ?? []
+    func recomputedStatus(on database: any Database) async throws -> Self {
+        let loadedImage = try await LegacyImageArtifactStore.loading(self, on: database)
+        let loaded = loadedImage.loadedArtifacts ?? []
 
         let newStatus: ImageStatus
         if !compatibleHypervisors().isEmpty {
@@ -202,10 +216,11 @@ extension Image {
             newStatus = .pending
         }
 
-        if status != newStatus {
-            status = newStatus
-            try await save(on: database)
-        }
+        guard status != newStatus else { return loadedImage }
+        guard let updated = try await LegacyImageStore.updateStatus(
+            id: try requireID(), status: newStatus, on: database)
+        else { throw ImageError.imageNotFound(try requireID()) }
+        return updated.loading(artifacts: loaded)
     }
 }
 
@@ -311,7 +326,7 @@ struct ImageResponse: Content {
     let defaultDisk: Int64?
     let defaultCmdline: String?
     /// Typed artifacts, when eager-loaded; empty otherwise.
-    let artifacts: [ImageArtifact.Public]
+    let artifacts: [ImageArtifactSnapshot.Public]
     /// Hypervisor types this image can run on, when artifacts are eager-loaded.
     let compatibleHypervisors: [HypervisorType]
     let uploadedById: UUID?
@@ -322,7 +337,7 @@ struct ImageResponse: Content {
         self.id = image.id
         self.name = image.name
         self.description = image.description
-        self.projectId = image.$project.id
+        self.projectId = image.projectID
         let diskArtifact = image.diskArtifact
         self.filename = diskArtifact?.filename
         self.size = diskArtifact?.size
@@ -338,9 +353,9 @@ struct ImageResponse: Content {
         self.defaultMemory = image.defaultMemory
         self.defaultDisk = image.defaultDisk
         self.defaultCmdline = image.defaultCmdline
-        self.artifacts = (image.$artifacts.value ?? []).map { $0.asPublic() }
+        self.artifacts = (image.loadedArtifacts ?? []).map { $0.asPublic() }
         self.compatibleHypervisors = image.compatibleHypervisors().sorted { $0.rawValue < $1.rawValue }
-        self.uploadedById = image.$uploadedBy.id
+        self.uploadedById = image.uploadedByID
         self.createdAt = image.createdAt
         self.updatedAt = image.updatedAt
     }

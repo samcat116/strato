@@ -1,4 +1,3 @@
-import Fluent
 import Vapor
 
 // JWT-SVID request authentication (issue #495).

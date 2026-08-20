@@ -77,30 +77,30 @@ struct QuotaUsageAggregatorTests {
     ) async throws -> QuotaMeasuredUsage {
         guard !projectIDs.isEmpty else { return .none }
 
-        let vmQuery = VM.query(on: db).filter(\.$project.$id ~~ projectIDs)
-        let sandboxQuery = Sandbox.query(on: db).filter(\.$project.$id ~~ projectIDs)
-        let snapshotQuery = SandboxSnapshot.query(on: db)
-            .filter(\.$project.$id ~~ projectIDs)
-            .filter(\.$status != .error)
-        if let environment {
-            vmQuery.filter(\.$environment == environment)
-            sandboxQuery.filter(\.$environment == environment)
-            snapshotQuery.filter(\.$environment == environment)
+        var snapshots = try await SandboxSnapshot.all(on: db).filter {
+            projectIDs.contains($0.projectID) && $0.status != .error
         }
-        let vms = try await vmQuery.all()
-        let sandboxes = try await sandboxQuery.all()
-        let snapshots = try await snapshotQuery.all()
-
+        if let environment {
+            snapshots = snapshots.filter { $0.environment == environment }
+        }
+        let vms = try await LegacyVMStore.vms(
+            projectIDs: projectIDs, environment: environment, on: db)
+        let sandboxes = try await LegacySandboxStore.sandboxes(
+            projectIDs: projectIDs, environment: environment, on: db)
         let snapshotBytes = snapshots.reduce(Int64(0)) { total, snapshot in
             let exported = (snapshot.exportedArtifacts ?? []).reduce(Int64(0)) { $0 + $1.sizeBytes }
             return total + (snapshot.size ?? 0) + exported
         }
 
+        let vmVCPUs = vms.reduce(0) { $0 + $1.cpu }
+        let sandboxVCPUs = sandboxes.reduce(0) { $0 + $1.cpus }
+        let vmMemory = vms.reduce(Int64(0)) { $0 + $1.memory }
+        let sandboxMemory = sandboxes.reduce(Int64(0)) { $0 + $1.memory }
+        let vmStorage = vms.reduce(Int64(0)) { $0 + $1.disk }
         return QuotaMeasuredUsage(
-            vcpus: vms.reduce(0) { $0 + $1.cpu } + sandboxes.reduce(0) { $0 + $1.cpus },
-            memoryBytes: vms.reduce(Int64(0)) { $0 + $1.memory }
-                + sandboxes.reduce(Int64(0)) { $0 + $1.memory },
-            storageBytes: vms.reduce(Int64(0)) { $0 + $1.disk } + snapshotBytes,
+            vcpus: vmVCPUs + sandboxVCPUs,
+            memoryBytes: vmMemory + sandboxMemory,
+            storageBytes: vmStorage + snapshotBytes,
             vmCount: vms.count,
             sandboxCount: sandboxes.count,
             volumeCount: 0,
@@ -229,16 +229,16 @@ struct QuotaUsageAggregatorTests {
                 sandboxID: try sandbox.requireID(),
                 projectID: try fixture.teamAProject.requireID(),
                 environment: sandbox.environment,
+                status: .ready,
+                size: 3 * 1024 * 1024 * 1024,
                 agentId: "agent-1",
+                exportedArtifacts: [
+                    SandboxSnapshotExportedArtifact(
+                        kind: SandboxSnapshotArtifactKind.allCases[0],
+                        sizeBytes: 512 * 1024 * 1024,
+                        sha256: String(repeating: "0", count: 64))
+                ],
                 createdByID: try user.requireID())
-            ready.status = .ready
-            ready.size = 3 * 1024 * 1024 * 1024
-            ready.exportedArtifacts = [
-                SandboxSnapshotExportedArtifact(
-                    kind: SandboxSnapshotArtifactKind.allCases[0],
-                    sizeBytes: 512 * 1024 * 1024,
-                    sha256: String(repeating: "0", count: 64))
-            ]
             try await ready.save(on: app.db)
 
             // A failed checkpoint removes its partial artifacts: not counted.
@@ -247,10 +247,10 @@ struct QuotaUsageAggregatorTests {
                 sandboxID: try sandbox.requireID(),
                 projectID: try fixture.teamAProject.requireID(),
                 environment: sandbox.environment,
+                status: .error,
+                size: 9 * 1024 * 1024 * 1024,
                 agentId: "agent-1",
                 createdByID: try user.requireID())
-            errored.status = .error
-            errored.size = 9 * 1024 * 1024 * 1024
             try await errored.save(on: app.db)
 
             let folderQuota = try await builder.createResourceQuota(

@@ -1,8 +1,38 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
 import Fluent
 
 struct OrganizationController: RouteCollection {
+    let groups: GroupsPersistence?
+    let hierarchy: HierarchyPersistence
+    let iam: IAMPersistence
+    let projects: ProjectsPersistence?
+    let users: UserDirectoryPersistence?
+
+    init(
+        groups: GroupsPersistence,
+        hierarchy: HierarchyPersistence,
+        iam: IAMPersistence,
+        projects: ProjectsPersistence,
+        users: UserDirectoryPersistence
+    ) {
+        self.groups = groups
+        self.hierarchy = hierarchy
+        self.iam = iam
+        self.projects = projects
+        self.users = users
+    }
+
+    /// Direct-method test seam for read-only organization listing.
+    package init(hierarchy: HierarchyPersistence, iam: IAMPersistence) {
+        groups = nil
+        self.hierarchy = hierarchy
+        self.iam = iam
+        projects = nil
+        users = nil
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let organizations = routes.grouped("api", "organizations")
         organizations.get(use: index)
@@ -30,10 +60,9 @@ struct OrganizationController: RouteCollection {
     func listAll(req: Request) async throws -> [OrganizationResponse] {
         _ = try await req.requireSystemAdmin("System admin access required")
 
-        let organizations = try await Organization.query(on: req.db)
-            .sort(\.$name)
-            .all()
-        return organizations.map { OrganizationResponse(from: $0, userRole: nil) }
+        return try await hierarchy.allOrganizations().map {
+            OrganizationResponse(from: $0, userRole: nil)
+        }
     }
 
     func index(req: Request) async throws -> [OrganizationResponse] {
@@ -41,30 +70,8 @@ struct OrganizationController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        // Get all organizations the user belongs to
-        try await user.$organizations.load(on: req.db)
-
-        // The roles come from the same pivot rows the load above walked, so
-        // read them once for the whole list rather than once per organization.
-        let organizationIDs = user.organizations.compactMap { $0.id }
-        var roles: [UUID: UUID] = [:]
-        if !organizationIDs.isEmpty {
-            let memberships = try await UserOrganization.query(on: req.db)
-                .filter(\.$user.$id == user.id!)
-                .filter(\.$organization.$id ~~ organizationIDs)
-                .all()
-            for membership in memberships {
-                if let roleID = membership.roleID {
-                    roles[membership.$organization.id] = roleID
-                }
-            }
-        }
-
-        return user.organizations.map { organization in
-            OrganizationResponse(
-                from: organization,
-                userRole: organization.id.flatMap { roles[$0] }
-            )
+        return try await hierarchy.organizations(forUser: user.requireID()).map { membership in
+            OrganizationResponse(from: membership.organization, userRole: membership.roleID)
         }
     }
 
@@ -77,7 +84,7 @@ struct OrganizationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
 
-        guard let organization = try await Organization.find(organizationID, on: req.db) else {
+        guard let organization = try await hierarchy.organization(id: organizationID) else {
             throw Abort(.notFound)
         }
 
@@ -86,12 +93,12 @@ struct OrganizationController: RouteCollection {
         // display the caller's role — nil for a system admin who isn't a member.
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
-        let userOrg = try await UserOrganization.query(on: req.db)
-            .filter(\.$user.$id == user.id!)
-            .filter(\.$organization.$id == organizationID)
-            .first()
+        let membership = try await hierarchy.membership(
+            userID: user.requireID(),
+            organizationID: organizationID
+        )
 
-        return OrganizationResponse(from: organization, userRole: userOrg?.roleID)
+        return OrganizationResponse(from: organization, userRole: membership?.roleID)
     }
 
     func create(req: Request) async throws -> OrganizationResponse {
@@ -105,97 +112,48 @@ struct OrganizationController: RouteCollection {
 
         let createRequest = try req.content.decodeValidated(CreateOrganizationRequest.self)
 
-        // Check if organization name already exists
-        let existingOrg = try await Organization.query(on: req.db)
-            .filter(\.$name == createRequest.name)
-            .first()
-
-        if existingOrg != nil {
-            throw Abort(.conflict, reason: "Organization name already exists")
+        let organizationID = UUID()
+        let trustDomain: String?
+        if req.controlPlaneConfiguration.bool(.spireOrgTrustDomainsEnabled) == true {
+            let shortID = organizationID.uuidString.replacingOccurrences(of: "-", with: "").prefix(16)
+            trustDomain = "org-\(shortID).\(req.controlPlaneConfiguration.string(.spireTrustDomain)!)"
+                .lowercased()
+        } else {
+            trustDomain = nil
         }
 
-        let organization = Organization(
-            name: createRequest.name,
-            description: createRequest.description ?? ""
-        )
-
-        try await organization.save(on: req.db)
-
-        // Add creator as admin: the authoritative role binding lands in the
-        // same transaction as the retained membership relation.
-        let userOrganization = UserOrganization(
-            userID: user.id!,
-            organizationID: organization.id!,
-            roleID: IAMRole.admin.seededID
-        )
-        try await req.db.transaction { db in
-            try await userOrganization.save(on: db)
-            try await RoleBindingService.grant(
-                principalType: .user,
-                principalID: user.id!,
-                role: .admin,
-                nodeType: .organization,
-                nodeID: organization.id!,
-                createdBy: user.id,
-                on: db
+        do {
+            let provisioned = try await hierarchy.provisionOrganization(
+                OrganizationProvisioningWrite(
+                    organization: OrganizationWrite(
+                        id: organizationID,
+                        name: createRequest.name,
+                        description: createRequest.description ?? ""
+                    ),
+                    creatorID: try user.requireID(),
+                    administratorRoleID: IAMRole.admin.seededID,
+                    projectDescription: "Default project for \(createRequest.name)",
+                    siteName: "\(createRequest.name) Default Site",
+                    siteDescription: "Default availability zone for \(createRequest.name)",
+                    trustDomain: trustDomain
+                )
             )
-            // Claim the organization's trust domain in the same transaction as
-            // its Cedar bindings, so an org can never exist without the row the
-            // reconciler (issue #614) provisions its SPIRE instance from. Off
-            // by default: with the feature flag down no row is written and only
-            // the platform trust domain exists.
-            try await OrgTrustDomainProvisioning.claim(
-                organizationID: organization.id!,
-                configuration: req.controlPlaneConfiguration,
-                on: db)
+            return OrganizationResponse(
+                from: provisioned.organization,
+                userRole: IAMRole.admin.seededID
+            )
+        } catch HierarchyPersistenceError.duplicateOrganizationName {
+            throw Abort(.conflict, reason: "Organization name already exists")
+        } catch HierarchyPersistenceError.trustDomainCollision(
+            let trustDomain,
+            let existingOrganizationID
+        ) {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Trust domain \(trustDomain) is already claimed by organization \(existingOrganizationID); retry creating this organization"
+            )
         }
-
-        // Set as current organization if user doesn't have one
-        if user.currentOrganizationId == nil {
-            user.currentOrganizationId = organization.id
-            try await user.save(on: req.db)
-        }
-
-        // A first project, so a new organization can create something without
-        // hand-making one. The name is a label and nothing more: no resolution
-        // reads it (issue #1059 deleted the query that did), so renaming this
-        // project is safe and a create that names no project is refused rather
-        // than routed here.
-        let defaultProject = Project(
-            name: "Default Project",
-            description: "Default project for \(organization.name)",
-            organizationID: organization.id,
-            path: "/\(organization.id!.uuidString)"
-        )
-        try await defaultProject.save(on: req.db)
-
-        // Update project path with its own ID
-        defaultProject.path = "/\(organization.id!.uuidString)/\(defaultProject.id!.uuidString)"
-        try await defaultProject.save(on: req.db)
-
-        // Creator binding on that first project (project creation writes an
-        // explicit, revocable binding for its creator).
-        try await RoleBindingService.grant(
-            principalType: .user,
-            principalID: user.id!,
-            role: .admin,
-            nodeType: .project,
-            nodeID: defaultProject.id!,
-            createdBy: user.id,
-            on: req.db
-        )
-
-        // The mandatory default security group, like any project creation.
-        _ = try await SecurityGroupService.ensureDefaultGroup(
-            projectID: defaultProject.id!, on: req.db)
-
-        // Give the org a default site (availability zone) so its first compute
-        // agent can be enrolled without the operator hand-creating one first —
-        // enrollment requires a site.
-        try await Site.createDefault(
-            forOrganization: organization.id!, named: organization.name, on: req.db)
-
-        return OrganizationResponse(from: organization, userRole: IAMRole.admin.seededID)
     }
 
     func update(req: Request) async throws -> OrganizationResponse {
@@ -207,36 +165,23 @@ struct OrganizationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
 
-        guard let organization = try await Organization.find(organizationID, on: req.db) else {
-            throw Abort(.notFound)
-        }
-
         // Org-admin check through the Cedar evaluator (`org:update`).
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         let updateRequest = try req.content.decodeValidated(UpdateOrganizationRequest.self)
 
-        if let name = updateRequest.name {
-            // Check if new name conflicts with existing organization
-            let existingOrg = try await Organization.query(on: req.db)
-                .filter(\.$name == name)
-                .filter(\.$id != organizationID)
-                .first()
-
-            if existingOrg != nil {
-                throw Abort(.conflict, reason: "Organization name already exists")
-            }
-
-            organization.name = name
+        do {
+            guard
+                let organization = try await hierarchy.updateOrganization(
+                    id: organizationID,
+                    name: updateRequest.name,
+                    description: updateRequest.description
+                )
+            else { throw Abort(.notFound) }
+            return OrganizationResponse(from: organization, userRole: IAMRole.admin.seededID)
+        } catch HierarchyPersistenceError.duplicateOrganizationName {
+            throw Abort(.conflict, reason: "Organization name already exists")
         }
-
-        if let description = updateRequest.description {
-            organization.description = description
-        }
-
-        try await organization.save(on: req.db)
-
-        return OrganizationResponse(from: organization, userRole: IAMRole.admin.seededID)
     }
 
     /// Refuse a delete that would cascade over live workloads, naming the
@@ -245,22 +190,14 @@ struct OrganizationController: RouteCollection {
         inProjects projectIDs: [UUID], on db: Database
     ) async throws {
         guard !projectIDs.isEmpty else { return }
-        let vmProjects = try await VM.query(on: db)
-            .filter(\.$project.$id ~~ projectIDs)
-            .all()
-            .map { $0.$project.id }
-        let sandboxProjects = try await Sandbox.query(on: db)
-            .filter(\.$project.$id ~~ projectIDs)
-            .all()
-            .map { $0.$project.id }
+        let vmProjects = try await LegacyVMStore.vms(projectIDs: projectIDs, on: db).map(\.projectID)
+        let sandboxProjects = try await LegacySandboxStore.sandboxes(
+            projectIDs: projectIDs, on: db).map(\.projectID)
         let blocking = Set(vmProjects + sandboxProjects)
         guard !blocking.isEmpty else { return }
 
-        let names = try await Project.query(on: db)
-            .filter(\.$id ~~ Array(blocking))
-            .all()
-            .map(\.name)
-            .sorted()
+        let names = try await LegacyProjectStore.projects(ids: Array(blocking), on: db)
+            .map(\.name).sorted()
         throw Abort(
             .conflict,
             reason: "Cannot delete organization: \(names.joined(separator: ", ")) "
@@ -293,17 +230,17 @@ struct OrganizationController: RouteCollection {
         // them. Their *bindings* are swept inside the transaction instead, by
         // `ResourceBindingCleanup`, which re-reads this set there rather than
         // trusting a snapshot taken outside it.
-        let orgProjectIDs = try await Project.query(on: req.db)
-            .filter(\.$organization.$id == organizationID)
-            .all(\.$id)
-        let ouIDs = try await OrganizationalUnit.query(on: req.db)
-            .filter(\.$organization.$id == organizationID)
-            .all(\.$id)
+        let orgProjectIDs = try await LegacyProjectStore.projects(
+            organizationIDs: [organizationID], on: req.db
+        ).compactMap(\.id)
+        let ouIDs = try await LegacyOrganizationalUnitStore.organizationalUnits(
+            organizationIDs: [organizationID], on: req.db
+        ).compactMap(\.id)
         var ouProjectIDs: [UUID] = []
         if !ouIDs.isEmpty {
-            ouProjectIDs = try await Project.query(on: req.db)
-                .filter(\.$organizationalUnit.$id ~~ ouIDs)
-                .all(\.$id)
+            ouProjectIDs = try await LegacyProjectStore.projects(
+                organizationalUnitIDs: ouIDs, on: req.db
+            ).compactMap(\.id)
         }
         let cascadedProjectIDs = orgProjectIDs + ouProjectIDs
 
@@ -315,14 +252,17 @@ struct OrganizationController: RouteCollection {
         // otherwise persist through a failed delete.
         try await Self.requireNoWorkloads(inProjects: cascadedProjectIDs, on: req.db)
 
+        guard let users else {
+            throw Abort(.internalServerError, reason: "User persistence is unavailable")
+        }
+
         // Update users who have this as current organization
-        let usersWithCurrentOrg = try await User.query(on: req.db)
-            .filter(\.$currentOrganizationId == organizationID)
-            .all()
+        let usersWithCurrentOrg = try await users.users(
+            filter: UserDirectoryFilter(currentOrganizationID: organizationID)
+        ).map(User.init(snapshot:))
 
         for user in usersWithCurrentOrg {
-            user.currentOrganizationId = nil
-            try await user.save(on: req.db)
+            _ = try await users.save(user.replacingCurrentOrganization(nil).directoryWrite)
         }
         // Roles owned by the org (or by a project cascading away with it) go
         // too — a role outliving its owner is bindable nowhere and listed
@@ -341,7 +281,7 @@ struct OrganizationController: RouteCollection {
             // is RESTRICT now (STR-98), so the database refuses instead;
             // translate that into an answer a caller can act on.
             do {
-                try await organization.delete(on: db)
+                _ = try await LegacyOrganizationStore.delete(id: organizationID, on: db)
             } catch let error as any DatabaseError where error.isConstraintFailure {
                 throw Abort(
                     .conflict,
@@ -393,8 +333,12 @@ struct OrganizationController: RouteCollection {
         // applies.
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
-        user.currentOrganizationId = organizationID
-        try await user.save(on: req.db)
+        guard
+            try await hierarchy.setCurrentOrganization(
+                userID: user.requireID(),
+                organizationID: organizationID
+            )
+        else { throw Abort(.notFound, reason: "User not found") }
 
         return .ok
     }
@@ -414,22 +358,21 @@ struct OrganizationController: RouteCollection {
         // member-visible (`org:read`).
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
-        let members = try await UserOrganization.query(on: req.db)
-            .filter(\.$organization.$id == organizationID)
-            .with(\.$user)
-            .all()
-
-        let displayNames = try await RoleDisplayNames.forRoleIDs(members.compactMap(\.roleID), on: req.db)
+        let members = try await hierarchy.members(organizationID: organizationID)
+        let displayNames = try await RoleDisplayNames.forRoleIDs(
+            members.compactMap(\.roleID),
+            using: iam
+        )
 
         return members.map { userOrg in
             OrganizationMemberResponse(
-                id: userOrg.user.id,
-                username: userOrg.user.username,
-                displayName: userOrg.user.displayName,
-                email: userOrg.user.email,
+                id: userOrg.userID,
+                username: userOrg.username,
+                displayName: userOrg.displayName,
+                email: userOrg.email,
                 role: userOrg.roleID,
                 roleDisplayName: userOrg.roleID.map(displayNames.displayName(forRoleID:)),
-                joinedAt: userOrg.createdAt
+                joinedAt: userOrg.joinedAt
             )
         }
     }
@@ -453,58 +396,48 @@ struct OrganizationController: RouteCollection {
 
         let addRequest = try req.content.decode(AddMemberRequest.self)
 
-        guard
-            let targetUser = try await User.query(on: req.db)
-                .filter(\.$email == addRequest.userEmail)
-                .first()
-        else {
+        guard let targetUserID = try await hierarchy.userID(email: addRequest.userEmail) else {
             throw Abort(.notFound, reason: "User not found")
-        }
-
-        // Check if user is already a member
-        let existingMembership = try await UserOrganization.query(on: req.db)
-            .filter(\.$user.$id == targetUser.id!)
-            .filter(\.$organization.$id == organizationID)
-            .first()
-
-        if existingMembership != nil {
-            throw Abort(.conflict, reason: "User is already a member of this organization")
         }
 
         let node = IAMNode(type: .organization, id: organizationID)
         let resolved: MemberRoleResolver.Resolved?
         if let roleID = addRequest.role {
-            resolved = try await MemberRoleResolver.resolve(roleID, scopeNode: node, on: req.db)
+            resolved = try await MemberRoleResolver.resolve(roleID, scopeNode: node, using: iam)
         } else {
             resolved = nil
         }
 
-        let membership = UserOrganization(
-            userID: targetUser.id!,
-            organizationID: organizationID,
-            roleID: resolved?.id
-        )
         // Org admins (and any role granted by UUID) get a binding on the org
         // node; bare membership maps to no binding — and with no binding there
         // is nothing for a ceiling to narrow (#484).
         let proposed = resolved.map { resolved in
             ProposedBinding(
                 principalType: .user,
-                principalID: targetUser.id!,
+                principalID: targetUserID,
                 roleActions: resolved.actions,
                 roleLabel: resolved.displayName,
                 node: node
             )
         }
 
-        let actorID = currentUser.id
-        try await req.db.transaction { db in
-            try await membership.save(on: db)
-            if let resolved {
-                try await RoleBindingService.insertExclusiveGrant(
-                    principalType: .user, principalID: targetUser.id!, roleID: resolved.id,
-                    node: node, createdBy: actorID, on: db)
-            }
+        let result = try await hierarchy.addMember(
+            userID: targetUserID,
+            organizationID: organizationID,
+            roleID: resolved?.id,
+            createdBy: currentUser.id
+        )
+        switch result {
+        case .applied:
+            break
+        case .alreadyMember:
+            throw Abort(.conflict, reason: "User is already a member of this organization")
+        case .principalAlreadyBound:
+            throw Abort(.conflict, reason: "Principal already has a role on this organization")
+        case .organizationNotFound:
+            throw Abort(.notFound, reason: "Organization not found")
+        case .membershipNotFound, .lastAdministrator:
+            throw Abort(.internalServerError, reason: "Unexpected organization membership state")
         }
 
         return try await report(for: proposed, req: req).encodeResponse(status: .created, for: req)
@@ -514,7 +447,18 @@ struct OrganizationController: RouteCollection {
     /// when it created no binding (bare membership).
     private func report(for proposed: ProposedBinding?, req: Request) async -> GrantWriteResponse {
         guard let proposed else { return .noBinding }
-        return await GuardrailWriteReport.report(for: proposed, req: req)
+        guard let groups, let projects, let users else {
+            preconditionFailure("Organization mutation routes require complete persistence modules")
+        }
+        return await GuardrailWriteReport.report(
+            for: proposed,
+            using: iam,
+            groups: groups,
+            hierarchy: hierarchy,
+            projects: projects,
+            users: users,
+            req: req
+        )
     }
 
     func removeMember(req: Request) async throws -> HTTPStatus {
@@ -533,37 +477,21 @@ struct OrganizationController: RouteCollection {
         // Org-admin check through the Cedar evaluator.
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
-        guard
-            try await UserOrganization.query(on: req.db)
-                .filter(\.$user.$id == userID)
-                .filter(\.$organization.$id == organizationID)
-                .first() != nil
-        else {
+        switch try await hierarchy.removeMember(
+            userID: userID,
+            organizationID: organizationID,
+            administratorRoleID: IAMRole.admin.seededID
+        ) {
+        case .applied:
+            break
+        case .membershipNotFound:
             throw Abort(.notFound, reason: "User is not a member of this organization")
-        }
-
-        let node = IAMNode(type: .organization, id: organizationID)
-        try await RoleBindingService.withMembershipNodeLocked(node, on: req.db) { db in
-            guard
-                let membership = try await UserOrganization.query(on: db)
-                    .filter(\.$user.$id == userID)
-                    .filter(\.$organization.$id == organizationID)
-                    .first()
-            else {
-                throw Abort(.notFound, reason: "User is not a member of this organization")
-            }
-            if try await Self.hasAdminBinding(userID: userID, organizationID: organizationID, on: db),
-                try await Self.adminBindingCount(organizationID: organizationID, on: db) <= 1
-            {
-                throw Abort(.badRequest, reason: "Cannot remove the last admin from organization")
-            }
-            try await membership.delete(on: db)
-            // Everything held inside the org goes with the membership — group
-            // memberships and bindings across the whole
-            // subtree, not just the org node (issue #485). Grants in other
-            // orgs stay: those are the other orgs' to revoke.
-            try await OffboardingSweep.userLeftOrganization(
-                userID: userID, organizationID: organizationID, on: db)
+        case .lastAdministrator:
+            throw Abort(.badRequest, reason: "Cannot remove the last admin from organization")
+        case .organizationNotFound:
+            throw Abort(.notFound, reason: "Organization not found")
+        case .alreadyMember, .principalAlreadyBound:
+            throw Abort(.internalServerError, reason: "Unexpected organization membership state")
         }
 
         return .noContent
@@ -591,19 +519,10 @@ struct OrganizationController: RouteCollection {
 
         let updateRequest = try req.content.decode(UpdateRoleRequest.self)
 
-        guard
-            try await UserOrganization.query(on: req.db)
-                .filter(\.$user.$id == userID)
-                .filter(\.$organization.$id == organizationID)
-                .first() != nil
-        else {
-            throw Abort(.notFound, reason: "User is not a member of this organization")
-        }
-
         let node = IAMNode(type: .organization, id: organizationID)
         let resolved: MemberRoleResolver.Resolved?
         if let roleID = updateRequest.role {
-            resolved = try await MemberRoleResolver.resolve(roleID, scopeNode: node, on: req.db)
+            resolved = try await MemberRoleResolver.resolve(roleID, scopeNode: node, using: iam)
         } else {
             resolved = nil
         }
@@ -621,57 +540,36 @@ struct OrganizationController: RouteCollection {
             )
         }
 
-        let actorID = currentUser.id
-        try await RoleBindingService.withMembershipNodeLocked(node, on: req.db) { db in
-            guard
-                let membership = try await UserOrganization.query(on: db)
-                    .filter(\.$user.$id == userID)
-                    .filter(\.$organization.$id == organizationID)
-                    .first()
-            else {
-                throw Abort(.notFound, reason: "User is not a member of this organization")
-            }
-            // Prevent changing role if this would remove the last admin. The
-            // organization-row lock makes the count and write one invariant
-            // across concurrent demotions and removals.
-            if try await Self.hasAdminBinding(userID: userID, organizationID: organizationID, on: db),
-                resolved?.id != IAMRole.admin.seededID,
-                try await Self.adminBindingCount(organizationID: organizationID, on: db) <= 1
-            {
-                throw Abort(.badRequest, reason: "Cannot change role of the last admin")
-            }
-            membership.roleID = resolved?.id
-            try await membership.save(on: db)
-            try await RoleBindingService.setExclusiveGrant(
-                principalType: .user, principalID: userID, roleID: resolved?.id,
-                node: node, createdBy: actorID, on: db)
+        switch try await hierarchy.updateMemberRole(
+            userID: userID,
+            organizationID: organizationID,
+            roleID: resolved?.id,
+            administratorRoleID: IAMRole.admin.seededID,
+            createdBy: currentUser.id
+        ) {
+        case .applied:
+            break
+        case .membershipNotFound:
+            throw Abort(.notFound, reason: "User is not a member of this organization")
+        case .lastAdministrator:
+            throw Abort(.badRequest, reason: "Cannot change role of the last admin")
+        case .organizationNotFound:
+            throw Abort(.notFound, reason: "Organization not found")
+        case .alreadyMember, .principalAlreadyBound:
+            throw Abort(.internalServerError, reason: "Unexpected organization membership state")
         }
 
         return try await report(for: proposed, req: req).encodeResponse(status: .ok, for: req)
     }
 
-    private static func hasAdminBinding(
-        userID: UUID, organizationID: UUID, on db: any Database
-    ) async throws -> Bool {
-        try await RoleBinding.query(on: db)
-            .filter(\.$principalType == IAMPrincipalType.user.rawValue)
-            .filter(\.$principalID == userID)
-            .filter(\.$roleID == IAMRole.admin.seededID)
-            .filter(\.$nodeType == IAMNodeType.organization.rawValue)
-            .filter(\.$nodeID == organizationID)
-            .active()
-            .first() != nil
-    }
+}
 
-    private static func adminBindingCount(
-        organizationID: UUID, on db: any Database
-    ) async throws -> Int {
-        try await RoleBinding.query(on: db)
-            .filter(\.$principalType == IAMPrincipalType.user.rawValue)
-            .filter(\.$roleID == IAMRole.admin.seededID)
-            .filter(\.$nodeType == IAMNodeType.organization.rawValue)
-            .filter(\.$nodeID == organizationID)
-            .active()
-            .count()
+private extension OrganizationResponse {
+    init(from organization: OrganizationSnapshot, userRole: UUID?) {
+        self.id = organization.id
+        self.name = organization.name
+        self.description = organization.description
+        self.createdAt = organization.createdAt
+        self.userRole = userRole
     }
 }

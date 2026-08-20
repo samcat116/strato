@@ -1,74 +1,113 @@
+import ControlPlanePostgres
 import Fluent
-import Vapor
 import Foundation
+import Vapor
 
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class Project: Model, @unchecked Sendable {
+struct Project: Content, Equatable, Sendable {
     static let schema = "projects"
 
-    @ID(key: .id)
-    var id: UUID?
-
-    @Field(key: "name")
-    var name: String
-
-    @Field(key: "description")
-    var description: String
-
-    // Project can belong to either an Organization directly or to an OU
-    @OptionalParent(key: "organization_id")
-    var organization: Organization?
-
-    @OptionalParent(key: "organizational_unit_id")
-    var organizationalUnit: OrganizationalUnit?
-
-    // Path for efficient hierarchy queries
-    @Field(key: "path")
-    var path: String
-
-    // Default environment for new resources
-    @Field(key: "default_environment")
-    var defaultEnvironment: String
-
-    // Available environments
-    @Field(key: "environments")
-    var environments: [String]
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    // Relationships
-    @Children(for: \.$project)
-    var vms: [VM]
-
-    init() {}
+    let id: UUID?
+    let name: String
+    let description: String
+    let organizationID: UUID?
+    let organizationalUnitID: UUID?
+    let path: String
+    let defaultEnvironment: String
+    let environments: [String]
+    let createdAt: Date?
+    let updatedAt: Date?
 
     init(
-        id: UUID? = nil,
+        id: UUID? = UUID(),
         name: String,
         description: String,
         organizationID: UUID? = nil,
         organizationalUnitID: UUID? = nil,
         path: String,
         defaultEnvironment: String = "development",
-        environments: [String] = ["development", "staging", "production"]
+        environments: [String] = ["development", "staging", "production"],
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
         self.description = description
-        self.$organization.id = organizationID
-        self.$organizationalUnit.id = organizationalUnitID
+        self.organizationID = organizationID
+        self.organizationalUnitID = organizationalUnitID
         self.path = path
         self.defaultEnvironment = defaultEnvironment
         self.environments = environments
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    init(snapshot: ProjectSnapshot) {
+        self.init(
+            id: snapshot.id, name: snapshot.name, description: snapshot.description,
+            organizationID: snapshot.organizationID,
+            organizationalUnitID: snapshot.organizationalUnitID,
+            path: snapshot.path, defaultEnvironment: snapshot.defaultEnvironment,
+            environments: snapshot.environments,
+            createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt)
+    }
+
+    func requireID() throws -> UUID {
+        guard let id else { throw Abort(.internalServerError, reason: "Project has no identifier") }
+        return id
+    }
+
+    func save(on db: any Database) async throws {
+        _ = try await LegacyProjectStore.upsert(self, on: db)
+    }
+
+    func delete(on db: any Database) async throws {
+        guard let id else { return }
+        _ = try await LegacyProjectStore.delete(id: id, on: db)
+    }
+
+    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+        try await LegacyProjectStore.project(id: id, on: db)
+    }
+
+    static func all(on db: any Database) async throws -> [Self] {
+        try await LegacyProjectStore.projects(on: db)
+    }
+
+    static func count(name: String? = nil, on db: any Database) async throws -> Int {
+        try await LegacyProjectStore.count(name: name, on: db)
+    }
+
+    func replacingPath(_ path: String) -> Self {
+        replacing(path: path)
+    }
+
+    func replacingScope(organizationID: UUID?, organizationalUnitID: UUID?) -> Self {
+        Self(
+            id: id, name: name, description: description,
+            organizationID: organizationID, organizationalUnitID: organizationalUnitID,
+            path: path, defaultEnvironment: defaultEnvironment,
+            environments: environments, createdAt: createdAt, updatedAt: updatedAt)
+    }
+
+    func replacing(
+        name: String? = nil,
+        description: String? = nil,
+        organizationID: UUID?? = nil,
+        organizationalUnitID: UUID?? = nil,
+        path: String? = nil,
+        defaultEnvironment: String? = nil,
+        environments: [String]? = nil
+    ) -> Self {
+        Self(
+            id: id, name: name ?? self.name, description: description ?? self.description,
+            organizationID: organizationID ?? self.organizationID,
+            organizationalUnitID: organizationalUnitID ?? self.organizationalUnitID,
+            path: path ?? self.path,
+            defaultEnvironment: defaultEnvironment ?? self.defaultEnvironment,
+            environments: environments ?? self.environments,
+            createdAt: createdAt, updatedAt: updatedAt)
     }
 }
-
-extension Project: Content {}
 
 extension Project {
     struct Public: Content {
@@ -88,8 +127,8 @@ extension Project {
             id: self.id,
             name: self.name,
             description: self.description,
-            organizationId: self.$organization.id,
-            organizationalUnitId: self.$organizationalUnit.id,
+            organizationId: self.organizationID,
+            organizationalUnitId: self.organizationalUnitID,
             path: self.path,
             defaultEnvironment: self.defaultEnvironment,
             environments: self.environments,
@@ -106,11 +145,11 @@ extension Project {
         var parentPath = ""
 
         // If project belongs to an OU, get the OU's path
-        if let ouId = self.$organizationalUnit.id {
+        if let ouId = self.organizationalUnitID {
             if let ou = try await OrganizationalUnit.find(ouId, on: db) {
                 parentPath = ou.path
             }
-        } else if let orgId = self.$organization.id {
+        } else if let orgId = self.organizationID {
             // Direct organization child
             parentPath = OrganizationalUnit.organizationPath(orgId)
         }
@@ -135,14 +174,14 @@ extension Project {
 
     /// Gets the root organization ID for this project
     func getRootOrganizationId(on db: Database) async throws -> UUID? {
-        if let orgId = self.$organization.id {
+        if let orgId = self.organizationID {
             return orgId
         }
 
-        if let ouId = self.$organizationalUnit.id,
+        if let ouId = self.organizationalUnitID,
             let ou = try await OrganizationalUnit.find(ouId, on: db)
         {
-            return ou.$organization.id
+            return ou.organizationID
         }
 
         return nil
@@ -175,21 +214,21 @@ extension Project {
     }
 
     /// Adds a new environment to the project
-    func addEnvironment(_ environment: String) {
-        if !environments.contains(environment) {
-            environments.append(environment)
-        }
+    func addingEnvironment(_ environment: String) -> Self {
+        guard !environments.contains(environment) else { return self }
+        return replacing(environments: environments + [environment])
     }
 
     /// Removes an environment from the project (if not the default)
-    func removeEnvironment(_ environment: String) -> Bool {
+    func removingEnvironment(_ environment: String) -> Self? {
         guard environment != defaultEnvironment,
             let index = environments.firstIndex(of: environment)
         else {
-            return false
+            return nil
         }
-        environments.remove(at: index)
-        return true
+        var remaining = environments
+        remaining.remove(at: index)
+        return replacing(environments: remaining)
     }
 }
 
@@ -216,18 +255,18 @@ extension Project {
     /// idempotent, so running it again here costs nothing and keeps any path
     /// that reaches a save without going through that service honest.
     func validate() throws {
-        name = try Validate.name(name)
+        _ = try Validate.name(name)
         try Validate.text(description)
         try Validate.list(environments, "environments", max: Self.maxEnvironments)
-        environments = try environments.map { try Validate.name($0, "environments") }
-        defaultEnvironment = try Validate.name(defaultEnvironment, "defaultEnvironment")
+        _ = try environments.map { try Validate.name($0, "environments") }
+        _ = try Validate.name(defaultEnvironment, "defaultEnvironment")
 
         // Ensure project belongs to either org or OU, but not both
-        if self.$organization.id != nil && self.$organizationalUnit.id != nil {
+        if self.organizationID != nil && self.organizationalUnitID != nil {
             throw Abort(.badRequest, reason: "Project cannot belong to both an organization and a folder")
         }
 
-        if self.$organization.id == nil && self.$organizationalUnit.id == nil {
+        if self.organizationID == nil && self.organizationalUnitID == nil {
             throw Abort(.badRequest, reason: "Project must belong to either an organization or a folder")
         }
 
@@ -277,8 +316,8 @@ struct ProjectResponse: Content {
         self.id = project.id
         self.name = project.name
         self.description = project.description
-        self.organizationId = project.$organization.id
-        self.organizationalUnitId = project.$organizationalUnit.id
+        self.organizationId = project.organizationID
+        self.organizationalUnitId = project.organizationalUnitID
         self.path = project.path
         self.defaultEnvironment = project.defaultEnvironment
         self.environments = project.environments

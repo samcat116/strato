@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import SQLKit
 import Testing
@@ -125,7 +126,7 @@ struct ResourceBindingCleanupTests {
     @Test("Revoking for a deleted VM clears the VM's bindings and its checkpoints'")
     func revokesVMAndCheckpoints() async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(username: "cleanup", email: "cleanup@example.com")
             let org = try await builder.createOrganization(name: "Cleanup Org")
             let project = try await builder.createProject(
@@ -157,10 +158,11 @@ struct ResourceBindingCleanupTests {
             try await ResourceBindingCleanup.revokeBindings(forDeletedVM: vmID, on: app.db)
 
             func count(_ nodeType: IAMNodeType, _ nodeID: UUID) async throws -> Int {
-                try await RoleBinding.query(on: app.db)
-                    .filter(\.$nodeType == nodeType.rawValue)
-                    .filter(\.$nodeID == nodeID)
-                    .count()
+                try await LegacyRoleBindingStore.bindings(
+                    nodeType: nodeType.rawValue,
+                    nodeID: nodeID,
+                    on: app.db
+                ).count
             }
             let vmBindings = try await count(.virtualMachine, vmID)
             let snapshotBindings = try await count(.vmSnapshot, snapshotID)
@@ -174,7 +176,7 @@ struct ResourceBindingCleanupTests {
     @Test("Revoking for a deleted VM clears the grants its instance identity held")
     func revokesVMInstanceIdentityGrants() async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(
                 username: "identitycleanup", email: "identitycleanup@example.com")
             let org = try await builder.createOrganization(name: "Identity Cleanup Org")
@@ -190,15 +192,17 @@ struct ResourceBindingCleanupTests {
             // would strand.
             let identity = try await GuestIdentity.register(
                 vmID: vmID, organizationID: orgID, createdBy: user.id, on: app.db)
-            let identityID = try identity.requireID()
+            let identityID = identity.id
 
             // A workload principal with no VM behind it, standing in for every
             // registration the sweep must not touch.
-            let bystander = WorkloadRegistration(
-                spiffeID: "spiffe://strato.local/sa/bystander", kind: .workload,
-                organizationID: orgID)
-            try await bystander.save(on: app.db)
-            let bystanderID = try bystander.requireID()
+            let bystander = try await LegacyWorkloadRegistrationStore.insert(
+                WorkloadRegistrationWrite(
+                    spiffeID: "spiffe://strato.local/sa/bystander",
+                    kind: WorkloadRegistrationKind.workload.rawValue,
+                    organizationID: orgID),
+                on: app.db)
+            let bystanderID = bystander.id
 
             for principalID in [identityID, bystanderID] {
                 try await RoleBindingService.grant(
@@ -209,10 +213,11 @@ struct ResourceBindingCleanupTests {
             try await ResourceBindingCleanup.revokeBindings(forDeletedVM: vmID, on: app.db)
 
             func count(_ principalID: UUID) async throws -> Int {
-                try await RoleBinding.query(on: app.db)
-                    .filter(\.$principalType == IAMPrincipalType.workload.rawValue)
-                    .filter(\.$principalID == principalID)
-                    .count()
+                try await LegacyRoleBindingStore.bindings(
+                    principalType: IAMPrincipalType.workload.rawValue,
+                    principalID: principalID,
+                    on: app.db
+                ).count
             }
             let identityBindings = try await count(identityID)
             let bystanderBindings = try await count(bystanderID)
@@ -224,18 +229,18 @@ struct ResourceBindingCleanupTests {
     @Test("Revoking for a deleted project clears every node that cascades away with it")
     func revokesProjectAndCascadingChildren() async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(username: "proj", email: "proj@example.com")
             let org = try await builder.createOrganization(name: "Project Cleanup Org")
             let project = try await builder.createProject(
                 name: "Doomed", description: "cascades away", organization: org)
-            let nodes = try await Self.populate(project: project, owner: user, on: app.db)
+            let nodes = try await Self.populate(project: project, owner: user, app: app)
 
             // A project that shares nothing but the organization: its bindings
             // stand in for every binding the sweep must not touch.
             let bystander = try await builder.createProject(
                 name: "Bystander", description: "stays", organization: org)
-            let bystanderNodes = try await Self.populate(project: bystander, owner: user, on: app.db)
+            let bystanderNodes = try await Self.populate(project: bystander, owner: user, app: app)
 
             for (nodeType, nodeID) in nodes + bystanderNodes {
                 try await RoleBindingService.grant(
@@ -261,10 +266,11 @@ struct ResourceBindingCleanupTests {
                 let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.db)
                 #expect(remaining == 1, "\(nodeType.rawValue) bindings of an unrelated project were swept")
             }
-            let heldByAccount = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalType == IAMPrincipalType.serviceAccount.rawValue)
-                .filter(\.$principalID == serviceAccountID)
-                .count()
+            let heldByAccount = try await LegacyRoleBindingStore.bindings(
+                principalType: IAMPrincipalType.serviceAccount.rawValue,
+                principalID: serviceAccountID,
+                on: app.db
+            ).count
             #expect(heldByAccount == 0)
         }
     }
@@ -272,32 +278,32 @@ struct ResourceBindingCleanupTests {
     @Test("Revoking for a deleted DNS zone clears its authored records' bindings")
     func revokesZoneAndRecords() async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(username: "dns", email: "dns@example.com")
             let org = try await builder.createOrganization(name: "DNS Cleanup Org")
             let project = try await builder.createProject(
                 name: "DNS", description: "", organization: org)
             let projectID = try project.requireID()
 
-            let zone = DNSZone(name: "acme.internal", projectID: projectID)
-            try await zone.save(on: app.db)
-            let record = DNSRecord(
-                zoneID: try zone.requireID(), name: "www", type: .a, value: "192.0.2.1")
-            try await record.save(on: app.db)
+            let zone = try await LegacyDNSZoneStore.insert(
+                name: "acme.internal", projectID: projectID, on: app.db)
+            let record = try await LegacyDNSRecordStore.insert(
+                zoneID: zone.id, name: "www", type: .a,
+                value: "192.0.2.1", on: app.db)
 
             // A record in a second zone: it cascades with *its* zone, not this
             // one, so the sweep must key on the zone rather than the project.
-            let otherZone = DNSZone(name: "other.internal", projectID: projectID)
-            try await otherZone.save(on: app.db)
-            let otherRecord = DNSRecord(
-                zoneID: try otherZone.requireID(), name: "www", type: .a, value: "192.0.2.2")
-            try await otherRecord.save(on: app.db)
+            let otherZone = try await LegacyDNSZoneStore.insert(
+                name: "other.internal", projectID: projectID, on: app.db)
+            let otherRecord = try await LegacyDNSRecordStore.insert(
+                zoneID: otherZone.id, name: "www", type: .a,
+                value: "192.0.2.2", on: app.db)
 
             for (nodeType, nodeID) in [
-                (IAMNodeType.dnsZone, try zone.requireID()),
-                (.dnsRecord, try record.requireID()),
-                (.dnsZone, try otherZone.requireID()),
-                (.dnsRecord, try otherRecord.requireID()),
+                (IAMNodeType.dnsZone, zone.id),
+                (.dnsRecord, record.id),
+                (.dnsZone, otherZone.id),
+                (.dnsRecord, otherRecord.id),
             ] {
                 try await RoleBindingService.grant(
                     principalType: .user, principalID: user.id!, role: .admin,
@@ -305,14 +311,14 @@ struct ResourceBindingCleanupTests {
             }
 
             try await ResourceBindingCleanup.revokeBindings(
-                forDeletedDNSZone: try zone.requireID(), on: app.db)
+                forDeletedDNSZone: zone.id, on: app.db)
 
-            let zoneBindings = try await Self.bindingCount(.dnsZone, try zone.requireID(), on: app.db)
-            let recordBindings = try await Self.bindingCount(.dnsRecord, try record.requireID(), on: app.db)
+            let zoneBindings = try await Self.bindingCount(.dnsZone, zone.id, on: app.db)
+            let recordBindings = try await Self.bindingCount(.dnsRecord, record.id, on: app.db)
             let otherZoneBindings = try await Self.bindingCount(
-                .dnsZone, try otherZone.requireID(), on: app.db)
+                .dnsZone, otherZone.id, on: app.db)
             let otherRecordBindings = try await Self.bindingCount(
-                .dnsRecord, try otherRecord.requireID(), on: app.db)
+                .dnsRecord, otherRecord.id, on: app.db)
             #expect(zoneBindings == 0)
             #expect(recordBindings == 0)
             #expect(otherZoneBindings == 1)
@@ -323,7 +329,7 @@ struct ResourceBindingCleanupTests {
     @Test("Revoking for a deleted folder clears the subtree it cascades")
     func revokesFolderSubtree() async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(username: "folder", email: "folder@example.com")
             let org = try await builder.createOrganization(name: "Folder Cleanup Org")
             let folder = try await builder.createOU(name: "team", description: "", organization: org)
@@ -331,7 +337,7 @@ struct ResourceBindingCleanupTests {
                 name: "sub", description: "", organization: org, parentOU: folder)
             let project = try await builder.createProject(
                 name: "Nested", description: "cascades away", ou: nested)
-            var nodes = try await Self.populate(project: project, owner: user, on: app.db)
+            var nodes = try await Self.populate(project: project, owner: user, app: app)
             nodes.append((.organizationalUnit, try folder.requireID()))
             nodes.append((.organizationalUnit, try nested.requireID()))
 
@@ -358,7 +364,7 @@ struct ResourceBindingCleanupTests {
     @Test("Revoking for a deleted organization clears its folders, projects, and their children")
     func revokesOrganizationSubtree() async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(username: "orgdel", email: "orgdel@example.com")
             let org = try await builder.createOrganization(name: "Org Cleanup Org")
             let organizationID = try org.requireID()
@@ -372,19 +378,22 @@ struct ResourceBindingCleanupTests {
                 (.organization, organizationID),
                 (.organizationalUnit, try folder.requireID()),
             ]
-            nodes += try await Self.populate(project: folderProject, owner: user, on: app.db)
-            nodes += try await Self.populate(project: orgProject, owner: user, on: app.db)
+            nodes += try await Self.populate(project: folderProject, owner: user, app: app)
+            nodes += try await Self.populate(project: orgProject, owner: user, app: app)
 
             // Groups and workload registrations cascade on `organization_id`
             // and are binding principals, never nodes, so only the principal
             // direction reclaims their grants.
             let group = try await builder.createGroup(name: "team", description: "", organization: org)
             let groupID = try group.requireID()
-            let workload = WorkloadRegistration(
-                spiffeID: "spiffe://example.org/workload/ci", kind: .workload,
-                organizationID: organizationID, displayName: "ci")
-            try await workload.save(on: app.db)
-            let workloadID = try workload.requireID()
+            let workload = try await LegacyWorkloadRegistrationStore.insert(
+                WorkloadRegistrationWrite(
+                    spiffeID: "spiffe://example.org/workload/ci",
+                    kind: WorkloadRegistrationKind.workload.rawValue,
+                    organizationID: organizationID,
+                    displayName: "ci"),
+                on: app.db)
+            let workloadID = workload.id
 
             let other = try await builder.createOrganization(name: "Untouched Org")
             let otherID = try other.requireID()
@@ -412,10 +421,11 @@ struct ResourceBindingCleanupTests {
             for (principalType, principalID) in [
                 (IAMPrincipalType.group, groupID), (.workload, workloadID),
             ] {
-                let held = try await RoleBinding.query(on: app.db)
-                    .filter(\.$principalType == principalType.rawValue)
-                    .filter(\.$principalID == principalID)
-                    .count()
+                let held = try await LegacyRoleBindingStore.bindings(
+                    principalType: principalType.rawValue,
+                    principalID: principalID,
+                    on: app.db
+                ).count
                 #expect(held == 0, "\(principalType.rawValue) grants survived the organization delete")
             }
             // The other org's own node binding is those former grants'
@@ -435,10 +445,10 @@ struct ResourceBindingCleanupTests {
     @Test("Deleting a project through the API takes its children's bindings with it")
     func projectEndpointRevokesCascadingBindings() async throws {
         try await withContainerDeleteApp { app, user, org, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let project = try await builder.createProject(
                 name: "Doomed", description: "", organization: org)
-            let nodes = try await Self.populate(project: project, owner: user, on: app.db)
+            let nodes = try await Self.populate(project: project, owner: user, app: app)
             try await Self.grantAll(nodes, to: user, on: app.db)
 
             try await app.test(.DELETE, "/api/projects/\(try project.requireID())") { req in
@@ -454,10 +464,10 @@ struct ResourceBindingCleanupTests {
     @Test("A project delete refused for its workloads leaves every binding in place")
     func refusedProjectDeleteKeepsBindings() async throws {
         try await withContainerDeleteApp { app, user, org, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let project = try await builder.createProject(
                 name: "Occupied", description: "", organization: org)
-            let nodes = try await Self.populate(project: project, owner: user, on: app.db)
+            let nodes = try await Self.populate(project: project, owner: user, app: app)
             try await Self.grantAll(nodes, to: user, on: app.db)
             _ = try await builder.createVM(name: "resident", project: project)
 
@@ -483,7 +493,7 @@ struct ResourceBindingCleanupTests {
     @Test("Deleting a folder through the API takes its own bindings with it")
     func folderEndpointRevokesBindings() async throws {
         try await withContainerDeleteApp { app, user, org, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let folder = try await builder.createOU(name: "team", description: "", organization: org)
             let folderID = try folder.requireID()
             try await Self.grantAll([(.organizationalUnit, folderID)], to: user, on: app.db)
@@ -503,14 +513,14 @@ struct ResourceBindingCleanupTests {
     @Test("Deleting an organization through the API takes its whole subtree's bindings")
     func organizationEndpointRevokesSubtreeBindings() async throws {
         try await withContainerDeleteApp { app, user, org, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let organizationID = try org.requireID()
             let folder = try await builder.createOU(name: "team", description: "", organization: org)
             let project = try await builder.createProject(name: "In Folder", description: "", ou: folder)
             var nodes: [(IAMNodeType, UUID)] = [
                 (.organization, organizationID), (.organizationalUnit, try folder.requireID()),
             ]
-            nodes += try await Self.populate(project: project, owner: user, on: app.db)
+            nodes += try await Self.populate(project: project, owner: user, app: app)
             try await Self.grantAll(nodes, to: user, on: app.db)
 
             try await app.test(.DELETE, "/api/organizations/\(organizationID)") { req in
@@ -529,11 +539,11 @@ struct ResourceBindingCleanupTests {
         _ test: (Application, User, Organization, String) async throws -> Void
     ) async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(username: "container", email: "container@example.com")
             let org = try await builder.createOrganization(name: "Container Delete Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
             try await test(app, user, org, token)
         }
     }
@@ -560,8 +570,9 @@ struct ResourceBindingCleanupTests {
     /// One row of every node type that cascades away with a project, returned
     /// as the (type, id) pairs a binding sweep has to reach.
     private static func populate(
-        project: Project, owner: User, on db: any Database
+        project: Project, owner: User, app: Application
     ) async throws -> [(IAMNodeType, UUID)] {
+        let db = app.db
         let projectID = try project.requireID()
         let ownerID = try owner.requireID()
         let suffix = projectID.uuidString.prefix(8)
@@ -582,23 +593,23 @@ struct ResourceBindingCleanupTests {
             projectID: projectID, siteID: siteID)
         try await network.save(on: db)
 
-        let securityGroup = SecurityGroup(projectID: projectID, name: "default")
-        try await securityGroup.save(on: db)
+        let securityGroup = try await LegacySecurityGroupStore.insert(
+            projectID: projectID, name: "default", on: db)
 
         // Pools are org-scoped, not project-scoped, so each project needs its
         // own only to keep the (pool, address) unique index happy.
-        let pool = FloatingIPPool(
-            name: "pool-\(suffix)", cidr: "203.0.113.0/24", siteID: siteID)
-        try await pool.save(on: db)
-        let floatingIP = FloatingIP(
-            poolID: try pool.requireID(), address: "203.0.113.5", projectID: projectID)
-        try await floatingIP.save(on: db)
+        let pool = try await TestDataBuilder(app: app).createFloatingIPPool(
+            name: "pool-\(suffix)", cidr: "203.0.113.0/24", siteID: siteID,
+            organizationID: project.organizationID,
+            organizationalUnitID: project.organizationalUnitID)
+        let floatingIP = try await LegacyFloatingIPStore.insert(
+            poolID: pool.id, address: "203.0.113.5", projectID: projectID, on: db)
 
-        let zone = DNSZone(name: "acme.internal", projectID: projectID)
-        try await zone.save(on: db)
-        let record = DNSRecord(
-            zoneID: try zone.requireID(), name: "www", type: .a, value: "192.0.2.1")
-        try await record.save(on: db)
+        let zone = try await LegacyDNSZoneStore.insert(
+            name: "acme.internal", projectID: projectID, on: db)
+        let record = try await LegacyDNSRecordStore.insert(
+            zoneID: zone.id, name: "www", type: .a,
+            value: "192.0.2.1", on: db)
 
         let volume = Volume(
             name: "data", description: "", projectID: projectID, environment: "development", size: 1024,
@@ -610,29 +621,30 @@ struct ResourceBindingCleanupTests {
             size: 1024, createdByID: ownerID)
         try await volumeSnapshot.save(on: db)
 
-        let serviceAccount = ServiceAccount(name: "runner", projectID: projectID)
-        try await serviceAccount.save(on: db)
+        let serviceAccount = try await LegacyServiceAccountStore.insert(
+            ServiceAccountWrite(name: "runner", projectID: projectID), on: db)
 
         return [
             (.project, projectID),
             (.image, try image.requireID()),
             (.network, try network.requireID()),
-            (.securityGroup, try securityGroup.requireID()),
-            (.floatingIP, try floatingIP.requireID()),
-            (.dnsZone, try zone.requireID()),
-            (.dnsRecord, try record.requireID()),
+            (.securityGroup, securityGroup.id),
+            (.floatingIP, floatingIP.id),
+            (.dnsZone, zone.id),
+            (.dnsRecord, record.id),
             (.volume, try volume.requireID()),
             (.volumeSnapshot, try volumeSnapshot.requireID()),
-            (.serviceAccount, try serviceAccount.requireID()),
+            (.serviceAccount, serviceAccount.id),
         ]
     }
 
     private static func bindingCount(
         _ nodeType: IAMNodeType, _ nodeID: UUID, on db: any Database
     ) async throws -> Int {
-        try await RoleBinding.query(on: db)
-            .filter(\.$nodeType == nodeType.rawValue)
-            .filter(\.$nodeID == nodeID)
-            .count()
+        try await LegacyRoleBindingStore.bindings(
+            nodeType: nodeType.rawValue,
+            nodeID: nodeID,
+            on: db
+        ).count
     }
 }

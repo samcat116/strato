@@ -20,6 +20,10 @@ import Vapor
 /// behind an auto-generated device name serializes across replicas. The
 /// `(vm_id, device_name)` unique index is the backstop, not the only defense.
 enum VolumeAttachmentService {
+    struct Claim: Sendable {
+        let volume: Volume
+        let deviceName: VolumeDeviceName
+    }
 
     // MARK: - Serialization
 
@@ -64,7 +68,7 @@ enum VolumeAttachmentService {
         bootOrder: Int?,
         readonly: Bool,
         on db: any Database
-    ) async throws -> VolumeDeviceName {
+    ) async throws -> Claim {
         let vmID = try vm.requireID()
         try await lock(vmID: vmID, on: db)
 
@@ -81,9 +85,8 @@ enum VolumeAttachmentService {
         // Every volume already pointing at this VM: a desired attachment claims
         // its name whether or not the agent has realized it yet, and the unique
         // index does not care either.
-        let siblings = try await Volume.query(on: db)
-            .filter(\.$vm.$id == vmID)
-            .all()
+        let siblings = try await LegacyVolumeStore.volumes(
+            attachment: .attachedTo(vmID), on: db)
             .filter { $0.id != volume.id }
 
         let deviceName =
@@ -111,15 +114,14 @@ enum VolumeAttachmentService {
             }
         }
 
-        volume.$vm.id = vmID
-        volume.deviceName = deviceName.rawValue
-        volume.bootOrder = bootOrder
-        volume.readonly = readonly
+        let claimed = volume.replacing(
+            attachedAgentId: .some(vm.hypervisorId), vmID: .some(vmID),
+            deviceName: .some(deviceName.rawValue), bootOrder: .some(bootOrder),
+            readonly: readonly)
         // The volume's replica placement is set at provisioning and must not be
         // overwritten here; this records where the *attachment* runs.
-        volume.attachedAgentId = vm.hypervisorId
         do {
-            try await volume.save(on: db)
+            try await claimed.save(on: db)
         } catch let error as any DatabaseError where error.isConstraintFailure {
             // The unique index caught what the checks above could not: a
             // concurrent attach on a replica that could not take the advisory
@@ -131,7 +133,7 @@ enum VolumeAttachmentService {
                     "Device name '\(deviceName)' or boot order is already in use on this VM "
                     + "(claimed by a concurrent attach)")
         }
-        return deviceName
+        return Claim(volume: claimed, deviceName: deviceName)
     }
 
     // MARK: - Release
@@ -156,14 +158,12 @@ enum VolumeAttachmentService {
     ///
     /// `status` is left alone. It is what the agent last observed, and the
     /// detach it will observe is what moves it.
-    static func clearAttachment(_ volume: Volume) {
-        volume.$vm.id = nil
-        volume.deviceName = nil
-        volume.bootOrder = nil
-        volume.readonly = false
-        volume.attachedAgentId = nil
-        volume.extendConvergenceDeadline(
-            by: OperationResourceKind.volume.completionBudgetSeconds(for: .detach))
+    static func clearAttachment(_ volume: Volume) -> Volume {
+        volume.replacing(
+            attachedAgentId: .some(nil), vmID: .some(nil), deviceName: .some(nil),
+            bootOrder: .some(nil), readonly: false)
+            .extendingConvergenceDeadline(
+                by: OperationResourceKind.volume.completionBudgetSeconds(for: .detach))
     }
 
     /// Releases every data volume attached to `vmID`, and returns their ids.
@@ -176,27 +176,24 @@ enum VolumeAttachmentService {
     /// not make its VM undeletable" outranks every other consideration here.
     @discardableResult
     static func releaseDataVolumes(fromVM vmID: UUID, on db: any Database) async throws -> [UUID] {
-        let attached = try await Volume.query(on: db)
-            .filter(\.$vm.$id == vmID)
-            .filter(\.$volumeType == .data)
-            .all()
+        let attached = try await LegacyVolumeStore.volumes(
+            attachment: .attachedTo(vmID), volumeType: .data, on: db)
 
         for volume in attached.sorted(by: {
             ($0.id?.uuidString ?? "") < ($1.id?.uuidString ?? "")
         }) {
-            guard try await volume.lockAndRefresh(on: db) else { continue }
+            guard var current = try await volume.lockingAndRefreshing(on: db) else { continue }
             // It may have moved while this VM's reap was reaching it. Only
             // release the attachment the query selected, never a newer one.
-            guard volume.$vm.id == vmID else { continue }
-            let expectedGeneration = volume.generation
-            clearAttachment(volume)
-            guard
-                case .applied = try await volume.advanceDesiredStateGeneration(
-                    expectedGeneration: expectedGeneration, on: db)
-            else {
+            guard current.vmID == vmID else { continue }
+            let expectedGeneration = current.generation
+            current = clearAttachment(current)
+            let advance = try await current.advancingDesiredStateGeneration(
+                expectedGeneration: expectedGeneration, on: db)
+            guard case .applied = advance.outcome else {
                 throw ConvergenceWriteError.unsupportedDatabase
             }
-            try await volume.save(on: db)
+            try await advance.resource.save(on: db)
         }
         return attached.compactMap(\.id)
     }

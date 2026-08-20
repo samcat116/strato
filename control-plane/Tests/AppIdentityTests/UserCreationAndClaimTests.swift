@@ -10,12 +10,12 @@ import AppTestSupport
 @Suite("Admin user creation & passkey claim", .serialized)
 final class UserCreationAndClaimTests: BaseTestCase {
 
-    private func makeAdminToken(on db: Database) async throws -> String {
+    private func makeAdminToken(on app: Application) async throws -> String {
         let admin = User(
             username: "admin", email: "admin@example.com", displayName: "Admin", isSystemAdmin: true
         )
-        try await admin.save(on: db)
-        return try await admin.generateAPIKey(on: db)
+        try await admin.save(on: app.db)
+        return try await admin.generateAPIKey(on: app)
     }
 
     // MARK: - create authorization
@@ -23,7 +23,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
     @Test("create is forbidden for non-admins")
     func testCreateForbidden() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             try await app.test(.POST, "/api/users") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -35,7 +35,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
                 #expect(res.status == .forbidden)
             }
 
-            let created = try await User.query(on: app.db).filter(\.$username == "neo").first()
+            let created = try await LegacyUserStore.users(username: "neo", on: app.db).first
             #expect(created == nil)
         }
     }
@@ -45,8 +45,8 @@ final class UserCreationAndClaimTests: BaseTestCase {
     @Test("admin create makes a local user and a valid claim token")
     func testCreateSucceeds() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            let adminToken = try await makeAdminToken(on: app.db)
+            try await setupCommonTestData(on: app)
+            let adminToken = try await makeAdminToken(on: app)
 
             var createdUserID: UUID?
             var rawToken = ""
@@ -70,14 +70,16 @@ final class UserCreationAndClaimTests: BaseTestCase {
             }
 
             // The raw token is not stored; only its hash, resolvable back to the user.
-            let claim = try #require(try await AccountClaimToken.findByToken(rawToken, on: app.db))
-            #expect(claim.$user.id == createdUserID)
+            let claim = try #require(try await findTestAccountClaim(rawToken: rawToken, on: app))
+            #expect(claim.userID == createdUserID)
             #expect(claim.claimedAt == nil)
-            #expect(claim.isValid)
+            #expect(claim.isValid())
 
             // The user exists with no credentials yet.
             let user = try #require(try await User.find(createdUserID, on: app.db))
-            let credentialCount = try await user.$credentials.query(on: app.db).count()
+            let credentialCount = try await app.passkeysPersistence.credentials(
+                userID: user.requireID()
+            ).count
             #expect(credentialCount == 0)
         }
     }
@@ -85,8 +87,8 @@ final class UserCreationAndClaimTests: BaseTestCase {
     @Test("admin create can grant system admin rights")
     func testCreateGrantsAdmin() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            let adminToken = try await makeAdminToken(on: app.db)
+            try await setupCommonTestData(on: app)
+            let adminToken = try await makeAdminToken(on: app)
 
             try await app.test(.POST, "/api/users") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -105,8 +107,8 @@ final class UserCreationAndClaimTests: BaseTestCase {
     @Test("admin create rejects a duplicate username or email")
     func testCreateConflict() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            let adminToken = try await makeAdminToken(on: app.db)
+            try await setupCommonTestData(on: app)
+            let adminToken = try await makeAdminToken(on: app)
 
             try await app.test(.POST, "/api/users") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -123,8 +125,8 @@ final class UserCreationAndClaimTests: BaseTestCase {
     @Test("admin create can provision the invitee into an organization")
     func testCreateWithOrgAssignment() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            let adminToken = try await makeAdminToken(on: app.db)
+            try await setupCommonTestData(on: app)
+            let adminToken = try await makeAdminToken(on: app)
             let orgID = try testOrganization.requireID()
 
             var createdUserID: UUID?
@@ -141,10 +143,8 @@ final class UserCreationAndClaimTests: BaseTestCase {
                 createdUserID = body.user.id
             }
 
-            let membership = try await UserOrganization.query(on: app.db)
-                .filter(\.$user.$id == #require(createdUserID))
-                .filter(\.$organization.$id == orgID)
-                .first()
+            let membership = try await OrganizationMembershipStore.membership(
+                userID: #require(createdUserID), organizationID: orgID, on: app.db)
             #expect(membership?.roleID == IAMRole.admin.seededID)
         }
     }
@@ -152,8 +152,8 @@ final class UserCreationAndClaimTests: BaseTestCase {
     @Test("admin create rejects an unknown assigned organization")
     func testCreateWithUnknownOrg() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            let adminToken = try await makeAdminToken(on: app.db)
+            try await setupCommonTestData(on: app)
+            let adminToken = try await makeAdminToken(on: app)
 
             try await app.test(.POST, "/api/users") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -166,7 +166,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
             }
 
             // The whole create rolls back — no orphaned user.
-            let created = try await User.query(on: app.db).filter(\.$username == "neo").first()
+            let created = try await LegacyUserStore.users(username: "neo", on: app.db).first
             #expect(created == nil)
         }
     }
@@ -174,8 +174,8 @@ final class UserCreationAndClaimTests: BaseTestCase {
     @Test("org list-all is system-admin only and includes non-member orgs")
     func testListAllOrganizations() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            let adminToken = try await makeAdminToken(on: app.db)
+            try await setupCommonTestData(on: app)
+            let adminToken = try await makeAdminToken(on: app)
 
             // An org the admin is not a member of.
             let other = Organization(name: "Zeta Corp", description: "")
@@ -201,8 +201,8 @@ final class UserCreationAndClaimTests: BaseTestCase {
     @Test("admin create rejects an invalid org role")
     func testCreateWithInvalidRole() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            let adminToken = try await makeAdminToken(on: app.db)
+            try await setupCommonTestData(on: app)
+            let adminToken = try await makeAdminToken(on: app)
             let orgID = try testOrganization.requireID()
 
             try await app.test(.POST, "/api/users") { req in
@@ -222,8 +222,8 @@ final class UserCreationAndClaimTests: BaseTestCase {
     @Test("claim info reports a valid invite")
     func testClaimInfoValid() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            let adminToken = try await makeAdminToken(on: app.db)
+            try await setupCommonTestData(on: app)
+            let adminToken = try await makeAdminToken(on: app)
 
             var rawToken = ""
             try await app.test(.POST, "/api/users") { req in
@@ -251,7 +251,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
     @Test("claim info 404s for an unknown token")
     func testClaimInfoUnknown() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             try await app.test(.GET, "/auth/claim/claim_does_not_exist") { res in
                 #expect(res.status == .notFound)
@@ -262,20 +262,18 @@ final class UserCreationAndClaimTests: BaseTestCase {
     @Test("an expired claim token is reported invalid and cannot begin a ceremony")
     func testExpiredClaimToken() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             let invitee = User(
                 username: "invitee", email: "invitee@example.com", displayName: "Invitee")
             try await invitee.save(on: app.db)
 
-            let raw = AccountClaimToken.generateToken()
-            let token = AccountClaimToken(
+            let token = try await seedTestAccountClaim(
                 userID: try invitee.requireID(),
-                tokenHash: AccountClaimToken.hashToken(raw),
-                tokenPrefix: AccountClaimToken.extractPrefix(raw),
                 expiresAt: Date().addingTimeInterval(-60),
-                createdByID: nil)
-            try await token.save(on: app.db)
+                on: app
+            )
+            let raw = token.rawToken
 
             try await app.test(.GET, "/auth/claim/\(raw)") { res in
                 #expect(res.status == .ok)
@@ -295,8 +293,8 @@ final class UserCreationAndClaimTests: BaseTestCase {
     @Test("claim begin stores its challenge under a claim-only operation")
     func testClaimBeginNamespacesChallenge() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            let adminToken = try await makeAdminToken(on: app.db)
+            try await setupCommonTestData(on: app)
+            let adminToken = try await makeAdminToken(on: app)
 
             var rawToken = ""
             try await app.test(.POST, "/api/users") { req in
@@ -309,43 +307,56 @@ final class UserCreationAndClaimTests: BaseTestCase {
                 rawToken = try res.content.decode(AdminCreateUserResponse.self).claimToken
             }
 
+            var challenge = ""
             try await app.test(.POST, "/auth/claim/begin") { req in
                 try req.content.encode(ClaimBeginRequest(token: rawToken))
             } afterResponse: { res in
                 #expect(res.status == .ok)
+                let root = try #require(
+                    JSONSerialization.jsonObject(with: Data(res.body.string.utf8))
+                        as? [String: Any]
+                )
+                let options = try #require(root["options"] as? [String: Any])
+                challenge = try #require(options["challenge"] as? String)
             }
 
             // The invite-authorized challenge must be namespaced so it cannot be
             // redeemed via the open /auth/register/finish path (which only
             // consumes "registration" challenges).
-            let challenges = try await AuthenticationChallenge.query(on: app.db).all()
-            #expect(challenges.contains { $0.operation == "claim" })
-            #expect(challenges.allSatisfy { $0.operation != "registration" })
+            #expect(
+                try await app.passkeysPersistence.challenge(
+                    challenge,
+                    operation: "claim"
+                ) != nil
+            )
+            #expect(
+                try await app.passkeysPersistence.challenge(
+                    challenge,
+                    operation: "registration"
+                ) == nil
+            )
         }
     }
 
     @Test("claim-token consume is atomic and one-time")
     func testClaimTokenConsumeIsOneTime() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             let invitee = User(
                 username: "invitee", email: "invitee@example.com", displayName: "Invitee")
             try await invitee.save(on: app.db)
 
-            let raw = AccountClaimToken.generateToken()
-            let token = AccountClaimToken(
+            let token = try await seedTestAccountClaim(
                 userID: try invitee.requireID(),
-                tokenHash: AccountClaimToken.hashToken(raw),
-                tokenPrefix: AccountClaimToken.extractPrefix(raw),
                 expiresAt: Date().addingTimeInterval(3600),
-                createdByID: nil)
-            try await token.save(on: app.db)
+                on: app
+            )
 
             // This is the exact conditional consume claimFinish runs before
             // enrolling a credential: only the first attempt claims the token.
             let sql = try #require(app.db as? SQLDatabase)
-            let claimID = try token.requireID()
+            let claimID = token.id
             let first = try await sql.raw(
                 """
                 UPDATE account_claim_tokens SET claimed_at = \(bind: Date())
@@ -371,8 +382,8 @@ final class UserCreationAndClaimTests: BaseTestCase {
     @Test("invited accounts cannot be claimed via open self-registration")
     func testRegisterBeginBlockedForInvitedAccount() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            let adminToken = try await makeAdminToken(on: app.db)
+            try await setupCommonTestData(on: app)
+            let adminToken = try await makeAdminToken(on: app)
 
             try await app.test(.POST, "/api/users") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -410,7 +421,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
     @Test("a claimed invite no longer blocks passkey enrollment")
     func testRegisterBeginAllowedAfterInviteClaimed() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             var sessionCookie: String?
             try await app.test(.POST, "/api/users/register") { req in
@@ -421,7 +432,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
                 sessionCookie = res.headers.setCookie?["vapor-session"]?.string
             }
             let cookie = try #require(sessionCookie)
-            let user = try #require(try await User.query(on: app.db).filter(\.$username == "trinity").first())
+            let user = try #require(try await LegacyUserStore.users(username: "trinity", on: app.db).first)
 
             func beginRegistration() async throws -> HTTPStatus {
                 var status: HTTPStatus = .internalServerError
@@ -437,19 +448,16 @@ final class UserCreationAndClaimTests: BaseTestCase {
             }
 
             // An outstanding invite blocks, as above.
-            let invite = AccountClaimToken(
+            let invite = try await seedTestAccountClaim(
                 userID: try user.requireID(),
-                tokenHash: AccountClaimToken.hashToken("claim_pending"),
-                tokenPrefix: "claim_pending",
+                rawToken: "claim_pending",
                 expiresAt: Date().addingTimeInterval(3600),
-                createdByID: nil
+                on: app
             )
-            try await invite.save(on: app.db)
             #expect(try await beginRegistration() == .forbidden)
 
             // Spending it releases the gate.
-            invite.claimedAt = Date()
-            try await invite.save(on: app.db)
+            try await consumeTestAccountClaim(id: invite.id, on: app)
             #expect(try await beginRegistration() == .ok)
         }
     }

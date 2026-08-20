@@ -1,179 +1,39 @@
+import ControlPlanePostgres
 import Fluent
 import StratoShared
 import Vapor
 
-/// A logical network VMs attach to, and the unit of IPAM ownership: the control
-/// plane allocates NIC addresses from a network's subnet and pushes them down to
-/// agents in the `VMSpec` (issue #212). Agents realize the network on their
-/// platform (OVN logical switch on Linux, user-mode on macOS), naming their
-/// objects after the row id.
-///
-/// Every network belongs to exactly one project, and everything that identifies
-/// one — NIC rows, address rows, the IPAM uniqueness index and lock, the agent's
-/// OVN object names — keys on the row id (issue #765). The name is a display
-/// label, unique only within its project, so two tenants can each own a network
-/// called "default" without sharing an L2 domain or an IP pool.
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class LogicalNetwork: Model, @unchecked Sendable {
+/// Immutable application view of a logical network. SQL decoding stays private
+/// to the persistence layer so request handlers and background work never share
+/// Fluent identity-map or dirty-tracking state.
+struct LogicalNetwork: Content, Equatable, Sendable {
     static let schema = "logical_networks"
-
-    /// Hard cap on resolvers advertised over DHCP. Well above anything a
-    /// resolver stack reads (glibc's `resolv.conf` stops at three) and still
-    /// under what DHCP option 6 can carry — its length byte tops out at 63
-    /// IPv4 addresses, so a longer list could not be programmed anyway.
     static let maxDNSServers = 32
 
-    @ID(key: .id)
-    var id: UUID?
-
-    /// Display name, unique within the owning project. Not an identifier: use
-    /// the row id to reference a network.
-    @Field(key: "name")
-    var name: String
-
-    /// Subnet in CIDR notation (e.g. "192.168.1.0/24"). IPs are allocated from
-    /// its host range.
-    @Field(key: "subnet")
-    var subnet: String
-
-    /// Gateway address inside the subnet; excluded from allocation and pushed
-    /// to guests via the VM spec. Changing it only affects future allocations:
-    /// existing NICs carry a denormalized copy.
-    @OptionalField(key: "gateway")
-    var gateway: String?
-
-    /// IPv6 subnet in canonical CIDR notation (always a /64), when the network
-    /// is dual-stack. New networks default to a generated RFC 4193 ULA /64;
-    /// nil means v4-only (explicit opt-out, or a network predating IPv6).
-    @OptionalField(key: "subnet6")
-    var subnet6: String?
-
-    /// IPv6 gateway (the router-port address) inside `subnet6`; excluded from
-    /// allocation and announced to guests via Router Advertisements.
-    @OptionalField(key: "gateway6")
-    var gateway6: String?
-
-    /// When true, agents program OVN's native DHCP responder to deliver the
-    /// control-plane-allocated IP, gateway, DNS, and MTU to guests, and cloud-init
-    /// omits static L3 config. When false, guests are configured statically via
-    /// cloud-init (the pre-DHCP behavior, and the fallback for non-OVN platforms).
-    @Field(key: "dhcp_enabled")
-    var dhcpEnabled: Bool
-
-    /// DNS resolvers advertised to guests over DHCP, stored comma-separated.
-    /// Use `dnsServers` for the parsed list.
-    @OptionalField(key: "dns_servers")
-    var dnsServersRaw: String?
-
-    /// DNS search domain advertised over DHCP (`domain_name` option).
-    @OptionalField(key: "domain_name")
-    var domainName: String?
-
-    /// DHCP lease time in seconds (`lease_time` option). Agents apply a default
-    /// when nil.
-    @OptionalField(key: "lease_time")
-    var leaseTime: Int?
-
-    /// When true, agents attach the network to its project's logical router and
-    /// program outbound SNAT to the host uplink (issue #342), giving VMs internet
-    /// access. False keeps the network internal (L3 gateway only, no egress).
-    /// The uplink IP is auto-detected on the agent — no operator config yet.
-    @Field(key: "external_access")
-    var externalAccess: Bool
-
-    /// When true, agents publish the link-local instance metadata service to
-    /// this network's guests — an OVN `localport` on the network's logical
-    /// switch, terminated in a per-network namespace on every chassis running
-    /// one of its NICs (STR-49).
-    ///
-    /// An opt-*out*, defaulting true: the metadata service replaces the
-    /// boot-time seed ISO rather than supplementing it. Editing it deliberately
-    /// does **not** bump `generation` — the metadata port converges
-    /// level-triggered on every network reconcile, exactly like the DHCP rows.
-    @Field(key: "metadata_enabled")
-    var metadataEnabled: Bool
-
-    /// When true, agents give this network's guests a DNS resolver at
-    /// `NetworkResolverEndpoint` — the host-wide CoreDNS each agent runs in its
-    /// *host* namespace (ADR 0008), serving the network's zones in full
-    /// (including the CNAME/TXT/SRV the OVN `DNS` table cannot express) and
-    /// forwarding everything else to `dnsServers` (STR-40).
-    ///
-    /// **This changes what `dnsServers` means for the network.** With the
-    /// resolver on, guests are told the resolver's link-local address over DHCP
-    /// and `dnsServers` becomes the resolver's upstream forwarders; with it off,
-    /// `dnsServers` is handed to guests verbatim, which is what it always was.
-    ///
-    /// An opt-*out*, defaulting true, like `metadataEnabled`. The resolver
-    /// forwards through the *hypervisor's* egress, so a
-    /// network whose `dnsServers` already worked keeps working and one with no
-    /// external access at all starts being able to resolve public names, which
-    /// is the bug this phase was filed for. And the control plane withholds the
-    /// flag entirely unless every agent in the site reports `resolverCapable`,
-    /// so a site that cannot run CoreDNS is unaffected by the default until it
-    /// can.
-    ///
-    /// Editing it deliberately does **not** bump `generation` — the port and the
-    /// DHCP row converge level-triggered on every network reconcile.
-    @Field(key: "resolver_enabled")
-    var resolverEnabled: Bool
-
-    /// The index this network's two link-local resolver addresses derive from
-    /// (`NetworkResolverEndpoint`), allocated fleet-wide by
-    /// `ResolverAddressAllocator`.
-    ///
-    /// Nil until the resolver is first enabled, and **kept** if it is later
-    /// disabled: the addresses live in the host namespace where every network's
-    /// resolver shares one namespace, so reusing an index while some agent still
-    /// has the old interface configured would put two networks on one address.
-    /// Holding it costs one number out of 65k and makes re-enabling free of any
-    /// guest-visible change.
-    @OptionalField(key: "resolver_index")
-    var resolverIndex: Int?
-
-    /// Monotonic counter bumped whenever a change alters how agents realize the
-    /// network's L3 (subnet, gateway, or external access). Sent to agents as the
-    /// `DesiredNetworkState.generation` so replayed/reordered syncs can't roll
-    /// the network's realization backward.
-    @Field(key: "generation")
-    var generation: Int
-
-    /// Project that owns this network. Required since issue #765: a network is
-    /// a tenant-scoped resource, and the project is what its name, its IP pool
-    /// and its logical router are scoped by.
-    @Parent(key: "project_id")
-    var project: Project
-
-    /// Site (availability zone) this network is pinned to. The network's
-    /// VMs may only place on that site's agents, where the shared OVN
-    /// deployment lets one logical switch span nodes over geneve.
-    @Parent(key: "site_id")
-    var site: Site
-
-    /// The zone VMs on this network **auto-register into** (issue #770) — the
-    /// zone their derived `<hostname>.<zone>` and PTR records land in. Must be
-    /// one of the network's attached zones (`DNSZoneNetwork`), which keeps
-    /// derived-record placement unambiguous while attachment stays
-    /// many-to-many. Nil is the ordinary case for a network that resolves
-    /// zones without registering into any of them.
-    @OptionalParent(key: "primary_dns_zone_id")
-    var primaryDNSZone: DNSZone?
-
-    /// User who created the network; nil for seeded networks.
-    @OptionalParent(key: "created_by_id")
-    var createdBy: User?
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
+    let id: UUID?
+    let name: String
+    let subnet: String
+    let gateway: String?
+    let subnet6: String?
+    let gateway6: String?
+    let dhcpEnabled: Bool
+    let dnsServersRaw: String?
+    let domainName: String?
+    let leaseTime: Int?
+    let externalAccess: Bool
+    let metadataEnabled: Bool
+    let resolverEnabled: Bool
+    let resolverIndex: Int?
+    let generation: Int
+    let projectID: UUID
+    let siteID: UUID
+    let primaryDNSZoneID: UUID?
+    let createdByID: UUID?
+    let createdAt: Date?
+    let updatedAt: Date?
 
     init(
-        id: UUID? = nil,
+        id: UUID? = UUID(),
         name: String,
         subnet: String,
         gateway: String? = nil,
@@ -190,7 +50,10 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         resolverEnabled: Bool = true,
         resolverIndex: Int? = nil,
         generation: Int = 1,
-        siteID: UUID
+        siteID: UUID,
+        primaryDNSZoneID: UUID? = nil,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
@@ -198,11 +61,11 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         self.gateway = gateway
         self.subnet6 = subnet6
         self.gateway6 = gateway6
-        self.$project.id = projectID
-        self.$site.id = siteID
-        self.$createdBy.id = createdByID
+        self.projectID = projectID
+        self.siteID = siteID
+        self.createdByID = createdByID
         self.dhcpEnabled = dhcpEnabled
-        self.dnsServersRaw = LogicalNetwork.joinDNS(dnsServers)
+        self.dnsServersRaw = Self.joinDNS(dnsServers)
         self.domainName = domainName
         self.leaseTime = leaseTime
         self.externalAccess = externalAccess
@@ -210,6 +73,110 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         self.resolverEnabled = resolverEnabled
         self.resolverIndex = resolverIndex
         self.generation = generation
+        self.primaryDNSZoneID = primaryDNSZoneID
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    init(snapshot: NetworkSnapshot) {
+        self.init(
+            id: snapshot.id,
+            name: snapshot.name,
+            subnet: snapshot.subnet,
+            gateway: snapshot.gateway,
+            subnet6: snapshot.subnet6,
+            gateway6: snapshot.gateway6,
+            projectID: snapshot.projectID,
+            createdByID: snapshot.createdByID,
+            dhcpEnabled: snapshot.dhcpEnabled,
+            dnsServers: snapshot.dnsServers,
+            domainName: snapshot.domainName,
+            leaseTime: snapshot.leaseTime,
+            externalAccess: snapshot.externalAccess,
+            metadataEnabled: snapshot.metadataEnabled,
+            resolverEnabled: snapshot.resolverEnabled,
+            resolverIndex: snapshot.resolverIndex,
+            generation: snapshot.generation,
+            siteID: snapshot.siteID,
+            primaryDNSZoneID: snapshot.primaryDNSZoneID,
+            createdAt: snapshot.createdAt,
+            updatedAt: snapshot.updatedAt
+        )
+    }
+
+    func requireID() throws -> UUID {
+        guard let id else {
+            throw Abort(.internalServerError, reason: "Logical network has no identifier")
+        }
+        return id
+    }
+
+    @discardableResult
+    func persisted(on db: any Database) async throws -> Self {
+        try await LegacyLogicalNetworkStore.upsert(self, on: db)
+    }
+
+    func save(on db: any Database) async throws {
+        _ = try await persisted(on: db)
+    }
+
+    func delete(on db: any Database) async throws {
+        guard let id else { return }
+        _ = try await LegacyLogicalNetworkStore.delete(id: id, on: db)
+    }
+
+    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+        try await LegacyLogicalNetworkStore.network(id: id, on: db)
+    }
+
+    static func all(on db: any Database) async throws -> [Self] {
+        try await LegacyLogicalNetworkStore.networks(on: db)
+    }
+
+    static func count(on db: any Database) async throws -> Int {
+        try await LegacyLogicalNetworkStore.count(on: db)
+    }
+
+    func replacing(
+        name: String? = nil,
+        subnet: String? = nil,
+        gateway: String?? = nil,
+        subnet6: String?? = nil,
+        gateway6: String?? = nil,
+        dhcpEnabled: Bool? = nil,
+        dnsServers: [String]? = nil,
+        domainName: String?? = nil,
+        leaseTime: Int?? = nil,
+        externalAccess: Bool? = nil,
+        metadataEnabled: Bool? = nil,
+        resolverEnabled: Bool? = nil,
+        resolverIndex: Int?? = nil,
+        generation: Int? = nil,
+        primaryDNSZoneID: UUID?? = nil
+    ) -> Self {
+        Self(
+            id: id,
+            name: name ?? self.name,
+            subnet: subnet ?? self.subnet,
+            gateway: gateway ?? self.gateway,
+            subnet6: subnet6 ?? self.subnet6,
+            gateway6: gateway6 ?? self.gateway6,
+            projectID: projectID,
+            createdByID: createdByID,
+            dhcpEnabled: dhcpEnabled ?? self.dhcpEnabled,
+            dnsServers: dnsServers ?? self.dnsServers,
+            domainName: domainName ?? self.domainName,
+            leaseTime: leaseTime ?? self.leaseTime,
+            externalAccess: externalAccess ?? self.externalAccess,
+            metadataEnabled: metadataEnabled ?? self.metadataEnabled,
+            resolverEnabled: resolverEnabled ?? self.resolverEnabled,
+            resolverIndex: resolverIndex ?? self.resolverIndex,
+            generation: generation ?? self.generation,
+            siteID: siteID,
+            primaryDNSZoneID: primaryDNSZoneID ?? self.primaryDNSZoneID,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
     }
 
     /// The addresses to put on the wire for this network's resolver, or nil when
@@ -242,14 +209,11 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     /// preserves that east-west is a follow-up).
     var routerKey: String {
         let scope = externalAccess ? "" : "-internal"
-        return "project-\($project.id.uuidString)\(scope)"
+        return "project-\(projectID.uuidString)\(scope)"
     }
 
     /// Parsed DNS resolver list, backed by the comma-separated `dns_servers` column.
-    var dnsServers: [String] {
-        get { LogicalNetwork.splitDNS(dnsServersRaw) }
-        set { dnsServersRaw = LogicalNetwork.joinDNS(newValue) }
-    }
+    var dnsServers: [String] { Self.splitDNS(dnsServersRaw) }
 
     static func splitDNS(_ raw: String?) -> [String] {
         guard let raw else { return [] }
@@ -266,8 +230,6 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         return cleaned.isEmpty ? nil : cleaned.joined(separator: ",")
     }
 }
-
-extension LogicalNetwork: Content {}
 
 // MARK: - Request/Response DTOs
 
@@ -465,7 +427,7 @@ struct NetworkResponse: Content {
         self.gateway = network.gateway
         self.subnet6 = network.subnet6
         self.gateway6 = network.gateway6
-        self.projectId = network.$project.id
+        self.projectId = network.projectID
         self.attachedInterfaceCount = attachedInterfaceCount
         self.dhcpEnabled = network.dhcpEnabled
         self.dnsServers = network.dnsServers
@@ -480,8 +442,38 @@ struct NetworkResponse: Content {
                 NetworkResolverEndpoint.addressV6(forIndex: $0),
             ]
         }
-        self.siteId = network.$site.id
-        self.primaryDnsZoneId = network.$primaryDNSZone.id
+        self.siteId = network.siteID
+        self.primaryDnsZoneId = network.primaryDNSZoneID
+        self.zoneResolutionWarning = zoneResolutionWarning
+        self.createdAt = network.createdAt
+        self.updatedAt = network.updatedAt
+    }
+
+    init(from overview: NetworkOverview, zoneResolutionWarning: String?) {
+        let network = overview.network
+        self.id = network.id
+        self.name = network.name
+        self.subnet = network.subnet
+        self.gateway = network.gateway
+        self.subnet6 = network.subnet6
+        self.gateway6 = network.gateway6
+        self.projectId = network.projectID
+        self.attachedInterfaceCount = overview.attachedInterfaceCount
+        self.dhcpEnabled = network.dhcpEnabled
+        self.dnsServers = network.dnsServers
+        self.domainName = network.domainName
+        self.leaseTime = network.leaseTime
+        self.externalAccess = network.externalAccess
+        self.metadataEnabled = network.metadataEnabled
+        self.resolverEnabled = network.resolverEnabled
+        self.resolverAddresses = network.resolverIndex.map {
+            [
+                NetworkResolverEndpoint.address(forIndex: $0),
+                NetworkResolverEndpoint.addressV6(forIndex: $0),
+            ]
+        }
+        self.siteId = network.siteID
+        self.primaryDnsZoneId = network.primaryDNSZoneID
         self.zoneResolutionWarning = zoneResolutionWarning
         self.createdAt = network.createdAt
         self.updatedAt = network.updatedAt

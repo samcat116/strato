@@ -37,7 +37,11 @@ final class SCIMFilterTests: BaseTestCase {
         op: SCIMFilterOperator,
         value: String
     ) async throws -> [String] {
-        let handler = UserSCIMHandler(db: app.db, organizationID: org.id!)
+        let handler = UserSCIMHandler(
+            db: app.db,
+            externalIDs: app.scimExternalIDsPersistence,
+            organizationID: org.id!
+        )
         let query = userQuery(.attribute(path, op, .string(value)))
         let response = try await handler.search(query: query, context: makeContext())
         return response.Resources.map(\.userName).sorted()
@@ -51,7 +55,12 @@ final class SCIMFilterTests: BaseTestCase {
         op: SCIMFilterOperator,
         value: String
     ) async throws -> [String] {
-        let handler = GroupSCIMHandler(db: app.db, organizationID: org.id!)
+        let handler = GroupSCIMHandler(
+            groups: app.groupsPersistence,
+            externalIDs: app.scimExternalIDsPersistence,
+            organizationID: org.id!,
+            logger: app.logger
+        )
         let query = SCIMServerQuery(filter: .attribute(path, op, .string(value)))
         let response = try await handler.search(query: query, context: makeContext())
         return response.Resources.map(\.displayName).sorted()
@@ -78,7 +87,7 @@ final class SCIMFilterTests: BaseTestCase {
     @Test("User co (contains) is case-insensitive")
     func testUserContainsCaseInsensitive() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let org = try await builder.createOrganization(name: "Org A")
             try await createUser(builder, username: "Alice", displayName: "Alice Anderson", org: org)
             try await createUser(builder, username: "bob", displayName: "Bob Builder", org: org)
@@ -95,7 +104,7 @@ final class SCIMFilterTests: BaseTestCase {
     @Test("User sw (startsWith) is case-insensitive")
     func testUserStartsWithCaseInsensitive() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let org = try await builder.createOrganization(name: "Org A")
             try await createUser(builder, username: "Alice", displayName: "Alice Anderson", org: org)
             try await createUser(builder, username: "bob", displayName: "Bob Builder", org: org)
@@ -112,7 +121,7 @@ final class SCIMFilterTests: BaseTestCase {
     @Test("User ew (endsWith) is case-insensitive")
     func testUserEndsWithCaseInsensitive() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let org = try await builder.createOrganization(name: "Org A")
             try await createUser(builder, username: "Alice", displayName: "Alice Anderson", org: org)
             try await createUser(builder, username: "CAROL", displayName: "Carol Danvers", org: org)
@@ -127,7 +136,7 @@ final class SCIMFilterTests: BaseTestCase {
     @Test("User eq (equal) matches exactly")
     func testUserEqualExact() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let org = try await builder.createOrganization(name: "Org A")
             try await createUser(builder, username: "Alice", displayName: "Alice Anderson", org: org)
             try await createUser(builder, username: "bob", displayName: "Bob Builder", org: org)
@@ -142,7 +151,7 @@ final class SCIMFilterTests: BaseTestCase {
     @Test("User displayName co/sw/ew are case-insensitive")
     func testUserDisplayNameFilters() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let org = try await builder.createOrganization(name: "Org A")
             try await createUser(builder, username: "alice", displayName: "Alice Anderson", org: org)
             try await createUser(builder, username: "bob", displayName: "Bob Builder", org: org)
@@ -165,7 +174,7 @@ final class SCIMFilterTests: BaseTestCase {
     @Test("User co escapes LIKE wildcards so they match literally")
     func testUserContainsEscapesWildcards() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let org = try await builder.createOrganization(name: "Org A")
             try await createUser(builder, username: "tenPercent", displayName: "No Symbol", org: org)
             try await createUser(builder, username: "ten%off", displayName: "Has Percent", org: org)
@@ -181,7 +190,7 @@ final class SCIMFilterTests: BaseTestCase {
     @Test("User filter is scoped to the organization")
     func testUserFilterRespectsOrganizationScope() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let orgA = try await builder.createOrganization(name: "Org A")
             let orgB = try await builder.createOrganization(name: "Org B")
             try await createUser(builder, username: "Alice", displayName: "Alice Anderson", org: orgA)
@@ -203,7 +212,7 @@ final class SCIMFilterTests: BaseTestCase {
     @Test("Group displayName co/sw/ew/eq behave correctly and case-insensitively")
     func testGroupDisplayNameFilters() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let org = try await builder.createOrganization(name: "Org A")
             _ = try await builder.createGroup(name: "Platform", description: "", organization: org)
             _ = try await builder.createGroup(name: "platform-eng", description: "", organization: org)
@@ -231,7 +240,7 @@ final class SCIMFilterTests: BaseTestCase {
     @Test("Group filter is scoped to the organization")
     func testGroupFilterRespectsOrganizationScope() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let orgA = try await builder.createOrganization(name: "Org A")
             let orgB = try await builder.createOrganization(name: "Org B")
             _ = try await builder.createGroup(name: "Platform", description: "", organization: orgA)

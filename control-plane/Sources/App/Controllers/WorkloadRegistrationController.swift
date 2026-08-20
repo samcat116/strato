@@ -1,5 +1,6 @@
-import Fluent
 import Foundation
+import ControlPlanePostgres
+import Fluent
 import Vapor
 
 /// The workload registry surface (issue #491).
@@ -10,6 +11,12 @@ import Vapor
 /// in the IAM tree. Granting such a principal a project role, by contrast, is
 /// an ordinary IAM policy write on the project and is gated there.
 struct WorkloadRegistrationController: RouteCollection {
+    private let workloads: WorkloadsPersistence
+
+    init(workloads: WorkloadsPersistence) {
+        self.workloads = workloads
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let registrations = routes.grouped("api", "workload-registrations")
         registrations.get(use: list)
@@ -61,44 +68,47 @@ struct WorkloadRegistrationController: RouteCollection {
         _ = try await req.requireSystemAdmin()
         let paging = try ListPaging.decode(from: req)
 
-        var query = WorkloadRegistration.query(on: req.db)
+        var kind: String?
         if let rawKind = req.query[String.self, at: "kind"] {
-            guard let kind = WorkloadRegistrationKind(rawValue: rawKind) else {
+            guard WorkloadRegistrationKind(rawValue: rawKind) != nil else {
                 throw Abort(
                     .badRequest,
                     reason:
                         "Invalid kind; must be one of: \(WorkloadRegistrationKind.allCases.map(\.rawValue).joined(separator: ", "))"
                 )
             }
-            query = query.filter(\.$kind == kind)
+            kind = rawKind
         }
         // Exact match, not a prefix search: a SPIFFE ID is a lookup key, and
         // the operator diagnosing a squat has the whole URI in hand.
-        if let spiffeID = req.query[String.self, at: "spiffeId"] {
-            query = query.filter(\.$spiffeID == spiffeID)
-        }
+        let spiffeID = req.query[String.self, at: "spiffeId"]
         // `boolQuery`, not `query[Bool.self, at:]`: the latter reads a missing
         // key as `false`, which would make an unfiltered listing quietly exclude
         // every VM's identity — the majority of the table.
-        if let vmOwned = try req.boolQuery("vmOwned") {
-            query = vmOwned ? query.filter(\.$vm.$id != nil) : query.filter(\.$vm.$id == nil)
-        }
+        let vmOwned = try req.boolQuery("vmOwned")
 
-        let rows = try await query.sort(\.$spiffeID).all()
+        let rows = try await workloads.registrations(
+            kind: kind, spiffeID: spiffeID, vmOwned: vmOwned)
         // Only the requested page's labels are hydrated, so the extra query is
         // bounded by `limit` rather than by the fleet.
-        let page = paging.page(rows)
+        let pageItems: [WorkloadRegistrationSnapshot]
+        if paging.offset < rows.count {
+            pageItems = Array(
+                rows[paging.offset..<min(paging.offset + paging.limit, rows.count)])
+        } else {
+            pageItems = []
+        }
         let names = try await GuestIdentity.names(
-            forVMs: page.items.compactMap { $0.$vm.id }, on: req.db)
+            forVMs: pageItems.compactMap(\.vmID), on: req.db)
 
         return PagedResponse(
-            items: try page.items.map {
+            items: try pageItems.map {
                 try ServiceAccountController.WorkloadRegistrationResponse(
-                    $0, displayName: $0.$vm.id.flatMap { id in names[id] })
+                    $0, displayName: $0.vmID.flatMap { id in names[id] })
             },
-            total: page.total,
-            limit: page.limit,
-            offset: page.offset
+            total: rows.count,
+            limit: paging.limit,
+            offset: paging.offset
         )
     }
 
@@ -116,16 +126,16 @@ struct WorkloadRegistrationController: RouteCollection {
             throw Abort(.notFound, reason: "Organization not found")
         }
 
-        let registration = WorkloadRegistration(
-            spiffeID: spiffeID,
-            kind: .workload,
-            organizationID: body.organizationId,
-            displayName: body.displayName,
-            createdBy: admin.id
-        )
+        let registration: WorkloadRegistrationSnapshot
         do {
-            try await registration.save(on: req.db)
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+            registration = try await workloads.createRegistration(
+                WorkloadRegistrationWrite(
+                    spiffeID: spiffeID,
+                    kind: WorkloadRegistrationKind.workload.rawValue,
+                    organizationID: body.organizationId,
+                    displayName: body.displayName,
+                    createdBy: admin.id))
+        } catch WorkloadsPersistenceError.duplicateSPIFFEID {
             throw Abort(.conflict, reason: "This SPIFFE ID is already registered")
         }
 
@@ -151,10 +161,10 @@ struct WorkloadRegistrationController: RouteCollection {
         guard let registrationID = req.parameters.get("registrationID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid registration ID")
         }
-        guard let registration = try await WorkloadRegistration.find(registrationID, on: req.db) else {
+        guard let registration = try await workloads.registration(id: registrationID) else {
             throw Abort(.notFound, reason: "Registration not found")
         }
-        if let vmID = registration.$vm.id {
+        if let vmID = registration.vmID {
             req.logger.warning(
                 "Revoking a VM's instance identity; it cannot be reissued for this VM",
                 metadata: [
@@ -164,11 +174,11 @@ struct WorkloadRegistrationController: RouteCollection {
         }
 
         try await req.db.transaction { db in
-            if registration.kind == .workload {
+            if registration.kind == WorkloadRegistrationKind.workload.rawValue {
                 try await RoleBindingService.revokeAll(
                     principalType: .workload, principalID: registrationID, on: db)
             }
-            try await registration.delete(on: db)
+            try await LegacyWorkloadRegistrationStore.delete(id: registrationID, on: db)
         }
         return .noContent
     }
@@ -181,7 +191,7 @@ struct WorkloadRegistrationController: RouteCollection {
     func setGrant(req: Request) async throws -> Response {
         let (project, registration) = try await loadGrantTarget(req)
         let projectID = try project.requireID()
-        let registrationID = try registration.requireID()
+        let registrationID = registration.id
         try await req.authorize("iam:setPolicy", on: IAMNode(type: .project, id: projectID))
 
         let body = try req.content.decode(SetWorkloadGrantRequest.self)
@@ -201,7 +211,7 @@ struct WorkloadRegistrationController: RouteCollection {
         // Keep grants within the registration's organization, the same rule
         // group grants follow.
         if let rootOrgID = try await project.getRootOrganizationId(on: req.db),
-            registration.$organization.id != rootOrgID
+            registration.organizationID != rootOrgID
         {
             throw Abort(.badRequest, reason: "Workload registration belongs to a different organization")
         }
@@ -226,7 +236,7 @@ struct WorkloadRegistrationController: RouteCollection {
     func clearGrant(req: Request) async throws -> HTTPStatus {
         let (project, registration) = try await loadGrantTarget(req)
         let projectID = try project.requireID()
-        let registrationID = try registration.requireID()
+        let registrationID = registration.id
         try await req.authorize("iam:setPolicy", on: IAMNode(type: .project, id: projectID))
 
         try await RoleBindingService.revoke(
@@ -239,13 +249,15 @@ struct WorkloadRegistrationController: RouteCollection {
         return .noContent
     }
 
-    private func loadGrantTarget(_ req: Request) async throws -> (Project, WorkloadRegistration) {
+    private func loadGrantTarget(
+        _ req: Request
+    ) async throws -> (Project, WorkloadRegistrationSnapshot) {
         let project = try await req.requireProject()
         guard let registrationID = req.parameters.get("registrationID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid registration ID")
         }
-        guard let registration = try await WorkloadRegistration.find(registrationID, on: req.db),
-            registration.kind == .workload
+        guard let registration = try await workloads.registration(id: registrationID),
+            registration.kind == WorkloadRegistrationKind.workload.rawValue
         else {
             throw Abort(.notFound, reason: "Workload registration not found")
         }

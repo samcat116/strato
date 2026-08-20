@@ -9,10 +9,12 @@ import Vapor
 /// Divergence between the workload kinds lives in `reap` — what each one has
 /// to tear down alongside its row — rather than in the finalizer bookkeeping,
 /// which is identical for both.
-protocol FinalizableResource: Model, AgentPlacedResource where IDValue == UUID {
+protocol FinalizableResource: PersistentResourceRecord, AgentPlacedResource {
     /// Cleanup tokens still outstanding for a terminating resource; empty for
     /// a live one. Persisted as a Postgres `text[]`.
-    var finalizers: [String] { get set }
+    var finalizers: [String] { get }
+
+    func replacingFinalizers(_ finalizers: [String]) -> Self
 
     /// Whether a `DELETE` has been accepted — desired state is `.absent`. Only
     /// a terminating resource reaps, so a stray `clear` on a live one is a
@@ -81,9 +83,10 @@ enum ResourceFinalizerService {
     /// tokens their participants have already cleared. Does not persist.
     static func stampForDeletion<R: FinalizableResource>(
         _ resource: R, on db: any Database
-    ) async throws {
-        guard !resource.isTerminating else { return }
-        resource.finalizers = try await tokens(forDeleting: resource, on: db).map(\.rawValue)
+    ) async throws -> R {
+        guard !resource.isTerminating else { return resource }
+        return resource.replacingFinalizers(
+            try await tokens(forDeleting: resource, on: db).map(\.rawValue))
     }
 
     /// Idempotently clears `token` from a terminating resource, reaping the row
@@ -131,7 +134,7 @@ enum ResourceFinalizerService {
 
         // The post-update list from the database, not a hand-computed one: this
         // instance may be saved later, and the row may have changed under it.
-        resource.finalizers = row.finalizers
+        let updatedResource = resource.replacingFinalizers(row.finalizers)
 
         guard row.finalizers.isEmpty else { return .held(row.finalizers) }
 
@@ -142,7 +145,7 @@ enum ResourceFinalizerService {
         // verdict recording bails on a drained application anyway.
         try Task.checkCancellation()
 
-        return try await R.reap(resource, on: db, app: app) ? .reaped : .alreadyGone
+        return try await R.reap(updatedResource, on: db, app: app) ? .reaped : .alreadyGone
     }
 
     /// Resolve a VM-owned boot volume when its agent is offline. Physical
@@ -152,10 +155,8 @@ enum ResourceFinalizerService {
     static func abandonBootVolumeForOfflineVM(
         vmID: UUID, on db: any Database, app: Application
     ) async throws {
-        let bootVolumes = try await Volume.query(on: db)
-            .filter(\.$vm.$id == vmID)
-            .filter(\.$volumeType == .boot)
-            .all()
+        let bootVolumes = try await LegacyVolumeStore.volumes(
+            attachment: .attachedTo(vmID), volumeType: .boot, on: db)
 
         if bootVolumes.isEmpty, let vm = try await VM.find(vmID, on: db) {
             _ = try await clear(.bootVolumeAbsent, from: vm, on: db, app: app)
@@ -250,6 +251,12 @@ enum ResourceFinalizerService {
 extension VM: FinalizableResource {
     var isTerminating: Bool { desiredStatus == .absent }
 
+    func replacingFinalizers(_ finalizers: [String]) -> Self {
+        var copy = self
+        copy.finalizers = finalizers
+        return copy
+    }
+
     static func reap(_ vm: VM, on db: any Database, app: Application) async throws -> Bool {
         let vmID = try vm.requireID()
 
@@ -308,6 +315,12 @@ extension VM: FinalizableResource {
 extension Sandbox: FinalizableResource {
     var isTerminating: Bool { desiredStatus == .absent }
 
+    func replacingFinalizers(_ finalizers: [String]) -> Self {
+        var copy = self
+        copy.finalizers = finalizers
+        return copy
+    }
+
     static func reap(_ sandbox: Sandbox, on db: any Database, app: Application) async throws -> Bool {
         let sandboxID = try sandbox.requireID()
 
@@ -344,9 +357,13 @@ extension Sandbox: FinalizableResource {
 // MARK: - Volume
 
 extension Volume: FinalizableResource {
+    func replacingFinalizers(_ finalizers: [String]) -> Self {
+        replacing(finalizers: finalizers)
+    }
+
     static func reap(_ volume: Volume, on db: any Database, app: Application) async throws -> Bool {
         let volumeID = try volume.requireID()
-        let parentVMID = volume.volumeType == .boot ? volume.$vm.id : nil
+        let parentVMID = volume.volumeType == .boot ? volume.vmID : nil
 
         let reaped = try await db.transaction { tx in
             guard try await ResourceFinalizerService.reapClaim(Volume.self, id: volumeID, in: tx) else {
@@ -429,7 +446,7 @@ enum SnapshotArtifactReap {
             // Before the row goes: the terminal event reads the delete
             // request's scope, and after the delete there is nothing to read.
             try await ResourceFinalizerService.recordDeletionCompleted(artifact, in: tx)
-            try await artifact.delete(on: tx)
+            try await artifact.remove(on: tx)
             try await releaseQuota(artifact, tx)
             return true
         }
@@ -444,7 +461,7 @@ extension VolumeSnapshot: FinalizableResource {
                 // The overlay was charged to the project's storage pool at
                 // admission (STR-181); recount now that it is gone.
                 _ = try? await QuotaEnforcementService.storageOverCommit(
-                    projectID: snapshot.$project.id, environment: snapshot.environment, on: tx)
+                    projectID: snapshot.projectID, environment: snapshot.environment, on: tx)
             })
     }
 }
@@ -457,7 +474,7 @@ extension VMSnapshot: FinalizableResource {
                 // The checkpoint's machine state was charged to the project's
                 // storage pool at admission; recount now that it is gone.
                 _ = try? await QuotaEnforcementService.storageOverCommit(
-                    projectID: snapshot.$project.id, environment: snapshot.environment, on: tx)
+                    projectID: snapshot.projectID, environment: snapshot.environment, on: tx)
             })
     }
 }
@@ -472,7 +489,7 @@ extension SandboxSnapshot: FinalizableResource {
             },
             releaseQuota: { snapshot, tx in
                 _ = try? await QuotaEnforcementService.storageOverCommit(
-                    projectID: snapshot.$project.id, environment: snapshot.environment, on: tx)
+                    projectID: snapshot.projectID, environment: snapshot.environment, on: tx)
             })
     }
 }

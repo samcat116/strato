@@ -93,7 +93,7 @@ struct ResourceEventEnumConstraintTests {
             await #expect(throws: (any Error).self) {
                 try await sql.raw("DELETE FROM resource_events").run()
             }
-            let remaining = try await ResourceEvent.query(on: app.db).count()
+            let remaining = try await ResourceEvent.count(on: app.db)
             #expect(remaining == 1)
         }
     }

@@ -1,4 +1,5 @@
 import Fluent
+import ControlPlanePostgres
 import StratoShared
 import Testing
 import Vapor
@@ -37,15 +38,14 @@ final class VMInstanceIdentityTests {
             )
             let org = try await builder.createOrganization(name: "Identity Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "Identity Project",
                 description: "Project for instance identity tests",
                 organization: org
             )
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, org, project, token)
 
@@ -115,8 +115,8 @@ final class VMInstanceIdentityTests {
 
     private func registration(
         forVM vmID: UUID, on db: any Database
-    ) async throws -> WorkloadRegistration? {
-        try await WorkloadRegistration.query(on: db).filter(\.$vm.$id == vmID).first()
+    ) async throws -> LegacyWorkloadRegistrationRecord? {
+        try await LegacyWorkloadRegistrationStore.registrations(vmIDs: [vmID], on: db).first
     }
 
     // MARK: - Create
@@ -129,14 +129,13 @@ final class VMInstanceIdentityTests {
                 suffix: "create")
             let vmID = try #require(created.id)
 
-            let rows = try await WorkloadRegistration.query(on: app.db)
-                .filter(\.$vm.$id == vmID)
-                .all()
+            let rows = try await LegacyWorkloadRegistrationStore.registrations(
+                vmIDs: [vmID], on: app.db)
             #expect(rows.count == 1)
             let row = try #require(rows.first)
 
             #expect(row.kind == .workload)
-            #expect(row.$organization.id == org.id)
+            #expect(row.organizationID == org.id)
             #expect(row.createdBy == user.id)
             // No stored label: the id in the SPIFFE path is the identity, and a
             // copy of `vm.name` would only decay. The registry hydrates it.
@@ -147,11 +146,11 @@ final class VMInstanceIdentityTests {
 
             // The registration is a principal, and it holds nothing. This is
             // what makes always-on registration safe.
-            let registrationID = try row.requireID()
-            let bindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalType == IAMPrincipalType.workload.rawValue)
-                .filter(\.$principalID == registrationID)
-                .count()
+            let registrationID = row.id
+            let bindings = try await LegacyRoleBindingStore.bindings(
+                principalType: IAMPrincipalType.workload.rawValue,
+                principalID: registrationID,
+                on: app.db).count
             #expect(bindings == 0)
             #expect(created.instanceIdentityStatus == .enabled)
         }
@@ -295,7 +294,7 @@ final class VMInstanceIdentityTests {
                 displayName: "Direct VM Reader",
                 isSystemAdmin: false)
             let readerID = try reader.requireID()
-            let readerToken = try await reader.generateAPIKey(on: app.db)
+            let readerToken = try await reader.generateAPIKey(on: app)
             try await RoleBindingService.grant(
                 principalType: .user,
                 principalID: readerID,
@@ -351,7 +350,7 @@ final class VMInstanceIdentityTests {
             let admin = try await TestDataBuilder(db: app.db).createUser(
                 username: "registryadmin", email: "registryadmin@example.com",
                 displayName: "Registry Admin", isSystemAdmin: true)
-            let adminToken = try await admin.generateAPIKey(on: app.db)
+            let adminToken = try await admin.generateAPIKey(on: app)
 
             let created = try await self.createVM(
                 app, project: project, user: user, token: token, name: "before-rename",
@@ -360,7 +359,7 @@ final class VMInstanceIdentityTests {
             let spiffeID = try #require(
                 try await self.registration(forVM: vmID, on: app.db)?.spiffeID)
 
-            let vm = try #require(try await VM.find(vmID, on: app.db))
+            var vm = try #require(try await VM.find(vmID, on: app.db))
             vm.name = "after-rename"
             try await vm.save(on: app.db)
 
@@ -405,7 +404,7 @@ final class VMInstanceIdentityTests {
             let admin = try await TestDataBuilder(db: app.db).createUser(
                 username: "filteradmin", email: "filteradmin@example.com",
                 displayName: "Filter Admin", isSystemAdmin: true)
-            let adminToken = try await admin.generateAPIKey(on: app.db)
+            let adminToken = try await admin.generateAPIKey(on: app)
 
             let created = try await self.createVM(
                 app, project: project, user: user, token: token, name: "filtered-vm",
@@ -414,10 +413,12 @@ final class VMInstanceIdentityTests {
 
             // A workload row with no VM behind it, so `vmOwned` has something to
             // exclude rather than trivially matching everything.
-            try await WorkloadRegistration(
-                spiffeID: "spiffe://\(PlatformTrustDomain.current)/sa/filter-bystander",
-                kind: .workload, organizationID: try org.requireID()
-            ).save(on: app.db)
+            _ = try await LegacyWorkloadRegistrationStore.insert(
+                WorkloadRegistrationWrite(
+                    spiffeID: "spiffe://\(PlatformTrustDomain.current)/sa/filter-bystander",
+                    kind: WorkloadRegistrationKind.workload.rawValue,
+                    organizationID: try org.requireID()),
+                on: app.db)
 
             struct RegistrationBody: Content {
                 let spiffeId: String
@@ -483,11 +484,13 @@ final class VMInstanceIdentityTests {
 
             // Simulate a legacy or directly inserted row that bypassed the
             // `/vm/` reservation and claimed the URI a VM would be minted into.
-            try await WorkloadRegistration(
-                spiffeID: GuestIdentity.spiffeID(
-                    forVM: vmID, trustDomain: PlatformTrustDomain.current),
-                kind: .workload, organizationID: orgID
-            ).save(on: app.db)
+            _ = try await LegacyWorkloadRegistrationStore.insert(
+                WorkloadRegistrationWrite(
+                    spiffeID: GuestIdentity.spiffeID(
+                        forVM: vmID, trustDomain: PlatformTrustDomain.current),
+                    kind: WorkloadRegistrationKind.workload.rawValue,
+                    organizationID: orgID),
+                on: app.db)
 
             // The `spiffe_id` unique index is the interim guard, and this is the
             // failure the create path's retry wrapper catches.
@@ -518,12 +521,12 @@ final class VMInstanceIdentityTests {
     func reapRemovesTheIdentityAndItsBindings() async throws {
         try await withIdentityTestApp { app, user, org, project, token in
             let builder = TestDataBuilder(db: app.db)
-            let vm = try await builder.createVM(name: "doomed-vm", project: project)
+            var vm = try await builder.createVM(name: "doomed-vm", project: project)
             let vmID = try vm.requireID()
 
             let row = try await GuestIdentity.register(
                 vmID: vmID, organizationID: try org.requireID(), createdBy: user.id, on: app.db)
-            let registrationID = try row.requireID()
+            let registrationID = row.id
 
             // A grant the identity holds somewhere else entirely — the kind the
             // VM's own cascade would otherwise strand.
@@ -534,11 +537,13 @@ final class VMInstanceIdentityTests {
 
             // A bystander workload, to prove the sweep is scoped rather than
             // a blanket delete of every workload principal.
-            let bystander = WorkloadRegistration(
-                spiffeID: "spiffe://\(PlatformTrustDomain.current)/sa/bystander",
-                kind: .workload, organizationID: try org.requireID())
-            try await bystander.save(on: app.db)
-            let bystanderID = try bystander.requireID()
+            let bystander = try await LegacyWorkloadRegistrationStore.insert(
+                WorkloadRegistrationWrite(
+                    spiffeID: "spiffe://\(PlatformTrustDomain.current)/sa/bystander",
+                    kind: WorkloadRegistrationKind.workload.rawValue,
+                    organizationID: try org.requireID()),
+                on: app.db)
+            let bystanderID = bystander.id
             try await RoleBindingService.grant(
                 principalType: .workload, principalID: bystanderID, role: .viewer,
                 nodeType: .project, nodeID: try project.requireID(), createdBy: user.id,
@@ -550,13 +555,15 @@ final class VMInstanceIdentityTests {
             #expect(reaped)
 
             #expect(try await self.registration(forVM: vmID, on: app.db) == nil)
-            #expect(try await WorkloadRegistration.find(registrationID, on: app.db) == nil)
+            #expect(
+                try await LegacyWorkloadRegistrationStore.registration(
+                    id: registrationID, on: app.db) == nil)
 
             func bindingCount(_ principalID: UUID) async throws -> Int {
-                try await RoleBinding.query(on: app.db)
-                    .filter(\.$principalType == IAMPrincipalType.workload.rawValue)
-                    .filter(\.$principalID == principalID)
-                    .count()
+                try await LegacyRoleBindingStore.bindings(
+                    principalType: IAMPrincipalType.workload.rawValue,
+                    principalID: principalID,
+                    on: app.db).count
             }
             #expect(try await bindingCount(registrationID) == 0)
             #expect(try await bindingCount(bystanderID) == 1)
@@ -571,7 +578,7 @@ final class VMInstanceIdentityTests {
             let admin = try await TestDataBuilder(db: app.db).createUser(
                 username: "identityadmin", email: "identityadmin@example.com",
                 displayName: "Identity Admin", isSystemAdmin: true)
-            let adminToken = try await admin.generateAPIKey(on: app.db)
+            let adminToken = try await admin.generateAPIKey(on: app)
 
             let builder = TestDataBuilder(db: app.db)
             let vm = try await builder.createVM(name: "revoked-vm", project: project)
@@ -579,7 +586,7 @@ final class VMInstanceIdentityTests {
             let row = try await GuestIdentity.register(
                 vmID: vmID, organizationID: try org.requireID(), createdBy: user.id, on: app.db)
 
-            try await app.test(.DELETE, "/api/workload-registrations/\(try row.requireID())") { req in
+            try await app.test(.DELETE, "/api/workload-registrations/\(row.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)

@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import Foundation
 import Vapor
@@ -36,7 +37,10 @@ struct UserDirectoryVisibility: Sendable {
     // MARK: - Narrowing
 
     /// Resolve the caller's candidate user records.
-    static func resolve(on req: Request) async throws -> UserDirectoryVisibility {
+    static func resolve(
+        on req: Request,
+        using iam: IAMPersistence
+    ) async throws -> UserDirectoryVisibility {
         guard let user = req.auth.get(User.self), let userID = user.id else {
             throw Abort(.unauthorized)
         }
@@ -54,7 +58,7 @@ struct UserDirectoryVisibility: Sendable {
         var candidates: Set<UUID> = [userID]
         candidates.formUnion(
             try await boundRecords(userID: userID, groupIDs: facts.groupIDs, on: req.db))
-        guard let authored = try await authoredPermitRecords(on: req) else {
+        guard let authored = try await authoredPermitRecords(on: req, using: iam) else {
             // An authored permit whose reach cannot be bounded. Widening to "no
             // narrowing" is the only safe answer; every record it puts in front
             // of the evaluator is still decided there.
@@ -79,18 +83,13 @@ struct UserDirectoryVisibility: Sendable {
         var principals: [(IAMPrincipalType, UUID)] = [(.user, userID)]
         principals += groupIDs.map { (IAMPrincipalType.group, $0) }
 
-        let bindings = try await RoleBinding.query(on: db)
-            .group(.or) { anyPrincipal in
-                for (type, id) in principals {
-                    anyPrincipal.group(.and) { thisPrincipal in
-                        thisPrincipal.filter(\.$principalType == type.rawValue)
-                        thisPrincipal.filter(\.$principalID == id)
-                    }
-                }
-            }
-            .filter(\.$nodeType == IAMNodeType.user.rawValue)
-            .active()
-            .all()
+        let bindings = try await LegacyRoleBindingStore.bindings(
+            nodeType: IAMNodeType.user.rawValue,
+            subjects: principals.map {
+                IAMOwnerReference(type: $0.0.rawValue, id: $0.1)
+            },
+            activeAt: Date(),
+            on: db)
 
         return Set(bindings.map(\.nodeID))
     }
@@ -108,20 +107,20 @@ struct UserDirectoryVisibility: Sendable {
     /// Gated on the compiled set's own authored-policy count, which makes the
     /// gate exact rather than an optimisation: a policy this replica has not
     /// compiled yet cannot allow anything either.
-    private static func authoredPermitRecords(on req: Request) async throws -> Set<UUID>? {
+    private static func authoredPermitRecords(
+        on req: Request,
+        using iam: IAMPersistence
+    ) async throws -> Set<UUID>? {
         let built = try await IAMDecisionEngine.compiledSet(req.application)
         guard built.authoredPolicyCount > 0 else { return [] }
 
-        let policies = try await IAMPolicy.query(on: req.db)
-            .filter(\.$enabled == true)
-            .filter(\.$effect == IAMPolicyEffect.permit.rawValue)
-            .all()
-
         var records: Set<UUID> = []
-        for policy in policies {
-            guard let id = policy.id,
+        for policy in try await iam.allEnabledPolicies()
+        where policy.effect == IAMPolicyEffect.permit.rawValue {
+            guard
                 let shape = try? CedarAuthoredPolicyInspector.describe(
-                    cedarText: policy.cedarText, policyID: PolicyDescriptor.policyID(id))
+                    cedarText: policy.cedarText,
+                    policyID: PolicyDescriptor.policyID(policy.id))
             else {
                 // Unparseable text is not in the compiled set either, so it
                 // grants nothing and needs no candidate.

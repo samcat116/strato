@@ -33,23 +33,23 @@ final class ResourceQuotaTests {
             try await testOrganization.save(on: app.db)
 
             // Create test project
-            let testProject = Project(
+            var testProject = Project(
                 name: "Test Project",
                 description: "Test project",
                 organizationID: testOrganization.id,
                 path: ""
             )
             try await testProject.save(on: app.db)
-            testProject.path = try await testProject.buildPath(on: app.db)
+            testProject = testProject.replacingPath(try await testProject.buildPath(on: app.db))
             try await testProject.save(on: app.db)
 
             // Add user to organization as admin
-            let userOrg = UserOrganization(
+            _ = try await OrganizationMembershipStore.insert(
                 userID: testUser.id!,
                 organizationID: testOrganization.id!,
-                roleID: IAMRole.admin.seededID
+                roleID: IAMRole.admin.seededID,
+                on: app.db
             )
-            try await userOrg.save(on: app.db)
 
             // The admin role binding the API/backfill would have written
             // alongside the membership row — the Cedar evaluator (#482)
@@ -58,7 +58,7 @@ final class ResourceQuotaTests {
                 principalType: .user, principalID: testUser.id!, role: .admin,
                 nodeType: .organization, nodeID: testOrganization.id!, createdBy: nil, on: app.db)
 
-            let authToken = try await testUser.generateAPIKey(on: app.db)
+            let authToken = try await testUser.generateAPIKey(on: app)
 
             try await test(app, testUser, testOrganization, testProject, authToken)
         } catch {
@@ -238,11 +238,12 @@ final class ResourceQuotaTests {
             try await quota.save(on: app.db)
 
             // Update usage
-            quota.reservedVCPUs = 4
-            quota.reservedMemory = Int64(8.0 * 1024 * 1024 * 1024)
-            quota.reservedStorage = Int64(40.0 * 1024 * 1024 * 1024)
-            quota.vmCount = 2
-            try await quota.save(on: app.db)
+            let usedQuota = quota.replacingCounters(
+                reservedVCPUs: 4,
+                reservedMemory: Int64(8.0 * 1024 * 1024 * 1024),
+                reservedStorage: Int64(40.0 * 1024 * 1024 * 1024),
+                vmCount: 2)
+            try await usedQuota.save(on: app.db)
 
             // Get quota with usage
             try await app.test(.GET, "/api/quotas/\(quota.id!)") { req in
@@ -294,7 +295,7 @@ final class ResourceQuotaTests {
     @Test("Sandboxes share the vCPU/memory pools but have their own count limit")
     func testSandboxAccommodation() async throws {
         try await withQuotaTestApp { app, _, _, testProject, _ in
-            let quota = ResourceQuota(
+            var quota = ResourceQuota(
                 name: "Sandbox Quota",
                 organizationID: nil,
                 organizationalUnitID: nil,
@@ -308,7 +309,7 @@ final class ResourceQuotaTests {
             try await quota.save(on: app.db)
 
             // A VM reservation consumes the shared vCPU pool...
-            try quota.reserveResources(
+            quota = try quota.reservingResources(
                 vcpus: 3, memory: Int64(1024 * 1024 * 1024), storage: Int64(1024 * 1024 * 1024))
 
             // ...so a 2-vCPU sandbox no longer fits (3 + 2 > 4).
@@ -316,7 +317,7 @@ final class ResourceQuotaTests {
             #expect(!tooBig.allowed)
 
             // A 1-vCPU sandbox fits and takes the only sandbox slot.
-            try quota.reserveSandboxResources(vcpus: 1, memory: Int64(1024 * 1024 * 1024))
+            quota = try quota.reservingSandboxResources(vcpus: 1, memory: Int64(1024 * 1024 * 1024))
             #expect(quota.sandboxCount == 1)
             #expect(quota.vmCount == 1)
 
@@ -409,10 +410,9 @@ final class ResourceQuotaTests {
                 username: "quota-bare-member", email: "quota-member@example.com",
                 displayName: "Bare Member", isSystemAdmin: false)
             try await member.save(on: app.db)
-            try await UserOrganization(
-                userID: member.id!, organizationID: testOrganization.id!, roleID: nil
-            ).save(on: app.db)
-            let memberToken = try await member.generateAPIKey(on: app.db)
+            _ = try await OrganizationMembershipStore.insert(
+                userID: member.id!, organizationID: testOrganization.id!, on: app.db)
+            let memberToken = try await member.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/quotas?level=project") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
@@ -640,7 +640,7 @@ final class ResourceQuotaTests {
             }
 
             let siteID = try #require(
-                try await LogicalNetwork.query(on: app.db).first()?.$site.id)
+                try await LogicalNetwork.all(on: app.db).first?.siteID)
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(
@@ -860,9 +860,8 @@ final class ResourceQuotaTests {
                 maxVMs: 5
             )
             // Left over from workloads that no longer exist.
-            quota.reservedVCPUs = 8
-            quota.vmCount = 4
-            try await quota.save(on: app.db)
+            let staleQuota = quota.replacingCounters(reservedVCPUs: 8, vmCount: 4)
+            try await staleQuota.save(on: app.db)
 
             try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -954,7 +953,7 @@ final class ResourceQuotaTests {
                 isSystemAdmin: true
             )
             try await admin.save(on: app.db)
-            let adminToken = try await admin.generateAPIKey(on: app.db)
+            let adminToken = try await admin.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)

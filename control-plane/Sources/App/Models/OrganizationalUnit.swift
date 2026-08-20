@@ -1,68 +1,89 @@
+import ControlPlanePostgres
 import Fluent
-import Vapor
 import Foundation
+import Vapor
 
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class OrganizationalUnit: Model, @unchecked Sendable {
+struct OrganizationalUnit: Content, Equatable, Sendable {
     static let schema = "organizational_units"
 
-    @ID(key: .id)
-    var id: UUID?
-
-    @Field(key: "name")
-    var name: String
-
-    @Field(key: "description")
-    var description: String
-
-    // Hierarchical relationships
-    @Parent(key: "organization_id")
-    var organization: Organization
-
-    @OptionalParent(key: "parent_ou_id")
-    var parentOU: OrganizationalUnit?
-
-    // Path for efficient hierarchy queries (e.g., "/org-uuid/ou-uuid/ou-uuid")
-    @Field(key: "path")
-    var path: String
-
-    // Depth in hierarchy (0 for direct children of org, 1 for their children, etc.)
-    @Field(key: "depth")
-    var depth: Int
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    // Relationships
-    @Children(for: \.$organizationalUnit)
-    var projects: [Project]
-
-    init() {}
+    let id: UUID?
+    let name: String
+    let description: String
+    let organizationID: UUID
+    let parentOUID: UUID?
+    let path: String
+    let depth: Int
+    let createdAt: Date?
+    let updatedAt: Date?
 
     init(
-        id: UUID? = nil,
+        id: UUID? = UUID(),
         name: String,
         description: String,
         organizationID: UUID,
         parentOUID: UUID? = nil,
         path: String,
-        depth: Int
+        depth: Int,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
         self.description = description
-        self.$organization.id = organizationID
-        self.$parentOU.id = parentOUID
+        self.organizationID = organizationID
+        self.parentOUID = parentOUID
         self.path = path
         self.depth = depth
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    init(snapshot: OrganizationalUnitSnapshot) {
+        self.init(
+            id: snapshot.id,
+            name: snapshot.name,
+            description: snapshot.description,
+            organizationID: snapshot.organizationID,
+            parentOUID: snapshot.parentID,
+            path: snapshot.path,
+            depth: snapshot.depth,
+            createdAt: snapshot.createdAt,
+            updatedAt: snapshot.updatedAt)
+    }
+
+    func requireID() throws -> UUID {
+        guard let id else { throw Abort(.internalServerError, reason: "Folder has no identifier") }
+        return id
+    }
+
+    func save(on db: any Database) async throws {
+        _ = try await LegacyOrganizationalUnitStore.upsert(self, on: db)
+    }
+
+    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+        try await LegacyOrganizationalUnitStore.organizationalUnit(id: id, on: db)
+    }
+
+    static func all(on db: any Database) async throws -> [Self] {
+        try await LegacyOrganizationalUnitStore.organizationalUnits(on: db)
+    }
+
+    func replacingPath(_ path: String, depth: Int? = nil) -> Self {
+        Self(
+            id: id, name: name, description: description,
+            organizationID: organizationID, parentOUID: parentOUID,
+            path: path, depth: depth ?? self.depth,
+            createdAt: createdAt, updatedAt: updatedAt)
+    }
+
+    func replacingParent(_ parentOUID: UUID?) -> Self {
+        Self(
+            id: id, name: name, description: description,
+            organizationID: organizationID, parentOUID: parentOUID,
+            path: path, depth: depth,
+            createdAt: createdAt, updatedAt: updatedAt)
     }
 }
-
-extension OrganizationalUnit: Content {}
 
 extension OrganizationalUnit {
     struct Public: Content {
@@ -81,8 +102,8 @@ extension OrganizationalUnit {
             id: self.id,
             name: self.name,
             description: self.description,
-            organizationId: self.$organization.id,
-            parentOuId: self.$parentOU.id,
+            organizationId: self.organizationID,
+            parentOuId: self.parentOUID,
             path: self.path,
             depth: self.depth,
             createdAt: self.createdAt
@@ -111,13 +132,13 @@ extension OrganizationalUnit {
         var pathComponents: [String] = []
 
         // Add organization ID as root
-        pathComponents.append(self.$organization.id.uuidString)
+        pathComponents.append(self.organizationID.uuidString)
 
         // Walk up the parent chain
         var currentOU: OrganizationalUnit? = self
         var ouChain: [UUID] = []
 
-        while let ou = currentOU, let parentId = ou.$parentOU.id {
+        while let ou = currentOU, let parentId = ou.parentOUID {
             ouChain.insert(parentId, at: 0)
             currentOU = try await OrganizationalUnit.find(parentId, on: db)
         }
@@ -138,7 +159,7 @@ extension OrganizationalUnit {
         var depth = 0
         var currentOU: OrganizationalUnit? = self
 
-        while let ou = currentOU, let parentId = ou.$parentOU.id {
+        while let ou = currentOU, let parentId = ou.parentOUID {
             depth += 1
             currentOU = try await OrganizationalUnit.find(parentId, on: db)
         }
@@ -163,10 +184,7 @@ extension OrganizationalUnit {
     /// Sorted by name so a caller assembling a tree from one flat load orders
     /// each sibling group the way the per-level queries it replaced did.
     static func descendants(ofPath path: String, on db: Database) async throws -> [OrganizationalUnit] {
-        try await OrganizationalUnit.query(on: db)
-            .filter(\.$path, .contains(inverse: false, .prefix), "\(path)/")
-            .sort(\.$name)
-            .all()
+        try await LegacyOrganizationalUnitStore.descendants(ofPath: path, on: db)
     }
 
     /// This folder's id plus every descendant's — the folder ids a
@@ -230,8 +248,8 @@ struct OrganizationalUnitResponse: Content {
         self.id = ou.id
         self.name = ou.name
         self.description = ou.description
-        self.organizationId = ou.$organization.id
-        self.parentOuId = ou.$parentOU.id
+        self.organizationId = ou.organizationID
+        self.parentOuId = ou.parentOUID
         self.path = ou.path
         self.depth = ou.depth
         self.createdAt = ou.createdAt

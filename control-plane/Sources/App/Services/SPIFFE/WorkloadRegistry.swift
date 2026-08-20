@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import Foundation
 import Vapor
@@ -63,10 +64,8 @@ enum WorkloadRegistry {
     /// Resolve a SPIFFE URI to the principal it registers, or nil for an
     /// unregistered identity.
     static func resolve(spiffeID: String, on db: any Database) async throws -> ResolvedWorkload? {
-        guard
-            let row = try await WorkloadRegistration.query(on: db)
-                .filter(\.$spiffeID == spiffeID)
-                .first()
+        guard let row = try await LegacyWorkloadRegistrationStore.registration(
+            spiffeID: spiffeID, on: db)
         else { return nil }
         return resolved(row)
     }
@@ -74,17 +73,18 @@ enum WorkloadRegistry {
     /// The resolution of one registry row; nil when the row is internally
     /// inconsistent (a kind without its reference), which resolves to no
     /// principal rather than to a guess.
-    static func resolved(_ row: WorkloadRegistration) -> ResolvedWorkload? {
+    static func resolved(_ row: LegacyWorkloadRegistrationRecord) -> ResolvedWorkload? {
         switch row.kind {
         case .agent:
             guard let name = row.agentName else { return nil }
             return .agent(name: name)
         case .serviceAccount:
-            guard let id = row.$serviceAccount.id else { return nil }
+            guard let id = row.serviceAccountID else { return nil }
             return .serviceAccount(id: id)
         case .workload:
-            guard let id = row.id else { return nil }
-            return .workload(id: id)
+            return .workload(id: row.id)
+        case nil:
+            return nil
         }
     }
 
@@ -98,8 +98,12 @@ enum WorkloadRegistry {
     /// the same URI ever resolves to a different principal.
     static func registerAgent(identity: AgentIdentity, on db: any Database) async throws {
         do {
-            try await WorkloadRegistration(spiffeID: identity.key, kind: .agent, agentName: identity.name)
-                .save(on: db)
+            _ = try await LegacyWorkloadRegistrationStore.insert(
+                WorkloadRegistrationWrite(
+                    spiffeID: identity.key,
+                    kind: WorkloadRegistrationKind.agent.rawValue,
+                    agentName: identity.name),
+                on: db)
         } catch {
             guard let dbError = error as? any DatabaseError, dbError.isConstraintFailure else { throw error }
             // A concurrent connection won the insert race; the unique key
@@ -115,10 +119,8 @@ enum WorkloadRegistry {
     /// Remove an agent's registration row when the agent is deprovisioned.
     /// Exact-URI deletion, for the same reason registration is URI-keyed.
     static func deregisterAgent(identity: AgentIdentity, on db: any Database) async throws {
-        try await WorkloadRegistration.query(on: db)
-            .filter(\.$kind == .agent)
-            .filter(\.$spiffeID == identity.key)
-            .delete()
+        try await LegacyWorkloadRegistrationStore.deleteAgent(
+            spiffeID: identity.key, on: db)
     }
 
     /// Enforce the registry mapping for a verified agent identity: a URI

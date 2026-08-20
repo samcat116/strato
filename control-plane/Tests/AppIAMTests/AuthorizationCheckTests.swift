@@ -31,12 +31,11 @@ final class AuthorizationCheckTests {
             )
             let org = try await builder.createOrganization(name: "Auth Check Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "member")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
             let project = try await builder.createProject(
                 name: "Auth Check Project", description: "d", organization: org)
 
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
             try await test(app, user, org, project, token)
 
         } catch {

@@ -47,12 +47,11 @@ final class VMMutableMetadataTests {
             let organization = try await builder.createOrganization(name: "Mutable Metadata Org")
             try await builder.addUserToOrganization(
                 user: user, organization: organization, role: "admin")
-            user.currentOrganizationId = try organization.requireID()
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(try organization.requireID()).save(on: app.db)
             let project = try await builder.createProject(
                 name: "Mutable Metadata Project", description: "metadata patch tests",
                 organization: organization)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, project, token, store)
         } catch {
@@ -85,9 +84,9 @@ final class VMMutableMetadataTests {
     }
 
     private func attachBootVolume(app: Application, vm: VM, agentID: String) async throws {
-        let owner = try #require(try await User.query(on: app.db).sort(\.$createdAt).first())
+        let owner = try #require(try await User.all(on: app.db).first)
         let boot = Volume(
-            name: "\(vm.name)-boot", description: "", projectID: vm.$project.id,
+            name: "\(vm.name)-boot", description: "", projectID: vm.projectID,
             environment: vm.environment, size: vm.disk, format: .qcow2,
             volumeType: .boot, status: .attached, createdByID: try owner.requireID())
         boot.$vm.id = try vm.requireID()

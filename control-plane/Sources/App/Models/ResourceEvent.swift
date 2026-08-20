@@ -1,4 +1,6 @@
 import Fluent
+import Foundation
+import SQLKit
 import StratoShared
 import Vapor
 
@@ -78,59 +80,27 @@ enum ResourceEventPhase: String, Codable, CaseIterable, Sendable {
 /// 11 (STR-152) the only one — `resource_operations.user_id` was the other, and
 /// went with its table. Unlike `user_id` this row can name a machine principal,
 /// which is what unblocks JWT-SVID mutations (STR-15).
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class ResourceEvent: Model, @unchecked Sendable {
-    static let schema = "resource_events"
+/// Immutable rows may cross task boundaries; writes always append a new row.
+struct ResourceEvent: Decodable, Equatable, Sendable {
+    let id: UUID?
+    let actorType: MutationActorType
+    let actorID: UUID?
+    let resourceKind: OperationResourceKind
+    let resourceID: UUID
+    let resourceName: String?
+    let mutation: VMOperationKind
+    let phase: ResourceEventPhase
+    let targetGeneration: Int64?
+    let organizationID: UUID?
+    let projectID: UUID?
+    let createdAt: Date?
 
-    @ID(key: .id)
-    var id: UUID?
-
-    @Enum(key: "actor_type")
-    var actorType: MutationActorType
-
-    @OptionalField(key: "actor_id")
-    var actorID: UUID?
-
-    @Enum(key: "resource_kind")
-    var resourceKind: OperationResourceKind
-
-    @Field(key: "resource_id")
-    var resourceID: UUID
-
-    /// The resource's name when it was mutated, so a delete stays readable
-    /// after the row it names is gone.
-    @OptionalField(key: "resource_name")
-    var resourceName: String?
-
-    @Enum(key: "mutation")
-    var mutation: VMOperationKind
-
-    /// Whether this row records the request or its outcome (STR-147). Rows
-    /// written before the column existed are `requested`, which is what every
-    /// one of them was.
-    @Enum(key: "phase")
-    var phase: ResourceEventPhase
-
-    /// The resource's generation once the mutation applied — the generation an
-    /// agent's observed report has to reach before this mutation counts as
-    /// converged. Nil when the resource could not be read back (it has no
-    /// generation to name), and, for the mutations that do not bump one
-    /// (a VM reboot is an action, not a state), simply the generation the
-    /// mutation was issued against.
-    @OptionalField(key: "target_generation")
-    var targetGeneration: Int64?
-
-    @OptionalField(key: "organization_id")
-    var organizationID: UUID?
-
-    @OptionalField(key: "project_id")
-    var projectID: UUID?
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    init() {}
+    func requireID() throws -> UUID {
+        guard let id else {
+            throw Abort(.internalServerError, reason: "Resource event has no identifier")
+        }
+        return id
+    }
 }
 
 extension ResourceEvent {
@@ -159,32 +129,32 @@ extension ResourceEvent {
         switch kind {
         case .virtualMachine:
             guard let vm = try await VM.find(id, on: db) else { return scope }
-            scope.projectID = vm.$project.id
+            scope.projectID = vm.projectID
             scope.resourceName = vm.name
             scope.generation = vm.generation
         case .sandbox:
             guard let sandbox = try await Sandbox.find(id, on: db) else { return scope }
-            scope.projectID = sandbox.$project.id
+            scope.projectID = sandbox.projectID
             scope.resourceName = sandbox.name
             scope.generation = sandbox.generation
         case .volume:
             guard let volume = try await Volume.find(id, on: db) else { return scope }
-            scope.projectID = volume.$project.id
+            scope.projectID = volume.projectID
             scope.resourceName = volume.name
             scope.generation = volume.generation
         case .volumeSnapshot:
             guard let snapshot = try await VolumeSnapshot.find(id, on: db) else { return scope }
-            scope.projectID = snapshot.$project.id
+            scope.projectID = snapshot.projectID
             scope.resourceName = snapshot.name
             scope.generation = snapshot.generation
         case .vmCheckpoint:
             guard let snapshot = try await VMSnapshot.find(id, on: db) else { return scope }
-            scope.projectID = snapshot.$project.id
+            scope.projectID = snapshot.projectID
             scope.resourceName = snapshot.name
             scope.generation = snapshot.generation
         case .sandboxSnapshot:
             guard let snapshot = try await SandboxSnapshot.find(id, on: db) else { return scope }
-            scope.projectID = snapshot.$project.id
+            scope.projectID = snapshot.projectID
             scope.resourceName = snapshot.name
             scope.generation = snapshot.generation
         }
@@ -212,35 +182,17 @@ extension ResourceEvent {
     ) async throws -> Int64? {
         switch kind {
         case .virtualMachine:
-            return try await VM.query(on: db)
-                .filter(\.$id == id)
-                .field(\.$generation)
-                .first()?.generation
+            return try await VM.find(id, on: db)?.generation
         case .sandbox:
-            return try await Sandbox.query(on: db)
-                .filter(\.$id == id)
-                .field(\.$generation)
-                .first()?.generation
+            return try await Sandbox.find(id, on: db)?.generation
         case .volume:
-            return try await Volume.query(on: db)
-                .filter(\.$id == id)
-                .field(\.$generation)
-                .first()?.generation
+            return try await Volume.find(id, on: db)?.generation
         case .volumeSnapshot:
-            return try await VolumeSnapshot.query(on: db)
-                .filter(\.$id == id)
-                .field(\.$generation)
-                .first()?.generation
+            return try await VolumeSnapshot.find(id, on: db)?.generation
         case .vmCheckpoint:
-            return try await VMSnapshot.query(on: db)
-                .filter(\.$id == id)
-                .field(\.$generation)
-                .first()?.generation
+            return try await VMSnapshot.find(id, on: db)?.generation
         case .sandboxSnapshot:
-            return try await SandboxSnapshot.query(on: db)
-                .filter(\.$id == id)
-                .field(\.$generation)
-                .first()?.generation
+            return try await SandboxSnapshot.find(id, on: db)?.generation
         }
     }
 
@@ -275,18 +227,29 @@ extension ResourceEvent {
             resolved = try await Self.scope(of: resourceKind, id: resourceID, on: db)
         }
 
-        let event = ResourceEvent()
-        event.actorType = actor.type
-        event.actorID = actor.id
-        event.resourceKind = resourceKind
-        event.resourceID = resourceID
-        event.resourceName = resolved.resourceName
-        event.mutation = mutation
-        event.phase = phase
-        event.targetGeneration = resolved.generation
-        event.organizationID = resolved.organizationID
-        event.projectID = resolved.projectID
-        try await event.save(on: db)
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Resource events require a SQL database")
+        }
+        let rows = try await sql.raw(
+            """
+            INSERT INTO resource_events (
+                id, actor_type, actor_id, resource_kind, resource_id,
+                resource_name, mutation, phase, target_generation,
+                organization_id, project_id, created_at
+            ) VALUES (
+                \(bind: UUID()), \(bind: actor.type.rawValue), \(bind: actor.id),
+                \(bind: resourceKind.rawValue), \(bind: resourceID),
+                \(bind: resolved.resourceName), \(bind: mutation.rawValue),
+                \(bind: phase.rawValue), \(bind: resolved.generation),
+                \(bind: resolved.organizationID), \(bind: resolved.projectID),
+                CURRENT_TIMESTAMP
+            )
+            RETURNING \(unsafeRaw: eventColumns)
+            """
+        ).all(decoding: ResourceEvent.self)
+        guard rows.count == 1, let event = rows.first else {
+            throw Abort(.internalServerError, reason: "Resource event insert returned an unexpected row count")
+        }
         return event
     }
 
@@ -302,11 +265,88 @@ extension ResourceEvent {
         resourceID: UUID,
         on db: any Database
     ) async throws -> ResourceEvent? {
-        try await ResourceEvent.query(on: db)
-            .filter(\.$resourceKind == resourceKind)
-            .filter(\.$resourceID == resourceID)
-            .filter(\.$phase == phase)
-            .sort(\.$createdAt, .descending)
-            .first()
+        try await matching(
+            resourceKind: resourceKind,
+            resourceID: resourceID,
+            phase: phase,
+            limit: 1,
+            on: db
+        ).first
+    }
+
+    static func find(_ id: UUID, on db: any Database) async throws -> ResourceEvent? {
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Resource events require a SQL database")
+        }
+        return try await sql.raw(
+            "SELECT \(unsafeRaw: eventColumns) FROM resource_events WHERE id = \(bind: id)"
+        ).first(decoding: ResourceEvent.self)
+    }
+
+    /// Bound, allowlisted read used by operation history and compatibility
+    /// tests while resource mutations still share Fluent transactions.
+    static func matching(
+        resourceKind: OperationResourceKind? = nil,
+        resourceID: UUID? = nil,
+        mutation: VMOperationKind? = nil,
+        phase: ResourceEventPhase? = nil,
+        ascending: Bool = false,
+        limit: Int? = nil,
+        on db: any Database
+    ) async throws -> [ResourceEvent] {
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Resource events require a SQL database")
+        }
+        var query: SQLQueryString =
+            "SELECT \(unsafeRaw: eventColumns) FROM resource_events WHERE TRUE"
+        if let resourceKind {
+            query += " AND resource_kind = \(bind: resourceKind.rawValue)"
+        }
+        if let resourceID {
+            query += " AND resource_id = \(bind: resourceID)"
+        }
+        if let mutation {
+            query += " AND mutation = \(bind: mutation.rawValue)"
+        }
+        if let phase {
+            query += " AND phase = \(bind: phase.rawValue)"
+        }
+        query += ascending
+            ? " ORDER BY created_at ASC, id ASC"
+            : " ORDER BY created_at DESC, id DESC"
+        if let limit {
+            query += " LIMIT \(bind: limit)"
+        }
+        return try await sql.raw(query).all(decoding: ResourceEvent.self)
+    }
+
+    static func count(
+        resourceKind: OperationResourceKind? = nil,
+        on db: any Database
+    ) async throws -> Int {
+        struct CountRow: Decodable { let count: Int }
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Resource events require a SQL database")
+        }
+        var query: SQLQueryString = "SELECT COUNT(*)::bigint AS count FROM resource_events WHERE TRUE"
+        if let resourceKind {
+            query += " AND resource_kind = \(bind: resourceKind.rawValue)"
+        }
+        return try await sql.raw(query).first(decoding: CountRow.self)?.count ?? 0
     }
 }
+
+private let eventColumns = """
+    id,
+    actor_type AS "actorType",
+    actor_id AS "actorID",
+    resource_kind AS "resourceKind",
+    resource_id AS "resourceID",
+    resource_name AS "resourceName",
+    mutation,
+    phase,
+    target_generation AS "targetGeneration",
+    organization_id AS "organizationID",
+    project_id AS "projectID",
+    created_at AS "createdAt"
+    """

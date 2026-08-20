@@ -145,7 +145,7 @@ final class ReplicaRoutingAgentServiceTests {
         // New agents need an owning org; this harness creates no other data,
         // so mint one on first use.
         let orgID: UUID
-        if let existing = try await Organization.query(on: app.db).sort(\.$createdAt).first() {
+        if let existing = try await Organization.all(on: app.db).first {
             orgID = try existing.requireID()
         } else {
             let org = Organization(name: "Routing Org", description: "org for routing tests")

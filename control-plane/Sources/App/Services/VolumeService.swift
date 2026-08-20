@@ -43,34 +43,36 @@ enum VolumeService {
     /// The replicas that authoritatively place a volume. Healthy copies sort
     /// before provisioning copies so reads prefer confirmed bytes, while a
     /// freshly accepted create is still routable before its first observation.
-    static func replicas(of volume: Volume, on db: any Database) async throws -> [VolumeReplica] {
+    static func replicas(
+        of volume: Volume,
+        on db: any Database
+    ) async throws -> [VolumeReplicaSnapshot] {
         guard let volumeID = volume.id else { return [] }
         return try await replicas(volumeIDs: [volumeID], on: db)[volumeID] ?? []
     }
 
     /// Batched counterpart used by assemblers and API lists.
     static func replicas(volumeIDs: [UUID], on db: any Database) async throws
-        -> [UUID: [VolumeReplica]]
+        -> [UUID: [VolumeReplicaSnapshot]]
     {
         guard !volumeIDs.isEmpty else { return [:] }
-        let rows = try await VolumeReplica.query(on: db)
-            .filter(\.$volume.$id ~~ volumeIDs)
-            .filter(\.$state ~~ authoritativeReplicaStates)
-            .all()
-        return Dictionary(grouping: rows, by: \.$volume.id)
+        let rows = try await LegacyVolumeReplicaStore.replicas(
+            volumeIDs: volumeIDs,
+            states: authoritativeReplicaStates,
+            on: db
+        )
+        return Dictionary(grouping: rows, by: \.volumeID)
             .mapValues { $0.sorted(by: replicaPrecedes) }
     }
 
     /// All physical copies for API/inventory views, including copies that are
     /// degraded, resyncing, or faulted and therefore cannot drive placement.
     static func allReplicas(volumeIDs: [UUID], on db: any Database) async throws
-        -> [UUID: [VolumeReplica]]
+        -> [UUID: [VolumeReplicaSnapshot]]
     {
         guard !volumeIDs.isEmpty else { return [:] }
-        let rows = try await VolumeReplica.query(on: db)
-            .filter(\.$volume.$id ~~ volumeIDs)
-            .all()
-        return Dictionary(grouping: rows, by: \.$volume.id)
+        let rows = try await LegacyVolumeReplicaStore.replicas(volumeIDs: volumeIDs, on: db)
+        return Dictionary(grouping: rows, by: \.volumeID)
             .mapValues { $0.sorted(by: replicaPrecedes) }
     }
 
@@ -81,15 +83,13 @@ enum VolumeService {
     static func replicaScope(onAgent agentId: String, on db: any Database) async throws
         -> AgentReplicaScope
     {
-        let replicas = try await VolumeReplica.query(on: db)
-            .filter(\.$agentId == agentId)
-            .all()
+        let replicas = try await LegacyVolumeReplicaStore.replicas(agentId: agentId, on: db)
         return AgentReplicaScope(
-            allVolumeIDs: Set(replicas.map(\.$volume.id)),
+            allVolumeIDs: Set(replicas.map(\.volumeID)),
             authoritativeVolumeIDs: Set(
                 replicas.lazy
                     .filter { authoritativeReplicaStates.contains($0.state) }
-                    .map(\.$volume.id)))
+                    .map(\.volumeID)))
     }
 
     /// Every logical volume this agent must reconcile. Inactive copies are
@@ -97,9 +97,7 @@ enum VolumeService {
     static func volumes(onAgent agentId: String, on db: any Database) async throws -> [Volume] {
         let scope = try await replicaScope(onAgent: agentId, on: db)
         guard !scope.allVolumeIDs.isEmpty else { return [] }
-        return try await Volume.query(on: db)
-            .filter(\.$id ~~ Array(scope.allVolumeIDs))
-            .all()
+        return try await LegacyVolumeStore.volumes(ids: Array(scope.allVolumeIDs), on: db)
             .filter(scope.includes)
     }
 
@@ -191,7 +189,10 @@ enum VolumeService {
         }
     }
 
-    private static func replicaPrecedes(_ lhs: VolumeReplica, _ rhs: VolumeReplica) -> Bool {
+    private static func replicaPrecedes(
+        _ lhs: VolumeReplicaSnapshot,
+        _ rhs: VolumeReplicaSnapshot
+    ) -> Bool {
         func rank(_ state: VolumeReplicaState) -> Int {
             switch state {
             case .healthy: 0
@@ -201,8 +202,8 @@ enum VolumeService {
             case .faulted: 4
             }
         }
-        let left = (rank(lhs.state), lhs.createdAt ?? .distantPast, lhs.id?.uuidString ?? "")
-        let right = (rank(rhs.state), rhs.createdAt ?? .distantPast, rhs.id?.uuidString ?? "")
+        let left = (rank(lhs.state), lhs.createdAt ?? .distantPast, lhs.id.uuidString)
+        let right = (rank(rhs.state), rhs.createdAt ?? .distantPast, rhs.id.uuidString)
         return left < right
     }
 

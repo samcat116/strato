@@ -4,6 +4,7 @@ import Vapor
 import VaporTesting
 
 import AppTestSupport
+import ControlPlanePostgres
 @testable import App
 
 /// IAM phase 1 (issue #477): the role/action registry, the role_bindings
@@ -28,11 +29,9 @@ final class IAMRoleBindingTests {
 
     private func bindings(
         on db: Database, nodeType: IAMNodeType, nodeID: UUID
-    ) async throws -> [RoleBinding] {
-        try await RoleBinding.query(on: db)
-            .filter(\.$nodeType == nodeType.rawValue)
-            .filter(\.$nodeID == nodeID)
-            .all()
+    ) async throws -> [LegacyRoleBindingRecord] {
+        try await LegacyRoleBindingStore.bindings(
+            nodeType: nodeType.rawValue, nodeID: nodeID, on: db)
     }
 
     // MARK: - Registry
@@ -58,13 +57,11 @@ final class IAMRoleBindingTests {
     func registrySyncIdempotent() async throws {
         try await withApp { app in
             // configure() already ran the sync once; run it again.
-            try await RoleRegistrySync.sync(on: app.db, logger: app.logger)
+            try await app.policySetVersion.synchronizeRoleRegistry(logger: app.logger)
 
             // Every managed row matches its seeded descriptor exactly:
             // fixed id, name, expanded action set, canonical Cedar text.
-            let managed = try await IAMRoleDefinition.query(on: app.db)
-                .filter(\.$managed == true)
-                .all()
+            let managed = try await RoleStore.legacyRoles(on: app.db).filter(\.managed)
             #expect(managed.count == IAMRole.allCases.count)
             for desired in RoleDescriptor.seededDefaults() {
                 let row = managed.first { $0.id == desired.id }
@@ -72,7 +69,7 @@ final class IAMRoleBindingTests {
                 #expect(row?.actions == desired.actions)
                 #expect(row?.cedarText == desired.cedarText)
                 #expect(row?.ownerType == IAMRoleOwnerType.platform.rawValue)
-                #expect(row?.ownerID == IAMRoleDefinition.platformOwnerID)
+                #expect(row?.ownerID == IAMRoleOwnerType.platformOwnerID)
             }
         }
     }
@@ -80,18 +77,20 @@ final class IAMRoleBindingTests {
     @Test("Registry sync never touches user-created rows")
     func registrySyncLeavesUserRolesAlone() async throws {
         try await withApp { app in
-            let userRole = IAMRoleDefinition(
+            let userRole = try await RoleStore.insertLegacy(IAMRoleSnapshot(
+                id: UUID(),
                 name: "auditor",
-                ownerType: .organization,
+                description: nil,
+                ownerType: IAMRoleOwnerType.organization.rawValue,
                 ownerID: UUID(),
                 cedarText: "// user-authored",
-                actions: ["vm:read"]
-            )
-            try await userRole.create(on: app.db)
+                actions: ["vm:read"],
+                managed: false,
+                createdBy: nil), on: app.db)
 
-            try await RoleRegistrySync.sync(on: app.db, logger: app.logger)
+            try await app.policySetVersion.synchronizeRoleRegistry(logger: app.logger)
 
-            let survived = try await IAMRoleDefinition.find(userRole.id, on: app.db)
+            let survived = try await RoleStore.legacyRole(id: userRole.id, on: app.db)
             #expect(survived?.cedarText == "// user-authored")
             #expect(survived?.actions == ["vm:read"])
         }
@@ -164,15 +163,19 @@ final class IAMRoleBindingTests {
             // row and it grants nothing. A row that looks like a live grant in
             // every listing and confers no access is the hazard; the schema
             // says no rather than letting one be written.
-            let binding = RoleBinding(
-                principalType: .user, principalID: UUID(), role: .editor,
-                nodeType: .project, nodeID: UUID())
-            binding.condition = #"{"mfa": true}"#
             await #expect(throws: (any Error).self) {
-                try await binding.save(on: app.db)
+                try await LegacyRoleBindingStore.insert(
+                    LegacyRoleBindingWrite(
+                        principalType: IAMPrincipalType.user.rawValue,
+                        principalID: UUID(),
+                        roleID: IAMRole.editor.seededID,
+                        nodeType: IAMNodeType.project.rawValue,
+                        nodeID: UUID(),
+                        condition: #"{"mfa": true}"#),
+                    on: app.db)
             }
 
-            let rows = try await RoleBinding.query(on: app.db).all()
+            let rows = try await LegacyRoleBindingStore.bindings(on: app.db)
             #expect(rows.isEmpty)
         }
     }
@@ -182,9 +185,9 @@ final class IAMRoleBindingTests {
     @Test("Organization create dual-writes admin + default-project creator bindings")
     func orgCreateWritesBindings() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let creator = try await builder.createUser(username: "orgcreator", email: "orgcreator@example.com")
-            let token = try await creator.generateAPIKey(on: app.db)
+            let token = try await creator.generateAPIKey(on: app)
 
             var orgID: UUID?
             try await app.test(.POST, "/api/organizations") { req in
@@ -204,9 +207,9 @@ final class IAMRoleBindingTests {
             #expect(orgBindings.first?.createdBy == creator.id)
 
             // The auto-created default project carries a creator binding.
-            let defaultProject = try await Project.query(on: app.db)
-                .filter(\.$organization.$id == createdOrgID)
-                .first()
+            let defaultProject = try await LegacyProjectStore.projects(
+                organizationIDs: [createdOrgID], on: app.db
+            ).first
             let projectID = try #require(defaultProject?.id)
             let projectBindings = try await bindings(on: app.db, nodeType: .project, nodeID: projectID)
             #expect(projectBindings.count == 1)
@@ -215,12 +218,12 @@ final class IAMRoleBindingTests {
 
             // The org also gets a default site so it can enroll agents right
             // away (enrollment requires one).
-            let sites = try await Site.query(on: app.db)
-                .filter(\.$organization.$id == createdOrgID)
-                .all()
+            let sites = try await LegacySiteStore.sites(
+                organizationID: createdOrgID,
+                on: app.db)
             #expect(sites.count == 1)
             #expect(sites.first?.name == Site.defaultName(forOrganizationNamed: "IAM Org"))
-            #expect(sites.first?.$organizationalUnit.id == nil)
+            #expect(sites.first?.organizationalUnitID == nil)
         }
     }
 
@@ -231,11 +234,10 @@ final class IAMRoleBindingTests {
             let org = try await builder.createOrganization(name: "PMB Org")
             let actor = try await builder.createUser(username: "pmbactor", email: "pmbactor@example.com")
             try await builder.addUserToOrganization(user: actor, organization: org, role: "admin")
-            actor.currentOrganizationId = org.id
-            try await actor.save(on: app.db)
+            try await actor.replacingCurrentOrganization(org.id).save(on: app.db)
             let target = try await builder.createUser(username: "pmbtarget", email: "pmbtarget@example.com")
             let project = try await builder.createProject(name: "PMB Project", description: "d", organization: org)
-            let token = try await actor.generateAPIKey(on: app.db)
+            let token = try await actor.generateAPIKey(on: app)
 
             // Grant member → editor binding.
             try await app.test(.POST, "/api/projects/\(project.id!)/members") { req in
@@ -278,16 +280,15 @@ final class IAMRoleBindingTests {
     @Test("Group grant/revoke dual-writes group-principal bindings")
     func groupGrantBindingLifecycle() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let org = try await builder.createOrganization(name: "GGB Org")
             let actor = try await builder.createUser(username: "ggbactor", email: "ggbactor@example.com")
             try await builder.addUserToOrganization(user: actor, organization: org, role: "admin")
-            actor.currentOrganizationId = org.id
-            try await actor.save(on: app.db)
+            try await actor.replacingCurrentOrganization(org.id).save(on: app.db)
             let project = try await builder.createProject(name: "GGB Project", description: "d", organization: org)
-            let group = Group(name: "GGB Group", description: "d", organizationID: org.id!)
-            try await group.save(on: app.db)
-            let token = try await actor.generateAPIKey(on: app.db)
+            let group = try await builder.createGroup(
+                name: "GGB Group", description: "d", organization: org)
+            let token = try await actor.generateAPIKey(on: app)
 
             try await app.test(.POST, "/api/projects/\(project.id!)/groups") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -320,9 +321,8 @@ final class IAMRoleBindingTests {
             let org = try await builder.createOrganization(name: "PCB Org")
             let creator = try await builder.createUser(username: "pcbcreator", email: "pcbcreator@example.com")
             try await builder.addUserToOrganization(user: creator, organization: org, role: "member")
-            creator.currentOrganizationId = org.id
-            try await creator.save(on: app.db)
-            let token = try await creator.generateAPIKey(on: app.db)
+            try await creator.replacingCurrentOrganization(org.id).save(on: app.db)
+            let token = try await creator.generateAPIKey(on: app)
 
             var projectID: UUID?
             try await app.test(.POST, "/api/organizations/\(org.id!)/projects") { req in

@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Foundation
 
 // IAM authored policies (issue #606): an authored-policy row as the Cedar
@@ -31,10 +32,11 @@ struct PolicyDescriptor: Equatable, Sendable {
 }
 
 extension PolicyDescriptor {
-    /// Descriptor for an authored-policy row. Nil when the row has no id
-    /// (unsaved model), which cannot reach the compile path.
-    init?(row: IAMPolicy) {
-        guard let id = row.id else { return nil }
-        self.init(id: id, name: row.name, cedarText: row.cedarText)
+    init(row: LegacyIAMPolicyRecord) {
+        self.init(id: row.id, name: row.name, cedarText: row.cedarText)
+    }
+
+    init(row: IAMPolicySnapshot) {
+        self.init(id: row.id, name: row.name, cedarText: row.cedarText)
     }
 }

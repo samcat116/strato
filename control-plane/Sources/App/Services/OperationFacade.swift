@@ -1,4 +1,5 @@
 import Fluent
+import ControlPlanePostgres
 import StratoShared
 import Vapor
 
@@ -373,15 +374,16 @@ enum OperationFacade {
         resourceKind: OperationResourceKind,
         resourceID: UUID,
         limit: Int,
+        vmCommands: VMCommandExecutionsPersistence? = nil,
         on db: any Database
     ) async throws -> [OperationResponse] {
-        let events = try await ResourceEvent.query(on: db)
-            .filter(\.$resourceKind == resourceKind)
-            .filter(\.$resourceID == resourceID)
-            .filter(\.$phase == .requested)
-            .sort(\.$createdAt, .descending)
-            .limit(limit)
-            .all()
+        let events = try await ResourceEvent.matching(
+            resourceKind: resourceKind,
+            resourceID: resourceID,
+            phase: .requested,
+            limit: limit,
+            on: db
+        )
         var responses: [OperationResponse] = []
         if !events.isEmpty {
             let view = try await view(of: resourceKind, id: resourceID, on: db)
@@ -389,11 +391,10 @@ enum OperationFacade {
         }
 
         if resourceKind == .virtualMachine {
-            let commands = try await VMCommandExecution.query(on: db)
-                .filter(\.$vmID == resourceID)
-                .sort(\.$createdAt, .descending)
-                .limit(limit)
-                .all()
+            guard let vmCommands else {
+                throw Abort(.internalServerError, reason: "VM command persistence was not injected")
+            }
+            let commands = try await vmCommands.history(vmID: resourceID, limit: limit)
             for command in commands {
                 responses.append(try command.operationResponse(payload: nil))
             }

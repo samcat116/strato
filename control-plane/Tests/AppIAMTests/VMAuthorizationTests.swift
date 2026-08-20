@@ -36,8 +36,7 @@ final class VMAuthorizationTests {
             )
             let org = try await builder.createOrganization(name: "VM Auth Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "member")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "VM Auth Project",
@@ -45,7 +44,7 @@ final class VMAuthorizationTests {
                 organization: org
             )
             let vm = try await builder.createVM(name: "auth-vm", project: project)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, vm, project, token)
 

@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import Foundation
 import Vapor
@@ -152,11 +153,17 @@ actor CedarPolicySetCache {
 
     private let engine: any CedarEngine
     private let logger: Logger
+    private let iam: IAMPersistence
     private(set) var current: Built?
 
-    init(engine: any CedarEngine = SwiftCedarEngine(), logger: Logger) {
+    init(
+        engine: any CedarEngine = SwiftCedarEngine(),
+        logger: Logger,
+        iam: IAMPersistence
+    ) {
         self.engine = engine
         self.logger = logger
+        self.iam = iam
     }
 
     /// Rebuild only when the cached set is not already at `version` — the
@@ -180,13 +187,11 @@ actor CedarPolicySetCache {
         do {
             // Every role definition — seeded and user-created. Sorted by id so
             // two replicas building the same version produce identical text.
-            let roleRows = try await IAMRoleDefinition.query(on: db).all()
-            let roles = roleRows.compactMap(RoleDescriptor.init(row:))
+            let roleRows = try await iam.allRoles()
+            let roles = roleRows.map(RoleDescriptor.init(row:))
                 .sorted { $0.id.uuidString < $1.id.uuidString }
 
-            let guardrails = try await Guardrail.query(on: db)
-                .filter(\.$enabled == true)
-                .all()
+            let guardrails = try await iam.allEnabledGuardrails()
 
             let schemaText = CedarSchemaBuilder.schemaText(roles: roles)
 
@@ -222,10 +227,8 @@ actor CedarPolicySetCache {
             // Authored policies (issue #606): enabled permit/forbid rows,
             // sorted by id so two replicas building the same version produce
             // identical text.
-            let policyRows = try await IAMPolicy.query(on: db)
-                .filter(\.$enabled == true)
-                .all()
-            let authoredPolicies = policyRows.compactMap(PolicyDescriptor.init(row:))
+            let policyRows = try await iam.allEnabledPolicies()
+            let authoredPolicies = policyRows.map(PolicyDescriptor.init(row:))
                 .sorted { $0.id.uuidString < $1.id.uuidString }
 
             // Pre-screen each authored policy the way role text is screened:
@@ -339,19 +342,15 @@ actor CedarPolicySetCache {
     /// fail-open) instead of failing the whole-set compile and pinning every
     /// replica to its previous build.
     private func buildGuardrailPolicies(
-        _ guardrails: [Guardrail], schemaText: String, on db: any Database
+        _ guardrails: [IAMGuardrailSnapshot], schemaText: String, on db: any Database
     ) async throws -> GuardrailRendering.RenderedForbids {
         var sources: [CedarPolicySource] = []
         var namesByID: [UUID: String] = [:]
         var skipped: [GuardrailRendering.SkippedGuardrail] = []
 
-        var needGeneration: [Guardrail] = []
+        var needGeneration: [IAMGuardrailSnapshot] = []
         for guardrail in guardrails {
-            guard let id = guardrail.id else {
-                skipped.append(
-                    GuardrailRendering.SkippedGuardrail(id: nil, name: guardrail.name, reason: "row has no id"))
-                continue
-            }
+            let id = guardrail.id
             namesByID[id] = guardrail.name
             if let text = guardrail.cedarText, !text.isEmpty {
                 sources.append(CedarPolicySource(id: GuardrailRendering.policyID(id), text: text))
@@ -397,7 +396,13 @@ extension Application {
 
     /// This replica's compiled Cedar policy set.
     var cedarPolicySet: CedarPolicySetCache {
-        lazyService(CedarPolicySetCacheKey.self) { CedarPolicySetCache(logger: logger) }
+        get {
+            guard let cache = storage[CedarPolicySetCacheKey.self] else {
+                preconditionFailure("Cedar policy-set cache has not been configured")
+            }
+            return cache
+        }
+        set { setStorageValue(CedarPolicySetCacheKey.self, to: newValue) }
     }
 
     /// Hang the compiled-set rebuild off the policy-set version watch. Call

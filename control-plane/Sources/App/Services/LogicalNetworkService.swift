@@ -32,15 +32,18 @@ enum LogicalNetworkService {
             throw Abort(.badRequest, reason: "Specify either 'networkId' or 'networkName', not both")
         }
 
-        let query = LogicalNetwork.query(on: db).filter(\.$project.$id == projectID)
         if let requestedID {
-            guard let network = try await query.filter(\.$id == requestedID).first() else {
+            guard let network = try await LegacyLogicalNetworkStore.networks(
+                ids: [requestedID], projectID: projectID, on: db
+            ).first else {
                 throw Abort(.notFound, reason: "Network \(requestedID) not found in this project")
             }
             return network
         }
         if let requestedName {
-            guard let network = try await query.filter(\.$name == requestedName).first() else {
+            guard let network = try await LegacyLogicalNetworkStore.networks(
+                projectID: projectID, name: requestedName, on: db
+            ).first else {
                 throw Abort(.notFound, reason: "No network named '\(requestedName)' in this project")
             }
             return network

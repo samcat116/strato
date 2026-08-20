@@ -37,7 +37,7 @@ struct SecurityHeadersTests {
         // must carry the headers.
         let builder = TestDataBuilder(db: app.db)
         let user = try await builder.createUser()
-        let token = try await user.generateAPIKey(on: app.db)
+        let token = try await user.generateAPIKey(on: app)
 
         try await app.test(.GET, "/this-route-does-not-exist") { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: token)

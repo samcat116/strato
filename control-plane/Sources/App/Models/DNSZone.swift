@@ -1,11 +1,12 @@
 import Fluent
+import SQLKit
 import Vapor
 
 /// A DNS zone: an arbitrarily-named, project-owned namespace that VMs resolve
 /// and register into (issue #770, roadmap #769).
 ///
 /// The shape is Route 53's private hosted zone: the zone is a first-class
-/// resource attached many-to-many to logical networks (`DNSZoneNetwork`), and
+/// resource attached many-to-many to logical networks, and
 /// attaching it to a network means "VMs on this network can resolve this
 /// zone". That maps directly onto OVN's `Logical_Switch.dns_records` being a
 /// *set* of weak references — one switch can carry several zones' rows.
@@ -15,9 +16,7 @@ import Vapor
 /// internally is what makes split-horizon possible later. Uniqueness is per
 /// project, so two tenants may both serve `corp.example.com` without seeing
 /// each other's records.
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class DNSZone: Model, @unchecked Sendable {
+enum DNSZone {
     static let schema = "dns_zones"
 
     /// Hard cap on authored records per zone. A guard against unbounded
@@ -25,53 +24,125 @@ final class DNSZone: Model, @unchecked Sendable {
     /// zone's whole record set in one row), not a billable quota — promote it
     /// to a `ResourceQuota` column if zones ever get one.
     static let maxRecordsPerZone = 1000
+}
 
-    @ID(key: .id)
-    var id: UUID?
+struct DNSZoneSnapshot: Equatable, Sendable {
+    let id: UUID
+    let name: String
+    let zoneDescription: String?
+    let projectID: UUID
+    let createdByID: UUID?
+    let createdAt: Date?
+    let updatedAt: Date?
+}
 
-    /// The zone's fully-qualified name, lowercased with no trailing dot.
-    /// Unique within the owning project (schema-enforced).
-    @Field(key: "name")
-    var name: String
+enum LegacyDNSZoneStore {
+    static func zones(
+        ids: [UUID]? = nil,
+        projectIDs: [UUID]? = nil,
+        on db: any Database
+    ) async throws -> [DNSZoneSnapshot] {
+        if let ids, ids.isEmpty { return [] }
+        if let projectIDs, projectIDs.isEmpty { return [] }
+        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM dns_zones WHERE TRUE"
+        if let ids { query += " AND id = ANY(\(bind: ids))" }
+        if let projectIDs { query += " AND project_id = ANY(\(bind: projectIDs))" }
+        query += " ORDER BY name, id"
+        return try await requireSQL(db).raw(query).all(decoding: Record.self).map(\.snapshot)
+    }
 
-    @OptionalField(key: "description")
-    var zoneDescription: String?
+    static func find(id: UUID, on db: any Database) async throws -> DNSZoneSnapshot? {
+        try await zones(ids: [id], on: db).first
+    }
 
-    /// Project that owns the zone. Zones are tenant resources: their name,
-    /// their records, and the networks they may attach to are all scoped by it.
-    @Parent(key: "project_id")
-    var project: Project
-
-    @OptionalParent(key: "created_by_id")
-    var createdBy: User?
-
-    @Children(for: \.$zone)
-    var records: [DNSRecord]
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
-
-    init(
-        id: UUID? = nil,
+    @discardableResult
+    static func insert(
+        id: UUID = UUID(),
         name: String,
         description: String? = nil,
         projectID: UUID,
-        createdByID: UUID? = nil
-    ) {
-        self.id = id
-        self.name = name
-        self.zoneDescription = description
-        self.$project.id = projectID
-        self.$createdBy.id = createdByID
+        createdByID: UUID? = nil,
+        on db: any Database
+    ) async throws -> DNSZoneSnapshot {
+        guard let row = try await requireSQL(db).raw(
+            """
+            INSERT INTO dns_zones (
+                id, name, description, project_id, created_by_id, created_at, updated_at
+            ) VALUES (
+                \(bind: id), \(bind: name), \(bind: description), \(bind: projectID),
+                \(bind: createdByID), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            RETURNING \(unsafeRaw: columns)
+            """
+        ).first(decoding: Record.self) else {
+            throw Abort(.internalServerError, reason: "Could not create DNS zone")
+        }
+        return row.snapshot
+    }
+
+    @discardableResult
+    static func update(
+        id: UUID,
+        name: String,
+        description: String?,
+        on db: any Database
+    ) async throws -> DNSZoneSnapshot? {
+        try await requireSQL(db).raw(
+            """
+            UPDATE dns_zones
+            SET name = \(bind: name), description = \(bind: description),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = \(bind: id)
+            RETURNING \(unsafeRaw: columns)
+            """
+        ).first(decoding: Record.self)?.snapshot
+    }
+
+    static func ids(projectIDs: [UUID], on db: any Database) async throws -> [UUID] {
+        struct ID: Decodable { let id: UUID }
+        guard !projectIDs.isEmpty else { return [] }
+        return try await requireSQL(db).raw(
+            "SELECT id FROM dns_zones WHERE project_id = ANY(\(bind: projectIDs))"
+        ).all(decoding: ID.self).map(\.id)
+    }
+
+    @discardableResult
+    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+        struct Deleted: Decodable { let id: UUID }
+        return try await requireSQL(db).raw(
+            "DELETE FROM dns_zones WHERE id = \(bind: id) RETURNING id"
+        ).first(decoding: Deleted.self)?.id
+    }
+
+    private struct Record: Decodable, Sendable {
+        let id: UUID
+        let name: String
+        let zoneDescription: String?
+        let projectID: UUID
+        let createdByID: UUID?
+        let createdAt: Date?
+        let updatedAt: Date?
+
+        var snapshot: DNSZoneSnapshot {
+            DNSZoneSnapshot(
+                id: id, name: name, zoneDescription: zoneDescription,
+                projectID: projectID, createdByID: createdByID,
+                createdAt: createdAt, updatedAt: updatedAt)
+        }
+    }
+
+    private static let columns = """
+        id, name, description AS "zoneDescription", project_id AS "projectID",
+        created_by_id AS "createdByID", created_at AS "createdAt", updated_at AS "updatedAt"
+        """
+
+    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "DNS zones require PostgreSQL")
+        }
+        return sql
     }
 }
-
-extension DNSZone: Content {}
 
 // MARK: - Request/Response DTOs
 
@@ -179,14 +250,14 @@ struct DNSZoneResponse: Content {
     let updatedAt: Date?
 
     init(
-        from zone: DNSZone,
+        from zone: DNSZoneSnapshot,
         networks: [DNSZoneNetworkResponse],
         recordCount: Int
-    ) throws {
-        self.id = try zone.requireID()
+    ) {
+        self.id = zone.id
         self.name = zone.name
         self.description = zone.zoneDescription
-        self.projectId = zone.$project.id
+        self.projectId = zone.projectID
         self.networks = networks
         self.recordCount = recordCount
         self.createdAt = zone.createdAt

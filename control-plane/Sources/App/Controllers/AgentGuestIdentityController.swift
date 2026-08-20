@@ -71,10 +71,10 @@ struct AgentGuestIdentityController: RouteCollection {
         }
 
         guard
-            let agentRow = try await Agent.query(on: req.db)
-                .filter(\.$trustDomain == authenticatedAgent.identity.trustDomain)
-                .filter(\.$name == authenticatedAgent.identity.name)
-                .first(),
+            let agentRow = try await LegacyAgentStore.agents(
+                trustDomain: authenticatedAgent.identity.trustDomain,
+                name: authenticatedAgent.identity.name,
+                on: req.db).first,
             let agentID = agentRow.id
         else {
             throw await refusal(
@@ -354,7 +354,7 @@ struct AgentGuestIdentityController: RouteCollection {
     }
 
     private func organizationID(for vm: VM, on db: any Database) async -> UUID? {
-        guard let project = try? await Project.find(vm.$project.id, on: db) else { return nil }
+        guard let project = try? await Project.find(vm.projectID, on: db) else { return nil }
         return try? await project.getRootOrganizationId(on: db)
     }
 

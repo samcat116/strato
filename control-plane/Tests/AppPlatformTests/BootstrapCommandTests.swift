@@ -35,12 +35,12 @@ final class CaptureConsole: Console, Sendable {
 struct BootstrapCommandTests {
     @discardableResult
     private func runBootstrap(_ app: Application, arguments: [String] = []) async throws -> CaptureConsole {
-        var input = CommandInput(arguments: ["bootstrap"] + arguments)
-        let signature = try BootstrapCommand.Signature(from: &input)
+        let input = CommandInput(arguments: ["bootstrap"] + arguments)
         let console = CaptureConsole()
         var context = CommandContext(console: console, input: input)
         context.application = app
-        try await BootstrapCommand().run(using: context, signature: signature)
+        let command = try #require(app.asyncCommands.commands["bootstrap"])
+        try await command.run(using: &context)
         return console
     }
 
@@ -54,19 +54,21 @@ struct BootstrapCommandTests {
                     "--org-name", "CI Org", "--project-name", "E2E",
                 ])
 
-            let user = try #require(try await User.query(on: app.db).first())
+            let user = try #require(try await User.all(on: app.db).first)
             #expect(user.username == "ci")
             #expect(user.email == "ci@example.com")
             #expect(user.isSystemAdmin)
 
-            let org = try #require(try await Organization.query(on: app.db).first())
+            let org = try #require(try await Organization.all(on: app.db).first)
             #expect(org.name == "CI Org")
             #expect(user.currentOrganizationId == org.id)
 
-            let membership = try #require(try await UserOrganization.query(on: app.db).first())
+            let membership = try #require(
+                try await OrganizationMembershipStore.membership(
+                    userID: user.id!, organizationID: org.id!, on: app.db))
             #expect(membership.roleID == IAMRole.admin.seededID)
 
-            let project = try #require(try await Project.query(on: app.db).first())
+            let project = try #require(try await Project.all(on: app.db).first)
             #expect(project.name == "E2E")
             let expectedPath = "/\(org.id!.uuidString)/\(project.id!.uuidString)"
             #expect(project.path == expectedPath)
@@ -83,9 +85,12 @@ struct BootstrapCommandTests {
             let printedKey = try #require(console.lines.first).trimmingCharacters(in: .whitespacesAndNewlines)
             #expect(console.lines.count == 1)
             #expect(printedKey.hasPrefix("sk_"))
-            let apiKey = try #require(try await APIKey.query(on: app.db).first())
-            #expect(apiKey.keyHash == APIKey.hashAPIKey(printedKey))
-            #expect(apiKey.restriction.isUnrestricted)
+            let apiKey = try #require(
+                try await app.apiKeysPersistence.activeKey(
+                    keyHash: APIKeyCredential.hash(printedKey)
+                )
+            )
+            #expect(CredentialRestriction(apiKey.restriction).isUnrestricted)
             #expect(apiKey.isActive)
             #expect(apiKey.expiresAt == nil)
         }
@@ -95,7 +100,7 @@ struct BootstrapCommandTests {
     func headlessSeedIsNotClaimable() async throws {
         try await withTestApp { app in
             try await runBootstrap(app, arguments: ["--quiet"])
-            let claimCount = try await AccountClaimToken.query(on: app.db).count()
+            let claimCount = try await testAccountClaimCount(on: app)
             #expect(claimCount == 0)
         }
     }
@@ -107,7 +112,7 @@ struct BootstrapCommandTests {
             let console = try await runBootstrap(
                 app, arguments: ["--quiet", "--admin-email", "ada.lovelace@example.com"])
 
-            let user = try #require(try await User.query(on: app.db).first())
+            let user = try #require(try await User.all(on: app.db).first)
             #expect(user.email == "ada.lovelace@example.com")
             // Derived from the local part rather than left as `bootstrap`.
             #expect(user.username == "ada.lovelace")
@@ -122,10 +127,10 @@ struct BootstrapCommandTests {
             // The printed link carries the one raw token the stored hash matches,
             // and the invite is live — this is the whole fix, so pin it end to end.
             let rawToken = try #require(claimURL.split(separator: "=").last.map(String.init))
-            let claim = try #require(try await AccountClaimToken.query(on: app.db).first())
-            #expect(claim.tokenHash == AccountClaimToken.hashToken(rawToken))
-            #expect(claim.$user.id == user.id)
-            #expect(claim.isValid)
+            let claim = try #require(try await findTestAccountClaim(rawToken: rawToken, on: app))
+            #expect(claim.tokenHash == AccountClaimSecret.hashToken(rawToken))
+            #expect(claim.userID == user.id)
+            #expect(claim.isValid())
         }
     }
 
@@ -137,7 +142,7 @@ struct BootstrapCommandTests {
         try await withTestApp { app in
             try await runBootstrap(
                 app, arguments: ["--quiet", "--admin-email", "ada@example.com", "--username", "ci"])
-            let user = try #require(try await User.query(on: app.db).first())
+            let user = try #require(try await User.all(on: app.db).first)
             #expect(user.username == "ci")
         }
     }
@@ -150,7 +155,7 @@ struct BootstrapCommandTests {
             let console = try await runBootstrap(app, arguments: ["--admin-email", "ada@example.com"])
             let output = console.lines.joined(separator: "\n")
 
-            let claim = try #require(try await AccountClaimToken.query(on: app.db).first())
+            let claim = try #require(try await testAccountClaims(on: app).first)
             #expect(output.contains("/claim?token="))
             #expect(output.contains(Self.expiryText(claim.expiresAt)))
             #expect(output.contains("WEBAUTHN_RELYING_PARTY_ORIGIN"))
@@ -179,7 +184,7 @@ struct BootstrapCommandTests {
             await #expect(throws: BootstrapCommand.UnusableDerivedUsernameError.self) {
                 try await runBootstrap(app, arguments: ["--quiet", "--admin-email", "ada+ci@example.com"])
             }
-            let userCount = try await User.query(on: app.db).count()
+            let userCount = try await User.count(on: app.db)
             #expect(userCount == 0)
         }
     }
@@ -190,7 +195,10 @@ struct BootstrapCommandTests {
             let console = try await runBootstrap(
                 app, arguments: ["--quiet", "--no-api-key", "--admin-email", "ada@example.com"])
 
-            let keyCount = try await APIKey.query(on: app.db).count()
+            let user = try #require(try await User.all(on: app.db).first)
+            let keyCount = try await app.apiKeysPersistence.keys(
+                userID: try user.requireID()
+            ).count
             #expect(keyCount == 0)
             // Quiet output is one secret per line, so only the claim URL remains.
             #expect(console.lines.count == 1)
@@ -206,7 +214,7 @@ struct BootstrapCommandTests {
             await #expect(throws: BootstrapCommand.UnreachableSeedError.self) {
                 try await runBootstrap(app, arguments: ["--quiet", "--no-api-key"])
             }
-            let userCount = try await User.query(on: app.db).count()
+            let userCount = try await User.count(on: app.db)
             #expect(userCount == 0)
         }
     }
@@ -220,7 +228,7 @@ struct BootstrapCommandTests {
             await #expect(throws: BootstrapCommand.RefusedError.self) {
                 try await runBootstrap(app, arguments: ["--quiet", "--admin-email", "ada@example.com"])
             }
-            let claimCount = try await AccountClaimToken.query(on: app.db).count()
+            let claimCount = try await testAccountClaimCount(on: app)
             #expect(claimCount == 0)
         }
     }
@@ -240,7 +248,7 @@ struct BootstrapCommandTests {
                     app,
                     arguments: ["--quiet", "--admin-email", "ada@example.com", "--email", "ci@example.com"])
             }
-            let userCount = try await User.query(on: app.db).count()
+            let userCount = try await User.count(on: app.db)
             #expect(userCount == 0)
         }
     }
@@ -251,7 +259,7 @@ struct BootstrapCommandTests {
             await #expect(throws: BootstrapCommand.UnusableDerivedUsernameError.self) {
                 try await runBootstrap(app, arguments: ["--quiet", "--admin-email", "a+b@example.com"])
             }
-            let userCount = try await User.query(on: app.db).count()
+            let userCount = try await User.count(on: app.db)
             #expect(userCount == 0)
         }
     }
@@ -265,9 +273,9 @@ struct BootstrapCommandTests {
             await #expect(throws: BootstrapCommand.RefusedError.self) {
                 try await runBootstrap(app, arguments: ["--quiet"])
             }
-            let userCount = try await User.query(on: app.db).count()
+            let userCount = try await User.count(on: app.db)
             #expect(userCount == 1)
-            let orgCount = try await Organization.query(on: app.db).count()
+            let orgCount = try await Organization.count(on: app.db)
             #expect(orgCount == 0)
         }
     }
@@ -279,7 +287,10 @@ struct BootstrapCommandTests {
             await #expect(throws: BootstrapCommand.RefusedError.self) {
                 try await runBootstrap(app, arguments: ["--quiet"])
             }
-            let keyCount = try await APIKey.query(on: app.db).count()
+            let user = try #require(try await User.all(on: app.db).first)
+            let keyCount = try await app.apiKeysPersistence.keys(
+                userID: try user.requireID()
+            ).count
             #expect(keyCount == 1)
         }
     }

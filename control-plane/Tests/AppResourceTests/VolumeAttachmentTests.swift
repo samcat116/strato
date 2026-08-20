@@ -32,11 +32,10 @@ struct VolumeAttachmentTests {
                 email: "attachment-admin@example.com",
                 displayName: "Attachment Admin",
                 isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
             let org = try await builder.createOrganization(name: "Attachment Org")
             try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
-            admin.currentOrganizationId = org.id
-            try await admin.save(on: app.db)
+            try await admin.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "Attachment Project",
@@ -64,12 +63,10 @@ struct VolumeAttachmentTests {
             projectID: try project.requireID(), environment: "development",
             size: 10 * 1024 * 1024 * 1024,
             status: vm == nil ? .available : .attached,
-            createdByID: try user.requireID())
-        if let vm {
-            volume.$vm.id = try vm.requireID()
-            volume.deviceName = deviceName ?? "disk0"
-            volume.bootOrder = bootOrder
-        }
+            createdByID: try user.requireID(),
+            vmID: try vm?.requireID(),
+            deviceName: vm == nil ? nil : deviceName ?? "disk0",
+            bootOrder: vm == nil ? nil : bootOrder)
         try await volume.save(on: app.db)
         return volume
     }
@@ -97,11 +94,12 @@ struct VolumeAttachmentTests {
 
     @Test("Deleting a VM detaches its volumes instead of stranding them")
     func deletingAVMDetachesItsVolumes() async throws {
-        try await withAttachmentApp { app, _, admin, project, vm, _ in
+        try await withAttachmentApp { app, _, admin, project, initialVM, _ in
+            var vm = initialVM
             let volume = try await makeVolume(
                 named: "reaped-vm-volume", attachedTo: vm, deviceName: "disk0", bootOrder: 0,
-                on: app, user: admin, project: project)
-            volume.attachedAgentId = "agent-a"
+                on: app, user: admin, project: project
+            ).replacing(attachedAgentId: "agent-a")
             try await volume.save(on: app.db)
             let vmID = try vm.requireID()
             let generationBefore = volume.generation
@@ -120,7 +118,7 @@ struct VolumeAttachmentTests {
             // Before the fix the FK cleared `vm_id` and left everything else,
             // so the volume named a device on a VM that no longer existed.
             let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
-            #expect(reloaded.$vm.id == nil)
+            #expect(reloaded.vmID == nil)
             #expect(reloaded.deviceName == nil)
             #expect(reloaded.bootOrder == nil)
             #expect(reloaded.attachedAgentId == nil)
@@ -138,7 +136,8 @@ struct VolumeAttachmentTests {
 
     @Test("A volume detached from a deleted VM is attachable again")
     func aReleasedVolumeCanBeReattached() async throws {
-        try await withAttachmentApp { app, builder, admin, project, vm, token in
+        try await withAttachmentApp { app, builder, admin, project, initialVM, token in
+            var vm = initialVM
             let volume = try await makeVolume(
                 named: "reusable-volume", attachedTo: vm, on: app, user: admin, project: project)
 
@@ -171,7 +170,7 @@ struct VolumeAttachmentTests {
             }
 
             let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
-            #expect(reloaded.$vm.id == vm.id)
+            #expect(reloaded.vmID == vm.id)
             #expect(reloaded.status == .attached)
         }
     }
@@ -194,7 +193,7 @@ struct VolumeAttachmentTests {
             // Refused before anything was written.
             let reloaded = try #require(try await Volume.find(second.id, on: app.db))
             #expect(reloaded.status == .available)
-            #expect(reloaded.$vm.id == nil)
+            #expect(reloaded.vmID == nil)
         }
     }
 
@@ -212,7 +211,7 @@ struct VolumeAttachmentTests {
 
             let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
             #expect(reloaded.deviceName == nil)
-            #expect(reloaded.$vm.id == nil)
+            #expect(reloaded.vmID == nil)
         }
     }
 
@@ -233,11 +232,11 @@ struct VolumeAttachmentTests {
                 try await VolumeAttachmentService.claim(
                     second, to: vm, deviceName: nil, bootOrder: nil, readonly: false, on: tx)
             }
-            #expect(claimed.rawValue == "disk1")
+            #expect(claimed.deviceName.rawValue == "disk1")
 
             let reloaded = try #require(try await Volume.find(second.id, on: app.db))
             #expect(reloaded.deviceName == "disk1")
-            #expect(reloaded.$vm.id == vm.id)
+            #expect(reloaded.vmID == vm.id)
             // `claim` is deliberately state-only. The HTTP path wraps it in
             // `ResourceMutation.accept`, which owns the single generation
             // advance after the attachment mutation succeeds.
@@ -272,14 +271,15 @@ struct VolumeAttachmentTests {
             // rows-in-time name different VMs.
             await #expect(throws: (any Error).self) {
                 try await app.db.transaction { tx in
-                    #expect(try await stale.lockAndRefresh(on: tx))
+                    let refreshed = try #require(try await stale.lockingAndRefreshing(on: tx))
                     try await VolumeAttachmentService.claim(
-                        stale, to: other, deviceName: nil, bootOrder: nil, readonly: false, on: tx)
+                        refreshed, to: other, deviceName: nil, bootOrder: nil, readonly: false,
+                        on: tx)
                 }
             }
 
             let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
-            #expect(reloaded.$vm.id == vm.id)
+            #expect(reloaded.vmID == vm.id)
         }
     }
 
@@ -307,8 +307,8 @@ struct VolumeAttachmentTests {
             let volume = Volume(
                 name: "nameless-attachment", description: "",
                 projectID: try project.requireID(), environment: "development", size: 1 << 30, status: .attached,
-                createdByID: try admin.requireID())
-            volume.$vm.id = try vm.requireID()
+                createdByID: try admin.requireID(),
+                vmID: try vm.requireID())
 
             await #expect(throws: (any Error).self) {
                 try await volume.save(on: app.db)
@@ -354,11 +354,13 @@ struct VolumeAttachmentTests {
             // an older build can still produce mid-rollout.
             let volume = try await makeVolume(
                 named: "stranded-volume", on: app, user: admin, project: project)
-            volume.status = .attached
-            volume.deviceName = "disk0"
-            volume.bootOrder = 0
-            volume.readonly = true
-            volume.attachedAgentId = "agent-a"
+                .replacing(
+                    status: .attached,
+                    attachedAgentId: "agent-a",
+                    deviceName: "disk0",
+                    bootOrder: 0,
+                    readonly: true
+                )
             try await volume.save(on: app.db)
             let generationBefore = volume.generation
 
@@ -388,7 +390,7 @@ struct VolumeAttachmentTests {
 
             let swept = try #require(try await Volume.find(volume.id, on: app.db))
             #expect(swept.deviceName == "disk0")
-            #expect(swept.$vm.id == vm.id)
+            #expect(swept.vmID == vm.id)
             #expect(swept.generation == generationBefore)
         }
     }

@@ -127,7 +127,7 @@ struct ImageFetchRedirectTests {
         )
         try await image.save(on: app.db)
         let imageID = try image.requireID()
-        let artifact = ImageArtifact(
+        let artifact = try await LegacyImageArtifactStore.insert(
             imageID: imageID,
             kind: .diskImage,
             format: nil,
@@ -140,29 +140,29 @@ struct ImageFetchRedirectTests {
                 kind: ArtifactKind.diskImage.rawValue, filename: "image.qcow2"),
             status: .pending,
             sourceURL: sourceURL,
-            expectedChecksum: expectedChecksum
+            expectedChecksum: expectedChecksum,
+            on: app.db
         )
-        try await artifact.save(on: app.db)
-        return (imageID, try artifact.requireID())
+        return (imageID, artifact.id)
     }
 
     /// Polls until the image leaves the in-flight states, so the test doesn't
     /// race the detached fetch task.
     private func waitForTerminalStatus(
         app: Application, imageID: UUID, timeout: Duration = .seconds(10)
-    ) async throws -> (Image, ImageArtifact) {
+    ) async throws -> (Image, ImageArtifactSnapshot) {
         let deadline = ContinuousClock.now.advanced(by: timeout)
         while ContinuousClock.now < deadline {
-            if let image = try await Image.find(imageID, on: app.db),
-                let artifact = try await ImageArtifact.query(on: app.db)
-                    .filter(\.$image.$id == imageID).filter(\.$kind == .diskImage).first(),
+            if let image = try await LegacyImageStore.image(id: imageID, on: app.db),
+                let artifact = try await LegacyImageArtifactStore.artifact(
+                    imageID: imageID, kind: .diskImage, on: app.db),
                 artifact.status == .ready || artifact.status == .error
             {
                 return (image, artifact)
             }
             try await Task.sleep(for: .milliseconds(50))
         }
-        let last = try await Image.find(imageID, on: app.db)
+        let last = try await LegacyImageStore.image(id: imageID, on: app.db)
         Issue.record("Fetch did not settle; last status \(String(describing: last?.status))")
         throw ImageError.downloadFailed("timed out waiting for fetch")
     }

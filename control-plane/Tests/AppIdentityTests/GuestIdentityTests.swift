@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import Foundation
 import Testing
@@ -39,15 +40,16 @@ final class GuestIdentityTests {
     @discardableResult
     private func claimTrustDomain(
         _ app: Application, organizationID: UUID, phase: OrgTrustDomainPhase, bundlePEM: String?
-    ) async throws -> OrgTrustDomain {
-        let row = OrgTrustDomain(
-            organizationID: organizationID,
-            trustDomain: OrgTrustDomain.trustDomain(
-                forOrganization: organizationID, platformTrustDomain: PlatformTrustDomain.current),
-            phase: phase)
-        row.orgBundlePEM = bundlePEM
-        try await row.save(on: app.db)
-        return row
+    ) async throws -> OrgTrustDomainRecord {
+        try await OrgTrustDomainStore.insert(
+            OrgTrustDomainWrite(
+                organizationID: organizationID,
+                trustDomain: OrgTrustDomain.trustDomain(
+                    forOrganization: organizationID,
+                    platformTrustDomain: PlatformTrustDomain.current),
+                phase: phase,
+                orgBundlePEM: bundlePEM),
+            on: app.db)
     }
 
     // MARK: - Composition
@@ -171,11 +173,11 @@ final class GuestIdentityTests {
 
             let registration = try await GuestIdentity.register(
                 vmID: vmID, organizationID: orgID, createdBy: nil, on: app.db)
-            let registrationID = try registration.requireID()
+            let registrationID = registration.id
 
             #expect(registration.kind == .workload)
-            #expect(registration.$vm.id == vmID)
-            #expect(registration.$organization.id == orgID)
+            #expect(registration.vmID == vmID)
+            #expect(registration.organizationID == orgID)
             #expect(
                 registration.spiffeID
                     == GuestIdentity.spiffeID(
@@ -227,14 +229,14 @@ final class GuestIdentityTests {
             // it as a bug.
             let registration = try await GuestIdentity.register(
                 vmID: try vm.requireID(), organizationID: nil, createdBy: nil, on: app.db)
-            #expect(registration.$organization.id == nil)
+            #expect(registration.organizationID == nil)
 
             // External, so binding a role to it needs `iam:grantExternal` — the
             // safe default, and the same answer any org-less workload row has
             // always got: a principal that cannot be placed must not slip past
             // the gate.
             let external = try await CrossOrgBindingGate.isExternal(
-                principalType: .workload, principalID: try registration.requireID(),
+                principalType: .workload, principalID: registration.id,
                 organizationID: try org.requireID(), on: app.db)
             #expect(external)
         }
@@ -261,12 +263,14 @@ final class GuestIdentityTests {
             // `vm_id` is what forbids that, and this is the only assertion that
             // proves the index is really unique rather than merely present.
             await #expect(throws: (any Error).self) {
-                try await WorkloadRegistration(
-                    spiffeID: "spiffe://\(PlatformTrustDomain.current)/vm/\(UUID().uuidString.lowercased())",
-                    kind: .workload,
-                    organizationID: orgID,
-                    vmID: vmID
-                ).save(on: app.db)
+                _ = try await LegacyWorkloadRegistrationStore.insert(
+                    WorkloadRegistrationWrite(
+                        spiffeID:
+                            "spiffe://\(PlatformTrustDomain.current)/vm/\(UUID().uuidString.lowercased())",
+                        kind: WorkloadRegistrationKind.workload.rawValue,
+                        organizationID: orgID,
+                        vmID: vmID),
+                    on: app.db)
             }
         }
     }

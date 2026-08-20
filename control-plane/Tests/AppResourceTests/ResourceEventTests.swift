@@ -37,8 +37,7 @@ final class ResourceEventTests {
             )
             let org = try await builder.createOrganization(name: "Event Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "Event Project",
@@ -46,7 +45,7 @@ final class ResourceEventTests {
                 organization: org
             )
             let vm = try await builder.createVM(name: "event-vm", project: project)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, org, project, vm, token)
 
@@ -61,10 +60,11 @@ final class ResourceEventTests {
     private func events(
         for resourceID: UUID, on db: any Database
     ) async throws -> [ResourceEvent] {
-        try await ResourceEvent.query(on: db)
-            .filter(\.$resourceID == resourceID)
-            .sort(\.$createdAt)
-            .all()
+        try await ResourceEvent.matching(
+            resourceID: resourceID,
+            ascending: true,
+            on: db
+        )
     }
 
     // MARK: - Attribution at mutation time
@@ -127,19 +127,18 @@ final class ResourceEventTests {
             }
 
             let created = try #require(
-                try await VM.query(on: app.db).filter(\.$name == "created-vm").first())
+                try await VM.all(on: app.db).first { $0.name == "created-vm" })
             let createdID = try created.requireID()
-            let bootVolumes = try await Volume.query(on: app.db)
-                .filter(\.$vm.$id == createdID)
-                .filter(\.$volumeType == .boot)
-                .all()
+            let bootVolumes = try await Volume.all(on: app.db).filter {
+                $0.vmID == createdID && $0.volumeType == .boot
+            }
             let bootVolume = try #require(bootVolumes.first)
             #expect(bootVolumes.count == 1)
             #expect(bootVolume.deviceName == VolumeDeviceName.disk(0).rawValue)
             #expect(bootVolume.bootOrder == 0)
             #expect(!bootVolume.readonly)
             #expect(bootVolume.size == created.disk)
-            #expect(bootVolume.$sourceImage.id == image.id)
+            #expect(bootVolume.sourceImageID == image.id)
 
             let recorded = try await self.events(for: createdID, on: app.db)
             let create = try #require(recorded.first { $0.mutation == .create })
@@ -187,7 +186,7 @@ final class ResourceEventTests {
             }
 
             let created = try #require(
-                try await Sandbox.query(on: app.db).filter(\.$name == "created-sandbox").first())
+                try await Sandbox.all(on: app.db).first { $0.name == "created-sandbox" })
             let event = try #require(
                 try await self.events(for: try created.requireID(), on: app.db)
                     .first { $0.mutation == .create })
@@ -213,12 +212,13 @@ final class ResourceEventTests {
             // which `MutationActor` derived `.system` from; the sentinel went
             // with the operations table (STR-152) and the sweep passes the
             // actor directly.
-            _ = try await app.resourceMutation.accept(
+            _ = try await app.resourceMutation.acceptValue(
                 .delete, on: sandbox, actor: .system, dispatch: .stateSync,
                 on: app.db, app: app
-            ) { db in
-                sandbox.setDesiredStatus(.absent)
-                try await sandbox.save(on: db)
+            ) { current, _ in
+                var changed = current
+                changed.setDesiredStatus(.absent)
+                return changed
             }
 
             let event = try #require(try await self.events(for: sandboxID, on: app.db).first)
@@ -305,12 +305,13 @@ final class ResourceEventTests {
             // the transaction rolling the generation bump and the event back
             // together.
             await #expect(throws: MutationFailure.self) {
-                _ = try await app.resourceMutation.accept(
+                _ = try await app.resourceMutation.acceptValue(
                     .boot, on: vm, actor: .user(try user.requireID()),
                     dispatch: .stateSync, on: app.db, app: app
-                ) { db in
-                    vm.setDesiredStatus(.running)
-                    try await vm.save(on: db)
+                ) { current, db in
+                    var changed = current
+                    changed.setDesiredStatus(.running)
+                    try await changed.save(on: db)
                     throw MutationFailure()
                 }
             }

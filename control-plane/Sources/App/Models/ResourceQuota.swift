@@ -1,118 +1,41 @@
+import ControlPlanePostgres
 import Fluent
-import Vapor
 import Foundation
+import Vapor
 
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class ResourceQuota: Model, @unchecked Sendable {
-    static let schema = "resource_quotas"
-
-    @ID(key: .id)
-    var id: UUID?
-
-    @Field(key: "name")
-    var name: String
-
-    // Quota can apply to Organization, OU, or Project level
-    @OptionalParent(key: "organization_id")
-    var organization: Organization?
-
-    @OptionalParent(key: "organizational_unit_id")
-    var organizationalUnit: OrganizationalUnit?
-
-    @OptionalParent(key: "project_id")
-    var project: Project?
-
-    // CPU limits
-    @Field(key: "max_vcpus")
-    var maxVCPUs: Int
-
-    @Field(key: "reserved_vcpus")
-    var reservedVCPUs: Int
-
-    // Memory limits (in bytes)
-    @Field(key: "max_memory")
-    var maxMemory: Int64
-
-    @Field(key: "reserved_memory")
-    var reservedMemory: Int64
-
-    // Storage limits (in bytes)
-    @Field(key: "max_storage")
-    var maxStorage: Int64
-
-    @Field(key: "reserved_storage")
-    var reservedStorage: Int64
-
-    // VM count limits
-    @Field(key: "max_vms")
-    var maxVMs: Int
-
-    @Field(key: "vm_count")
-    var vmCount: Int
-
-    // Sandbox count limits (issue #415). Sandboxes draw vCPUs/memory from the
-    // same pools as VMs above; only the count limit is separate, so a quota
-    // sized for N VMs isn't silently consumed by sandboxes.
-    @Field(key: "max_sandboxes")
-    var maxSandboxes: Int
-
-    @Field(key: "sandbox_count")
-    var sandboxCount: Int
-
-    /// Volume count limit (STR-181), or nil for no limit.
-    ///
-    /// Optional where the other two counts are required, and that asymmetry is
-    /// the point: `max_vms` was the only plausible backfill and it is the wrong
-    /// one, since a deployment that gives each VM a data disk or two has more
-    /// volumes than VMs and would come out of the upgrade refusing creates
-    /// against a limit nobody chose. Bytes (`maxStorage`) are the ceiling that
-    /// protects the host; this is here for an operator who wants a count too.
-    @OptionalField(key: "max_volumes")
-    var maxVolumes: Int?
-
-    @Field(key: "volume_count")
-    var volumeCount: Int
-
-    /// Project-wide network count limit (STR-236).
-    ///
-    /// Logical networks have no environment: workloads from every environment
-    /// can attach to the same switch. This limit therefore applies only when
-    /// `environment` is nil. The API rejects an explicitly supplied network
-    /// limit for an environment-scoped quota instead of storing an inert policy.
-    @Field(key: "max_networks")
-    var maxNetworks: Int
-
-    @Field(key: "network_count")
-    var networkCount: Int
-
-    /// Project-wide native load-balancer count limit (STR-28). Like logical
-    /// networks, load balancers span environments and are governed only by a
-    /// quota whose `environment` is nil.
-    @Field(key: "max_load_balancers")
-    var maxLoadBalancers: Int
-
-    @Field(key: "load_balancer_count")
-    var loadBalancerCount: Int
-
-    // Whether this quota is enabled
-    @Field(key: "is_enabled")
-    var isEnabled: Bool
-
-    // Optional environment-specific quota (null means applies to all environments)
-    @OptionalField(key: "environment")
-    var environment: String?
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
+/// Immutable quota state used by admission and hierarchy code that still runs
+/// inside a caller-owned Fluent transaction. Persistence is explicit SQL in
+/// `LegacyResourceQuotaStore`; no Fluent identity map or dirty tracking leaks
+/// across this boundary.
+struct ResourceQuota: Content, Equatable, Sendable {
+    let id: UUID?
+    let name: String
+    let organizationID: UUID?
+    let organizationalUnitID: UUID?
+    let projectID: UUID?
+    let maxVCPUs: Int
+    let reservedVCPUs: Int
+    let maxMemory: Int64
+    let reservedMemory: Int64
+    let maxStorage: Int64
+    let reservedStorage: Int64
+    let maxVMs: Int
+    let vmCount: Int
+    let maxSandboxes: Int
+    let sandboxCount: Int
+    let maxVolumes: Int?
+    let volumeCount: Int
+    let maxNetworks: Int
+    let networkCount: Int
+    let maxLoadBalancers: Int
+    let loadBalancerCount: Int
+    let isEnabled: Bool
+    let environment: String?
+    let createdAt: Date?
+    let updatedAt: Date?
 
     init(
-        id: UUID? = nil,
+        id: UUID? = UUID(),
         name: String,
         organizationID: UUID? = nil,
         organizationalUnitID: UUID? = nil,
@@ -126,39 +49,184 @@ final class ResourceQuota: Model, @unchecked Sendable {
         maxNetworks: Int = 10,
         maxLoadBalancers: Int? = nil,
         environment: String? = nil,
-        isEnabled: Bool = true
+        isEnabled: Bool = true,
+        reservedVCPUs: Int = 0,
+        reservedMemory: Int64 = 0,
+        reservedStorage: Int64 = 0,
+        vmCount: Int = 0,
+        sandboxCount: Int = 0,
+        volumeCount: Int = 0,
+        networkCount: Int = 0,
+        loadBalancerCount: Int = 0,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
-        self.$organization.id = organizationID
-        self.$organizationalUnit.id = organizationalUnitID
-        self.$project.id = projectID
+        self.organizationID = organizationID
+        self.organizationalUnitID = organizationalUnitID
+        self.projectID = projectID
         self.maxVCPUs = maxVCPUs
-        self.reservedVCPUs = 0
+        self.reservedVCPUs = reservedVCPUs
         self.maxMemory = maxMemory
-        self.reservedMemory = 0
+        self.reservedMemory = reservedMemory
         self.maxStorage = maxStorage
-        self.reservedStorage = 0
+        self.reservedStorage = reservedStorage
         self.maxVMs = maxVMs
-        self.vmCount = 0
-        // Unspecified sandbox limit follows the VM count limit — the same
-        // default the migration backfills for pre-existing quota rows.
+        self.vmCount = vmCount
         self.maxSandboxes = maxSandboxes ?? maxVMs
-        self.sandboxCount = 0
-        // No default: an unspecified volume limit is *no* volume limit, not one
-        // inferred from the VM count.
+        self.sandboxCount = sandboxCount
         self.maxVolumes = maxVolumes
-        self.volumeCount = 0
+        self.volumeCount = volumeCount
         self.maxNetworks = maxNetworks
-        self.networkCount = 0
+        self.networkCount = networkCount
         self.maxLoadBalancers = maxLoadBalancers ?? maxVMs
-        self.loadBalancerCount = 0
+        self.loadBalancerCount = loadBalancerCount
         self.environment = environment
         self.isEnabled = isEnabled
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    init(snapshot: ResourceQuotaSnapshot) {
+        self.init(
+            id: snapshot.id,
+            name: snapshot.name,
+            organizationID: snapshot.organizationID,
+            organizationalUnitID: snapshot.organizationalUnitID,
+            projectID: snapshot.projectID,
+            maxVCPUs: snapshot.maxVCPUs,
+            maxMemory: snapshot.maxMemory,
+            maxStorage: snapshot.maxStorage,
+            maxVMs: snapshot.maxVMs,
+            maxSandboxes: snapshot.maxSandboxes,
+            maxVolumes: snapshot.maxVolumes,
+            maxNetworks: snapshot.maxNetworks,
+            maxLoadBalancers: snapshot.maxLoadBalancers,
+            environment: snapshot.environment,
+            isEnabled: snapshot.isEnabled,
+            reservedVCPUs: snapshot.reservedVCPUs,
+            reservedMemory: snapshot.reservedMemory,
+            reservedStorage: snapshot.reservedStorage,
+            vmCount: snapshot.vmCount,
+            sandboxCount: snapshot.sandboxCount,
+            volumeCount: snapshot.volumeCount,
+            networkCount: snapshot.networkCount,
+            loadBalancerCount: snapshot.loadBalancerCount,
+            createdAt: snapshot.createdAt,
+            updatedAt: snapshot.updatedAt)
+    }
+
+    func requireID() throws -> UUID {
+        guard let id else { throw Abort(.internalServerError, reason: "Resource quota has no identifier") }
+        return id
+    }
+
+    func save(on db: any Database) async throws {
+        _ = try await LegacyResourceQuotaStore.upsert(self, on: db)
+    }
+
+    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+        try await LegacyResourceQuotaStore.quota(id: id, on: db)
+    }
+
+    func replacingCounters(
+        reservedVCPUs: Int? = nil,
+        reservedMemory: Int64? = nil,
+        reservedStorage: Int64? = nil,
+        vmCount: Int? = nil,
+        sandboxCount: Int? = nil,
+        volumeCount: Int? = nil,
+        networkCount: Int? = nil,
+        loadBalancerCount: Int? = nil
+    ) -> Self {
+        Self(
+            id: id, name: name,
+            organizationID: organizationID,
+            organizationalUnitID: organizationalUnitID,
+            projectID: projectID,
+            maxVCPUs: maxVCPUs, maxMemory: maxMemory,
+            maxStorage: maxStorage, maxVMs: maxVMs,
+            maxSandboxes: maxSandboxes, maxVolumes: maxVolumes,
+            maxNetworks: maxNetworks, maxLoadBalancers: maxLoadBalancers,
+            environment: environment, isEnabled: isEnabled,
+            reservedVCPUs: reservedVCPUs ?? self.reservedVCPUs,
+            reservedMemory: reservedMemory ?? self.reservedMemory,
+            reservedStorage: reservedStorage ?? self.reservedStorage,
+            vmCount: vmCount ?? self.vmCount,
+            sandboxCount: sandboxCount ?? self.sandboxCount,
+            volumeCount: volumeCount ?? self.volumeCount,
+            networkCount: networkCount ?? self.networkCount,
+            loadBalancerCount: loadBalancerCount ?? self.loadBalancerCount,
+            createdAt: createdAt, updatedAt: updatedAt)
+    }
+
+    func replacingReservations(with usage: QuotaMeasuredUsage) -> Self {
+        replacingCounters(
+            reservedVCPUs: usage.vcpus,
+            reservedMemory: usage.memoryBytes,
+            reservedStorage: usage.storageBytes,
+            vmCount: usage.vmCount,
+            sandboxCount: usage.sandboxCount,
+            volumeCount: usage.volumeCount,
+            networkCount: usage.networkCount,
+            loadBalancerCount: usage.loadBalancerCount)
+    }
+
+    func withEnabled(_ isEnabled: Bool) -> Self {
+        replacingConfiguration(isEnabled: isEnabled)
+    }
+
+    func withMaxSandboxes(_ maxSandboxes: Int) -> Self {
+        replacingConfiguration(maxSandboxes: maxSandboxes)
+    }
+
+    func withMaxNetworks(_ maxNetworks: Int) -> Self {
+        replacingConfiguration(maxNetworks: maxNetworks)
+    }
+
+    func withMaxVolumes(_ maxVolumes: Int?) -> Self {
+        Self(
+            id: id, name: name,
+            organizationID: organizationID,
+            organizationalUnitID: organizationalUnitID,
+            projectID: projectID,
+            maxVCPUs: maxVCPUs, maxMemory: maxMemory,
+            maxStorage: maxStorage, maxVMs: maxVMs,
+            maxSandboxes: maxSandboxes, maxVolumes: maxVolumes,
+            maxNetworks: maxNetworks, maxLoadBalancers: maxLoadBalancers,
+            environment: environment, isEnabled: isEnabled,
+            reservedVCPUs: reservedVCPUs, reservedMemory: reservedMemory,
+            reservedStorage: reservedStorage, vmCount: vmCount,
+            sandboxCount: sandboxCount, volumeCount: volumeCount,
+            networkCount: networkCount, loadBalancerCount: loadBalancerCount,
+            createdAt: createdAt, updatedAt: updatedAt)
+    }
+
+    private func replacingConfiguration(
+        maxSandboxes: Int? = nil,
+        maxNetworks: Int? = nil,
+        isEnabled: Bool? = nil
+    ) -> Self {
+        Self(
+            id: id, name: name,
+            organizationID: organizationID,
+            organizationalUnitID: organizationalUnitID,
+            projectID: projectID,
+            maxVCPUs: maxVCPUs, maxMemory: maxMemory,
+            maxStorage: maxStorage, maxVMs: maxVMs,
+            maxSandboxes: maxSandboxes ?? self.maxSandboxes,
+            maxVolumes: maxVolumes,
+            maxNetworks: maxNetworks ?? self.maxNetworks,
+            maxLoadBalancers: maxLoadBalancers,
+            environment: environment, isEnabled: isEnabled ?? self.isEnabled,
+            reservedVCPUs: reservedVCPUs, reservedMemory: reservedMemory,
+            reservedStorage: reservedStorage, vmCount: vmCount,
+            sandboxCount: sandboxCount, volumeCount: volumeCount,
+            networkCount: networkCount, loadBalancerCount: loadBalancerCount,
+            createdAt: createdAt, updatedAt: updatedAt)
     }
 }
-
-extension ResourceQuota: Content {}
 
 // MARK: - Actual Usage Calculation
 
@@ -313,14 +381,15 @@ extension ResourceQuota {
     /// Applies a resize's deltas to this quota's reservations. Shrinks floor
     /// at zero: the counters are resynced to real usage before any admission
     /// check, so a transiently negative figure would be meaningless anyway.
-    func applyVMResize(vcpuDelta: Int, memoryDelta: Int64) throws {
+    func applyingVMResize(vcpuDelta: Int, memoryDelta: Int64) throws -> Self {
         let check = canAccommodateVMResize(vcpuDelta: vcpuDelta, memoryDelta: memoryDelta)
         if !check.allowed {
             throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
         }
 
-        reservedVCPUs = max(reservedVCPUs + vcpuDelta, 0)
-        reservedMemory = max(reservedMemory + memoryDelta, 0)
+        return replacingCounters(
+            reservedVCPUs: max(reservedVCPUs + vcpuDelta, 0),
+            reservedMemory: max(reservedMemory + memoryDelta, 0))
     }
 
     /// Check if a sandbox creation would exceed quota limits. Sandboxes draw
@@ -372,29 +441,31 @@ extension ResourceQuota {
     }
 
     /// Reserve resources for a VM
-    func reserveResources(vcpus: Int, memory: Int64, storage: Int64) throws {
+    func reservingResources(vcpus: Int, memory: Int64, storage: Int64) throws -> Self {
         let check = canAccommodateVM(vcpus: vcpus, memory: memory, storage: storage)
         if !check.allowed {
             throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
         }
 
-        reservedVCPUs = Self.reserving(reservedVCPUs, vcpus)
-        reservedMemory = Self.reserving(reservedMemory, memory)
-        reservedStorage = Self.reserving(reservedStorage, storage)
-        vmCount += 1
+        return replacingCounters(
+            reservedVCPUs: Self.reserving(reservedVCPUs, vcpus),
+            reservedMemory: Self.reserving(reservedMemory, memory),
+            reservedStorage: Self.reserving(reservedStorage, storage),
+            vmCount: Self.reserving(vmCount, 1))
     }
 
     /// Reserve resources for a sandbox: same vCPU/memory pools as VMs, its own
     /// count, no storage.
-    func reserveSandboxResources(vcpus: Int, memory: Int64) throws {
+    func reservingSandboxResources(vcpus: Int, memory: Int64) throws -> Self {
         let check = canAccommodateSandbox(vcpus: vcpus, memory: memory)
         if !check.allowed {
             throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
         }
 
-        reservedVCPUs = Self.reserving(reservedVCPUs, vcpus)
-        reservedMemory = Self.reserving(reservedMemory, memory)
-        sandboxCount += 1
+        return replacingCounters(
+            reservedVCPUs: Self.reserving(reservedVCPUs, vcpus),
+            reservedMemory: Self.reserving(reservedMemory, memory),
+            sandboxCount: Self.reserving(sandboxCount, 1))
     }
 
     /// Check whether `bytes` of storage fits, for the objects that draw on the
@@ -467,42 +538,43 @@ extension ResourceQuota {
     /// not certain to be positive here — the export path passes an
     /// agent-reported size — which is the other reason the result floors at
     /// zero.
-    func reserveStorage(_ bytes: Int64, for subject: String) throws {
+    func reservingStorage(_ bytes: Int64, for subject: String) throws -> Self {
         let check = canAccommodateStorage(bytes, for: subject)
         if !check.allowed {
             throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
         }
-        reservedStorage = Self.reserving(reservedStorage, bytes)
+        return replacingCounters(reservedStorage: Self.reserving(reservedStorage, bytes))
     }
 
     /// Reserve one volume's bytes and, when a count limit is set, its slot
     /// (STR-181).
-    func reserveVolumeResources(size: Int64) throws {
+    func reservingVolumeResources(size: Int64) throws -> Self {
         let check = canAccommodateVolume(size: size)
         if !check.allowed {
             throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
         }
-        reservedStorage = Self.reserving(reservedStorage, size)
-        volumeCount += 1
+        return replacingCounters(
+            reservedStorage: Self.reserving(reservedStorage, size),
+            volumeCount: Self.reserving(volumeCount, 1))
     }
 
     /// Reserve project-wide logical-network slots (STR-236).
-    func reserveNetworkResources(count: Int = 1) throws {
-        guard count > 0 else { return }
+    func reservingNetworkResources(count: Int = 1) throws -> Self {
+        guard count > 0 else { return self }
         let check = canAccommodateNetworks(count)
         if !check.allowed {
             throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
         }
-        networkCount = Self.reserving(networkCount, count)
+        return replacingCounters(networkCount: Self.reserving(networkCount, count))
     }
 
-    func reserveLoadBalancerResources(count: Int = 1) throws {
-        guard count > 0 else { return }
+    func reservingLoadBalancerResources(count: Int = 1) throws -> Self {
+        guard count > 0 else { return self }
         let check = canAccommodateLoadBalancers(count)
         if !check.allowed {
             throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
         }
-        loadBalancerCount = Self.reserving(loadBalancerCount, count)
+        return replacingCounters(loadBalancerCount: Self.reserving(loadBalancerCount, count))
     }
 }
 
@@ -522,9 +594,9 @@ extension ResourceQuota {
     func validate() throws {
         // Ensure quota belongs to exactly one entity
         let parentCount = [
-            $organization.id != nil,
-            $organizationalUnit.id != nil,
-            $project.id != nil,
+            organizationID != nil,
+            organizationalUnitID != nil,
+            projectID != nil,
         ].filter { $0 }.count
 
         if parentCount != 1 {
@@ -657,13 +729,13 @@ struct ResourceQuotaResponse: Content {
         self.name = quota.name
 
         // Determine entity type and ID
-        if let orgId = quota.$organization.id {
+        if let orgId = quota.organizationID {
             self.entityType = "organization"
             self.entityId = orgId
-        } else if let ouId = quota.$organizationalUnit.id {
+        } else if let ouId = quota.organizationalUnitID {
             self.entityType = "ou"
             self.entityId = ouId
-        } else if let projId = quota.$project.id {
+        } else if let projId = quota.projectID {
             self.entityType = "project"
             self.entityId = projId
         } else {
@@ -708,6 +780,52 @@ struct ResourceQuotaResponse: Content {
         )
 
         self.createdAt = quota.createdAt
+    }
+
+    init(from quota: ResourceQuotaSnapshot) {
+        self.id = quota.id
+        self.name = quota.name
+        if let id = quota.organizationID {
+            entityType = "organization"; entityId = id
+        } else if let id = quota.organizationalUnitID {
+            entityType = "ou"; entityId = id
+        } else if let id = quota.projectID {
+            entityType = "project"; entityId = id
+        } else {
+            entityType = "unknown"; entityId = UUID()
+        }
+        environment = quota.environment
+        isEnabled = quota.isEnabled
+        limits = ResourceLimits(
+            maxVCPUs: quota.maxVCPUs,
+            maxMemoryGB: quota.maxMemory.bytesToGB,
+            maxStorageGB: quota.maxStorage.bytesToGB,
+            maxVMs: quota.maxVMs,
+            maxSandboxes: quota.maxSandboxes,
+            maxVolumes: quota.maxVolumes,
+            maxNetworks: quota.maxNetworks,
+            maxLoadBalancers: quota.maxLoadBalancers
+        )
+        usage = ResourceUsage(
+            reservedVCPUs: quota.reservedVCPUs,
+            reservedMemoryGB: quota.reservedMemory.bytesToGB,
+            reservedStorageGB: quota.reservedStorage.bytesToGB,
+            vmCount: quota.vmCount,
+            sandboxCount: quota.sandboxCount,
+            volumeCount: quota.volumeCount,
+            networkCount: quota.networkCount,
+            loadBalancerCount: quota.loadBalancerCount
+        )
+        utilization = ResourceUtilization(
+            cpuPercent: quota.maxVCPUs > 0 ? Double(quota.reservedVCPUs) / Double(quota.maxVCPUs) * 100 : 0,
+            memoryPercent: quota.maxMemory > 0 ? Double(quota.reservedMemory) / Double(quota.maxMemory) * 100 : 0,
+            storagePercent: quota.maxStorage > 0 ? Double(quota.reservedStorage) / Double(quota.maxStorage) * 100 : 0,
+            vmPercent: quota.maxVMs > 0 ? Double(quota.vmCount) / Double(quota.maxVMs) * 100 : 0,
+            sandboxPercent: quota.maxSandboxes > 0 ? Double(quota.sandboxCount) / Double(quota.maxSandboxes) * 100 : 0,
+            volumePercent: quota.maxVolumes.flatMap { $0 > 0 ? Double(quota.volumeCount) / Double($0) * 100 : nil },
+            loadBalancerPercent: quota.maxLoadBalancers > 0 ? Double(quota.loadBalancerCount) / Double(quota.maxLoadBalancers) * 100 : 0
+        )
+        createdAt = quota.createdAt
     }
 }
 

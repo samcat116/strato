@@ -1,4 +1,5 @@
 import AppTestSupport
+import ControlPlanePostgres
 import Fluent
 import Foundation
 import SQLKit
@@ -20,11 +21,15 @@ struct CurrentSchemaBaselineTests {
 
             let logs = try await MigrationLog.query(on: app.db).all()
             #expect(logs.map(\.name) == [CurrentSchemaBaseline().name])
-            #expect(try await User.query(on: app.db).count() == 0)
-            #expect(try await StoragePool.query(on: app.db).count() == 1)
-            #expect(try await StoragePool.defaultPool(on: app.db).name == StoragePool.defaultPoolName)
+            #expect(try await User.count(on: app.db) == 0)
 
             let sql = try #require(app.db as? any SQLDatabase)
+            let storagePoolRows = try await sql.raw(
+                "SELECT name FROM storage_pools ORDER BY name"
+            ).all()
+            #expect(storagePoolRows.count == 1)
+            #expect(try storagePoolRows.first?.decode(column: "name", as: String.self) == "default")
+
             let fluentEnumRows = try await sql.raw("SELECT id FROM _fluent_enums").all()
             #expect(fluentEnumRows.count == 12)
 
@@ -155,7 +160,7 @@ struct CurrentSchemaBaselineTests {
                 thrown = error
             }
 
-            let error = try #require(thrown as? SchemaMigrationError)
+            let error = try #require(thrown as? ControlPlanePostgres.SchemaMigrationError)
             #expect(error.description.contains(CurrentSchemaBaseline().name))
             #expect(error.description.contains("requires a fresh database"))
             #expect(error.description.contains("operator_data"))

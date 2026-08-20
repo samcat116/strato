@@ -31,7 +31,7 @@ struct HierarchyPathResolver {
         case "organizational_unit", "ou":
             // Scope to the requested org: resolving an OU from another org would
             // leak its name (and ancestor names) to a member of this org.
-            if let ou = try await OrganizationalUnit.find(entityID, on: db), ou.$organization.id == organizationID {
+            if let ou = try await OrganizationalUnit.find(entityID, on: db), ou.organizationID == organizationID {
                 // Walk from the target OU up to the root, collecting each ancestor
                 // (including the target) so the chain reads root-first.
                 var ouChain: [OrganizationalUnit] = []
@@ -39,7 +39,7 @@ struct HierarchyPathResolver {
 
                 while let node = currentOU {
                     ouChain.insert(node, at: 0)
-                    if let parentID = node.$parentOU.id {
+                    if let parentID = node.parentOUID {
                         currentOU = try await OrganizationalUnit.find(parentID, on: db)
                     } else {
                         currentOU = nil
@@ -56,7 +56,7 @@ struct HierarchyPathResolver {
                 try await project.getRootOrganizationId(on: db) == organizationID
             {
                 // Add OU path if project belongs to OU
-                if let ouID = project.$organizationalUnit.id {
+                if let ouID = project.organizationalUnitID {
                     let ouComponents = try await buildEntityPath(
                         entityType: "organizational_unit", entityID: ouID, organizationID: organizationID, on: db)
                     components.append(contentsOf: ouComponents.dropFirst())  // Remove duplicate org
@@ -68,12 +68,12 @@ struct HierarchyPathResolver {
             // Scope to the requested org via the VM's project, so a VM in another
             // org isn't resolvable by name here.
             if let vm = try await VM.find(entityID, on: db),
-                let project = try await Project.find(vm.$project.id, on: db),
+                let project = try await Project.find(vm.projectID, on: db),
                 try await project.getRootOrganizationId(on: db) == organizationID
             {
                 // Add project path
                 let projectComponents = try await buildEntityPath(
-                    entityType: "project", entityID: vm.$project.id, organizationID: organizationID, on: db)
+                    entityType: "project", entityID: vm.projectID, organizationID: organizationID, on: db)
                 components.append(contentsOf: projectComponents.dropFirst())  // Remove duplicate org
                 components.append(PathComponent(id: entityID, name: vm.name, type: "vm"))
             }

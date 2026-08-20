@@ -1,5 +1,5 @@
-import Fluent
 import Foundation
+import Fluent
 import StratoShared
 import Vapor
 
@@ -71,7 +71,7 @@ extension VMController {
         try await SnapshotArtifactMutation.requireCaptureCapableAgent(
             agentId, kind: .vmCheckpoint, app: req.application)
 
-        guard let project = try await Project.find(vm.$project.id, on: req.db) else {
+        guard let project = try await Project.find(vm.projectID, on: req.db) else {
             throw Abort(.internalServerError, reason: "VM project not found")
         }
 
@@ -85,23 +85,16 @@ extension VMController {
             name: name,
             description: request.description ?? "",
             vmID: vmID,
-            projectID: vm.$project.id,
+            projectID: vm.projectID,
             environment: vm.environment,
+            size: vm.memory,
             agentId: agentId,
+            convergenceDeadline: Date().addingTimeInterval(
+                OperationResourceKind.vmCheckpoint.completionBudgetSeconds(for: .create)),
             expiresAt: try SnapshotRetention.expiry(
                 requested: request.ttlSeconds,
                 defaultTTLSeconds: req.controlPlaneConfiguration.int(.snapshotDefaultTTLSeconds)),
             createdByID: userID)
-        // Admission estimate: the machine state is bounded by the memory the
-        // guest was granted. Replaced by the agent's actual figure once its
-        // observed report carries one.
-        snapshot.size = vm.memory
-        // The capture has a budget to converge in; past it the stuck-convergence
-        // sweep marks the artifact degraded rather than leaving a client polling
-        // a checkpoint that will never appear.
-        snapshot.extendConvergenceDeadline(
-            by: OperationResourceKind.vmCheckpoint.completionBudgetSeconds(for: .create))
-
         let environment = vm.environment
         let memory = vm.memory
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
@@ -146,11 +139,8 @@ extension VMController {
         let vm = try await authorizedVM(req: req, action: "vm:read")
         let vmID = try vm.requireID()
 
-        let snapshots = try await VMSnapshot.query(on: req.db)
-            .filter(\.$vm.$id == vmID)
-            .sort(\.$createdAt, .descending)
-            .sort(\.$id, .descending)
-            .all()
+        let snapshots = try await LegacyVMSnapshotStore.snapshots(
+            vmID: vmID, orderByCreatedDescending: true, on: req.db)
         return paging.page(snapshots.map { VMSnapshotResponse(from: $0) })
     }
 
@@ -235,17 +225,19 @@ extension VMController {
             agentId, requiring: .vmCheckpoint, app: req.application)
 
         let userID = try user.requireID()
-        let accepted = try await req.resourceMutation.accept(
+        let mutation = try await req.resourceMutation.acceptValue(
             .restore, on: vm, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable db in
+        ) { @Sendable currentVM, db in
             // Re-checked inside the mutation's transaction, under the VM's row
             // lock: the preflight above ran before it, and a checkpoint can be
             // deleted in between.
             guard let current = try await VMSnapshot.find(snapshotID, on: db), current.canRestore else {
                 throw Abort(.conflict, reason: "Checkpoint is no longer restorable")
             }
-            vm.requestRestore(snapshotID: snapshotID)
+            var updated = currentVM
+            updated.requestRestore(snapshotID: snapshotID)
+            return updated
         }
 
         req.logger.info(
@@ -254,7 +246,7 @@ extension VMController {
                 "vm_id": .string(vmID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
             ])
-        return try await Self.acceptedResponse(for: vm, accepted, on: req)
+        return try await acceptedResponse(for: mutation.resource, mutation.accepted, on: req)
     }
 
     // MARK: - Shared
@@ -275,7 +267,7 @@ extension VMController {
             throw Abort(.badRequest, reason: "Invalid snapshot ID")
         }
         guard let snapshot = try await VMSnapshot.find(snapshotID, on: req.db),
-            snapshot.$vm.id == (try vm.requireID())
+            snapshot.vmID == (try vm.requireID())
         else {
             throw Abort(.notFound, reason: "Checkpoint not found")
         }

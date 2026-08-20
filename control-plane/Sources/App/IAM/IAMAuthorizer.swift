@@ -348,8 +348,17 @@ enum IAMAuthorizer {
 
         let outcomes: [IAMCheckTarget: IAMDecisionEngine.Decision]
         do {
-            outcomes = try await IAMDecisionEngine.decide(
-                targets, action: action, built: built, cache: cache, restriction: state.restriction, on: db)
+            outcomes = try await app.policySetVersion.withIAMPersistence { iam in
+                try await IAMDecisionEngine.decide(
+                    targets,
+                    action: action,
+                    built: built,
+                    cache: cache,
+                    restriction: state.restriction,
+                    using: iam,
+                    on: db
+                )
+            }
         } catch let failure as IAMDecisionEngine.EvaluationFailure {
             app.logger.error(
                 "Cedar evaluation failed; failing closed",

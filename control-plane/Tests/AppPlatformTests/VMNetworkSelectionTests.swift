@@ -70,16 +70,16 @@ final class VMNetworkSelectionTests {
     private func addFirecrackerArtifacts(to image: Image, on db: any Database) async throws {
         let imageID = try image.requireID()
         let checksum = String(repeating: "c", count: 64)
-        try await ImageArtifact(
+        _ = try await LegacyImageArtifactStore.insert(
             imageID: imageID, kind: .kernel, format: nil,
             architecture: image.architecture, filename: "vmlinux", size: 1,
-            checksum: checksum, storagePath: "images/\(imageID)/kernel/vmlinux"
-        ).save(on: db)
-        try await ImageArtifact(
+            checksum: checksum, storagePath: "images/\(imageID)/kernel/vmlinux",
+            on: db)
+        _ = try await LegacyImageArtifactStore.insert(
             imageID: imageID, kind: .rootfs, format: .raw,
             architecture: image.architecture, filename: "rootfs.raw", size: 1,
-            checksum: checksum, storagePath: "images/\(imageID)/rootfs/rootfs.raw"
-        ).save(on: db)
+            checksum: checksum, storagePath: "images/\(imageID)/rootfs/rootfs.raw",
+            on: db)
     }
 
     private func withApp(
@@ -94,8 +94,7 @@ final class VMNetworkSelectionTests {
             let user = try await builder.createUser(username: "netseluser", email: "netsel@example.com")
             let org = try await builder.createOrganization(name: "NetSel Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "NetSel Project", description: "p", organization: org)
@@ -103,7 +102,7 @@ final class VMNetworkSelectionTests {
             // fixture makes the one most tests here select by name.
             try await builder.createNetwork(name: "default", project: project)
             let image = try await builder.createImage(project: project, uploadedBy: user)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, org, project, image, token)
         } catch {
@@ -114,11 +113,15 @@ final class VMNetworkSelectionTests {
     }
 
     private func nic(forVMNamed name: String, on db: any Database) async throws -> VMNetworkInterface? {
-        guard let vm = try await VM.query(on: db).filter(\.$name == name).first() else { return nil }
-        return try await VMNetworkInterface.query(on: db)
-            .filter(\.$vm.$id == vm.id!)
-            .with(\.$addresses)
-            .first()
+        guard let vm = try await storedVM(named: name, on: db) else { return nil }
+        guard let nic = try await LegacyVMNetworkInterfaceStore.interfaces(
+            vmID: vm.id!, on: db).first
+        else { return nil }
+        return try await LegacyInterfaceAddressStore.loading([nic], on: db).first
+    }
+
+    private func storedVM(named name: String, on db: any Database) async throws -> VM? {
+        try await LegacyVMStore.vms(name: name, on: db).first
     }
 
     private func placementSiteID(for project: Project, on db: any Database) async throws -> UUID {
@@ -159,10 +162,8 @@ final class VMNetworkSelectionTests {
     func createWithMultipleInterfaces() async throws {
         try await withApp { app, _, _, project, image, token in
             let network = try #require(
-                try await LogicalNetwork.query(on: app.db)
-                    .filter(\.$project.$id == project.id!)
-                    .filter(\.$name == "default")
-                    .first())
+                try await LegacyLogicalNetworkStore.networks(
+                    projectID: project.id!, name: "default", on: app.db).first)
             try await app.test(.POST, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -178,21 +179,19 @@ final class VMNetworkSelectionTests {
                 #expect(res.status == .accepted)
             }
 
-            let vm = try #require(
-                try await VM.query(on: app.db).filter(\.$name == "multi-nic-vm").first())
-            let nics = try await VMNetworkInterface.query(on: app.db)
-                .filter(\.$vm.$id == vm.id!)
-                .with(\.$addresses)
-                .sort(\.$orderIndex)
-                .all()
+            let vm = try #require(try await self.storedVM(named: "multi-nic-vm", on: app.db))
+            let nics = try await LegacyInterfaceAddressStore.loading(
+                LegacyVMNetworkInterfaceStore.interfaces(vmID: vm.id!, on: app.db),
+                on: app.db)
             #expect(nics.count == 2)
             #expect(nics.map(\.orderIndex) == [0, 1])
             #expect(nics.map(\.deviceName) == ["net0", "net1"])
             #expect(nics.map(\.mtu) == [1400, 9000])
             #expect(Set(nics.compactMap(\.ipv4Address?.address)).count == 2)
-            #expect(
-                try await VMInterfaceSecurityGroup.query(on: app.db)
-                    .filter(\.$interface.$id ~~ nics.compactMap(\.id)).count() == 2)
+            #expect(try await LegacyInterfaceSecurityGroupStore.count(
+                kind: .vm,
+                interfaceIDs: nics.compactMap(\.id),
+                on: app.db) == 2)
 
             // Exercise the same create-derived rows through the wire spec the
             // agent consumes. This is the API-reachable source shape for the
@@ -213,9 +212,8 @@ final class VMNetworkSelectionTests {
     func createRejectsMixedNetworkForms() async throws {
         try await withApp { app, _, _, project, image, token in
             let network = try #require(
-                try await LogicalNetwork.query(on: app.db)
-                    .filter(\.$project.$id == project.id!)
-                    .first())
+                try await LegacyLogicalNetworkStore.networks(
+                    projectID: project.id!, on: app.db).first)
             try await app.test(.POST, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -230,7 +228,7 @@ final class VMNetworkSelectionTests {
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
-            #expect(try await VM.query(on: app.db).filter(\.$name == "mixed-network-vm").count() == 0)
+            #expect(try await self.storedVM(named: "mixed-network-vm", on: app.db) == nil)
         }
     }
 
@@ -238,9 +236,8 @@ final class VMNetworkSelectionTests {
     func createRejectsNineInterfaces() async throws {
         try await withApp { app, _, _, project, image, token in
             let network = try #require(
-                try await LogicalNetwork.query(on: app.db)
-                    .filter(\.$project.$id == project.id!)
-                    .first())
+                try await LegacyLogicalNetworkStore.networks(
+                    projectID: project.id!, on: app.db).first)
             try await app.test(.POST, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -280,9 +277,7 @@ final class VMNetworkSelectionTests {
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
-            #expect(
-                try await VM.query(on: app.db)
-                    .filter(\.$name == "low-ipv6-mtu-vm").count() == 0)
+            #expect(try await self.storedVM(named: "low-ipv6-mtu-vm", on: app.db) == nil)
         }
     }
 
@@ -301,7 +296,7 @@ final class VMNetworkSelectionTests {
                 #expect(res.status == .accepted)
             }
 
-            let vm = try await VM.query(on: app.db).filter(\.$name == "userdata-vm").first()
+            let vm = try await self.storedVM(named: "userdata-vm", on: app.db)
             #expect(vm?.userData == payload)
         }
     }
@@ -324,8 +319,8 @@ final class VMNetworkSelectionTests {
                 }
             }
 
-            let optedIn = try await VM.query(on: app.db).filter(\.$name == "guest-agent-on").first()
-            let defaulted = try await VM.query(on: app.db).filter(\.$name == "guest-agent-off").first()
+            let optedIn = try await self.storedVM(named: "guest-agent-on", on: app.db)
+            let defaulted = try await self.storedVM(named: "guest-agent-off", on: app.db)
             #expect(optedIn?.guestAgentEnabled == true)
             #expect(defaulted?.guestAgentEnabled == false)
         }
@@ -349,8 +344,8 @@ final class VMNetworkSelectionTests {
                 }
             }
 
-            let imds = try await VM.query(on: app.db).filter(\.$name == "bootstrap-imds").first()
-            let defaulted = try await VM.query(on: app.db).filter(\.$name == "bootstrap-default").first()
+            let imds = try await self.storedVM(named: "bootstrap-imds", on: app.db)
+            let defaulted = try await self.storedVM(named: "bootstrap-default", on: app.db)
             #expect(imds?.metadataSource == .imds)
             #expect(defaulted?.metadataSource == .imds)
         }
@@ -360,10 +355,8 @@ final class VMNetworkSelectionTests {
     func createIMDSRequiresMetadataReachability() async throws {
         try await withApp { app, user, _, project, image, token in
             let defaultNetwork = try #require(
-                try await LogicalNetwork.query(on: app.db)
-                    .filter(\.$project.$id == project.id!)
-                    .filter(\.$name == "default")
-                    .first())
+                try await LegacyLogicalNetworkStore.networks(
+                    projectID: project.id!, name: "default", on: app.db).first)
 
             // A VM-level opt-out makes the bootstrap endpoint refuse this VM
             // even when its selected network publishes the service.
@@ -382,8 +375,7 @@ final class VMNetworkSelectionTests {
 
             // A network-level opt-out means the agent creates no metadata
             // localport or listener for the seedfrom URL.
-            defaultNetwork.metadataEnabled = false
-            try await defaultNetwork.save(on: app.db)
+            try await defaultNetwork.replacing(metadataEnabled: false).save(on: app.db)
             try await app.test(.POST, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -395,14 +387,8 @@ final class VMNetworkSelectionTests {
                 #expect(res.status == .badRequest)
                 #expect(res.body.string.contains("at least one selected network"))
             }
-            #expect(
-                try await VM.query(on: app.db)
-                    .filter(\.$name == "imds-disabled-vm")
-                    .first() == nil)
-            #expect(
-                try await VM.query(on: app.db)
-                    .filter(\.$name == "imds-disabled-network")
-                    .first() == nil)
+            #expect(try await self.storedVM(named: "imds-disabled-vm", on: app.db) == nil)
+            #expect(try await self.storedVM(named: "imds-disabled-network", on: app.db) == nil)
 
             // The compatibility ISO does not need the metadata service.
             try await app.test(.POST, "/api/vms") { req in
@@ -418,12 +404,11 @@ final class VMNetworkSelectionTests {
 
             // One enabled network is sufficient even when another selected
             // network has opted out.
-            defaultNetwork.metadataEnabled = true
-            try await defaultNetwork.save(on: app.db)
+            try await defaultNetwork.replacing(metadataEnabled: true).save(on: app.db)
             let disabledNetwork = LogicalNetwork(
                 name: "metadata-off", subnet: "10.121.0.0/24", gateway: "10.121.0.1",
                 projectID: project.id!, createdByID: user.id!, metadataEnabled: false,
-                siteID: defaultNetwork.$site.id)
+                siteID: defaultNetwork.siteID)
             try await disabledNetwork.save(on: app.db)
             try await app.test(.POST, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -455,7 +440,7 @@ final class VMNetworkSelectionTests {
                 #expect(res.status == .badRequest)
             }
 
-            let vm = try await VM.query(on: app.db).filter(\.$name == "bad-userdata-vm").first()
+            let vm = try await self.storedVM(named: "bad-userdata-vm", on: app.db)
             #expect(vm == nil)
         }
     }
@@ -479,7 +464,7 @@ final class VMNetworkSelectionTests {
                 #expect(res.status == .accepted)
             }
 
-            let vm = try await VM.query(on: app.db).filter(\.$name == "fc-userdata-vm").first()
+            let vm = try await self.storedVM(named: "fc-userdata-vm", on: app.db)
             #expect(vm?.hypervisorType == .firecracker)
             #expect(vm?.userData == userData)
         }
@@ -510,7 +495,7 @@ final class VMNetworkSelectionTests {
                 } afterResponse: { res in
                     #expect(res.status == .badRequest)
                 }
-                #expect(try await VM.query(on: app.db).filter(\.$name == name).first() == nil)
+                #expect(try await self.storedVM(named: name, on: app.db) == nil)
             }
         }
     }
@@ -536,12 +521,9 @@ final class VMNetworkSelectionTests {
             }
 
             let defaultNetwork = try #require(
-                try await LogicalNetwork.query(on: app.db)
-                    .filter(\.$project.$id == project.id!)
-                    .filter(\.$name == "default")
-                    .first())
-            defaultNetwork.metadataEnabled = false
-            try await defaultNetwork.save(on: app.db)
+                try await LegacyLogicalNetworkStore.networks(
+                    projectID: project.id!, name: "default", on: app.db).first)
+            try await defaultNetwork.replacing(metadataEnabled: false).save(on: app.db)
 
             try await app.test(.POST, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -556,9 +538,9 @@ final class VMNetworkSelectionTests {
                 #expect(res.body.string.contains("at least one selected network"))
             }
 
-            defaultNetwork.metadataEnabled = true
-            defaultNetwork.dhcpEnabled = false
-            try await defaultNetwork.save(on: app.db)
+            try await defaultNetwork.replacing(
+                dhcpEnabled: false, metadataEnabled: true
+            ).save(on: app.db)
 
             try await app.test(.POST, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -573,15 +555,10 @@ final class VMNetworkSelectionTests {
                 #expect(res.body.string.contains("DHCP"))
             }
 
+            #expect(try await self.storedVM(named: "fc-userdata-disabled-vm", on: app.db) == nil)
             #expect(
-                try await VM.query(on: app.db)
-                    .filter(\.$name == "fc-userdata-disabled-vm").first() == nil)
-            #expect(
-                try await VM.query(on: app.db)
-                    .filter(\.$name == "fc-userdata-disabled-network").first() == nil)
-            #expect(
-                try await VM.query(on: app.db)
-                    .filter(\.$name == "fc-userdata-no-dhcp").first() == nil)
+                try await self.storedVM(named: "fc-userdata-disabled-network", on: app.db) == nil)
+            #expect(try await self.storedVM(named: "fc-userdata-no-dhcp", on: app.db) == nil)
         }
     }
 
@@ -602,7 +579,7 @@ final class VMNetworkSelectionTests {
                 #expect(res.body.string.contains("firecracker"))
             }
 
-            let vm = try await VM.query(on: app.db).filter(\.$name == "fc-imds-vm").first()
+            let vm = try await self.storedVM(named: "fc-imds-vm", on: app.db)
             #expect(vm == nil)
         }
     }
@@ -624,7 +601,7 @@ final class VMNetworkSelectionTests {
                 #expect(res.status == .accepted)
             }
 
-            let vm = try await VM.query(on: app.db).filter(\.$name == "secret-vm").first()
+            let vm = try await self.storedVM(named: "secret-vm", on: app.db)
             #expect(vm?.userData == secret)
             let vmId = try #require(vm?.id)
 
@@ -658,12 +635,11 @@ final class VMNetworkSelectionTests {
             let viewer = try await builder.createUser(
                 username: "vm-net-viewer", email: "vm-net-viewer@example.com")
             try await builder.addUserToOrganization(user: viewer, organization: org, role: "member")
-            viewer.currentOrganizationId = org.id
-            try await viewer.save(on: app.db)
+            try await viewer.replacingCurrentOrganization(org.id).save(on: app.db)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: viewer.id!, role: .viewer,
                 nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
-            let viewerToken = try await viewer.generateAPIKey(on: app.db)
+            let viewerToken = try await viewer.generateAPIKey(on: app)
 
             try await app.test(.POST, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: viewerToken)
@@ -677,7 +653,7 @@ final class VMNetworkSelectionTests {
             }
 
             // And no VM row was created as a side effect.
-            let leaked = try await VM.query(on: app.db).filter(\.$name == "unauthorized-vm").first()
+            let leaked = try await self.storedVM(named: "unauthorized-vm", on: app.db)
             #expect(leaked == nil)
         }
     }
@@ -755,7 +731,7 @@ final class VMNetworkSelectionTests {
                 #expect(res.status == .badRequest)
             }
 
-            #expect(try await VM.query(on: app.db).filter(\.$name == "networkless-vm").count() == 0)
+            #expect(try await self.storedVM(named: "networkless-vm", on: app.db) == nil)
         }
     }
 
@@ -783,7 +759,7 @@ final class VMNetworkSelectionTests {
                 #expect(res.status == .notFound)
             }
 
-            #expect(try await VM.query(on: app.db).filter(\.$name == "cross-vm").count() == 0)
+            #expect(try await self.storedVM(named: "cross-vm", on: app.db) == nil)
         }
     }
 
@@ -837,10 +813,11 @@ final class VMNetworkSelectionTests {
                 macAddress: "00:0c:29:aa:bb:cc",
                 deviceName: "net0", orderIndex: 0)
             try await nic.save(on: app.db)
-            let address = VMInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: nic.id!, logicalNetworkID: try network.requireID(), family: .ipv4,
-                address: "192.168.1.42", prefixLength: 24, gateway: "192.168.1.1")
-            try await address.save(on: app.db)
+                address: "192.168.1.42", prefixLength: 24, gateway: "192.168.1.1",
+                on: app.db)
 
             try await app.test(.GET, "/api/vms/\(vm.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)

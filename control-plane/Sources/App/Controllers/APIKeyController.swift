@@ -1,8 +1,14 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
 struct APIKeyController: RouteCollection {
+    private let apiKeys: APIKeysPersistence
+
+    init(apiKeys: APIKeysPersistence) {
+        self.apiKeys = apiKeys
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let apiKeys = routes.grouped("api", "api-keys")
         apiKeys.get(use: index)
@@ -22,10 +28,7 @@ struct APIKeyController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        let apiKeys = try await APIKey.query(on: req.db)
-            .filter(\.$user.$id == user.id!)
-            .sort(\.$createdAt, .descending)
-            .all()
+        let apiKeys = try await apiKeys.keys(userID: try user.requireID())
 
         return apiKeys.map { APIKeyResponse(from: $0) }
     }
@@ -40,10 +43,10 @@ struct APIKeyController: RouteCollection {
         }
 
         guard
-            let apiKey = try await APIKey.query(on: req.db)
-                .filter(\.$id == apiKeyID)
-                .filter(\.$user.$id == user.id!)
-                .first()
+            let apiKey = try await apiKeys.ownedKey(
+                id: apiKeyID,
+                userID: try user.requireID()
+            )
         else {
             throw Abort(.notFound)
         }
@@ -75,18 +78,9 @@ struct APIKeyController: RouteCollection {
             }
         }
 
-        // Check API key limit per user (max 10)
-        let existingKeysCount = try await APIKey.query(on: req.db)
-            .filter(\.$user.$id == user.id!)
-            .count()
-
-        if existingKeysCount >= 10 {
-            throw Abort(.badRequest, reason: "Maximum API key limit reached (10 keys per user)")
-        }
-
         // Generate the API key
-        let fullKey = APIKey.generateAPIKey()
-        let keyHash = APIKey.hashAPIKey(fullKey)
+        let fullKey = APIKeyCredential.generate()
+        let keyHash = APIKeyCredential.hash(fullKey)
         let keyPrefix = String(fullKey.prefix(12)) + "..."  // Show first 12 chars
 
         // Calculate expiration date
@@ -99,16 +93,22 @@ struct APIKeyController: RouteCollection {
         }
 
         // Create the API key
-        let apiKey = APIKey(
-            userID: user.id!,
-            name: createRequest.name,
-            keyHash: keyHash,
-            keyPrefix: keyPrefix,
-            restriction: restriction,
-            expiresAt: expiresAt
-        )
-
-        try await apiKey.save(on: req.db)
+        let apiKey: APIKeySnapshot
+        do {
+            apiKey = try await apiKeys.issue(
+                APIKeyWrite(
+                    userID: try user.requireID(),
+                    name: createRequest.name,
+                    keyHash: keyHash,
+                    keyPrefix: keyPrefix,
+                    restriction: restriction.stored,
+                    expiresAt: expiresAt
+                ),
+                maximumKeysPerUser: 10
+            )
+        } catch APIKeyPersistenceError.limitReached {
+            throw Abort(.badRequest, reason: "Maximum API key limit reached (10 keys per user)")
+        }
 
         return CreateAPIKeyResponse(apiKey: apiKey, fullKey: fullKey)
     }
@@ -122,33 +122,37 @@ struct APIKeyController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid API key ID")
         }
 
-        guard
-            let apiKey = try await APIKey.query(on: req.db)
-                .filter(\.$id == apiKeyID)
-                .filter(\.$user.$id == user.id!)
-                .first()
-        else {
+        let userID = try user.requireID()
+        guard try await apiKeys.ownedKey(id: apiKeyID, userID: userID) != nil else {
             throw Abort(.notFound)
         }
 
         let updateRequest = try req.content.decodeValidated(UpdateAPIKeyRequest.self)
 
-        // Update fields
-        if let name = updateRequest.name {
-            apiKey.name = name
-        }
-
+        let restriction: StoredCredentialRestriction?
         if let payload = updateRequest.restriction {
-            apiKey.store(
-                restriction: try await CredentialRestriction.resolve(
-                    payload, issuedUnder: req.credentialRestriction, on: req.db))
+            restriction = try await CredentialRestriction.resolve(
+                payload,
+                issuedUnder: req.credentialRestriction,
+                on: req.db
+            ).stored
+        } else {
+            restriction = nil
         }
 
-        if let isActive = updateRequest.isActive {
-            apiKey.isActive = isActive
+        guard
+            let apiKey = try await apiKeys.updateOwnedKey(
+                id: apiKeyID,
+                userID: userID,
+                changes: APIKeyChanges(
+                    name: updateRequest.name,
+                    restriction: restriction,
+                    isActive: updateRequest.isActive
+                )
+            )
+        else {
+            throw Abort(.notFound)
         }
-
-        try await apiKey.save(on: req.db)
 
         return APIKeyResponse(from: apiKey)
     }
@@ -163,15 +167,13 @@ struct APIKeyController: RouteCollection {
         }
 
         guard
-            let apiKey = try await APIKey.query(on: req.db)
-                .filter(\.$id == apiKeyID)
-                .filter(\.$user.$id == user.id!)
-                .first()
+            try await apiKeys.deleteOwnedKey(
+                id: apiKeyID,
+                userID: try user.requireID()
+            )
         else {
             throw Abort(.notFound)
         }
-
-        try await apiKey.delete(on: req.db)
 
         return .noContent
     }

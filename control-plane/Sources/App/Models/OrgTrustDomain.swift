@@ -1,4 +1,6 @@
 import Fluent
+import Foundation
+import SQLKit
 import Vapor
 
 /// Lifecycle phase of one organization's SPIRE instance.
@@ -36,90 +38,10 @@ enum OrgTrustDomainPhase: String, Codable, CaseIterable, Sendable {
 /// resolution is always a lookup on this table, never string-parsing of the
 /// domain — identity is a lookup key, never a carrier of authorization
 /// (`docs/architecture/iam.md`, issue #491).
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class OrgTrustDomain: Model, @unchecked Sendable {
+/// Namespace for stable schema and identity derivation. Persisted rows are
+/// decoded as immutable `OrgTrustDomainRecord` values below.
+enum OrgTrustDomain {
     static let schema = "org_trust_domains"
-
-    @ID(key: .id)
-    var id: UUID?
-
-    /// Owning organization. Unique, and intentionally FK-free (see above).
-    @Field(key: "organization_id")
-    var organizationID: UUID
-
-    /// e.g. `org-3f2a91c04b7d4e5f.strato.local`. Unique and immutable.
-    @Field(key: "trust_domain")
-    var trustDomain: String
-
-    @Enum(key: "phase")
-    var phase: OrgTrustDomainPhase
-
-    /// Bumped by every intent change (create, teardown request). The reconciler
-    /// copies it to `observedGeneration` once it has converged that intent, so
-    /// a crash mid-provision resumes rather than being mistaken for done.
-    @Field(key: "generation")
-    var generation: Int
-
-    @Field(key: "observed_generation")
-    var observedGeneration: Int
-
-    /// Address agents dial for node attestation (`host:port`).
-    @OptionalField(key: "server_address")
-    var serverAddress: String?
-
-    /// SPIFFE bundle endpoint URL of this org's SPIRE server.
-    @OptionalField(key: "bundle_endpoint_url")
-    var bundleEndpointURL: String?
-
-    /// Address the control plane dials for this org's SPIRE server admin API.
-    @OptionalField(key: "node_address")
-    var nodeAddress: String?
-
-    /// Cached X.509 roots for this trust domain, PEM-encoded and concatenated.
-    /// This is what `SPIREService` verifies org SVIDs against; without it the
-    /// control plane cannot authenticate the org's agents at all.
-    @OptionalField(key: "org_bundle_pem")
-    var orgBundlePEM: String?
-
-    /// Last reconciliation failure, surfaced in the admin UI (phase 7).
-    @OptionalField(key: "last_error")
-    var lastError: String?
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    /// Tombstone: set when the organization is deleted. The row stays so the
-    /// reconciler can finish destroying the CA, and is only removed once
-    /// teardown has actually completed.
-    ///
-    /// Deliberately `on: .none` rather than Fluent's `.delete` soft-delete
-    /// hook: a soft-deleted row is filtered out of every ordinary query, and
-    /// this tombstone exists precisely so the reconciler can still *find* the
-    /// row and act on it.
-    @Timestamp(key: "deleted_at", on: .none)
-    var deletedAt: Date?
-
-    init() {}
-
-    init(organizationID: UUID, trustDomain: String, phase: OrgTrustDomainPhase = .pending) {
-        self.organizationID = organizationID
-        self.trustDomain = trustDomain
-        self.phase = phase
-        self.generation = 1
-        self.observedGeneration = 0
-    }
-
-    /// Whether this org's SPIRE identities should be accepted right now: the
-    /// instance is (or was) up and we hold roots to verify against. A `pending`
-    /// or `failed` row has nothing to verify with, and a `deleting` row's
-    /// identities are being revoked.
-    var acceptsIdentities: Bool {
-        phase == .active && orgBundlePEM != nil
-    }
 
     /// The trust domain for an organization, derived once at creation and then
     /// stored. Deterministic so a re-run of provisioning lands on the same
@@ -144,5 +66,209 @@ final class OrgTrustDomain: Model, @unchecked Sendable {
             .replacingOccurrences(of: "-", with: "")
             .prefix(16)
         return "org-\(shortID).\(platformTrustDomain)".lowercased()
+    }
+}
+
+/// Immutable persistence result for one organization's SPIRE instance intent.
+struct OrgTrustDomainRecord: Decodable, Equatable, Sendable {
+    let id: UUID
+    let organizationID: UUID
+    let trustDomain: String
+    let phase: OrgTrustDomainPhase
+    let generation: Int64
+    let observedGeneration: Int64
+    let serverAddress: String?
+    let bundleEndpointURL: String?
+    let nodeAddress: String?
+    let orgBundlePEM: String?
+    let lastError: String?
+    let createdAt: Date?
+    let updatedAt: Date?
+    let deletedAt: Date?
+
+    var acceptsIdentities: Bool {
+        phase == .active && orgBundlePEM != nil
+    }
+}
+
+/// Create intent. UUIDs are generated application-side; PostgreSQL supplies
+/// lifecycle timestamps and the returned record is authoritative.
+struct OrgTrustDomainWrite: Sendable {
+    let id: UUID
+    let organizationID: UUID
+    let trustDomain: String
+    let phase: OrgTrustDomainPhase
+    let generation: Int64
+    let observedGeneration: Int64
+    let serverAddress: String?
+    let bundleEndpointURL: String?
+    let nodeAddress: String?
+    let orgBundlePEM: String?
+    let lastError: String?
+    let deletedAt: Date?
+
+    init(
+        id: UUID = UUID(),
+        organizationID: UUID,
+        trustDomain: String,
+        phase: OrgTrustDomainPhase = .pending,
+        generation: Int64 = 1,
+        observedGeneration: Int64 = 0,
+        serverAddress: String? = nil,
+        bundleEndpointURL: String? = nil,
+        nodeAddress: String? = nil,
+        orgBundlePEM: String? = nil,
+        lastError: String? = nil,
+        deletedAt: Date? = nil
+    ) {
+        self.id = id
+        self.organizationID = organizationID
+        self.trustDomain = trustDomain
+        self.phase = phase
+        self.generation = generation
+        self.observedGeneration = observedGeneration
+        self.serverAddress = serverAddress
+        self.bundleEndpointURL = bundleEndpointURL
+        self.nodeAddress = nodeAddress
+        self.orgBundlePEM = orgBundlePEM
+        self.lastError = lastError
+        self.deletedAt = deletedAt
+    }
+}
+
+enum OrgTrustDomainStore {
+    enum Error: Swift.Error, Sendable {
+        case unsupportedDatabase
+    }
+
+    private static let columns = """
+        id,
+        organization_id AS "organizationID",
+        trust_domain AS "trustDomain",
+        phase::text AS phase,
+        generation,
+        observed_generation AS "observedGeneration",
+        server_address AS "serverAddress",
+        bundle_endpoint_url AS "bundleEndpointURL",
+        node_address AS "nodeAddress",
+        org_bundle_pem AS "orgBundlePEM",
+        last_error AS "lastError",
+        created_at AS "createdAt",
+        updated_at AS "updatedAt",
+        deleted_at AS "deletedAt"
+        """
+
+    static func find(organizationID: UUID, on db: any Database) async throws -> OrgTrustDomainRecord? {
+        let sql = try sqlDatabase(db)
+        return try await sql.raw(
+            "SELECT \(unsafeRaw: columns) FROM org_trust_domains WHERE organization_id = \(bind: organizationID)"
+        ).first(decoding: OrgTrustDomainRecord.self)
+    }
+
+    static func find(trustDomain: String, on db: any Database) async throws -> OrgTrustDomainRecord? {
+        let sql = try sqlDatabase(db)
+        return try await sql.raw(
+            "SELECT \(unsafeRaw: columns) FROM org_trust_domains WHERE trust_domain = \(bind: trustDomain)"
+        ).first(decoding: OrgTrustDomainRecord.self)
+    }
+
+    static func active(on db: any Database) async throws -> [OrgTrustDomainRecord] {
+        let sql = try sqlDatabase(db)
+        return try await sql.raw(
+            "SELECT \(unsafeRaw: columns) FROM org_trust_domains WHERE phase = 'active' ORDER BY id"
+        ).all(decoding: OrgTrustDomainRecord.self)
+    }
+
+    @discardableResult
+    static func insert(_ write: OrgTrustDomainWrite, on db: any Database) async throws
+        -> OrgTrustDomainRecord
+    {
+        let sql = try sqlDatabase(db)
+        guard let record = try await sql.raw(
+            """
+            INSERT INTO org_trust_domains (
+                id, organization_id, trust_domain, phase, generation, observed_generation,
+                server_address, bundle_endpoint_url, node_address, org_bundle_pem,
+                last_error, created_at, updated_at, deleted_at
+            ) VALUES (
+                \(bind: write.id), \(bind: write.organizationID), \(bind: write.trustDomain),
+                \(bind: write.phase.rawValue), \(bind: write.generation),
+                \(bind: write.observedGeneration), \(bind: write.serverAddress),
+                \(bind: write.bundleEndpointURL), \(bind: write.nodeAddress),
+                \(bind: write.orgBundlePEM), \(bind: write.lastError),
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, \(bind: write.deletedAt)
+            )
+            RETURNING \(unsafeRaw: columns)
+            """
+        ).first(decoding: OrgTrustDomainRecord.self) else {
+            throw Abort(.internalServerError, reason: "Trust-domain insert returned no row")
+        }
+        return record
+    }
+
+    /// Full state replacement used by the reconciler-facing contract tests.
+    /// The immutable identity and trust-domain columns are intentionally absent.
+    @discardableResult
+    static func updateState(
+        id: UUID,
+        phase: OrgTrustDomainPhase,
+        generation: Int64,
+        observedGeneration: Int64,
+        serverAddress: String?,
+        bundleEndpointURL: String?,
+        nodeAddress: String?,
+        orgBundlePEM: String?,
+        lastError: String?,
+        deletedAt: Date?,
+        on db: any Database
+    ) async throws -> OrgTrustDomainRecord? {
+        let sql = try sqlDatabase(db)
+        return try await sql.raw(
+            """
+            UPDATE org_trust_domains
+            SET phase = \(bind: phase.rawValue),
+                generation = \(bind: generation),
+                observed_generation = \(bind: observedGeneration),
+                server_address = \(bind: serverAddress),
+                bundle_endpoint_url = \(bind: bundleEndpointURL),
+                node_address = \(bind: nodeAddress),
+                org_bundle_pem = \(bind: orgBundlePEM),
+                last_error = \(bind: lastError),
+                deleted_at = \(bind: deletedAt),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = \(bind: id)
+            RETURNING \(unsafeRaw: columns)
+            """
+        ).first(decoding: OrgTrustDomainRecord.self)
+    }
+
+    /// Atomically records teardown intent and advances its convergence key.
+    @discardableResult
+    static func markForTeardown(organizationID: UUID, on db: any Database) async throws
+        -> OrgTrustDomainRecord?
+    {
+        let sql = try sqlDatabase(db)
+        return try await sql.raw(
+            """
+            UPDATE org_trust_domains
+            SET phase = 'deleting', deleted_at = CURRENT_TIMESTAMP, last_error = NULL,
+                generation = generation + 1, updated_at = CURRENT_TIMESTAMP
+            WHERE organization_id = \(bind: organizationID)
+            RETURNING \(unsafeRaw: columns)
+            """
+        ).first(decoding: OrgTrustDomainRecord.self)
+    }
+
+    static func count(organizationID: UUID, on db: any Database) async throws -> Int {
+        struct CountRow: Decodable { let count: Int }
+        let sql = try sqlDatabase(db)
+        return try await sql.raw(
+            "SELECT COUNT(*)::bigint AS count FROM org_trust_domains WHERE organization_id = \(bind: organizationID)"
+        ).first(decoding: CountRow.self)?.count ?? 0
+    }
+
+    private static func sqlDatabase(_ db: any Database) throws -> any SQLDatabase {
+        guard let sql = db as? any SQLDatabase else { throw Error.unsupportedDatabase }
+        return sql
     }
 }

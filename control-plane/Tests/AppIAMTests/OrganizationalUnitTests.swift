@@ -32,12 +32,12 @@ final class OrganizationalUnitTests {
             try await testOrganization.save(on: app.db)
 
             // Add user to organization as admin
-            let userOrg = UserOrganization(
+            _ = try await OrganizationMembershipStore.insert(
                 userID: testUser.id!,
                 organizationID: testOrganization.id!,
-                roleID: IAMRole.admin.seededID
+                roleID: IAMRole.admin.seededID,
+                on: app.db
             )
-            try await userOrg.save(on: app.db)
 
             // The admin role binding the API/backfill would have written
             // alongside the membership row — the Cedar evaluator (#482)
@@ -46,7 +46,7 @@ final class OrganizationalUnitTests {
                 principalType: .user, principalID: testUser.id!, role: .admin,
                 nodeType: .organization, nodeID: testOrganization.id!, createdBy: nil, on: app.db)
 
-            let authToken = try await testUser.generateAPIKey(on: app.db)
+            let authToken = try await testUser.generateAPIKey(on: app)
 
             try await test(app, testUser, testOrganization, authToken)
         } catch {
@@ -86,7 +86,7 @@ final class OrganizationalUnitTests {
     func testCreateNestedOU() async throws {
         try await withOUTestApp { app, testUser, testOrganization, authToken in
             // Create parent OU
-            let parentOU = OrganizationalUnit(
+            var parentOU = OrganizationalUnit(
                 name: "Engineering",
                 description: "Engineering department",
                 organizationID: testOrganization.id!,
@@ -94,7 +94,11 @@ final class OrganizationalUnitTests {
                 depth: 0
             )
             try await parentOU.save(on: app.db)
-            parentOU.path = try await parentOU.buildPath(on: app.db)
+            parentOU = OrganizationalUnit(
+                id: parentOU.id, name: parentOU.name, description: parentOU.description,
+                organizationID: parentOU.organizationID, parentOUID: parentOU.parentOUID,
+                path: try await parentOU.buildPath(on: app.db), depth: parentOU.depth,
+                createdAt: parentOU.createdAt, updatedAt: parentOU.updatedAt)
             try await parentOU.save(on: app.db)
 
             // Create nested OU
@@ -199,7 +203,7 @@ final class OrganizationalUnitTests {
     func testGetOUTree() async throws {
         try await withOUTestApp { app, testUser, testOrganization, authToken in
             // Create OU hierarchy
-            let rootOU = OrganizationalUnit(
+            var rootOU = OrganizationalUnit(
                 name: "Engineering",
                 description: "Engineering dept",
                 organizationID: testOrganization.id!,
@@ -207,10 +211,10 @@ final class OrganizationalUnitTests {
                 depth: 0
             )
             try await rootOU.save(on: app.db)
-            rootOU.path = try await rootOU.buildPath(on: app.db)
+            rootOU = rootOU.replacingPath(try await rootOU.buildPath(on: app.db))
             try await rootOU.save(on: app.db)
 
-            let childOU1 = OrganizationalUnit(
+            var childOU1 = OrganizationalUnit(
                 name: "Backend",
                 description: "Backend team",
                 organizationID: testOrganization.id!,
@@ -219,10 +223,10 @@ final class OrganizationalUnitTests {
                 depth: 1
             )
             try await childOU1.save(on: app.db)
-            childOU1.path = try await childOU1.buildPath(on: app.db)
+            childOU1 = childOU1.replacingPath(try await childOU1.buildPath(on: app.db))
             try await childOU1.save(on: app.db)
 
-            let childOU2 = OrganizationalUnit(
+            var childOU2 = OrganizationalUnit(
                 name: "Frontend",
                 description: "Frontend team",
                 organizationID: testOrganization.id!,
@@ -231,7 +235,7 @@ final class OrganizationalUnitTests {
                 depth: 1
             )
             try await childOU2.save(on: app.db)
-            childOU2.path = try await childOU2.buildPath(on: app.db)
+            childOU2 = childOU2.replacingPath(try await childOU2.buildPath(on: app.db))
             try await childOU2.save(on: app.db)
 
             try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/ous/\(rootOU.id!)/tree") { req in
@@ -252,7 +256,7 @@ final class OrganizationalUnitTests {
     func testMoveOU() async throws {
         try await withOUTestApp { app, testUser, testOrganization, authToken in
             // Create OUs
-            let ou1 = OrganizationalUnit(
+            var ou1 = OrganizationalUnit(
                 name: "Department A",
                 description: "Dept A",
                 organizationID: testOrganization.id!,
@@ -260,10 +264,10 @@ final class OrganizationalUnitTests {
                 depth: 0
             )
             try await ou1.save(on: app.db)
-            ou1.path = try await ou1.buildPath(on: app.db)
+            ou1 = ou1.replacingPath(try await ou1.buildPath(on: app.db))
             try await ou1.save(on: app.db)
 
-            let ou2 = OrganizationalUnit(
+            var ou2 = OrganizationalUnit(
                 name: "Department B",
                 description: "Dept B",
                 organizationID: testOrganization.id!,
@@ -271,10 +275,10 @@ final class OrganizationalUnitTests {
                 depth: 0
             )
             try await ou2.save(on: app.db)
-            ou2.path = try await ou2.buildPath(on: app.db)
+            ou2 = ou2.replacingPath(try await ou2.buildPath(on: app.db))
             try await ou2.save(on: app.db)
 
-            let childOU = OrganizationalUnit(
+            var childOU = OrganizationalUnit(
                 name: "Team X",
                 description: "Team X",
                 organizationID: testOrganization.id!,
@@ -283,7 +287,11 @@ final class OrganizationalUnitTests {
                 depth: 1
             )
             try await childOU.save(on: app.db)
-            childOU.path = try await childOU.buildPath(on: app.db)
+            childOU = OrganizationalUnit(
+                id: childOU.id, name: childOU.name, description: childOU.description,
+                organizationID: childOU.organizationID, parentOUID: childOU.parentOUID,
+                path: try await childOU.buildPath(on: app.db), depth: childOU.depth,
+                createdAt: childOU.createdAt, updatedAt: childOU.updatedAt)
             try await childOU.save(on: app.db)
 
             // Move childOU from ou1 to ou2

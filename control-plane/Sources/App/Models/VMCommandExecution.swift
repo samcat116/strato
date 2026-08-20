@@ -1,25 +1,16 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import StratoShared
+import Vapor
 
-/// Durable, frequently-polled state for one captured VM command. The invoked
-/// argv and output live in `vm_command_payloads` so normal operation queries
-/// never load either potentially large payload.
-final class VMCommandExecution: Model, @unchecked Sendable {
-    static let schema = "vm_command_executions"
-
-    @ID(key: .id) var id: UUID?
-    @Field(key: "vm_id") var vmID: UUID
-    @Enum(key: "actor_type") var actorType: MutationActorType
-    @Field(key: "actor_id") var actorID: UUID
-    @Field(key: "agent_key") var agentKey: String
-    @Enum(key: "status") var status: VMOperationStatus
-    @OptionalField(key: "error") var error: String?
-    @Field(key: "deadline") var deadline: Date
-    @Timestamp(key: "created_at", on: .create) var createdAt: Date?
-    @OptionalField(key: "completed_at") var completedAt: Date?
-
-    init() {}
+/// Application-side intent for a captured command. Durable state crosses the
+/// persistence boundary as `VMCommandExecutionSnapshot`.
+struct VMCommandExecution: Equatable, Sendable {
+    let id: UUID
+    let vmID: UUID
+    let actorID: UUID
+    let agentKey: String
+    let deadline: Date
 
     init(
         id: UUID = UUID(), vmID: UUID, actorID: UUID, agentKey: String,
@@ -27,37 +18,81 @@ final class VMCommandExecution: Model, @unchecked Sendable {
     ) {
         self.id = id
         self.vmID = vmID
-        self.actorType = .user
         self.actorID = actorID
         self.agentKey = agentKey
-        self.status = .pending
         self.deadline = deadline
+    }
+
+    func requireID() throws -> UUID { id }
+
+    @discardableResult
+    func create(command: [String], using persistence: VMCommandExecutionsPersistence) async throws
+        -> VMCommandExecutionSnapshot
+    {
+        try await persistence.create(
+            id: id,
+            vmID: vmID,
+            actorType: MutationActorType.user.rawValue,
+            actorID: actorID,
+            agentKey: agentKey,
+            deadline: deadline,
+            command: command)
+    }
+
+    static func find(_ id: UUID, using persistence: VMCommandExecutionsPersistence) async throws
+        -> VMCommandExecutionSnapshot?
+    {
+        try await persistence.execution(id: id)
+    }
+
+    static func count(using persistence: VMCommandExecutionsPersistence) async throws -> Int {
+        try await persistence.count()
     }
 }
 
-/// Cold invocation and result payload. Created atomically with the execution so
-/// the exact argv survives restarts; result fields remain nil until completion.
-final class VMCommandPayload: Model, @unchecked Sendable {
-    static let schema = "vm_command_payloads"
+typealias VMCommandPayload = VMCommandPayloadSnapshot
 
-    @ID(custom: "execution_id", generatedBy: .user) var id: UUID?
-    @Field(key: "command") var command: [String]
-    @OptionalField(key: "stdout") var stdout: Data?
-    @OptionalField(key: "stderr") var stderr: Data?
-    @OptionalField(key: "exit_code") var exitCode: Int?
-    @OptionalField(key: "truncated") var truncated: Bool?
+extension VMCommandPayloadSnapshot {
+    static func find(_ id: UUID, using persistence: VMCommandExecutionsPersistence) async throws
+        -> VMCommandPayloadSnapshot?
+    {
+        try await persistence.payload(executionID: id)
+    }
+}
 
-    init() {}
-
-    init(executionID: UUID, command: [String]) {
-        self.id = executionID
-        self.command = command
+extension VMCommandExecutionSnapshot {
+    func operationResponse(using persistence: VMCommandExecutionsPersistence) async throws
+        -> OperationResponse
+    {
+        let payload = status == VMOperationStatus.succeeded.rawValue
+            ? try await persistence.payload(executionID: id)
+            : nil
+        return try operationResponse(payload: payload)
     }
 
-    func recordResult(stdout: Data, stderr: Data, exitCode: Int, truncated: Bool) {
-        self.stdout = stdout
-        self.stderr = stderr
-        self.exitCode = exitCode
-        self.truncated = truncated
+    func operationResponse(payload: VMCommandPayloadSnapshot?) throws -> OperationResponse {
+        guard let operationStatus = VMOperationStatus(rawValue: status) else {
+            throw Abort(.internalServerError, reason: "Unknown VM command status: \(status)")
+        }
+        let result = payload.flatMap { payload -> VMCommandResultResponse? in
+            guard let stdout = payload.stdout, let stderr = payload.stderr,
+                let exitCode = payload.exitCode, let truncated = payload.truncated
+            else { return nil }
+            return VMCommandResultResponse(
+                stdout: String(decoding: stdout, as: UTF8.self),
+                stderr: String(decoding: stderr, as: UTF8.self),
+                exitCode: exitCode,
+                truncated: truncated)
+        }
+        return OperationResponse(
+            id: id,
+            resourceKind: .virtualMachine,
+            resourceID: vmID,
+            kind: .run,
+            status: operationStatus,
+            error: error,
+            createdAt: createdAt,
+            completedAt: completedAt,
+            result: result)
     }
 }

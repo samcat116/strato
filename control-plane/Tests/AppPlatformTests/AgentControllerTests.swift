@@ -44,7 +44,7 @@ struct AgentControllerTests {
                 email: "agent-reader@example.com",
                 displayName: "Agent Reader",
                 isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
             let organization = try await builder.createOrganization(name: "Agent Read Org")
 
             let freshOffline = try await makeAgent(
@@ -104,8 +104,8 @@ struct AgentControllerTests {
                 availableMemory: 16_000_000_000,
                 totalDisk: 100_000_000_000,
                 availableDisk: 100_000_000_000),
-            lastHeartbeat: lastHeartbeat)
-        agent.organizationScope = .organization(try organization.requireID())
+            lastHeartbeat: lastHeartbeat
+        ).replacingOrganizationScope(.organization(try organization.requireID()))
         try await agent.save(on: db)
         return agent
     }

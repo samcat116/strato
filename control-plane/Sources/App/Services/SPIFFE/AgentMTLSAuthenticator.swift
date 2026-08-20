@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import Vapor
 

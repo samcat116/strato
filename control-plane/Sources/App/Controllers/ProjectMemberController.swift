@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -6,6 +6,29 @@ import Vapor
 /// Both listing and mutation operate on `role_bindings`; there is no
 /// relational grant mirror.
 struct ProjectMemberController: RouteCollection {
+    private let groupStore: GroupsPersistence
+    private let hierarchy: HierarchyPersistence
+    private let iam: IAMPersistence
+    private let projects: ProjectsPersistence
+    private let users: UserDirectoryPersistence
+    private let workloads: WorkloadsPersistence
+
+    init(
+        groups: GroupsPersistence,
+        hierarchy: HierarchyPersistence,
+        iam: IAMPersistence,
+        projects: ProjectsPersistence,
+        users: UserDirectoryPersistence,
+        workloads: WorkloadsPersistence
+    ) {
+        self.groupStore = groups
+        self.hierarchy = hierarchy
+        self.iam = iam
+        self.projects = projects
+        self.users = users
+        self.workloads = workloads
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let members = routes.grouped("api", "projects", ":projectID", "members")
         members.get(use: list)
@@ -81,62 +104,52 @@ struct ProjectMemberController: RouteCollection {
     }
 
     func list(req: Request) async throws -> ProjectMembersResponse {
-        let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectMember(project: project, on: req)
-        let projectID = try project.requireID()
+        let project = try await requireProject(req)
+        try await OrganizationAccessService.requireProjectMember(projectID: project.id, on: req)
+        let projectID = project.id
 
         let bindings = try await RoleBindingService.activeBindings(
-            nodeType: .project, nodeID: projectID, on: req.db)
+            nodeType: .project, nodeID: projectID, using: iam)
         let userBindings = bindings.filter { $0.principalType == IAMPrincipalType.user.rawValue }
         let groupBindings = bindings.filter { $0.principalType == IAMPrincipalType.group.rawValue }
         let workloadBindings = bindings.filter { $0.principalType == IAMPrincipalType.workload.rawValue }
 
-        var users: [UUID: User] = [:]
+        var usersByID: [UUID: UserDirectorySnapshot] = [:]
         if !userBindings.isEmpty {
-            for user in try await User.query(on: req.db)
-                .filter(\.$id ~~ Array(Set(userBindings.map(\.principalID))))
-                .all()
-            {
-                users[try user.requireID()] = user
+            for user in try await users.users(ids: userBindings.map(\.principalID)) {
+                usersByID[user.id] = user
             }
         }
-        var groups: [UUID: Group] = [:]
+        var groups: [UUID: GroupSnapshot] = [:]
         if !groupBindings.isEmpty {
-            for group in try await Group.query(on: req.db)
-                .filter(\.$id ~~ Array(Set(groupBindings.map(\.principalID))))
-                .all()
+            for group in try await groupStore.groups(
+                ids: Array(Set(groupBindings.map(\.principalID))))
             {
-                groups[try group.requireID()] = group
+                groups[group.id] = group
             }
         }
-        var workloads: [UUID: WorkloadRegistration] = [:]
+        var workloadsByID: [UUID: WorkloadPrincipalSnapshot] = [:]
         if !workloadBindings.isEmpty {
-            for workload in try await WorkloadRegistration.query(on: req.db)
-                .filter(\.$id ~~ Array(Set(workloadBindings.map(\.principalID))))
-                .filter(\.$kind == .workload)
-                .all()
-            {
-                workloads[try workload.requireID()] = workload
+            for workload in try await workloads.workloadPrincipals(
+                ids: workloadBindings.map(\.principalID)
+            ) {
+                workloadsByID[workload.id] = workload
             }
         }
-        let workloadVMNames = try await GuestIdentity.names(
-            forVMs: workloads.values.compactMap { $0.$vm.id }, on: req.db)
 
-        let rootOrgID = try await project.getRootOrganizationId(on: req.db)
+        let rootOrgID = project.rootOrganizationID
         var internalUserIDs: Set<UUID> = []
-        if let rootOrgID, !users.isEmpty {
-            internalUserIDs = Set(
-                try await UserOrganization.query(on: req.db)
-                    .filter(\.$organization.$id == rootOrgID)
-                    .filter(\.$user.$id ~~ Array(users.keys))
-                    .all()
-                    .map { $0.$user.id })
+        if let rootOrgID, !usersByID.isEmpty {
+            internalUserIDs = try await users.organizationMemberIDs(
+                organizationID: rootOrgID,
+                among: Array(usersByID.keys)
+            )
         }
 
-        let displayNames = try await RoleDisplayNames.forRoleIDs(bindings.map(\.roleID), on: req.db)
+        let displayNames = try await RoleDisplayNames.forRoleIDs(bindings.map(\.roleID), using: iam)
         return ProjectMembersResponse(
             users: userBindings.compactMap { binding in
-                guard let user = users[binding.principalID] else { return nil }
+                guard let user = usersByID[binding.principalID] else { return nil }
                 return ProjectMemberResponse(
                     userId: user.id,
                     username: user.username,
@@ -155,16 +168,15 @@ struct ProjectMemberController: RouteCollection {
                     role: binding.roleID,
                     roleDisplayName: displayNames.displayName(forRoleID: binding.roleID),
                     grantedAt: binding.createdAt,
-                    external: rootOrgID != nil && group.$organization.id != rootOrgID)
+                    external: rootOrgID != nil && group.organizationID != rootOrgID)
             },
             workloads: workloadBindings.compactMap { binding in
-                guard let workload = workloads[binding.principalID] else { return nil }
+                guard let workload = workloadsByID[binding.principalID] else { return nil }
                 return ProjectWorkloadGrantResponse(
                     registrationId: binding.principalID,
                     spiffeId: workload.spiffeID,
-                    vmId: workload.$vm.id,
-                    displayName: workload.$vm.id.flatMap { workloadVMNames[$0] }
-                        ?? workload.displayName ?? workload.spiffeID,
+                    vmId: workload.vmID,
+                    displayName: workload.vmName ?? workload.displayName ?? workload.spiffeID,
                     role: binding.roleID,
                     roleDisplayName: displayNames.displayName(forRoleID: binding.roleID),
                     grantedAt: binding.createdAt)
@@ -175,99 +187,90 @@ struct ProjectMemberController: RouteCollection {
     /// Unlike `GET /api/vms`, this performs no interface or enforcement
     /// hydration and returns the complete readable set in one request.
     func listVMPrincipals(req: Request) async throws -> [ProjectVMPrincipalResponse] {
-        let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectMember(project: project, on: req)
-        let projectID = try project.requireID()
+        let project = try await requireProject(req)
+        try await OrganizationAccessService.requireProjectMember(projectID: project.id, on: req)
+        let projectID = project.id
 
-        let vms = try await VM.query(on: req.db)
-            .filter(\.$project.$id == projectID)
-            .sort(\.$createdAt, .descending)
-            .sort(\.$id, .descending)
-            .all()
-        let nodes = vms.compactMap { $0.id.map { IAMNode(type: .virtualMachine, id: $0) } }
+        let vms = try await workloads.vmPrincipals(projectID: projectID)
+        let nodes = vms.map { IAMNode(type: .virtualMachine, id: $0.id) }
         let readable = try await req.canFilter("vm:read", on: nodes)
         let visible = vms.filter { vm in
-            vm.id.map { readable.contains(IAMNode(type: .virtualMachine, id: $0)) } ?? false
+            readable.contains(IAMNode(type: .virtualMachine, id: vm.id))
         }
-        let identities = try await GuestIdentity.registrations(
-            forVMs: visible.compactMap(\.id), on: req.db)
 
-        return visible.compactMap { vm in
-            guard let id = vm.id else { return nil }
-            let identity = identities[id]
+        return visible.map { vm in
             return ProjectVMPrincipalResponse(
-                id: id,
+                id: vm.id,
                 name: vm.name,
-                spiffeId: identity?.spiffeID,
-                instanceIdentityPrincipalId: identity?.principalID,
-                instanceIdentityStatus: identity == nil ? .revoked : .enabled)
+                spiffeId: vm.spiffeID,
+                instanceIdentityPrincipalId: vm.principalID,
+                instanceIdentityStatus: vm.principalID == nil ? .revoked : .enabled)
         }
     }
 
     func grant(req: Request) async throws -> Response {
-        let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
-        let node = IAMNode(type: .project, id: try project.requireID())
+        let project = try await requireProject(req)
+        try await OrganizationAccessService.requireProjectPolicyAdmin(projectID: project.id, on: req)
+        let node = IAMNode(type: .project, id: project.id)
         let body = try req.content.decode(GrantMemberRequest.self)
-        let role = try await MemberRoleResolver.resolve(body.role, scopeNode: node, on: req.db)
-        let targetUser = try await resolveUser(body, on: req)
-        let userID = try targetUser.requireID()
+        let role = try await MemberRoleResolver.resolve(body.role, scopeNode: node, using: iam)
+        let userID = try await resolveUser(body)
 
-        try await requireNoGrant(principalType: .user, principalID: userID, node: node, on: req.db)
+        try await requireNoGrant(principalType: .user, principalID: userID, node: node)
         let crossOrg = try await CrossOrgBindingGate.requireGrantPermitted(
-            principalType: .user, principalID: userID, node: node, req: req)
+            principalType: .user, principalID: userID, node: node, using: iam, req: req)
         let proposed = ProposedBinding(
             principalType: .user, principalID: userID, roleActions: role.actions,
             roleLabel: role.displayName, node: node)
 
         try await RoleBindingService.insertExclusiveGrant(
             principalType: .user, principalID: userID, roleID: role.id, node: node,
-            createdBy: req.auth.get(User.self)?.id, on: req.db)
+            createdBy: req.auth.get(User.self)?.id, using: iam)
         if crossOrg {
             await CrossOrgBindingGate.recordCrossOrgEvent(
                 .crossOrgGrant, principalType: .user, principalID: userID,
-                role: role.displayName, node: node, req: req)
+                role: role.displayName, node: node, using: iam, req: req)
         }
-        return try await GuardrailWriteReport.report(for: proposed, req: req)
+        return try await report(for: proposed, req: req)
             .encodeResponse(status: .created, for: req)
     }
 
     func updateRole(req: Request) async throws -> Response {
-        let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
-        let node = IAMNode(type: .project, id: try project.requireID())
+        let project = try await requireProject(req)
+        try await OrganizationAccessService.requireProjectPolicyAdmin(projectID: project.id, on: req)
+        let node = IAMNode(type: .project, id: project.id)
         guard let userID = req.parameters.get("userID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid user ID")
         }
         let body = try req.content.decode(UpdateMemberRoleRequest.self)
-        let role = try await MemberRoleResolver.resolve(body.role, scopeNode: node, on: req.db)
+        let role = try await MemberRoleResolver.resolve(body.role, scopeNode: node, using: iam)
 
         let existing = try await RoleBindingService.activeBindings(
             principalType: .user, principalID: userID,
-            nodeType: .project, nodeID: node.id, on: req.db)
+            nodeType: .project, nodeID: node.id, using: iam)
         guard !existing.isEmpty else { throw Abort(.notFound, reason: "User has no role on this project") }
 
         let crossOrg = try await CrossOrgBindingGate.requireGrantPermitted(
-            principalType: .user, principalID: userID, node: node, req: req)
+            principalType: .user, principalID: userID, node: node, using: iam, req: req)
         let proposed = ProposedBinding(
             principalType: .user, principalID: userID, roleActions: role.actions,
             roleLabel: role.displayName, node: node)
         try await RoleBindingService.replaceExclusiveGrant(
             principalType: .user, principalID: userID, roleID: role.id, node: node,
-            createdBy: req.auth.get(User.self)?.id, on: req.db)
+            createdBy: req.auth.get(User.self)?.id, using: iam)
         if crossOrg {
             await CrossOrgBindingGate.recordCrossOrgEvent(
                 .crossOrgGrant, principalType: .user, principalID: userID,
-                role: role.displayName, node: node, req: req)
+                role: role.displayName, node: node, using: iam, req: req)
         }
-        return try await GuardrailWriteReport.report(for: proposed, req: req)
+        return try await report(for: proposed, req: req)
             .encodeResponse(status: .ok, for: req)
     }
 
     func revoke(req: Request) async throws -> HTTPStatus {
-        let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
-        let node = IAMNode(type: .project, id: try project.requireID())
+        let project = try await requireProject(req)
+        try await OrganizationAccessService.requireProjectPolicyAdmin(projectID: project.id, on: req)
+        let node = IAMNode(type: .project, id: project.id)
         guard let userID = req.parameters.get("userID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid user ID")
         }
@@ -276,37 +279,37 @@ struct ProjectMemberController: RouteCollection {
     }
 
     func grantGroup(req: Request) async throws -> Response {
-        let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
-        let node = IAMNode(type: .project, id: try project.requireID())
+        let project = try await requireProject(req)
+        try await OrganizationAccessService.requireProjectPolicyAdmin(projectID: project.id, on: req)
+        let node = IAMNode(type: .project, id: project.id)
         let body = try req.content.decode(GrantGroupRequest.self)
-        let role = try await MemberRoleResolver.resolve(body.role, scopeNode: node, on: req.db)
-        guard try await Group.find(body.groupID, on: req.db) != nil else {
+        let role = try await MemberRoleResolver.resolve(body.role, scopeNode: node, using: iam)
+        guard try await groupStore.group(id: body.groupID) != nil else {
             throw Abort(.notFound, reason: "Group not found")
         }
 
-        try await requireNoGrant(principalType: .group, principalID: body.groupID, node: node, on: req.db)
+        try await requireNoGrant(principalType: .group, principalID: body.groupID, node: node)
         let crossOrg = try await CrossOrgBindingGate.requireGrantPermitted(
-            principalType: .group, principalID: body.groupID, node: node, req: req)
+            principalType: .group, principalID: body.groupID, node: node, using: iam, req: req)
         let proposed = ProposedBinding(
             principalType: .group, principalID: body.groupID, roleActions: role.actions,
             roleLabel: role.displayName, node: node)
         try await RoleBindingService.insertExclusiveGrant(
             principalType: .group, principalID: body.groupID, roleID: role.id, node: node,
-            createdBy: req.auth.get(User.self)?.id, on: req.db)
+            createdBy: req.auth.get(User.self)?.id, using: iam)
         if crossOrg {
             await CrossOrgBindingGate.recordCrossOrgEvent(
                 .crossOrgGrant, principalType: .group, principalID: body.groupID,
-                role: role.displayName, node: node, req: req)
+                role: role.displayName, node: node, using: iam, req: req)
         }
-        return try await GuardrailWriteReport.report(for: proposed, req: req)
+        return try await report(for: proposed, req: req)
             .encodeResponse(status: .created, for: req)
     }
 
     func revokeGroup(req: Request) async throws -> HTTPStatus {
-        let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
-        let node = IAMNode(type: .project, id: try project.requireID())
+        let project = try await requireProject(req)
+        try await OrganizationAccessService.requireProjectPolicyAdmin(projectID: project.id, on: req)
+        let node = IAMNode(type: .project, id: project.id)
         guard let groupID = req.parameters.get("groupID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid group ID")
         }
@@ -315,11 +318,11 @@ struct ProjectMemberController: RouteCollection {
     }
 
     private func requireNoGrant(
-        principalType: IAMPrincipalType, principalID: UUID, node: IAMNode, on db: any Database
+        principalType: IAMPrincipalType, principalID: UUID, node: IAMNode
     ) async throws {
         let existing = try await RoleBindingService.activeBindings(
             principalType: principalType, principalID: principalID,
-            nodeType: .project, nodeID: node.id, on: db)
+            nodeType: .project, nodeID: node.id, using: iam)
         guard existing.isEmpty else { throw Abort(.conflict, reason: "Principal already has a role on this project") }
     }
 
@@ -327,32 +330,57 @@ struct ProjectMemberController: RouteCollection {
         principalType: IAMPrincipalType, principalID: UUID, node: IAMNode, req: Request
     ) async throws {
         let crossOrg = try await CrossOrgBindingGate.isCrossOrg(
-            principalType: principalType, principalID: principalID, node: node, on: req.db)
+            principalType: principalType, principalID: principalID, node: node,
+            using: iam)
         let roles = try await RoleBindingService.revokeExclusiveGrant(
-            principalType: principalType, principalID: principalID, node: node, on: req.db)
+            principalType: principalType, principalID: principalID, node: node, using: iam)
         if crossOrg {
             await CrossOrgBindingGate.recordCrossOrgEvent(
                 .crossOrgRevoke, principalType: principalType, principalID: principalID,
-                role: roles.first?.uuidString ?? "unknown", node: node, req: req)
+                role: roles.first?.uuidString ?? "unknown", node: node, using: iam, req: req)
         }
     }
 
-    private func resolveUser(_ body: GrantMemberRequest, on req: Request) async throws -> User {
+    private func requireProject(_ req: Request) async throws -> ProjectSnapshot {
+        guard let projectID = req.parameters.get("projectID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid project ID")
+        }
+        guard let project = try await projects.project(id: projectID) else {
+            throw Abort(.notFound, reason: "Project not found")
+        }
+        return project
+    }
+
+    private func resolveUser(_ body: GrantMemberRequest) async throws -> UUID {
         switch (body.userID, body.userEmail?.trimmingCharacters(in: .whitespacesAndNewlines)) {
         case (.some(let id), .none), (.some(let id), .some("")):
-            guard let user = try await User.find(id, on: req.db) else {
+            guard try await users.user(id: id) != nil else {
                 throw Abort(.notFound, reason: "User not found")
             }
-            return user
+            return id
         case (.none, .some(let email)) where !email.isEmpty:
-            guard let user = try await User.query(on: req.db).filter(\.$email == email).first() else {
+            guard let user = try await users.user(email: email) else {
                 throw Abort(.notFound, reason: "User not found")
             }
-            return user
+            return user.id
         case (.some, .some):
             throw Abort(.badRequest, reason: "Provide either userID or userEmail, not both")
         default:
             throw Abort(.badRequest, reason: "Provide userID or userEmail")
         }
+    }
+
+    private func report(for binding: ProposedBinding, req: Request) async throws
+        -> GrantWriteResponse
+    {
+        await GuardrailWriteReport.report(
+            for: binding,
+            using: iam,
+            groups: groupStore,
+            hierarchy: hierarchy,
+            projects: projects,
+            users: users,
+            req: req
+        )
     }
 }

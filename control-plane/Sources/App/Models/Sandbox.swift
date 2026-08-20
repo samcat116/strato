@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import Vapor
 import StratoShared
@@ -8,70 +9,46 @@ import StratoShared
 /// desired/observed state split (issue #260): `status` is purely observed,
 /// `desiredStatus` is the goal written by API mutations, and the generation
 /// pair tracks agent convergence.
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class Sandbox: Model, @unchecked Sendable {
+struct Sandbox: Sendable {
     static let schema = "sandboxes"
 
-    @ID(key: .id)
     var id: UUID?
-
-    @Field(key: "name")
     var name: String
-
-    @Parent(key: "project_id")
-    var project: Project
-
-    @Field(key: "environment")
+    var projectID: UUID
     var environment: String
 
     /// OCI image reference as provided by the user (`ghcr.io/acme/worker:v3`).
     /// Kept verbatim for identity and logging; agents converge on
     /// `imageDigest` once tag→digest resolution lands (issue #414).
-    @Field(key: "image")
     var image: String
 
     /// Manifest digest (`sha256:...`) the reference resolved to. Populated by
     /// tag→digest resolution (issue #414); nil until then, in which case the
     /// agent resolves the tag itself, accepting the mutability.
-    @OptionalField(key: "image_digest")
     var imageDigest: String?
-
-    @Field(key: "vcpus")
     var cpus: Int
 
     /// Guest memory size in bytes.
-    @Field(key: "memory")
     var memory: Int64
 
     /// Entrypoint/cmd/env/workdir overrides over the OCI image config, applied
     /// by the guest agent (override wins on key collision).
-    @OptionalField(key: "entrypoint")
     var entrypoint: [String]?
-
-    @OptionalField(key: "cmd")
     var cmd: [String]?
-
-    @Field(key: "env")
     var env: [String: String]
-
-    @OptionalField(key: "working_dir")
     var workingDir: String?
 
     /// Lifetime budget in seconds, counted from `createdAt` (see `expiresAt`).
     /// The expiry sweep deletes the sandbox once the budget runs out; nil
     /// means the sandbox lives until something else removes it.
-    @OptionalField(key: "ttl_seconds")
     var ttlSeconds: Int?
 
     /// The agent this sandbox is placed on, written by the scheduler.
-    @OptionalField(key: "hypervisor_id")
     var hypervisorId: String?
 
     /// Durable lineage for a fork (issue #427). Kept as an opaque id rather
     /// than a foreign key so database cascade rules can never delete a fork;
     /// the controller protects live lineage explicitly.
-    @OptionalField(key: "restored_from_snapshot_id")
     var restoredFromSnapshotId: UUID?
 
     /// Firecracker CPU template the microVM boots with, decided at create
@@ -79,40 +56,34 @@ final class Sandbox: Model, @unchecked Sendable {
     /// state: a templated snapshot restores on any same-arch host whose
     /// Firecracker honours the template, while a nil (passthrough) snapshot
     /// only restores on identical CPU models. Immutable after create.
-    @OptionalField(key: "cpu_template")
     var cpuTemplate: String?
 
-    /// The sandbox's NICs (single-NIC in v1), allocated at create time by the
-    /// same IPAM as VMs (issue #416). Requires eager loading with
-    /// `.with(\.$networkInterfaces)`.
-    @Children(for: \.$sandbox)
-    var networkInterfaces: [SandboxNetworkInterface]
+    /// The sandbox's NICs explicitly loaded through
+    /// `LegacySandboxNetworkInterfaceStore`. Nil means the caller did not ask
+    /// for them; an empty array means this sandbox has no NIC.
+    var loadedNetworkInterfaces: [SandboxNetworkInterface]?
+
+    var networkInterfaces: [SandboxNetworkInterface] {
+        loadedNetworkInterfaces ?? []
+    }
 
     // Observed state, written only from agent reports (plus the diagnostic
     // escalations in the sweeps).
-    @Enum(key: "status")
     var status: SandboxStatus
 
     /// When `status` last changed. Used by the reconciliation sweep to detect
     /// sandboxes stuck in a transitional state past a timeout.
-    @OptionalField(key: "status_changed_at")
     var statusChangedAt: Date?
 
     /// Exit code of a workload that ran to completion (`status == .exited`),
     /// as reported by the agent.
-    @OptionalField(key: "exit_code")
     var exitCode: Int?
 
     // Desired state, written by API mutations. Same contract as VM:
     // `generation` bumps on every desired change and `observedGeneration`
     // records the last generation the owning agent confirmed converging to.
-    @Enum(key: "desired_status")
     var desiredStatus: DesiredSandboxStatus
-
-    @Field(key: "generation")
     var generation: Int64
-
-    @Field(key: "observed_generation")
     var observedGeneration: Int64
 
     // Restore as an edge-nonce (ADR 0001 stage 9, STR-151). "Be at snapshot S"
@@ -127,12 +98,10 @@ final class Sandbox: Model, @unchecked Sendable {
     // *forked from* at create time — a lineage fact, and the clone-safety
     // guard's whole input — while this drives a rewind of a sandbox that
     // already exists.
-    @Field(key: "restore_generation")
     var restoreGeneration: Int64
 
     /// The snapshot `restoreGeneration` names. Not a foreign key, for
     /// `VM.restoreSnapshotID`'s reason.
-    @OptionalField(key: "restore_snapshot_id")
     var restoreSnapshotID: UUID?
 
     // Convergence progress mirrored from the agent's observed-state report,
@@ -141,46 +110,31 @@ final class Sandbox: Model, @unchecked Sendable {
     // generation, and the error pair records the last failed attempt until a
     // successful convergence clears it. Projected as the API's `conditions`
     // block.
-    @OptionalField(key: "convergence_phase")
     var convergencePhase: String?
-
-    @OptionalField(key: "last_error")
     var lastError: String?
-
-    @OptionalField(key: "failed_generation")
     var failedGeneration: Int64?
 
     /// When the current error/generation pair was first observed. Stable while
     /// identical heartbeats repeat it, and cleared by successful convergence.
-    @OptionalField(key: "last_error_at")
     var lastErrorAt: Date?
 
     /// Internal claim for the sustained-divergence warning. Nil starts a new
     /// episode; the sweep atomically stamps it before logging.
-    @OptionalField(key: "divergence_detected_at")
     var divergenceDetectedAt: Date?
 
     /// When the stuck-convergence sweep marks this sandbox degraded — the VM
     /// contract exactly (STR-147). Written by the mutation path as
     /// `max(existing, now + budget)`; nil means nothing is outstanding.
-    @OptionalField(key: "convergence_deadline")
     var convergenceDeadline: Date?
 
     /// Outstanding cleanup participants blocking this sandbox's removal
     /// (ADR 0001, stage 3) — the VM contract exactly. See `ResourceFinalizer`.
-    @Field(key: "finalizers")
     var finalizers: [String]
-
-    @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
     var updatedAt: Date?
 
-    init() {}
-
     init(
-        id: UUID? = nil,
+        id: UUID? = UUID(),
         name: String,
         projectID: UUID,
         environment: String,
@@ -193,13 +147,34 @@ final class Sandbox: Model, @unchecked Sendable {
         workingDir: String? = nil,
         ttlSeconds: Int? = nil,
         restoredFromSnapshotId: UUID? = nil,
-        cpuTemplate: String? = nil
+        cpuTemplate: String? = nil,
+        imageDigest: String? = nil,
+        hypervisorId: String? = nil,
+        loadedNetworkInterfaces: [SandboxNetworkInterface]? = nil,
+        status: SandboxStatus = .stopped,
+        statusChangedAt: Date? = nil,
+        exitCode: Int? = nil,
+        desiredStatus: DesiredSandboxStatus = .stopped,
+        generation: Int64 = 0,
+        observedGeneration: Int64 = 0,
+        restoreGeneration: Int64 = 0,
+        restoreSnapshotID: UUID? = nil,
+        convergencePhase: String? = nil,
+        lastError: String? = nil,
+        failedGeneration: Int64? = nil,
+        lastErrorAt: Date? = nil,
+        divergenceDetectedAt: Date? = nil,
+        convergenceDeadline: Date? = nil,
+        finalizers: [String] = [],
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
-        self.$project.id = projectID
+        self.projectID = projectID
         self.environment = environment
         self.image = image
+        self.imageDigest = imageDigest
         self.cpus = cpus
         self.memory = memory
         self.entrypoint = entrypoint
@@ -207,22 +182,64 @@ final class Sandbox: Model, @unchecked Sendable {
         self.env = env
         self.workingDir = workingDir
         self.ttlSeconds = ttlSeconds
+        self.hypervisorId = hypervisorId
         self.restoredFromSnapshotId = restoredFromSnapshotId
         self.cpuTemplate = cpuTemplate
-        // A fresh sandbox exists but is not running, mirroring VM creation:
-        // the create operation materializes it agent-side, and the user
-        // starts it explicitly. `.stopped` here means "not yet confirmed by
-        // any agent" until observedGeneration moves off 0.
-        self.status = .stopped
-        self.desiredStatus = .stopped
-        self.generation = 0
-        self.observedGeneration = 0
-        self.restoreGeneration = 0
-        self.finalizers = []
+        self.loadedNetworkInterfaces = loadedNetworkInterfaces
+        self.status = status
+        self.statusChangedAt = statusChangedAt
+        self.exitCode = exitCode
+        self.desiredStatus = desiredStatus
+        self.generation = generation
+        self.observedGeneration = observedGeneration
+        self.restoreGeneration = restoreGeneration
+        self.restoreSnapshotID = restoreSnapshotID
+        self.convergencePhase = convergencePhase
+        self.lastError = lastError
+        self.failedGeneration = failedGeneration
+        self.lastErrorAt = lastErrorAt
+        self.divergenceDetectedAt = divergenceDetectedAt
+        self.convergenceDeadline = convergenceDeadline
+        self.finalizers = finalizers
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    func requireID() throws -> UUID {
+        guard let id else { throw Abort(.internalServerError, reason: "Sandbox has no identifier") }
+        return id
+    }
+
+    func persisted(on db: any Database) async throws -> Self {
+        try await LegacySandboxStore.upsert(self, on: db)
+    }
+
+    func persist(on db: any Database) async throws { _ = try await persisted(on: db) }
+    func save(on db: any Database) async throws { try await persist(on: db) }
+    func delete(on db: any Database) async throws {
+        guard let id else { return }
+        _ = try await LegacySandboxStore.delete(id: id, on: db)
+    }
+    func remove(on db: any Database) async throws { try await delete(on: db) }
+
+    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+        try await LegacySandboxStore.sandbox(id: id, on: db)
+    }
+
+    static func load(_ id: UUID?, on db: any Database) async throws -> Self? {
+        try await find(id, on: db)
+    }
+
+    static func all(on db: any Database) async throws -> [Self] {
+        try await LegacySandboxStore.sandboxes(on: db)
+    }
+
+    func loadingNetworkInterfaces(_ interfaces: [SandboxNetworkInterface]) -> Self {
+        var copy = self
+        copy.loadedNetworkInterfaces = interfaces
+        return copy
     }
 }
-
-extension Sandbox: Content {}
 
 // MARK: - State helpers (mirroring VM)
 
@@ -267,7 +284,7 @@ extension Sandbox {
     /// Updates the observed status, starts a fresh divergence episode, and
     /// stamps the change time for reconciliation sweeps. Does not persist —
     /// call `save(on:)` afterwards.
-    func setStatus(_ newStatus: SandboxStatus, at date: Date = Date()) {
+    mutating func setStatus(_ newStatus: SandboxStatus, at date: Date = Date()) {
         status = newStatus
         statusChangedAt = date
         divergenceDetectedAt = nil
@@ -276,7 +293,7 @@ extension Sandbox {
     /// Records a new desired state in memory. The caller advances the
     /// generation through `DesiredStateGenerationWriter` in the same
     /// transaction that persists it.
-    func setDesiredStatus(_ newDesired: DesiredSandboxStatus) {
+    mutating func setDesiredStatus(_ newDesired: DesiredSandboxStatus) {
         desiredStatus = newDesired
     }
 
@@ -284,7 +301,7 @@ extension Sandbox {
     /// (STR-151), and sets the desired status to `.running` alongside — the
     /// restored guest resumes, so desired state has to agree or the next sync
     /// would stop it right back. Does not persist.
-    func requestRestore(snapshotID: UUID) {
+    mutating func requestRestore(snapshotID: UUID) {
         restoreGeneration += 1
         restoreSnapshotID = snapshotID
         setDesiredStatus(.running)
@@ -299,7 +316,7 @@ extension Sandbox {
     /// and has the reconciler recreate a blank one. Returns whether anything
     /// changed; does not persist.
     @discardableResult
-    func revertDesiredToObserved() -> Bool {
+    mutating func revertDesiredToObserved() -> Bool {
         guard desiredStatus != .absent else { return false }
 
         // An already-satisfied desired state needs no realignment. This also
@@ -336,7 +353,9 @@ extension Sandbox {
     /// counterpart to `Telemetry.vmEnteredError` yet, and the parameter is here
     /// so both workload kinds present one signature to `ConvergingResource`.
     @discardableResult
-    func resolveForStuckOperation(mutation: VMOperationKind, telemetryReason: String) -> Bool {
+    mutating func resolveForStuckOperation(
+        mutation: VMOperationKind, telemetryReason: String
+    ) -> Bool {
         if status.isTransitional || (mutation == .create && observedGeneration == 0) {
             setStatus(.error)
         }
@@ -390,20 +409,18 @@ struct SandboxNetworkInterfaceResponse: Content {
     /// forgotten `.with(...)` must not be able to make.
     let securityGroupIds: [UUID]?
 
-    init(from nic: SandboxNetworkInterface) {
+    init(from nic: SandboxNetworkInterface, securityGroupIDs: [UUID]? = nil) {
         self.id = nic.id
-        self.networkId = nic.$logicalNetwork.id
-        self.network = nic.$logicalNetwork.value?.name
+        self.networkId = nic.logicalNetworkID
+        self.network = nic.logicalNetworkName
         self.macAddress = nic.macAddress
         // ipv4-first for a stable, familiar ordering, as on the VM path.
-        self.addresses = (nic.$addresses.value ?? [])
+        self.addresses = (nic.loadedAddresses ?? [])
             .sorted { ($0.family, $0.address) < ($1.family, $1.address) }
             .map(InterfaceAddressResponse.init)
         self.mtu = nic.mtu
         self.deviceName = nic.deviceName
-        self.securityGroupIds = nic.$securityGroupMemberships.value.map { memberships in
-            memberships.map { $0.$securityGroup.id }.sorted { $0.uuidString < $1.uuidString }
-        }
+        self.securityGroupIds = securityGroupIDs?.sorted { $0.uuidString < $1.uuidString }
     }
 }
 
@@ -465,10 +482,14 @@ struct SandboxDetailResponse: Content {
     let createdAt: Date?
     let updatedAt: Date?
 
-    init(from sandbox: Sandbox, securityGroupsEnforced: Bool? = nil) {
+    init(
+        from sandbox: Sandbox,
+        securityGroupIDsByInterfaceID: [UUID: [UUID]]? = nil,
+        securityGroupsEnforced: Bool? = nil
+    ) {
         self.id = sandbox.id
         self.name = sandbox.name
-        self.projectId = sandbox.$project.id
+        self.projectId = sandbox.projectID
         self.environment = sandbox.environment
         self.image = sandbox.image
         self.imageDigest = sandbox.imageDigest
@@ -490,14 +511,18 @@ struct SandboxDetailResponse: Content {
         // the list from `deviceName` agrees only while v1 is single-NIC, and
         // the flat field is the one older clients read — so the disagreement
         // would surface first for the clients least able to notice it.
-        let orderedInterfaces = (sandbox.$networkInterfaces.value ?? [])
+        let orderedInterfaces = (sandbox.loadedNetworkInterfaces ?? [])
             .sorted { $0.deviceName < $1.deviceName }
-        self.securityGroupIds = orderedInterfaces
-            .first?
-            .$securityGroupMemberships.value?
-            .map { $0.$securityGroup.id }
-            .sorted { $0.uuidString < $1.uuidString }
-        self.networkInterfaces = orderedInterfaces.map(SandboxNetworkInterfaceResponse.init)
+        self.securityGroupIds = securityGroupIDsByInterfaceID.map { memberships in
+            orderedInterfaces.first?.id.flatMap { memberships[$0] } ?? []
+        }
+        self.networkInterfaces = orderedInterfaces.map { interface in
+            SandboxNetworkInterfaceResponse(
+                from: interface,
+                securityGroupIDs: securityGroupIDsByInterfaceID.map { memberships in
+                    interface.id.flatMap { memberships[$0] } ?? []
+                })
+        }
         self.securityGroupsEnforced = securityGroupsEnforced
         self.conditions = sandbox.conditions
         self.createdAt = sandbox.createdAt

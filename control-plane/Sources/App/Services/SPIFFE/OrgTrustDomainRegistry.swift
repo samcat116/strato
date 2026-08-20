@@ -1,5 +1,5 @@
-import Fluent
 import Foundation
+import Fluent
 import Vapor
 
 /// The trust domain the control plane's own identities live in. Every org trust
@@ -44,9 +44,7 @@ struct DatabaseOrgTrustDomainSource: OrgTrustDomainSource {
     public func loadOrgTrustDomains() async throws -> [OrgTrustDomainSnapshot] {
         guard app.controlPlaneConfiguration.bool(.spireOrgTrustDomainsEnabled) == true else { return [] }
 
-        let rows = try await OrgTrustDomain.query(on: app.db)
-            .filter(\.$phase == .active)
-            .all()
+        let rows = try await OrgTrustDomainStore.active(on: app.db)
 
         // `acceptsIdentities` also demands a cached bundle: a domain we hold no
         // roots for cannot be verified against, and accepting its SVIDs on the

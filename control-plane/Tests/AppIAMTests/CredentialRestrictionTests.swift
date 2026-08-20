@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import App
+@testable import ControlPlanePostgres
 
 /// STR-115/STR-227: the canonical restriction value itself and what it permits.
 ///
@@ -247,14 +248,14 @@ struct CredentialRestrictionTests {
     @Test("Stored columns round trip and malformed node storage fails closed")
     func storageRoundTrip() throws {
         let scoped = try restriction(["vm:read"], node: project)
-        let key = APIKey(
-            userID: UUID(), name: "k", keyHash: "h", keyPrefix: "p", restriction: scoped)
-        #expect(key.restrictionActions == ["vm:read"])
-        #expect(key.restrictionNodeType == "project")
-        #expect(key.restrictionNodeID == project.id)
-        #expect(key.restriction == scoped)
+        let stored = scoped.stored
+        #expect(stored.actions == ["vm:read"])
+        #expect(stored.nodeType == "project")
+        #expect(stored.nodeID == project.id)
+        #expect(CredentialRestriction(stored) == scoped)
 
-        key.restrictionNodeType = "spaceship"
-        #expect(key.restriction == .denyAll)
+        let malformed = StoredCredentialRestriction(
+            actions: ["vm:read"], nodeType: "spaceship", nodeID: project.id)
+        #expect(CredentialRestriction(malformed) == .denyAll)
     }
 }

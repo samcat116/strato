@@ -44,8 +44,7 @@ final class ResourceFinalizerTests {
             )
             let org = try await builder.createOrganization(name: "Finalizer Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "Finalizer Project",
@@ -53,7 +52,7 @@ final class ResourceFinalizerTests {
                 organization: org
             )
             let vm = try await builder.createVM(name: "finalizer-vm", project: project)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, project, vm, token)
         } catch {
@@ -83,7 +82,7 @@ final class ResourceFinalizerTests {
             ),
             protocolVersion: WireProtocol.currentVersion
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.db).first?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: agentName,
             organizationScope: orgID.map { .organization($0) })

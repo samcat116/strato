@@ -6,23 +6,24 @@ import Vapor
 
 @Suite("VMSpecBuilder.buildImageInfo — artifact set")
 struct VMSpecBuilderImageInfoTests {
-    private func readyImage(architecture: CPUArchitecture) -> Image {
-        let image = Image(
+    private func readyImage(
+        architecture: CPUArchitecture,
+        artifacts: [ImageArtifactSnapshot]? = nil
+    ) -> Image {
+        Image(
             name: "img",
             description: "",
             projectID: UUID(),
             architecture: architecture,
             status: .ready,
-            uploadedByID: UUID()
-        )
-        image.id = UUID()
-        return image
+            uploadedByID: UUID(),
+            loadedArtifacts: artifacts)
     }
 
     private func artifact(
         _ kind: ArtifactKind, format: ImageFormat? = nil, checksum: String
-    ) -> ImageArtifact {
-        ImageArtifact(
+    ) -> ImageArtifactSnapshot {
+        ImageArtifactSnapshot(
             imageID: UUID(),
             kind: kind,
             format: format,
@@ -36,12 +37,13 @@ struct VMSpecBuilderImageInfoTests {
 
     @Test("Emits one explicit download descriptor per artifact")
     func emitsArtifactSet() throws {
-        let image = readyImage(architecture: .x86_64)
-        image.$artifacts.value = [
-            artifact(.diskImage, format: .qcow2, checksum: "d"),
-            artifact(.kernel, checksum: "a"),
-            artifact(.rootfs, format: .raw, checksum: "b"),
-        ]
+        let image = readyImage(
+            architecture: .x86_64,
+            artifacts: [
+                artifact(.diskImage, format: .qcow2, checksum: "d"),
+                artifact(.kernel, checksum: "a"),
+                artifact(.rootfs, format: .raw, checksum: "b"),
+            ])
 
         let info = try VMSpecBuilder.buildImageInfo(from: image)
 
@@ -67,8 +69,7 @@ struct VMSpecBuilderImageInfoTests {
 
     @Test("Fails explicitly when a ready image has no usable artifacts")
     func missingArtifactsFail() throws {
-        let image = readyImage(architecture: .arm64)
-        image.$artifacts.value = []
+        let image = readyImage(architecture: .arm64, artifacts: [])
 
         #expect(throws: Abort.self) {
             try VMSpecBuilder.buildImageInfo(from: image)
@@ -77,11 +78,12 @@ struct VMSpecBuilderImageInfoTests {
 
     @Test("Volume image info rejects a Firecracker-only artifact set")
     func volumeInfoRequiresDiskImage() throws {
-        let image = readyImage(architecture: .x86_64)
-        image.$artifacts.value = [
-            artifact(.kernel, checksum: "a"),
-            artifact(.rootfs, format: .raw, checksum: "b"),
-        ]
+        let image = readyImage(
+            architecture: .x86_64,
+            artifacts: [
+                artifact(.kernel, checksum: "a"),
+                artifact(.rootfs, format: .raw, checksum: "b"),
+            ])
 
         #expect(throws: Abort.self) {
             try VMSpecBuilder.buildDiskImageInfo(from: image)
@@ -90,10 +92,9 @@ struct VMSpecBuilderImageInfoTests {
 
     @Test("Volume image info accepts a usable disk artifact")
     func volumeInfoAcceptsDiskImage() throws {
-        let image = readyImage(architecture: .x86_64)
-        image.$artifacts.value = [
-            artifact(.diskImage, format: .qcow2, checksum: "d")
-        ]
+        let image = readyImage(
+            architecture: .x86_64,
+            artifacts: [artifact(.diskImage, format: .qcow2, checksum: "d")])
 
         let info = try VMSpecBuilder.buildDiskImageInfo(from: image)
 

@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import NIOConcurrencyHelpers
 import Vapor
@@ -32,6 +33,45 @@ struct IAMUserFacts: Sendable, Equatable {
     /// no row behind it.
     static let none = IAMUserFacts(isSystemAdmin: false, groupIDs: [], organizationIDs: [])
 
+    static func load(
+        userID: UUID,
+        cache: IAMRequestCache?,
+        using iam: IAMPersistence
+    ) async throws -> IAMUserFacts {
+        try await load(userIDs: [userID], cache: cache, using: iam)[userID] ?? .none
+    }
+
+    static func load(
+        userIDs: Set<UUID>,
+        cache: IAMRequestCache?,
+        using iam: IAMPersistence
+    ) async throws -> [UUID: IAMUserFacts] {
+        var facts: [UUID: IAMUserFacts] = [:]
+        var pending: Set<UUID> = []
+        for userID in userIDs {
+            if let cached = cache?.userFacts(userID) {
+                facts[userID] = cached
+            } else {
+                pending.insert(userID)
+            }
+        }
+        guard !pending.isEmpty else { return facts }
+
+        let rows = try await iam.userAuthorizationFacts(ids: Array(pending))
+        let rowsByID = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
+        for userID in pending {
+            let row = rowsByID[userID]
+            let loaded = IAMUserFacts(
+                isSystemAdmin: row?.isSystemAdmin ?? false,
+                groupIDs: row?.groupIDs ?? [],
+                organizationIDs: row?.organizationIDs ?? []
+            )
+            cache?.store(userFacts: loaded, for: userID)
+            facts[userID] = loaded
+        }
+        return facts
+    }
+
     /// Load the facts for `userID`, answering from `cache` when it holds them.
     ///
     /// - Parameter cache: nil outside a request (background sweeps, tests),
@@ -59,8 +99,8 @@ struct IAMUserFacts: Sendable, Equatable {
 
         // The three loads are independent, so they go out together.
         let ids = Array(pending)
-        async let groups = UserGroup.query(on: db).filter(\.$user.$id ~~ ids).all()
-        async let organizations = UserOrganization.query(on: db).filter(\.$user.$id ~~ ids).all()
+        async let groups = LegacyGroupSQLBridge.memberships(userIDs: ids, on: db)
+        async let organizations = OrganizationMembershipStore.memberships(userIDs: ids, on: db)
         // `seededUser` is the authenticated `User` the request already has in
         // `req.auth`: having it saves re-reading the row the session
         // authenticated with. Anyone else needs their row read for the
@@ -70,10 +110,12 @@ struct IAMUserFacts: Sendable, Equatable {
             for: pending.filter { cache?.seededUser($0) == nil }, on: db)
 
         var groupIDs: [UUID: [UUID]] = [:]
-        for membership in try await groups { groupIDs[membership.$user.id, default: []].append(membership.$group.id) }
+        for membership in try await groups {
+            groupIDs[membership.userID, default: []].append(membership.groupID)
+        }
         var organizationIDs: [UUID: [UUID]] = [:]
         for membership in try await organizations {
-            organizationIDs[membership.$user.id, default: []].append(membership.$organization.id)
+            organizationIDs[membership.userID, default: []].append(membership.organizationID)
         }
         let isSystemAdmin = try await admins
 
@@ -95,7 +137,7 @@ struct IAMUserFacts: Sendable, Equatable {
     ) async throws -> [UUID: Bool] {
         guard !userIDs.isEmpty else { return [:] }
         var flags: [UUID: Bool] = [:]
-        for row in try await User.query(on: db).filter(\.$id ~~ Array(userIDs)).all() {
+        for row in try await LegacyUserStore.users(ids: Array(userIDs), on: db) {
             if let id = row.id { flags[id] = row.isSystemAdmin }
         }
         return flags

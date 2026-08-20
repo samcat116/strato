@@ -3,7 +3,7 @@ import SQLKit
 
 struct CreateVMCommandExecutions: AsyncMigration {
     func prepare(on database: any Database) async throws {
-        try await database.schema(VMCommandExecution.schema)
+        try await database.schema("vm_command_executions")
             .id()
             .field("vm_id", .uuid, .required)
             .field("actor_type", .string, .required)
@@ -16,10 +16,10 @@ struct CreateVMCommandExecutions: AsyncMigration {
             .field("completed_at", .datetime)
             .create()
 
-        try await database.schema(VMCommandPayload.schema)
+        try await database.schema("vm_command_payloads")
             .field(
                 "execution_id", .uuid, .identifier(auto: false),
-                .references(VMCommandExecution.schema, "id", onDelete: .cascade)
+                .references("vm_command_executions", "id", onDelete: .cascade)
             )
             .field("command", .array(of: .string), .required)
             .field("stdout", .data)
@@ -60,7 +60,7 @@ struct CreateVMCommandExecutions: AsyncMigration {
     }
 
     func revert(on database: any Database) async throws {
-        try await database.schema(VMCommandPayload.schema).delete()
-        try await database.schema(VMCommandExecution.schema).delete()
+        try await database.schema("vm_command_payloads").delete()
+        try await database.schema("vm_command_executions").delete()
     }
 }

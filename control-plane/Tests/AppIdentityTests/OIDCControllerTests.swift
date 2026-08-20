@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import Testing
 import Vapor
@@ -22,7 +23,7 @@ final class OIDCControllerTests: BaseTestCase {
     /// Insert a provider directly, bypassing the create endpoint's validation.
     @discardableResult
     private func makeProvider(
-        on db: Database,
+        on app: Application,
         organizationID: UUID,
         name: String,
         enabled: Bool = true,
@@ -31,35 +32,32 @@ final class OIDCControllerTests: BaseTestCase {
         tokenEndpoint: String? = "https://idp.example.com/token",
         jwksURI: String? = "https://idp.example.com/.well-known/jwks.json",
         endSessionEndpoint: String? = nil
-    ) async throws -> OIDCProvider {
-        let provider = OIDCProvider(
+    ) async throws -> OIDCProviderSnapshot {
+        try await app.oidcProvidersPersistence.create(OIDCProviderWrite(
             organizationID: organizationID,
             name: name,
             clientID: "client-\(name)",
-            clientSecret: "secret",
+            encryptedClientSecret: "secret",
             discoveryURL: discoveryURL,
             authorizationEndpoint: authorizationEndpoint,
             tokenEndpoint: tokenEndpoint,
             jwksURI: jwksURI,
             endSessionEndpoint: endSessionEndpoint,
             enabled: enabled
-        )
-        try await provider.save(on: db)
-        return provider
+        ))
     }
 
     /// An org-owned custom role bindable at `organizationID`.
     @discardableResult
     private func makeOrgRole(
         name: String, organizationID: UUID, actions: [String] = ["vm:read"], on db: Database
-    ) async throws -> IAMRoleDefinition {
+    ) async throws -> LegacyIAMRoleRecord {
         let id = UUID()
-        let role = IAMRoleDefinition(
-            id: id, name: name, ownerType: .organization, ownerID: organizationID,
+        return try await RoleStore.insertLegacy(IAMRoleSnapshot(
+            id: id, name: name, description: nil,
+            ownerType: IAMRoleOwnerType.organization.rawValue, ownerID: organizationID,
             cedarText: RoleDescriptor.canonicalPermitText(id: id, actions: actions),
-            actions: actions, managed: false)
-        try await role.save(on: db)
-        return role
+            actions: actions, managed: false, createdBy: nil), on: db)
     }
 
     // MARK: - Provider management
@@ -67,7 +65,7 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Create provider with a valid org-scoped role mapping succeeds")
     func testCreateProviderAcceptsScopedRoleMapping() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let role = try await makeOrgRole(name: "auditor", organizationID: testOrganization.id!, on: app.db)
 
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
@@ -81,14 +79,14 @@ final class OIDCControllerTests: BaseTestCase {
                         tokenEndpoint: "https://idp.example.com/token",
                         jwksURI: "https://idp.example.com/.well-known/jwks.json",
                         groupsClaim: "groups",
-                        roleMappings: [OIDCRoleMapping(claimValue: "idp-auditors", roleID: role.id!)],
-                        defaultRoleID: role.id!
+                        roleMappings: [OIDCRoleMapping(claimValue: "idp-auditors", roleID: role.id)],
+                        defaultRoleID: role.id
                     ))
             } afterResponse: { res in
                 #expect(res.status == .ok || res.status == .created)
                 let provider = try res.content.decode(OIDCProviderResponse.self)
-                #expect(provider.roleMappings?.first?.roleID == role.id!)
-                #expect(provider.defaultRoleID == role.id!)
+                #expect(provider.roleMappings?.first?.roleID == role.id)
+                #expect(provider.defaultRoleID == role.id)
             }
         }
     }
@@ -96,7 +94,7 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Create provider rejects a default role name instead of a canonical UUID")
     func testCreateProviderRejectsDefaultRoleByName() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             try await makeOrgRole(name: "auditor", organizationID: testOrganization.id!, on: app.db)
 
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
@@ -120,7 +118,7 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Create provider rejects a default role naming a role owned by another org")
     func testCreateProviderRejectsOutOfScopeDefaultRoleName() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let otherOrg = try await TestDataBuilder(db: app.db).createOrganization(name: "Name Owner Org")
             let foreignRole = try await makeOrgRole(
                 name: "foreign", organizationID: otherOrg.id!, on: app.db)
@@ -136,7 +134,7 @@ final class OIDCControllerTests: BaseTestCase {
                         tokenEndpoint: "https://idp.example.com/token",
                         jwksURI: "https://idp.example.com/.well-known/jwks.json",
                         groupsClaim: "groups",
-                        defaultRoleID: foreignRole.id!
+                        defaultRoleID: foreignRole.id
                     ))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
@@ -148,7 +146,7 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Create provider rejects a role mapping to a role owned by another org")
     func testCreateProviderRejectsOutOfScopeRoleMapping() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let otherOrg = try await TestDataBuilder(db: app.db).createOrganization(name: "Other Org")
             let foreignRole = try await makeOrgRole(name: "foreign", organizationID: otherOrg.id!, on: app.db)
 
@@ -163,7 +161,7 @@ final class OIDCControllerTests: BaseTestCase {
                         tokenEndpoint: "https://idp.example.com/token",
                         jwksURI: "https://idp.example.com/.well-known/jwks.json",
                         groupsClaim: "groups",
-                        roleMappings: [OIDCRoleMapping(claimValue: "idp-auditors", roleID: foreignRole.id!)]
+                        roleMappings: [OIDCRoleMapping(claimValue: "idp-auditors", roleID: foreignRole.id)]
                     ))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
@@ -174,7 +172,7 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Create provider rejects a default role naming an unknown role id")
     func testCreateProviderRejectsUnknownDefaultRole() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -200,7 +198,7 @@ final class OIDCControllerTests: BaseTestCase {
         // flipping role reconciliation into authoritative mode while matching
         // no real token — demoting every admin on their next login.
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             for blank in ["  ", "\n", "\t\n "] {
                 try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
@@ -226,7 +224,7 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Create OIDC provider as org admin")
     func testCreateProvider() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -262,7 +260,7 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Create provider requires org admin role")
     func testCreateProviderRequiresAdmin() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             let memberUser = User(
                 username: "memberuser",
@@ -270,13 +268,12 @@ final class OIDCControllerTests: BaseTestCase {
                 displayName: "Member User"
             )
             try await memberUser.save(on: app.db)
-            let memberOrg = UserOrganization(
+            _ = try await OrganizationMembershipStore.insert(
                 userID: memberUser.id!,
                 organizationID: testOrganization.id!,
-                roleID: nil
+                on: app.db
             )
-            try await memberOrg.save(on: app.db)
-            let memberToken = try await memberUser.generateAPIKey(on: app.db)
+            let memberToken = try await memberUser.generateAPIKey(on: app)
 
             // Provider management requires org admin: the member holds no
             // admin binding on the org, so the Cedar evaluator denies.
@@ -304,14 +301,14 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Claim mapping config is redacted for non-admin members")
     func testClaimMappingRedactedForMembers() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             let provider = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Okta")
-            provider.groupsClaim = "groups"
-            provider.setAdminClaimValuesArray(["strato-admins"])
-            provider.defaultRoleID = nil
-            try await provider.save(on: app.db)
+                on: app, organizationID: testOrganization.id!, name: "Okta")
+            var draft = OIDCProviderDraft(provider)
+            draft.groupsClaim = "groups"
+            draft.adminClaimValues = ["strato-admins"]
+            _ = try await app.oidcProvidersPersistence.replace(draft.write)
 
             let memberUser = User(
                 username: "memberuser",
@@ -319,13 +316,12 @@ final class OIDCControllerTests: BaseTestCase {
                 displayName: "Member User"
             )
             try await memberUser.save(on: app.db)
-            let memberOrg = UserOrganization(
+            _ = try await OrganizationMembershipStore.insert(
                 userID: memberUser.id!,
                 organizationID: testOrganization.id!,
-                roleID: nil
+                on: app.db
             )
-            try await memberOrg.save(on: app.db)
-            let memberToken = try await memberUser.generateAPIKey(on: app.db)
+            let memberToken = try await memberUser.generateAPIKey(on: app)
 
             // A plain member can list providers but must not see which IdP
             // claims map groups or grant admin. The admin/member distinction
@@ -357,7 +353,7 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Create provider without discovery URL or endpoints fails")
     func testCreateProviderRequiresEndpoints() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -404,12 +400,12 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Update provider changes fields")
     func testUpdateProvider() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let provider = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Okta")
+                on: app, organizationID: testOrganization.id!, name: "Okta")
 
             try await app.test(
-                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id!)"
+                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id)"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(
@@ -437,13 +433,14 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Update provider distinguishes an omitted default role from explicit bare membership")
     func testUpdateProviderCanClearDefaultRole() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let provider = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Role Defaults")
-            provider.defaultRoleID = IAMRole.admin.seededID
-            try await provider.save(on: app.db)
+                on: app, organizationID: testOrganization.id!, name: "Role Defaults")
+            var draft = OIDCProviderDraft(provider)
+            draft.defaultRoleID = IAMRole.admin.seededID
+            _ = try await app.oidcProvidersPersistence.replace(draft.write)
 
-            let path = "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id!)"
+            let path = "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id)"
             try await app.test(.PUT, path) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(UpdateOIDCProviderRequest(name: "Role Defaults Renamed"))
@@ -467,7 +464,7 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Client secrets are stored encrypted at rest and re-encrypted on update")
     func testClientSecretEncryptedAtRest() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let key = try SecretsEncryptionService.parseKey(String(repeating: "ef", count: 32))
             app.secretsEncryption = SecretsEncryptionService(key: key)
 
@@ -488,8 +485,8 @@ final class OIDCControllerTests: BaseTestCase {
                 providerID = try res.content.decode(OIDCProviderResponse.self).id
             }
 
-            let created = try await OIDCProvider.find(providerID, on: app.db)
-            let storedSecret = try #require(created?.clientSecret)
+            let created = try await app.oidcProvidersPersistence.provider(id: providerID!)
+            let storedSecret = try #require(created?.encryptedClientSecret)
             #expect(storedSecret.hasPrefix(SecretsEncryptionService.encryptedPrefix))
             #expect(!storedSecret.contains("top-secret-original"))
             let decrypted = try app.secretsEncryption.decrypt(storedSecret)
@@ -505,8 +502,8 @@ final class OIDCControllerTests: BaseTestCase {
                 #expect(res.status == .ok)
             }
 
-            let updated = try await OIDCProvider.find(providerID, on: app.db)
-            let rotatedStored = try #require(updated?.clientSecret)
+            let updated = try await app.oidcProvidersPersistence.provider(id: providerID!)
+            let rotatedStored = try #require(updated?.encryptedClientSecret)
             #expect(rotatedStored.hasPrefix(SecretsEncryptionService.encryptedPrefix))
             let rotatedDecrypted = try app.secretsEncryption.decrypt(rotatedStored)
             #expect(rotatedDecrypted == "rotated-secret")
@@ -516,17 +513,18 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Clearing the discovery URL clears the stored issuer")
     func testUpdateClearingDiscoveryClearsIssuer() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let provider = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Okta")
+                on: app, organizationID: testOrganization.id!, name: "Okta")
             // Simulate a provider that previously discovered an issuer.
-            provider.issuer = "https://old-issuer.example.com"
-            try await provider.save(on: app.db)
+            var draft = OIDCProviderDraft(provider)
+            draft.issuer = "https://old-issuer.example.com"
+            _ = try await app.oidcProvidersPersistence.replace(draft.write)
 
             // Switch to manual endpoints by clearing discovery. The stale issuer
             // must be dropped, otherwise it would reject a new manual issuer's tokens.
             try await app.test(
-                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id!)"
+                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id)"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(
@@ -548,7 +546,7 @@ final class OIDCControllerTests: BaseTestCase {
                 #expect(response.issuer == nil)
             }
 
-            let reloaded = try await OIDCProvider.find(provider.id!, on: app.db)
+            let reloaded = try await app.oidcProvidersPersistence.provider(id: provider.id)
             #expect(reloaded?.issuer == nil)
         }
     }
@@ -556,14 +554,14 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Update rejects non-HTTPS endpoint URLs")
     func testUpdateRejectsInsecureURLs() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let provider = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Okta")
+                on: app, organizationID: testOrganization.id!, name: "Okta")
 
             // An http:// token endpoint would receive the client secret on the
             // next login — the same HTTPS validation as create must apply.
             try await app.test(
-                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id!)"
+                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id)"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(
@@ -584,7 +582,7 @@ final class OIDCControllerTests: BaseTestCase {
             }
 
             // The stored endpoint must be untouched after the rejected edit.
-            let reloaded = try await OIDCProvider.find(provider.id, on: app.db)
+            let reloaded = try await app.oidcProvidersPersistence.provider(id: provider.id)
             #expect(reloaded?.tokenEndpoint == "https://idp.example.com/token")
         }
     }
@@ -592,15 +590,15 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Update clears discovery URL when an empty string is sent")
     func testUpdateClearsDiscoveryURL() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let provider = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Okta",
+                on: app, organizationID: testOrganization.id!, name: "Okta",
                 discoveryURL: "https://old-issuer.example.com/.well-known/openid-configuration")
 
             // Switching to manual config: empty string clears the stored
             // discovery URL; manual endpoints remain and keep the provider valid.
             try await app.test(
-                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id!)"
+                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id)"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(
@@ -626,7 +624,7 @@ final class OIDCControllerTests: BaseTestCase {
             // Clearing a required manual field without a discovery URL must
             // be rejected — the provider would no longer be loginable.
             try await app.test(
-                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id!)"
+                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id)"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(
@@ -651,15 +649,15 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Update with unreachable discovery URL still succeeds and keeps stored endpoints")
     func testUpdateWithFailingDiscoveryDoesNotBreak() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let provider = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Okta")
+                on: app, organizationID: testOrganization.id!, name: "Okta")
 
             // Not in the discovery allow-list, so the refresh attempt fails
             // before any network I/O; the update must still succeed and the
             // stored endpoints must survive.
             try await app.test(
-                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id!)"
+                .PUT, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id)"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(
@@ -687,9 +685,9 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Delete provider is blocked while users are linked")
     func testDeleteProviderWithLinkedUsers() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let provider = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Okta")
+                on: app, organizationID: testOrganization.id!, name: "Okta")
 
             let linkedUser = User(
                 username: "ssouser",
@@ -701,7 +699,7 @@ final class OIDCControllerTests: BaseTestCase {
             try await linkedUser.save(on: app.db)
 
             try await app.test(
-                .DELETE, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id!)"
+                .DELETE, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id)"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
@@ -709,11 +707,10 @@ final class OIDCControllerTests: BaseTestCase {
             }
 
             // Unlink and retry
-            linkedUser.$oidcProvider.id = nil
-            try await linkedUser.save(on: app.db)
+            try await linkedUser.replacing(oidcProviderID: .some(nil)).save(on: app.db)
 
             try await app.test(
-                .DELETE, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id!)"
+                .DELETE, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id)"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
@@ -725,15 +722,15 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Test endpoint reports endpoint configuration as JSON")
     func testTestProviderEndpoint() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let configured = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Configured")
+                on: app, organizationID: testOrganization.id!, name: "Configured")
             let incomplete = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Incomplete",
+                on: app, organizationID: testOrganization.id!, name: "Incomplete",
                 authorizationEndpoint: nil, tokenEndpoint: nil, jwksURI: nil)
 
             try await app.test(
-                .POST, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(configured.id!)/test"
+                .POST, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(configured.id)/test"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
@@ -743,7 +740,7 @@ final class OIDCControllerTests: BaseTestCase {
             }
 
             try await app.test(
-                .POST, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(incomplete.id!)/test"
+                .POST, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(incomplete.id)/test"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
@@ -759,10 +756,10 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Public provider listing needs no auth and hides disabled providers")
     func testPublicProviderListing() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            try await makeProvider(on: app.db, organizationID: testOrganization.id!, name: "Enabled")
+            try await setupCommonTestData(on: app)
+            try await makeProvider(on: app, organizationID: testOrganization.id!, name: "Enabled")
             try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Disabled", enabled: false)
+                on: app, organizationID: testOrganization.id!, name: "Disabled", enabled: false)
 
             try await app.test(
                 .GET, "/api/public/organizations/\(testOrganization.id!)/oidc-providers"
@@ -778,8 +775,8 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("SSO lookup resolves org name case-insensitively without auth")
     func testSSOLookup() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            try await makeProvider(on: app.db, organizationID: testOrganization.id!, name: "Okta")
+            try await setupCommonTestData(on: app)
+            try await makeProvider(on: app, organizationID: testOrganization.id!, name: "Okta")
 
             // setupCommonTestData names the org "Test Organization"
             try await app.test(.GET, "/api/public/sso/lookup?organization=test%20organization") { res async throws in
@@ -795,11 +792,11 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("SSO lookup hides unknown orgs and orgs without enabled providers")
     func testSSOLookupHidesUnknownAndUnconfigured() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             // Only a disabled provider: lookup must look identical to an
             // unknown organization.
             try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Disabled", enabled: false)
+                on: app, organizationID: testOrganization.id!, name: "Disabled", enabled: false)
 
             try await app.test(.GET, "/api/public/sso/lookup?organization=Test%20Organization") { res async throws in
                 #expect(res.status == .ok)
@@ -820,13 +817,13 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("SSO lookup refuses ambiguous case-only matches but honors exact casing")
     func testSSOLookupAmbiguousCaseMatches() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            try await makeProvider(on: app.db, organizationID: testOrganization.id!, name: "Okta")
+            try await setupCommonTestData(on: app)
+            try await makeProvider(on: app, organizationID: testOrganization.id!, name: "Okta")
 
             // A second org whose name differs from "Test Organization" only by case
             let shoutyOrg = Organization(name: "TEST ORGANIZATION", description: "case twin")
             try await shoutyOrg.save(on: app.db)
-            try await makeProvider(on: app.db, organizationID: shoutyOrg.id!, name: "Entra")
+            try await makeProvider(on: app, organizationID: shoutyOrg.id!, name: "Entra")
 
             // A third casing matches both orgs case-insensitively — refusing is
             // the only safe answer, otherwise the user is sent to an arbitrary
@@ -858,11 +855,17 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("First SSO login provisions current org and membership")
     func testFirstLoginSeedsAuthorization() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let provider = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Okta")
+                on: app, organizationID: testOrganization.id!, name: "Okta")
 
-            let identity = OIDCIdentityService(db: app.db, logger: app.logger)
+            let identity = OIDCIdentityService(
+                db: app.db,
+                providers: app.oidcProvidersPersistence,
+                groups: app.groupsPersistence,
+                externalIDs: app.scimExternalIDsPersistence,
+                logger: app.logger
+            )
             let user = try await identity.resolveUser(
                 userInfo: OIDCUserInfo(
                     subject: "subject-new",
@@ -880,21 +883,19 @@ final class OIDCControllerTests: BaseTestCase {
             // very first authorized request.
             #expect(user.currentOrganizationId == testOrganization.id)
 
-            let membership = try await UserOrganization.query(on: app.db)
-                .filter(\.$user.$id == user.id!)
-                .filter(\.$organization.$id == testOrganization.id!)
-                .first()
+            let membership = try await OrganizationMembershipStore.membership(
+                userID: user.id!, organizationID: testOrganization.id!, on: app.db)
             #expect(membership?.roleID == nil)
 
             // A bare "member" membership carries its own access (org:read +
             // project:create); only org admins get a role binding, so none may
             // be written here.
-            let orgBindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
-                .filter(\.$principalID == user.id!)
-                .filter(\.$nodeType == IAMNodeType.organization.rawValue)
-                .filter(\.$nodeID == testOrganization.id!)
-                .count()
+            let orgBindings = try await LegacyRoleBindingStore.bindings(
+                principalType: IAMPrincipalType.user.rawValue,
+                principalID: user.id!,
+                nodeType: IAMNodeType.organization.rawValue,
+                nodeID: testOrganization.id!,
+                on: app.db).count
             #expect(orgBindings == 0)
 
             // Second login with the same subject reuses the user, no new rows
@@ -912,7 +913,7 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("SSO lookup without organization parameter fails")
     func testSSOLookupMissingParameter() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             try await app.test(.GET, "/api/public/sso/lookup") { res async throws in
                 #expect(res.status == .badRequest)
@@ -925,12 +926,12 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Authorize redirect carries S256 PKCE parameters")
     func testAuthorizeRedirectIncludesPKCE() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let provider = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Okta")
+                on: app, organizationID: testOrganization.id!, name: "Okta")
 
             try await app.test(
-                .GET, "/auth/oidc/\(testOrganization.id!)/\(provider.id!)/authorize"
+                .GET, "/auth/oidc/\(testOrganization.id!)/\(provider.id)/authorize"
             ) { res async throws in
                 #expect(res.status == .seeOther)
                 let location = try #require(res.headers.first(name: .location))
@@ -954,9 +955,9 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("End-session URL includes client_id, id_token_hint, and post-logout redirect")
     func testEndSessionURL() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let provider = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Okta",
+                on: app, organizationID: testOrganization.id!, name: "Okta",
                 endSessionEndpoint: "https://idp.example.com/logout")
 
             let url = try #require(
@@ -974,7 +975,7 @@ final class OIDCControllerTests: BaseTestCase {
 
             // No end-session endpoint → no SLO URL.
             let plain = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Plain")
+                on: app, organizationID: testOrganization.id!, name: "Plain")
             #expect(plain.getEndSessionURL(idTokenHint: nil, postLogoutRedirectURI: nil) == nil)
         }
     }
@@ -982,9 +983,9 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Endpoint URLs keep their own query parameters (e.g. B2C policy selectors)")
     func testEndpointQueryParametersPreserved() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let provider = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "B2C",
+                on: app, organizationID: testOrganization.id!, name: "B2C",
                 authorizationEndpoint: "https://idp.example.com/authorize?p=b2c_1_signin",
                 endSessionEndpoint: "https://idp.example.com/logout?p=b2c_1_signin")
 
@@ -1010,7 +1011,7 @@ final class OIDCControllerTests: BaseTestCase {
     @Test("Provider CRUD stores, updates, and validates the end-session endpoint")
     func testEndSessionEndpointCRUD() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             // Non-HTTPS end-session endpoint is rejected on create.
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
@@ -1079,26 +1080,31 @@ final class OIDCControllerTests: BaseTestCase {
                 idTokenSigningAlgValuesSupported: ["RS256"]
             )
         }
-        let controller = OIDCController()
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
+            let controller = OIDCController(
+                providers: app.oidcProvidersPersistence,
+                groups: app.groupsPersistence,
+                externalIDs: app.scimExternalIDsPersistence
+            )
             let provider = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Okta",
+                on: app, organizationID: testOrganization.id!, name: "Okta",
                 endSessionEndpoint: "https://manual.example.com/logout")
+            var providerDraft = OIDCProviderDraft(provider)
 
             // Same-URL, same-issuer refresh with metadata omitting the
             // optional endpoints: the manual logout URL must survive.
             controller.applyDiscoveredConfiguration(
-                doc(issuer: "https://idp.example.com"), to: provider, discoveryChanged: false)
-            #expect(provider.endSessionEndpoint == "https://manual.example.com/logout")
+                doc(issuer: "https://idp.example.com"), to: &providerDraft, discoveryChanged: false)
+            #expect(providerDraft.endSessionEndpoint == "https://manual.example.com/logout")
 
             // Rotating the discovery document to a different issuer clears
             // the previous IdP's optional endpoints — a stale logout URL
             // would redirect users to the old provider.
             controller.applyDiscoveredConfiguration(
-                doc(issuer: "https://other.example.com"), to: provider, discoveryChanged: false)
-            #expect(provider.endSessionEndpoint == nil)
-            #expect(provider.issuer == "https://other.example.com")
+                doc(issuer: "https://other.example.com"), to: &providerDraft, discoveryChanged: false)
+            #expect(providerDraft.endSessionEndpoint == nil)
+            #expect(providerDraft.issuer == "https://other.example.com")
 
             // And when the new metadata supplies them, they're adopted.
             controller.applyDiscoveredConfiguration(
@@ -1106,43 +1112,44 @@ final class OIDCControllerTests: BaseTestCase {
                     issuer: "https://third.example.com",
                     userinfo: "https://third.example.com/userinfo",
                     endSession: "https://third.example.com/logout"),
-                to: provider, discoveryChanged: false)
-            #expect(provider.userinfoEndpoint == "https://third.example.com/userinfo")
-            #expect(provider.endSessionEndpoint == "https://third.example.com/logout")
+                to: &providerDraft, discoveryChanged: false)
+            #expect(providerDraft.userinfoEndpoint == "https://third.example.com/userinfo")
+            #expect(providerDraft.endSessionEndpoint == "https://third.example.com/logout")
 
             // A manual→discovery switch has no stored issuer to compare, so
             // a newly added/changed discovery URL alone must clear manual
             // optional endpoints the document omits.
             let manual = try await makeProvider(
-                on: app.db, organizationID: testOrganization.id!, name: "Manual",
+                on: app, organizationID: testOrganization.id!, name: "Manual",
                 endSessionEndpoint: "https://manual.example.com/logout")
+            var manualDraft = OIDCProviderDraft(manual)
             controller.applyDiscoveredConfiguration(
-                doc(issuer: "https://new-idp.example.com"), to: manual, discoveryChanged: true)
-            #expect(manual.endSessionEndpoint == nil)
-            #expect(manual.userinfoEndpoint == nil)
+                doc(issuer: "https://new-idp.example.com"), to: &manualDraft, discoveryChanged: true)
+            #expect(manualDraft.endSessionEndpoint == nil)
+            #expect(manualDraft.userinfoEndpoint == nil)
 
             // But a value the same request explicitly set to something new
             // (an admin supplying a fallback for metadata they know is
             // incomplete) survives even a discovery change.
-            manual.endSessionEndpoint = "https://new-idp.example.com/custom-logout"
+            manualDraft.endSessionEndpoint = "https://new-idp.example.com/custom-logout"
             controller.applyDiscoveredConfiguration(
-                doc(issuer: "https://newer-idp.example.com"), to: manual,
+                doc(issuer: "https://newer-idp.example.com"), to: &manualDraft,
                 discoveryChanged: true, explicitEndSessionEndpoint: true)
-            #expect(manual.endSessionEndpoint == "https://new-idp.example.com/custom-logout")
+            #expect(manualDraft.endSessionEndpoint == "https://new-idp.example.com/custom-logout")
 
             // Metadata that supplies the endpoint still wins over the
             // explicit flag — the document is authoritative for its issuer.
             controller.applyDiscoveredConfiguration(
                 doc(issuer: "https://final.example.com", endSession: "https://final.example.com/logout"),
-                to: manual, discoveryChanged: true, explicitEndSessionEndpoint: true)
-            #expect(manual.endSessionEndpoint == "https://final.example.com/logout")
+                to: &manualDraft, discoveryChanged: true, explicitEndSessionEndpoint: true)
+            #expect(manualDraft.endSessionEndpoint == "https://final.example.com/logout")
         }
     }
 
     @Test("Logout without an OIDC session returns no SLO URL")
     func testLogoutWithoutOIDCSession() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             try await app.test(.POST, "/auth/logout") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)

@@ -1,4 +1,3 @@
-import Fluent
 import Vapor
 
 // IAM phase 5 (issue #482): the structurally default-deny authorization

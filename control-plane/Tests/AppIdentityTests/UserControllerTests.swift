@@ -10,7 +10,7 @@ final class UserControllerTests: BaseTestCase {
 
     /// Create an additional user (distinct from `testUser`) plus a bearer token for it.
     private func makeUser(
-        on db: Database,
+        on app: Application,
         username: String,
         email: String,
         isSystemAdmin: Bool = false
@@ -21,8 +21,8 @@ final class UserControllerTests: BaseTestCase {
             displayName: username,
             isSystemAdmin: isSystemAdmin
         )
-        try await user.save(on: db)
-        let token = try await user.generateAPIKey(on: db)
+        try await user.save(on: app.db)
+        let token = try await user.generateAPIKey(on: app)
         return (user, token)
     }
 
@@ -35,8 +35,8 @@ final class UserControllerTests: BaseTestCase {
     @Test("index returns only your own record for non-admins")
     func testIndexReturnsOnlySelfForNonAdmin() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            _ = try await makeUser(on: app.db, username: "other", email: "other@example.com")
+            try await setupCommonTestData(on: app)
+            _ = try await makeUser(on: app, username: "other", email: "other@example.com")
 
             try await app.test(.GET, "/api/users") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -51,9 +51,9 @@ final class UserControllerTests: BaseTestCase {
     @Test("index succeeds for system admins")
     func testIndexAllowedForAdmin() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let admin = try await makeUser(
-                on: app.db, username: "admin", email: "admin@example.com", isSystemAdmin: true
+                on: app, username: "admin", email: "admin@example.com", isSystemAdmin: true
             )
 
             try await app.test(.GET, "/api/users") { req in
@@ -71,7 +71,7 @@ final class UserControllerTests: BaseTestCase {
     @Test("show is allowed for self")
     func testShowSelf() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             try await app.test(.GET, "/api/users/\(testUser.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -86,9 +86,9 @@ final class UserControllerTests: BaseTestCase {
     @Test("show another user is forbidden for non-admins")
     func testShowOtherForbidden() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let other = try await makeUser(
-                on: app.db, username: "other", email: "other@example.com"
+                on: app, username: "other", email: "other@example.com"
             )
 
             try await app.test(.GET, "/api/users/\(other.user.id!)") { req in
@@ -102,9 +102,9 @@ final class UserControllerTests: BaseTestCase {
     @Test("show another user is allowed for system admins")
     func testShowOtherAllowedForAdmin() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let admin = try await makeUser(
-                on: app.db, username: "admin", email: "admin@example.com", isSystemAdmin: true
+                on: app, username: "admin", email: "admin@example.com", isSystemAdmin: true
             )
 
             try await app.test(.GET, "/api/users/\(testUser.id!)") { req in
@@ -120,7 +120,7 @@ final class UserControllerTests: BaseTestCase {
     @Test("update self is allowed")
     func testUpdateSelf() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
 
             try await app.test(.PUT, "/api/users/\(testUser.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -136,9 +136,9 @@ final class UserControllerTests: BaseTestCase {
     @Test("update another user is forbidden for non-admins")
     func testUpdateOtherForbidden() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let other = try await makeUser(
-                on: app.db, username: "other", email: "other@example.com"
+                on: app, username: "other", email: "other@example.com"
             )
 
             try await app.test(.PUT, "/api/users/\(other.user.id!)") { req in
@@ -159,9 +159,9 @@ final class UserControllerTests: BaseTestCase {
     @Test("delete another user is forbidden for non-admins")
     func testDeleteOtherForbidden() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let other = try await makeUser(
-                on: app.db, username: "other", email: "other@example.com"
+                on: app, username: "other", email: "other@example.com"
             )
 
             try await app.test(.DELETE, "/api/users/\(other.user.id!)") { req in
@@ -179,12 +179,12 @@ final class UserControllerTests: BaseTestCase {
     @Test("delete another user is allowed for system admins")
     func testDeleteOtherAllowedForAdmin() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             let admin = try await makeUser(
-                on: app.db, username: "admin", email: "admin@example.com", isSystemAdmin: true
+                on: app, username: "admin", email: "admin@example.com", isSystemAdmin: true
             )
             let other = try await makeUser(
-                on: app.db, username: "other", email: "other@example.com"
+                on: app, username: "other", email: "other@example.com"
             )
 
             try await app.test(.DELETE, "/api/users/\(other.user.id!)") { req in

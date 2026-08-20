@@ -61,8 +61,8 @@ final class AgentOrganizationScopeTests {
         agentName: String,
         siteID: UUID? = nil,
         organizationScope: OrganizationScope? = nil
-    ) -> AgentEnrollment {
-        AgentEnrollment(
+    ) -> TestAgentEnrollment {
+        TestAgentEnrollment(
             agentName: agentName,
             spiffeID: "spiffe://strato.local/agent/\(agentName)",
             expirationHours: 1,
@@ -96,13 +96,15 @@ final class AgentOrganizationScopeTests {
         if resolvedSiteID == nil, let organizationScope {
             let existing: Site?
             if let organizationID = organizationScope.organizationID {
-                existing = try await Site.query(on: app.db)
-                    .filter(\.$organization.$id == organizationID)
-                    .first()
+                existing = try await LegacySiteStore.sites(
+                    organizationID: organizationID,
+                    on: app.db
+                ).first
             } else if let organizationalUnitID = organizationScope.organizationalUnitID {
-                existing = try await Site.query(on: app.db)
-                    .filter(\.$organizationalUnit.$id == organizationalUnitID)
-                    .first()
+                existing = try await LegacySiteStore.sites(
+                    organizationalUnitID: organizationalUnitID,
+                    on: app.db
+                ).first
             } else {
                 existing = nil
             }
@@ -133,8 +135,8 @@ final class AgentOrganizationScopeTests {
                 organizationScope: .organization(org.id!))
 
             let agent = try #require(try await Agent.find(agentUUID, on: app.db))
-            #expect(agent.$organization.id == org.id)
-            #expect(agent.$organizationalUnit.id == nil)
+            #expect(agent.organizationID == org.id)
+            #expect(agent.organizationalUnitID == nil)
         }
     }
 
@@ -144,7 +146,7 @@ final class AgentOrganizationScopeTests {
             await #expect(throws: AgentServiceError.self) {
                 _ = try await self.registerAgent(on: app, agentName: "unowned-agent")
             }
-            let count = try await Agent.query(on: app.db).count()
+            let count = try await Agent.count(on: app.db)
             #expect(count == 0)
         }
     }
@@ -161,17 +163,19 @@ final class AgentOrganizationScopeTests {
             let enrollment = self.makeEnrollment(
                 agentName: "mtls-node", siteID: site.id,
                 organizationScope: .organization(org.id!))
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
 
             let agentUUID = try await self.registerAgent(on: app, agentName: "mtls-node")
 
             let agent = try #require(try await Agent.find(agentUUID, on: app.db))
-            #expect(agent.$organization.id == org.id)
-            #expect(agent.$site.id == site.id)
+            #expect(agent.organizationID == org.id)
+            #expect(agent.siteID == site.id)
 
             // The enrollment is marked redeemed but survives: scope stays
             // readable, and unlike a single-use token it is not consumed.
-            let reloaded = try #require(try await AgentEnrollment.find(enrollment.id, on: app.db))
+            let reloaded = try #require(
+                try await findTestAgentEnrollment(enrollment.id, on: app.db)
+            )
             #expect(reloaded.isUsed == true)
         }
     }
@@ -187,7 +191,7 @@ final class AgentOrganizationScopeTests {
             _ = try await self.registerAgent(on: app, agentName: "sticky-agent")
 
             let agent = try #require(try await Agent.find(agentUUID, on: app.db))
-            #expect(agent.$organization.id == org.id)
+            #expect(agent.organizationID == org.id)
         }
     }
 
@@ -203,8 +207,7 @@ final class AgentOrganizationScopeTests {
             let site = Site(name: "drift-dc", organizationScope: .organization(org.id!))
             try await site.save(on: app.db)
             let agent = try #require(try await Agent.find(agentUUID, on: app.db))
-            agent.$site.id = try site.requireID()
-            try await agent.save(on: app.db)
+            try await agent.replacing(siteID: try site.requireID()).save(on: app.db)
 
             // A stale enrollment naming a different org and no site. Both values
             // are durable on the agent row, and re-reading the enrollment on
@@ -212,13 +215,13 @@ final class AgentOrganizationScopeTests {
             // agent — so the enrollment is deliberately not consulted again.
             let enrollment = self.makeEnrollment(
                 agentName: "durable-agent", organizationScope: .organization(otherOrg.id!))
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
 
             _ = try await self.registerAgent(on: app, agentName: "durable-agent")
 
             let reloaded = try #require(try await Agent.find(agentUUID, on: app.db))
-            #expect(reloaded.$organization.id == org.id)
-            #expect(reloaded.$site.id == site.id)
+            #expect(reloaded.organizationID == org.id)
+            #expect(reloaded.siteID == site.id)
         }
     }
 
@@ -234,7 +237,7 @@ final class AgentOrganizationScopeTests {
                 on: app, agentName: "loaded-agent",
                 organizationScope: .organization(org.id!))
 
-            let vm = try await builder.createVM(name: "resident", project: project)
+            var vm = try await builder.createVM(name: "resident", project: project)
             vm.hypervisorId = agentUUID.uuidString
             try await vm.save(on: app.db)
 
@@ -244,7 +247,7 @@ final class AgentOrganizationScopeTests {
                 organizationScope: .organization(otherOrg.id!))
 
             let agent = try #require(try await Agent.find(agentUUID, on: app.db))
-            #expect(agent.$organization.id == org.id)
+            #expect(agent.organizationID == org.id)
         }
     }
 
@@ -260,15 +263,15 @@ final class AgentOrganizationScopeTests {
                 on: app, agentName: "cross-org-agent",
                 organizationScope: .organization(org.id!))
             let originalAgent = try #require(try await Agent.find(agentUUID, on: app.db))
-            let originalSiteID = originalAgent.$site.id
+            let originalSiteID = originalAgent.siteID
             _ = try await self.registerAgent(
                 on: app, agentName: "cross-org-agent",
                 siteID: foreignSite.id,
                 organizationScope: .organization(org.id!))
 
             let agent = try #require(try await Agent.find(agentUUID, on: app.db))
-            #expect(agent.$site.id == originalSiteID)
-            #expect(agent.$organization.id == org.id)
+            #expect(agent.siteID == originalSiteID)
+            #expect(agent.organizationID == org.id)
 
             // Sibling-OU delegation within one org is refused the same way:
             // an OU-B site must not admit an OU-A agent (root org matches).
@@ -287,13 +290,13 @@ final class AgentOrganizationScopeTests {
                 on: app, agentName: "ou-a-agent",
                 organizationScope: .organizationalUnit(ouA.id!))
             let originalOUAgent = try #require(try await Agent.find(ouAgentUUID, on: app.db))
-            let originalOUSiteID = originalOUAgent.$site.id
+            let originalOUSiteID = originalOUAgent.siteID
             _ = try await self.registerAgent(
                 on: app, agentName: "ou-a-agent",
                 siteID: ouBSite.id,
                 organizationScope: .organizationalUnit(ouA.id!))
             let ouAgent = try #require(try await Agent.find(ouAgentUUID, on: app.db))
-            #expect(ouAgent.$site.id == originalOUSiteID)
+            #expect(ouAgent.siteID == originalOUSiteID)
         }
     }
 
@@ -307,7 +310,7 @@ final class AgentOrganizationScopeTests {
             let admin = try await builder.createUser(
                 username: "scope-admin", email: "scope-admin@example.com",
                 displayName: "Scope Admin", isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             struct Body: Content {
                 let agentName: String
@@ -337,8 +340,8 @@ final class AgentOrganizationScopeTests {
             }
 
             let row = try #require(
-                try await AgentEnrollment.query(on: app.db)
-                    .filter(\.$agentName == "node-x").first())
+                try await findTestAgentEnrollment(agentName: "node-x", on: app.db)
+            )
             #expect(row.organizationID == org.id)
         }
     }
@@ -351,7 +354,7 @@ final class AgentOrganizationScopeTests {
             let user = try await builder.createUser(
                 username: "scope-pleb", email: "scope-pleb@example.com",
                 displayName: "Pleb", isSystemAdmin: false)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             struct Body: Content {
                 let agentName: String
@@ -391,7 +394,7 @@ final class AgentOrganizationScopeTests {
             let admin = try await builder.createUser(
                 username: "scope-admin2", email: "scope-admin2@example.com",
                 displayName: "Scope Admin 2", isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             let otherOrg = try await builder.createOrganization(name: "Elsewhere Org")
             let foreignSite = Site(name: "elsewhere-dc", organizationScope: .organization(otherOrg.id!))
@@ -422,7 +425,7 @@ final class AgentOrganizationScopeTests {
             let admin = try await builder.createUser(
                 username: "site-scope-admin", email: "site-scope-admin@example.com",
                 displayName: "Site Scope Admin", isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             var siteId: UUID?
             try await app.test(.POST, "/api/sites") { req in
@@ -436,10 +439,10 @@ final class AgentOrganizationScopeTests {
                 siteId = try res.content.decode(SiteResponse.self).id
             }
 
-            let createdSite = try await Site.find(siteId!, on: app.db)
+            let createdSite = try await LegacySiteStore.site(id: siteId!, on: app.db)
             let site = try #require(createdSite)
-            #expect(site.$organization.id == org.id)
-            #expect(site.$organizationalUnit.id == nil)
+            #expect(site.organizationID == org.id)
+            #expect(site.organizationalUnitID == nil)
 
             try await app.test(.DELETE, "/api/sites/\(siteId!.uuidString)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -447,7 +450,7 @@ final class AgentOrganizationScopeTests {
                 #expect(res.status == .noContent)
             }
 
-            let remaining = try await Site.find(siteId!, on: app.db)
+            let remaining = try await LegacySiteStore.site(id: siteId!, on: app.db)
             #expect(remaining == nil)
         }
     }
@@ -463,7 +466,7 @@ final class AgentOrganizationScopeTests {
                 username: "delegated-admin", email: "delegated-admin@example.com",
                 displayName: "Delegated Admin", isSystemAdmin: false)
             try await builder.addUserToOrganization(user: orgAdmin, organization: org, role: "admin")
-            let orgAdminToken = try await orgAdmin.generateAPIKey(on: app.db)
+            let orgAdminToken = try await orgAdmin.generateAPIKey(on: app)
 
             let agentUUID = try await self.registerAgent(
                 on: app, agentName: "shared-agent",
@@ -474,7 +477,7 @@ final class AgentOrganizationScopeTests {
             let foreignOrg = try await builder.createOrganization(name: "Foreign Tenant")
             let foreignProject = try await builder.createProject(
                 name: "Foreign Project", description: "p", organization: foreignOrg)
-            let foreignVM = try await builder.createVM(name: "tenant-vm", project: foreignProject)
+            var foreignVM = try await builder.createVM(name: "tenant-vm", project: foreignProject)
             foreignVM.hypervisorId = agentUUID.uuidString
             try await foreignVM.save(on: app.db)
 
@@ -523,14 +526,14 @@ final class AgentOrganizationScopeTests {
             let admin = try await builder.createUser(
                 username: "dereg-admin", email: "dereg-admin@example.com",
                 displayName: "Dereg Admin", isSystemAdmin: true)
-            let adminToken = try await admin.generateAPIKey(on: app.db)
+            let adminToken = try await admin.generateAPIKey(on: app)
 
             let site = Site(name: "retiring-site", organizationScope: .organization(org.id!))
             try await site.save(on: app.db)
             let enrollment = self.makeEnrollment(
                 agentName: "retiring-agent", siteID: try site.requireID(),
                 organizationScope: .organization(org.id!))
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
             let agentUUID = try await self.registerAgent(on: app, agentName: "retiring-agent")
 
             try await app.test(.DELETE, "/api/agents/\(agentUUID.uuidString)") { req in
@@ -539,9 +542,10 @@ final class AgentOrganizationScopeTests {
                 #expect(res.status == .noContent)
             }
 
-            let leftover = try await AgentEnrollment.query(on: app.db)
-                .filter(\.$agentName == "retiring-agent")
-                .count()
+            let leftover = try await testAgentEnrollmentCount(
+                agentName: "retiring-agent",
+                on: app.db
+            )
             #expect(leftover == 0)
 
             // The name is immediately reusable — a leftover row would trip the
@@ -573,11 +577,10 @@ final class AgentOrganizationScopeTests {
                 username: "net-pinner", email: "net-pinner@example.com",
                 displayName: "Net Pinner", isSystemAdmin: false)
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
             let project = try await builder.createProject(
                 name: "Pin Project", description: "p", organization: org)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             let foreignOrg = try await builder.createOrganization(name: "Pin Foreign Org")
             let foreignSite = Site(name: "pin-foreign-dc", organizationScope: .organization(foreignOrg.id!))
@@ -653,7 +656,7 @@ final class AgentOrganizationScopeTests {
             let user = try await builder.createUser(
                 username: "agents-only-admin", email: "agents-only-admin@example.com",
                 displayName: "Agents Only Admin", isSystemAdmin: false)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             // The delegated-subtree scenario: the caller admins one OU (so
             // manage_agents on the enrollment's OU scope passes), but the
@@ -692,7 +695,7 @@ final class AgentOrganizationScopeTests {
             let user = try await builder.createUser(
                 username: "site-only-admin", email: "site-only-admin@example.com",
                 displayName: "Site Only Admin", isSystemAdmin: false)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             // The delegated-subtree scenario: the site lives in an OU the
             // caller admins (site manage passes), but the agent is owned at
@@ -719,7 +722,7 @@ final class AgentOrganizationScopeTests {
             }
 
             let agent = try #require(try await Agent.find(agentUUID, on: app.db))
-            #expect(agent.$site.id != site.id)
+            #expect(agent.siteID != site.id)
         }
     }
 
@@ -738,8 +741,8 @@ final class AgentOrganizationScopeTests {
                 organizationScope: .organizationalUnit(ou.id!))
 
             let agent = try #require(try await Agent.find(agentUUID, on: app.db))
-            #expect(agent.$organizationalUnit.id == ou.id)
-            #expect(agent.$organization.id == nil)
+            #expect(agent.organizationalUnitID == ou.id)
+            #expect(agent.organizationID == nil)
             let rootOrg = try await agent.rootOrganizationID(on: app.db)
             #expect(rootOrg == org.id)
         }

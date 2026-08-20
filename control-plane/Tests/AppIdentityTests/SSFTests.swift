@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import Foundation
 import Testing
@@ -52,7 +53,7 @@ private let accountEnabledType = "https://schemas.openid.net/secevent/risc/event
 private struct SSFFixture {
     let user: User
     let organization: Organization
-    let stream: SSFStream
+    let stream: SSFStreamSnapshot
     let pushToken: String
     let apiToken: String
 }
@@ -66,20 +67,27 @@ private func makePushFixture(
     let user = try await builder.createUser(username: "ssfuser", email: "ssf@example.com")
     let org = try await builder.createOrganization(name: "SSF Org")
     try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-    let apiToken = try await user.generateAPIKey(on: app.db)
+    let apiToken = try await user.generateAPIKey(on: app)
 
-    let stream = SSFStream(
-        organizationID: org.id!,
-        name: "IdP events",
-        transmitterURL: transmitterURL,
-        deliveryMethod: .push,
-        createdByID: user.id!
+    let created = try await app.ssfStreamsPersistence.create(
+        SSFStreamWrite(
+            organizationID: org.id!,
+            name: "IdP events",
+            transmitterURL: transmitterURL,
+            deliveryMethod: .push,
+            createdByID: user.id!
+        )
     )
-    let pushToken = SSFStream.generatePushToken()
-    stream.pushTokenHash = SSFStream.hashPushToken(pushToken)
-    stream.pushTokenPrefix = SSFStream.extractPushTokenPrefix(pushToken)
-    stream.remoteStreamID = "remote-stream-1"
-    try await stream.save(on: app.db)
+    let pushToken = SSFPushCredential.generatePushToken()
+    let stream = try #require(
+        try await app.ssfStreamsPersistence.completeRegistration(
+            id: created.id,
+            remoteStreamID: "remote-stream-1",
+            pollEndpoint: nil,
+            pushTokenHash: SSFPushCredential.hashPushToken(pushToken),
+            pushTokenPrefix: SSFPushCredential.extractPushTokenPrefix(pushToken)
+        )
+    )
 
     return SSFFixture(
         user: user, organization: org, stream: stream, pushToken: pushToken, apiToken: apiToken)
@@ -125,18 +133,22 @@ final class SSFPushDeliveryTests {
                 subID: ["format": "email", "email": "ssf@example.com"]
             )
             try await self.deliver(
-                app, streamID: fixture.stream.id!, token: fixture.pushToken, body: set,
+                app, streamID: fixture.stream.id, token: fixture.pushToken, body: set,
                 expect: .accepted)
 
             let user = try #require(try await User.find(fixture.user.id, on: app.db))
             #expect(user.sessionEpoch == 1)
             #expect(user.disabledAt == nil)
 
-            let audited = try await AuditEvent.query(on: app.db)
-                .filter(\.$eventType == "ssf.sessions_revoked").count()
+            let audited = try await app.audit.events.events(
+                matching: AuditEventFilter(eventType: "ssf.sessions_revoked"),
+                limit: 1
+            ).total
             #expect(audited == 1)
 
-            let stream = try #require(try await SSFStream.find(fixture.stream.id, on: app.db))
+            let stream = try #require(
+                try await app.ssfStreamsPersistence.stream(id: fixture.stream.id)
+            )
             #expect(stream.lastEventAt != nil)
         }
     }
@@ -151,16 +163,15 @@ final class SSFPushDeliveryTests {
                 subID: ["format": "email", "email": "ssf@example.com"]
             )
             try await self.deliver(
-                app, streamID: fixture.stream.id!, token: fixture.pushToken, body: set,
+                app, streamID: fixture.stream.id, token: fixture.pushToken, body: set,
                 expect: .accepted)
 
             let user = try #require(try await User.find(fixture.user.id, on: app.db))
             #expect(user.sessionEpoch == 1)
 
-            let activeKeys = try await APIKey.query(on: app.db)
-                .filter(\.$user.$id == fixture.user.id!)
-                .filter(\.$isActive == true)
-                .count()
+            let activeKeys = try await app.apiKeysPersistence.keys(
+                userID: fixture.user.id!
+            ).filter(\.isActive).count
             #expect(activeKeys == 0)
         }
     }
@@ -176,7 +187,7 @@ final class SSFPushDeliveryTests {
                 subID: ["format": "email", "email": "ssf@example.com"]
             )
             try await self.deliver(
-                app, streamID: fixture.stream.id!, token: fixture.pushToken, body: disable,
+                app, streamID: fixture.stream.id, token: fixture.pushToken, body: disable,
                 expect: .accepted)
             var user = try #require(try await User.find(fixture.user.id, on: app.db))
             #expect(user.disabledAt != nil)
@@ -188,7 +199,7 @@ final class SSFPushDeliveryTests {
                 subID: ["format": "email", "email": "ssf@example.com"]
             )
             try await self.deliver(
-                app, streamID: fixture.stream.id!, token: fixture.pushToken, body: enable,
+                app, streamID: fixture.stream.id, token: fixture.pushToken, body: enable,
                 expect: .accepted)
             user = try #require(try await User.find(fixture.user.id, on: app.db))
             #expect(user.disabledAt == nil)
@@ -209,14 +220,16 @@ final class SSFPushDeliveryTests {
             )
             // Still 202: the SET was valid; there was just nothing to do.
             try await self.deliver(
-                app, streamID: fixture.stream.id!, token: fixture.pushToken, body: set,
+                app, streamID: fixture.stream.id, token: fixture.pushToken, body: set,
                 expect: .accepted)
 
             let user = try #require(try await User.find(outsider.id, on: app.db))
             #expect(user.sessionEpoch == 0)
 
-            let unmatched = try await AuditEvent.query(on: app.db)
-                .filter(\.$eventType == "ssf.subject_unmatched").count()
+            let unmatched = try await app.audit.events.events(
+                matching: AuditEventFilter(eventType: "ssf.subject_unmatched"),
+                limit: 1
+            ).total
             #expect(unmatched == 1)
         }
     }
@@ -229,31 +242,27 @@ final class SSFPushDeliveryTests {
 
             // Same OIDC `sub` at two different issuers; only the provider for
             // the stream's transmitter (and organization) may match.
-            let provider = OIDCProvider(
+            let provider = try await app.oidcProvidersPersistence.create(OIDCProviderWrite(
                 organizationID: fixture.organization.id!,
                 name: "IdP",
                 clientID: "client",
-                clientSecret: "secret",
+                encryptedClientSecret: "secret",
                 discoveryURL: "https://idp.example.com/.well-known/openid-configuration"
-            )
-            try await provider.save(on: app.db)
+            ))
 
             let otherOrg = try await builder.createOrganization(name: "Other Org")
-            let otherProvider = OIDCProvider(
+            let otherProvider = try await app.oidcProvidersPersistence.create(OIDCProviderWrite(
                 organizationID: otherOrg.id!,
                 name: "Other IdP",
                 clientID: "client",
-                clientSecret: "secret",
+                encryptedClientSecret: "secret",
                 discoveryURL: "https://other-idp.example.com/.well-known/openid-configuration"
-            )
-            try await otherProvider.save(on: app.db)
+            ))
 
-            fixture.user.linkToOIDCProvider(provider.id!, subject: "shared-sub")
-            try await fixture.user.save(on: app.db)
+            try await fixture.user.linkedToOIDCProvider(provider.id, subject: "shared-sub").save(on: app.db)
             let otherUser = try await builder.createUser(username: "other", email: "other@example.com")
             try await builder.addUserToOrganization(user: otherUser, organization: otherOrg)
-            otherUser.linkToOIDCProvider(otherProvider.id!, subject: "shared-sub")
-            try await otherUser.save(on: app.db)
+            try await otherUser.linkedToOIDCProvider(otherProvider.id, subject: "shared-sub").save(on: app.db)
 
             let set = try makeUnsignedSET(
                 iss: "https://idp.example.com",
@@ -261,7 +270,7 @@ final class SSFPushDeliveryTests {
                 subID: ["format": "iss_sub", "iss": "https://idp.example.com", "sub": "shared-sub"]
             )
             try await self.deliver(
-                app, streamID: fixture.stream.id!, token: fixture.pushToken, body: set,
+                app, streamID: fixture.stream.id, token: fixture.pushToken, body: set,
                 expect: .accepted)
 
             let target = try #require(try await User.find(fixture.user.id, on: app.db))
@@ -279,7 +288,7 @@ final class SSFPushDeliveryTests {
                 ]
             )
             try await self.deliver(
-                app, streamID: fixture.stream.id!, token: fixture.pushToken, body: foreign,
+                app, streamID: fixture.stream.id, token: fixture.pushToken, body: foreign,
                 expect: .accepted)
             let unchanged = try #require(try await User.find(fixture.user.id, on: app.db))
             #expect(unchanged.sessionEpoch == 1)
@@ -294,9 +303,9 @@ final class SSFPushDeliveryTests {
                 iss: "https://idp.example.com", events: [sessionRevokedType: [:]])
 
             try await self.deliver(
-                app, streamID: fixture.stream.id!, token: nil, body: set, expect: .unauthorized)
+                app, streamID: fixture.stream.id, token: nil, body: set, expect: .unauthorized)
             try await self.deliver(
-                app, streamID: fixture.stream.id!, token: "ssf_wrong", body: set,
+                app, streamID: fixture.stream.id, token: "ssf_wrong", body: set,
                 expect: .unauthorized)
 
             let user = try #require(try await User.find(fixture.user.id, on: app.db))
@@ -312,17 +321,17 @@ final class SSFPushDeliveryTests {
                 iss: "https://idp.example.com", events: [sessionRevokedType: [:]])
 
             try await self.deliver(
-                app, streamID: fixture.stream.id!, token: fixture.pushToken, body: set,
+                app, streamID: fixture.stream.id, token: fixture.pushToken, body: set,
                 contentType: .json, expect: .badRequest)
 
             let wrongIssuer = try makeUnsignedSET(
                 iss: "https://evil.example.com", events: [sessionRevokedType: [:]])
             try await self.deliver(
-                app, streamID: fixture.stream.id!, token: fixture.pushToken, body: wrongIssuer,
+                app, streamID: fixture.stream.id, token: fixture.pushToken, body: wrongIssuer,
                 expect: .badRequest)
 
             try await self.deliver(
-                app, streamID: fixture.stream.id!, token: fixture.pushToken, body: "not-a-jwt",
+                app, streamID: fixture.stream.id, token: fixture.pushToken, body: "not-a-jwt",
                 expect: .badRequest)
         }
     }
@@ -339,17 +348,25 @@ final class SSFPushDeliveryTests {
 
             // Unregistered (e.g. a failed re-register): the old token must
             // stop working even if it were still stored.
-            fixture.stream.remoteStreamID = nil
-            try await fixture.stream.save(on: app.db)
+            _ = try await app.ssfStreamsPersistence.clearRegistration(id: fixture.stream.id)
             try await self.deliver(
-                app, streamID: fixture.stream.id!, token: fixture.pushToken, body: set,
+                app, streamID: fixture.stream.id, token: fixture.pushToken, body: set,
                 expect: .notFound)
 
-            fixture.stream.remoteStreamID = "remote-stream-1"
-            fixture.stream.enabled = false
-            try await fixture.stream.save(on: app.db)
+            _ = try await app.ssfStreamsPersistence.completeRegistration(
+                id: fixture.stream.id,
+                remoteStreamID: "remote-stream-1",
+                pollEndpoint: nil,
+                pushTokenHash: SSFPushCredential.hashPushToken(fixture.pushToken),
+                pushTokenPrefix: SSFPushCredential.extractPushTokenPrefix(fixture.pushToken)
+            )
+            _ = try await app.ssfStreamsPersistence.updateOwnedStream(
+                id: fixture.stream.id,
+                organizationID: fixture.stream.organizationID,
+                changes: SSFStreamChanges(enabled: false)
+            )
             try await self.deliver(
-                app, streamID: fixture.stream.id!, token: fixture.pushToken, body: set,
+                app, streamID: fixture.stream.id, token: fixture.pushToken, body: set,
                 expect: .notFound)
         }
     }
@@ -365,19 +382,27 @@ final class SSFPushDeliveryTests {
             // A stored endpoint pointing at a metadata service — as a
             // malicious transmitter could have returned before validation
             // existed — must be rejected at poll time.
-            let stream = SSFStream(
-                organizationID: org.id!,
-                name: "poll",
-                transmitterURL: "https://idp.example.com",
-                deliveryMethod: .poll,
-                createdByID: user.id!
+            let created = try await app.ssfStreamsPersistence.create(
+                SSFStreamWrite(
+                    organizationID: org.id!,
+                    name: "poll",
+                    transmitterURL: "https://idp.example.com",
+                    deliveryMethod: .poll,
+                    createdByID: user.id!
+                )
             )
-            stream.remoteStreamID = "remote-poll-1"
-            stream.pollEndpoint = "https://169.254.169.254/poll"
-            try await stream.save(on: app.db)
+            let stream = try #require(
+                try await app.ssfStreamsPersistence.completeRegistration(
+                    id: created.id,
+                    remoteStreamID: "remote-poll-1",
+                    pollEndpoint: "https://169.254.169.254/poll",
+                    pushTokenHash: nil,
+                    pushTokenPrefix: nil
+                )
+            )
 
             do {
-                _ = try await app.ssf.pollStream(stream, on: app.db)
+                _ = try await app.ssf.pollStream(stream)
                 Issue.record("Expected poll endpoint validation to throw")
             } catch let abort as Abort {
                 #expect(abort.status == .unprocessableEntity)
@@ -401,7 +426,7 @@ final class SSFStreamAPITests {
             let user = try await builder.createUser(username: "ssfadmin", email: "admin@example.com")
             let org = try await builder.createOrganization(name: "CRUD Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
             let base = "/api/organizations/\(org.id!.uuidString)/ssf-streams"
 
             var streamID: UUID?
@@ -463,8 +488,7 @@ final class SSFStreamAPITests {
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            let remaining = try await SSFStream.query(on: app.db).count()
-            #expect(remaining == 0)
+            #expect(try await app.ssfStreamsPersistence.stream(id: id) == nil)
         }
     }
 
@@ -478,7 +502,7 @@ final class SSFStreamAPITests {
             let user = try await builder.createUser(username: "ssfenc", email: "enc@example.com")
             let org = try await builder.createOrganization(name: "Enc Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
             let base = "/api/organizations/\(org.id!.uuidString)/ssf-streams"
 
             var streamID: UUID?
@@ -501,8 +525,8 @@ final class SSFStreamAPITests {
             }
             let id = try #require(streamID)
 
-            let created = try await SSFStream.find(id, on: app.db)
-            let storedToken = try #require(created?.authToken)
+            let created = try await app.ssfStreamsPersistence.stream(id: id)
+            let storedToken = try #require(created?.encryptedAuthToken)
             #expect(storedToken.hasPrefix(SecretsEncryptionService.encryptedPrefix))
             #expect(!storedToken.contains("management-secret-original"))
             let decrypted = try app.secretsEncryption.decrypt(storedToken)
@@ -525,8 +549,8 @@ final class SSFStreamAPITests {
                 #expect(res.status == .ok)
             }
 
-            let updated = try await SSFStream.find(id, on: app.db)
-            let rotatedStored = try #require(updated?.authToken)
+            let updated = try await app.ssfStreamsPersistence.stream(id: id)
+            let rotatedStored = try #require(updated?.encryptedAuthToken)
             #expect(rotatedStored.hasPrefix(SecretsEncryptionService.encryptedPrefix))
             let rotatedDecrypted = try app.secretsEncryption.decrypt(rotatedStored)
             #expect(rotatedDecrypted == "rotated-token")
@@ -543,23 +567,23 @@ final class SSFStreamAPITests {
             let key = try SecretsEncryptionService.parseKey(String(repeating: "ab", count: 32))
             app.secretsEncryption = SecretsEncryptionService(key: key)
 
-            let stream = SSFStream(
-                organizationID: org.id!,
-                name: "Encrypted",
-                transmitterURL: "https://idp.example.com",
-                authToken: try app.secretsEncryption.encrypt("management-secret"),
-                deliveryMethod: .poll,
-                createdByID: user.id!
+            let stream = try await app.ssfStreamsPersistence.create(
+                SSFStreamWrite(
+                    organizationID: org.id!,
+                    name: "Encrypted",
+                    transmitterURL: "https://idp.example.com",
+                    encryptedAuthToken: try app.secretsEncryption.encrypt("management-secret"),
+                    deliveryMethod: .poll,
+                    createdByID: user.id!
+                )
             )
-            try await stream.save(on: app.db)
 
             // With the key configured, building the receiver decrypts the token.
             _ = try await app.ssf.receiver(for: stream)
 
             // Without it, the encrypted token must fail loudly instead of being
             // sent to the transmitter as-is.
-            let streamID = try stream.requireID()
-            await app.ssf.invalidateReceiver(for: streamID)
+            await app.ssf.invalidateReceiver(for: stream.id)
             app.secretsEncryption = .disabled
             await #expect(throws: (any Error).self) {
                 _ = try await app.ssf.receiver(for: stream)
@@ -574,7 +598,7 @@ final class SSFStreamAPITests {
             let user = try await builder.createUser(username: "ssfadmin2", email: "a2@example.com")
             let org = try await builder.createOrganization(name: "URL Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             // Malformed, plaintext, and non-allow-listed transmitter hosts are
             // all rejected: streams drive server-side HTTP requests (SSRF).
@@ -607,7 +631,7 @@ final class SSFStreamAPITests {
             let user = try await builder.createUser(username: "member", email: "m@example.com")
             let org = try await builder.createOrganization(name: "Denied Org")
             try await builder.addUserToOrganization(user: user, organization: org)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await app.test(.POST, "/api/organizations/\(org.id!.uuidString)/ssf-streams") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -685,8 +709,7 @@ final class UserSecurityMiddlewareTests {
                 req.session.authenticate(user)
                 req.stampSessionEpoch(for: user)
                 // The signal handler bumps the epoch after login.
-                user.sessionEpoch += 1
-                try await user.save(on: app.db)
+                try await user.replacing(sessionEpoch: user.sessionEpoch + 1).save(on: app.db)
             }
             #expect(res.status == .unauthorized)
         }
@@ -705,8 +728,7 @@ final class UserSecurityMiddlewareTests {
             }
             #expect(ok.status == .ok)
 
-            user.sessionEpoch = 1
-            try await user.save(on: app.db)
+            try await user.replacing(sessionEpoch: 1).save(on: app.db)
             let revoked = try await self.respond(app) { req in
                 req.auth.login(user)
                 req.session.authenticate(user)
@@ -720,8 +742,7 @@ final class UserSecurityMiddlewareTests {
         try await withTestApp { app in
             let user = try await TestDataBuilder(db: app.db)
                 .createUser(username: "disabled", email: "d@example.com")
-            user.disabledAt = Date()
-            try await user.save(on: app.db)
+            try await user.replacing(disabledAt: .some(Date())).save(on: app.db)
 
             // No session at all — the API-key path is rejected too.
             let res = try await self.respond(app) { req in
@@ -740,9 +761,17 @@ final class UserSecurityMiddlewareTests {
                 req.auth.login(user)
                 req.session.authenticate(user)
                 req.stampSessionEpoch(for: user)
-                user.sessionEpoch = 3
-                try await user.save(on: app.db)
-                req.apiKey = APIKey()  // marks the request bearer-authenticated
+                try await user.replacing(sessionEpoch: 3).save(on: app.db)
+                req.apiKey = try await app.apiKeysPersistence.issue(
+                    APIKeyWrite(
+                        userID: try user.requireID(),
+                        name: "epoch-test",
+                        keyHash: "epoch-test-hash",
+                        keyPrefix: "sk_epoch...",
+                        restriction: CredentialRestriction.unrestricted.stored
+                    ),
+                    maximumKeysPerUser: 10
+                )
             }
             #expect(res.status == .ok)
         }
@@ -769,7 +798,7 @@ final class UserSecurityMiddlewareTests {
                 events: [sessionRevokedType: [:]],
                 subID: ["format": "email", "email": "ssf@example.com"]
             )
-            try await app.test(.POST, "/ssf/events/\(fixture.stream.id!.uuidString)") { req in
+            try await app.test(.POST, "/ssf/events/\(fixture.stream.id.uuidString)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.pushToken)
                 req.headers.contentType = secEventMediaType
                 req.body = ByteBufferAllocator().buffer(string: set)

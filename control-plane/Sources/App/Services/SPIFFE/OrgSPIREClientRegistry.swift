@@ -102,9 +102,8 @@ struct OrgSPIREClientRegistry: Sendable {
         }
 
         guard
-            let row = try await OrgTrustDomain.query(on: db)
-                .filter(\.$organizationID == organizationID)
-                .first()
+            let row = try await OrgTrustDomainStore.find(
+                organizationID: organizationID, on: db)
         else {
             // Organizations created before the feature was switched on never
             // claimed a domain. They are platform-domain tenants until an
@@ -171,9 +170,8 @@ struct OrgSPIREClientRegistry: Sendable {
         guard trustDomain != platformTrustDomain else { return platform }
 
         guard
-            let row = try await OrgTrustDomain.query(on: db)
-                .filter(\.$trustDomain == trustDomain)
-                .first()
+            let row = try await OrgTrustDomainStore.find(
+                trustDomain: trustDomain, on: db)
         else {
             // The row is gone — teardown finished, or it was never recorded —
             // while a resource still names the domain. Nothing here can remove
@@ -195,9 +193,8 @@ struct OrgSPIREClientRegistry: Sendable {
         }
 
         guard
-            let row = try await OrgTrustDomain.query(on: db)
-                .filter(\.$trustDomain == trustDomain)
-                .first()
+            let row = try await OrgTrustDomainStore.find(
+                trustDomain: trustDomain, on: db)
         else {
             return nil
         }
@@ -244,7 +241,7 @@ struct OrgSPIREClientRegistry: Sendable {
     /// bootstrap command, and `orgSelection` below is what requires it. Keeping
     /// it optional here is what lets revocation work against a row the
     /// reconciler never finished.
-    private func adminService(row: OrgTrustDomain) throws -> SPIRERegistrationService {
+    private func adminService(row: OrgTrustDomainRecord) throws -> SPIRERegistrationService {
         guard let nodeAddress = row.nodeAddress, !nodeAddress.isEmpty else {
             throw Abort(
                 .serviceUnavailable,
@@ -294,7 +291,7 @@ struct OrgSPIREClientRegistry: Sendable {
         return SPIRERegistrationService(api: client, config: config, logger: logger)
     }
 
-    private func orgSelection(row: OrgTrustDomain) throws -> OrgSPIRESelection {
+    private func orgSelection(row: OrgTrustDomainRecord) throws -> OrgSPIRESelection {
         // Only enrollment needs this: it is the address the *node* dials to
         // attest, which ends up in the bootstrap command. Checked before
         // building the client so a half-provisioned row fails naming the

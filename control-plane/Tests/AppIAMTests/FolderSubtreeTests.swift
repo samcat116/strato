@@ -20,9 +20,8 @@ struct FolderSubtreeTests {
             let user = try await builder.createUser(username: "folderadmin", email: "folders@example.com")
             let org = try await builder.createOrganization(name: "Folder Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
-            let token = try await user.generateAPIKey(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, org, builder, token)
         }

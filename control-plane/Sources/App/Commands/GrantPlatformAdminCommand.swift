@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -107,18 +107,18 @@ struct GrantPlatformAdminCommand: AsyncCommand {
 
         guard (signature.email == nil) != (signature.username == nil) else { throw SelectorError() }
 
-        let query = User.query(on: app.db)
         let selector: String
+        let user: RecoverableAccountSnapshot?
         if let email = signature.email?.trimmingCharacters(in: .whitespacesAndNewlines) {
-            query.filter(\.$email == email)
             selector = "email '\(email)'"
+            user = try await app.accountRecoveryPersistence.account(email: email)
         } else {
             let username = signature.username!.trimmingCharacters(in: .whitespacesAndNewlines)
-            query.filter(\.$username == username)
             selector = "username '\(username)'"
+            user = try await app.accountRecoveryPersistence.account(username: username)
         }
-        guard let user = try await query.first() else { throw NotFoundError(selector: selector) }
-        let userID = try user.requireID()
+        guard let user else { throw NotFoundError(selector: selector) }
+        let userID = user.id
 
         if signature.claim {
             // Both mirror gates the claim endpoints apply, refused here so the
@@ -126,51 +126,37 @@ struct GrantPlatformAdminCommand: AsyncCommand {
             // `claimBegin`/`claimFinish` call `rejectDisabledAccount`, and a
             // local passkey invite is not how an OIDC/SCIM identity signs in.
             guard user.disabledAt == nil else { throw DisabledAccountError(username: user.username) }
-            guard user.source == .local else {
-                throw NonLocalAccountError(username: user.username, source: user.source.rawValue)
+            guard user.source == "local" else {
+                throw NonLocalAccountError(username: user.username, source: user.source)
             }
         }
 
-        let claimToken = signature.claim ? AccountClaimToken.generateToken() : nil
+        let claimToken = signature.claim ? AccountClaimSecret.generateToken() : nil
         let claimExpiresAt = Date().addingTimeInterval(UserController.claimTokenTTL)
-        let wasAlreadyAdmin = user.isSystemAdmin
-
-        try await app.db.transaction { db in
-            // The enrollment check belongs *inside* the transaction that mints.
-            // Read outside it, a concurrent claim or self-registration could
-            // enroll the account's first credential in the gap, and this would
-            // then write an unclaimed invite onto an account that now has a
-            // passkey — `beginRegistration` refuses those, so the recovery
-            // command would itself cause the lockout it exists to undo.
-            if signature.claim {
-                let credentialCount = try await UserCredential.query(on: db)
-                    .filter(\.$user.$id == userID)
-                    .count()
-                guard credentialCount == 0 else { throw AlreadyEnrolledError(username: user.username) }
-            }
-
-            user.isSystemAdmin = true
-            try await user.save(on: db)
-
-            if let claimToken {
-                // Any older invite is superseded — leaving it live would give
-                // two working links to one account, and the stale one is
-                // exactly what a lost-link recovery is trying to replace.
-                try await AccountClaimToken.query(on: db)
-                    .filter(\.$user.$id == userID)
-                    .filter(\.$claimedAt == nil)
-                    .delete()
-
-                let claim = AccountClaimToken(
-                    userID: userID,
-                    tokenHash: AccountClaimToken.hashToken(claimToken),
-                    tokenPrefix: AccountClaimToken.extractPrefix(claimToken),
-                    expiresAt: claimExpiresAt,
-                    createdByID: userID
-                )
-                try await claim.save(on: db)
-            }
+        let issue = claimToken.map {
+            AccountClaimIssue(
+                tokenHash: AccountClaimSecret.hashToken($0),
+                tokenPrefix: AccountClaimSecret.extractPrefix($0),
+                expiresAt: claimExpiresAt,
+                createdByID: userID
+            )
         }
+        let recovery: PlatformAdminRecoveryResult
+        do {
+            recovery = try await app.accountRecoveryPersistence.grantPlatformAdmin(
+                userID: userID,
+                claim: issue
+            )
+        } catch AccountRecoveryPersistenceError.alreadyEnrolled {
+            throw AlreadyEnrolledError(username: user.username)
+        } catch AccountRecoveryPersistenceError.accountDisabled {
+            throw DisabledAccountError(username: user.username)
+        } catch AccountRecoveryPersistenceError.accountIsNotLocal(let source) {
+            throw NonLocalAccountError(username: user.username, source: source)
+        } catch AccountRecoveryPersistenceError.accountNotFound {
+            throw NotFoundError(selector: selector)
+        }
+        let wasAlreadyAdmin = recovery.wasAlreadySystemAdmin
 
         // The highest-privilege mutation in the system, made outside the
         // evaluator — so the trail is the only thing that can answer "who

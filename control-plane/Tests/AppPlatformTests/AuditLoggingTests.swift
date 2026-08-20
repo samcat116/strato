@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import NIOConcurrencyHelpers
 import Testing
@@ -31,10 +32,9 @@ final class AuditLoggingTests {
             )
             let org = try await builder.createOrganization(name: "Audit Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
             try await test(app, user, org, token)
         } catch {
             try await app.shutdownForTesting()
@@ -43,10 +43,13 @@ final class AuditLoggingTests {
         try await app.shutdownForTesting()
     }
 
-    private func events(
-        ofType type: String, on db: any Database
-    ) async throws -> [AuditEvent] {
-        try await AuditEvent.query(on: db).filter(\.$eventType == type).all()
+    private func events(ofType type: String, on app: Application) async throws
+        -> [AuditEventSnapshot]
+    {
+        try await app.audit.events.events(
+            matching: AuditEventFilter(eventType: type),
+            limit: 500
+        ).events
     }
 
     // MARK: - Middleware: API requests
@@ -61,7 +64,7 @@ final class AuditLoggingTests {
                 #expect(res.status == .ok)
             }
 
-            let recorded = try await self.events(ofType: "api.request", on: app.db)
+            let recorded = try await self.events(ofType: "api.request", on: app)
             #expect(recorded.count == 1)
             let event = try #require(recorded.first)
             #expect(event.userID == user.id)
@@ -86,7 +89,7 @@ final class AuditLoggingTests {
                 #expect(res.status == .ok)
             }
 
-            let recorded = try await self.events(ofType: "api.request", on: app.db)
+            let recorded = try await self.events(ofType: "api.request", on: app)
             #expect(recorded.isEmpty)
         }
     }
@@ -104,7 +107,7 @@ final class AuditLoggingTests {
                 #expect(res.status == .ok)
             }
 
-            let recorded = try await self.events(ofType: "api.request", on: app.db)
+            let recorded = try await self.events(ofType: "api.request", on: app)
             #expect(recorded.count == 1)
             let event = try #require(recorded.first)
             #expect(event.adminBypass == true)
@@ -122,9 +125,8 @@ final class AuditLoggingTests {
             let builder = TestDataBuilder(db: app.db)
             let outsider = try await builder.createUser(
                 username: "audit-outsider", email: "audit-outsider@example.com")
-            outsider.currentOrganizationId = org.id
-            try await outsider.save(on: app.db)
-            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
+            try await outsider.replacingCurrentOrganization(org.id).save(on: app.db)
+            let outsiderToken = try await outsider.generateAPIKey(on: app)
 
             try await app.test(.POST, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
@@ -132,7 +134,7 @@ final class AuditLoggingTests {
                 #expect(res.status == .forbidden)
             }
 
-            let recorded = try await self.events(ofType: "api.request", on: app.db)
+            let recorded = try await self.events(ofType: "api.request", on: app)
             #expect(recorded.count == 1)
             let event = try #require(recorded.first)
             #expect(event.status == 403)
@@ -145,14 +147,11 @@ final class AuditLoggingTests {
     @Test("Mutations denied by an API-key restriction are audited")
     func restrictionDeniedMutationIsAudited() async throws {
         try await withApp { app, user, _, _ in
-            let readOnlyKey = APIKey.generateAPIKey()
-            try await APIKey(
-                userID: user.id!,
+            let readOnlyKey = try await user.generateAPIKey(
+                on: app,
                 name: "read-only",
-                keyHash: APIKey.hashAPIKey(readOnlyKey),
-                keyPrefix: String(readOnlyKey.prefix(16)),
                 restriction: .readOnly
-            ).save(on: app.db)
+            )
 
             try await app.test(.POST, "/api/api-keys") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: readOnlyKey)
@@ -161,7 +160,7 @@ final class AuditLoggingTests {
                 #expect(res.status == .forbidden)
             }
 
-            let recorded = try await self.events(ofType: "api.request", on: app.db)
+            let recorded = try await self.events(ofType: "api.request", on: app)
             #expect(recorded.count == 1)
             let event = try #require(recorded.first)
             #expect(event.status == 403)
@@ -182,7 +181,7 @@ final class AuditLoggingTests {
                 #expect(res.status == .ok)
             }
 
-            let recorded = try await self.events(ofType: "auth.logout", on: app.db)
+            let recorded = try await self.events(ofType: "auth.logout", on: app)
             #expect(recorded.count == 1)
             let event = try #require(recorded.first)
             #expect(event.userID == user.id)
@@ -208,15 +207,12 @@ final class AuditLoggingTests {
     func systemAdminListsAndFilters() async throws {
         try await withApp(systemAdmin: true) { app, _, org, token in
             let otherOrgID = UUID()
-            try await AuditEvent(
-                from: AuditRecord(eventType: "test.alpha", organizationID: org.id, adminBypass: true)
-            ).save(on: app.db)
-            try await AuditEvent(
-                from: AuditRecord(eventType: "test.alpha", organizationID: otherOrgID)
-            ).save(on: app.db)
-            try await AuditEvent(
-                from: AuditRecord(eventType: "test.beta", organizationID: org.id)
-            ).save(on: app.db)
+            _ = try await app.audit.events.append([
+                AuditEventWrite(
+                    eventType: "test.alpha", organizationID: org.id, adminBypass: true),
+                AuditEventWrite(eventType: "test.alpha", organizationID: otherOrgID),
+                AuditEventWrite(eventType: "test.beta", organizationID: org.id),
+            ])
 
             try await app.test(.GET, "/api/audit-events?eventType=test.alpha") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -260,12 +256,10 @@ final class AuditLoggingTests {
     @Test("Org audit query is scoped to the organization and gated on org admin")
     func orgQueryScopedAndGated() async throws {
         try await withApp { app, _, org, token in
-            try await AuditEvent(
-                from: AuditRecord(eventType: "test.org", organizationID: org.id)
-            ).save(on: app.db)
-            try await AuditEvent(
-                from: AuditRecord(eventType: "test.org", organizationID: UUID())
-            ).save(on: app.db)
+            _ = try await app.audit.events.append([
+                AuditEventWrite(eventType: "test.org", organizationID: org.id),
+                AuditEventWrite(eventType: "test.org", organizationID: UUID()),
+            ])
 
             try await app.test(.GET, "/api/organizations/\(org.id!)/audit-events") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -282,7 +276,7 @@ final class AuditLoggingTests {
                 username: "audit-member", email: "audit-member@example.com")
             try await TestDataBuilder(db: app.db).addUserToOrganization(
                 user: member, organization: org, role: "member")
-            let memberToken = try await member.generateAPIKey(on: app.db)
+            let memberToken = try await member.generateAPIKey(on: app)
             try await app.test(.GET, "/api/organizations/\(org.id!)/audit-events") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
             } afterResponse: { res in
@@ -298,16 +292,16 @@ final class AuditLoggingTests {
     private func auditService(on app: Application, retentionDays: Int?) -> AuditService {
         var config = AuditConfig.fromConfiguration(app.controlPlaneConfiguration)
         config.retentionDays = retentionDays
-        return AuditService(app: app, config: config)
+        return AuditService(app: app, config: config, events: app.audit.events)
     }
 
-    /// Persist an event and backdate its creation timestamp (Fluent stamps
-    /// `created_at` on insert, so the backdate needs a second save).
-    private func saveEvent(type: String, ageDays: Double, on db: any Database) async throws {
-        let event = AuditEvent(from: AuditRecord(eventType: type))
-        try await event.save(on: db)
-        event.createdAt = Date().addingTimeInterval(-ageDays * 86_400)
-        try await event.save(on: db)
+    private func saveEvent(type: String, ageDays: Double, on app: Application) async throws {
+        _ = try await app.audit.events.append([
+            AuditEventWrite(
+                eventType: type,
+                createdAt: Date().addingTimeInterval(-ageDays * 86_400)
+            )
+        ])
     }
 
     @Test("Retention sweep deletes events past the window and keeps newer ones")
@@ -315,12 +309,12 @@ final class AuditLoggingTests {
         try await withApp { app, _, _, _ in
             app.audit = self.auditService(on: app, retentionDays: 30)
 
-            try await self.saveEvent(type: "test.expired", ageDays: 40, on: app.db)
-            try await self.saveEvent(type: "test.recent", ageDays: 1, on: app.db)
+            try await self.saveEvent(type: "test.expired", ageDays: 40, on: app)
+            try await self.saveEvent(type: "test.recent", ageDays: 1, on: app)
 
             await app.audit.sweepExpiredEvents()
 
-            let remaining = try await AuditEvent.query(on: app.db).all()
+            let remaining = try await app.audit.events.events(limit: 500).events
             let types = remaining.map(\.eventType)
             #expect(types == ["test.recent"])
         }
@@ -329,14 +323,14 @@ final class AuditLoggingTests {
     @Test("Retention sweep is a no-op when AUDIT_RETENTION_DAYS is unset or non-positive")
     func retentionSweepDisabled() async throws {
         try await withApp { app, _, _, _ in
-            try await self.saveEvent(type: "test.ancient", ageDays: 365, on: app.db)
+            try await self.saveEvent(type: "test.ancient", ageDays: 365, on: app)
 
             for retentionDays in [nil, 0, -7] {
                 app.audit = self.auditService(on: app, retentionDays: retentionDays)
                 #expect(app.audit.retentionDays == nil)
                 await app.audit.sweepExpiredEvents()
 
-                let count = try await AuditEvent.query(on: app.db).count()
+                let count = try await app.audit.events.events(limit: 500).total
                 #expect(count == 1)
             }
         }
@@ -346,7 +340,7 @@ final class AuditLoggingTests {
     func retentionSweepRespectsSingletonLock() async throws {
         try await withApp { app, _, _, _ in
             app.audit = self.auditService(on: app, retentionDays: 30)
-            try await self.saveEvent(type: "test.expired", ageDays: 40, on: app.db)
+            try await self.saveEvent(type: "test.expired", ageDays: 40, on: app)
 
             // Simulate another replica's in-flight pass.
             let acquired = await app.coordination.acquireSweepLock(
@@ -355,7 +349,7 @@ final class AuditLoggingTests {
 
             await app.audit.sweepExpiredEvents()
 
-            let count = try await AuditEvent.query(on: app.db).count()
+            let count = try await app.audit.events.events(limit: 500).total
             #expect(count == 1)
         }
     }
@@ -395,7 +389,12 @@ final class AuditLoggingTests {
         var config = AuditConfig.fromConfiguration(app.controlPlaneConfiguration)
         config.synchronousWrites = false
         config.maxQueueDepth = maxQueueDepth
-        return AuditService(app: app, config: config, backends: backends)
+        return AuditService(
+            app: app,
+            config: config,
+            events: app.audit.events,
+            backends: backends
+        )
     }
 
     @Test("Recording an event does not wait for the backends")
@@ -422,7 +421,8 @@ final class AuditLoggingTests {
     func backgroundDeliveryPersistsAuditedMutations() async throws {
         try await withApp { app, user, _, token in
             app.audit = self.backgroundAuditService(
-                on: app, backends: [DatabaseAuditBackend(app: app)])
+                on: app,
+                backends: [DatabaseAuditBackend(app: app, events: app.audit.events)])
 
             try await app.test(.POST, "/api/api-keys") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -433,7 +433,7 @@ final class AuditLoggingTests {
 
             await app.audit.flush()
 
-            let recorded = try await self.events(ofType: "api.request", on: app.db)
+            let recorded = try await self.events(ofType: "api.request", on: app)
             #expect(recorded.count == 1)
             #expect(recorded.first?.userID == user.id)
             #expect(recorded.first?.path == "/api/api-keys")
@@ -444,7 +444,8 @@ final class AuditLoggingTests {
     func shutdownFlushesQueuedEvents() async throws {
         try await withApp { app, _, _, _ in
             app.audit = self.backgroundAuditService(
-                on: app, backends: [DatabaseAuditBackend(app: app)])
+                on: app,
+                backends: [DatabaseAuditBackend(app: app, events: app.audit.events)])
 
             // Straight onto the queue, so the assertion is about the flush and
             // not about a drain task that may have run already.
@@ -454,7 +455,7 @@ final class AuditLoggingTests {
 
             await AuditRetentionLifecycleHandler().shutdownAsync(app)
 
-            let persisted = try await AuditEvent.query(on: app.db).all()
+            let persisted = try await app.audit.events.events(limit: 500).events
             #expect(Set(persisted.map(\.eventType)) == ["test.pending0", "test.pending1", "test.pending2"])
         }
     }

@@ -73,7 +73,7 @@ final class ProjectVisibilityTests {
                 name: "Vis Project", description: "d", organization: org)
             let user = try await builder.createUser(username: "vis-user", email: "vis@example.com")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             // A whole second organization the caller has no grant in — the
             // rows the old platform-wide walk would have visited.
@@ -109,7 +109,7 @@ final class ProjectVisibilityTests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
                 nodeType: .organizationalUnit, nodeID: parentFolder.id!, createdBy: nil, on: app.db)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             _ = try await createVolume(app, name: "nested-vol", project: nested, createdBy: user)
             _ = try await createVolume(app, name: "sibling-vol", project: sibling, createdBy: user)
@@ -132,7 +132,7 @@ final class ProjectVisibilityTests {
             let member = try await builder.createUser(
                 username: "bare-member", email: "bare@example.com")
             try await builder.addUserToOrganization(user: member, organization: org, role: "member")
-            let token = try await member.generateAPIKey(on: app.db)
+            let token = try await member.generateAPIKey(on: app)
             _ = try await createVolume(app, name: "unreachable", project: project, createdBy: member)
 
             #expect(try await listVolumeNames(app, token: token).isEmpty)
@@ -153,7 +153,7 @@ final class ProjectVisibilityTests {
             let user = try await builder.createUser(
                 username: "ceiling-user", email: "ceiling@example.com")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             _ = try await createVolume(app, name: "visible-vol", project: visible, createdBy: user)
             _ = try await createVolume(app, name: "hidden-vol", project: ceilinged, createdBy: user)
@@ -185,7 +185,7 @@ final class ProjectVisibilityTests {
             let user = try await builder.createUser(
                 username: "authored-user", email: "authored@example.com")
             try await builder.addUserToOrganization(user: user, organization: org, role: "member")
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
             _ = try await createVolume(app, name: "policy-vol", project: project, createdBy: user)
 
             #expect(try await listVolumeNames(app, token: token).isEmpty)
@@ -225,7 +225,7 @@ final class ProjectVisibilityTests {
                 name: "Admin Project B", description: "d", organization: orgB)
             let admin = try await builder.createUser(
                 username: "vis-admin", email: "vis-admin@example.com", isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
             _ = try await createVolume(app, name: "a-vol", project: projectA, createdBy: admin)
             _ = try await createVolume(app, name: "b-vol", project: projectB, createdBy: admin)
 
@@ -257,7 +257,7 @@ final class ProjectVisibilityTests {
             let member = try await builder.createUser(
                 username: "net-bare", email: "net-bare@example.com")
             try await builder.addUserToOrganization(user: member, organization: org, role: "member")
-            let token = try await member.generateAPIKey(on: app.db)
+            let token = try await member.generateAPIKey(on: app)
 
             // Every network belongs to a project (issue #765), so bare org
             // membership — which grants no project read — reaches none of them.
@@ -298,7 +298,9 @@ final class ProjectVisibilityTests {
             }
 
             let visibility = try await ProjectVisibility.resolve(
-                on: Request.forVisibilityTesting(app: app, user: user))
+                on: Request.forVisibilityTesting(app: app, user: user),
+                using: app.iamPersistence,
+                projects: app.projectsPersistence)
             #expect(visibility.candidateProjectIDs == [project.id!])
         }
     }

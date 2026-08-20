@@ -1,4 +1,5 @@
 import Fluent
+import ControlPlanePostgres
 import Foundation
 import Testing
 import Vapor
@@ -42,7 +43,7 @@ final class WhoCanEvaluatorAgreementTests {
     }
 
     private func buildTree(_ app: Application, prefix: String) async throws -> Tree {
-        let builder = TestDataBuilder(db: app.db)
+        let builder = TestDataBuilder(app: app)
         let org = try await builder.createOrganization(name: "\(prefix) Org")
         let project = try await builder.createProject(
             name: "\(prefix) Project", description: "d", organization: org)
@@ -71,7 +72,7 @@ final class WhoCanEvaluatorAgreementTests {
     func authoredPermitAgreement() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "PermitAgree")
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(
                 username: "permit-agree", email: "permit-agree@example.com")
 
@@ -113,7 +114,7 @@ final class WhoCanEvaluatorAgreementTests {
     func conditionedBindingAgreement() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "CondAgree")
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(
                 username: "cond-agree", email: "cond-agree@example.com")
             try await insertConditionedRoleBinding(
@@ -143,9 +144,10 @@ final class WhoCanEvaluatorAgreementTests {
     func machinePrincipalUngrantedNetworkAgreement() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "MachineNet")
-            let account = ServiceAccount(name: "net-reader", projectID: tree.project.id!)
-            try await account.save(on: app.db)
-            let network = try await TestDataBuilder(db: app.db).createNetwork(
+            let account = try await LegacyServiceAccountStore.insert(
+                ServiceAccountWrite(name: "net-reader", projectID: tree.project.id!),
+                on: app.db)
+            let network = try await TestDataBuilder(app: app).createNetwork(
                 name: "agree-net", project: tree.project, subnet: "10.95.0.0/24", gateway: "10.95.0.1")
             let node = IAMNode(type: .network, id: network.id!)
 
@@ -153,10 +155,10 @@ final class WhoCanEvaluatorAgreementTests {
             // permit that made them world-readable — are gone (issue #765), so
             // reading one now takes a grant like any other project resource.
             let can = try await WhoCanService.can(
-                principalType: .serviceAccount, principalID: account.id!, action: "network:read",
+                principalType: .serviceAccount, principalID: account.id, action: "network:read",
                 node: node, app: app, on: app.db)
             let enforced = try await authorizerAllows(
-                app, principal: .serviceAccount(account.id!), action: "network:read", node: node)
+                app, principal: .serviceAccount(account.id), action: "network:read", node: node)
             #expect(!enforced)
             #expect(can == enforced)
         }
@@ -165,7 +167,7 @@ final class WhoCanEvaluatorAgreementTests {
     @Test("A principal that cannot reach the evaluator answers false")
     func unreachablePrincipalsAnswerFalse() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(app, prefix: "Unreachable")
             let network = try await builder.createNetwork(
                 name: "nobody-net", project: tree.project, subnet: "10.96.0.0/24", gateway: "10.96.0.1")
@@ -182,8 +184,7 @@ final class WhoCanEvaluatorAgreementTests {
             // A disabled user cannot act on anything it still holds.
             let disabled = try await builder.createUser(
                 username: "agree-disabled", email: "agree-disabled@example.com")
-            disabled.disabledAt = Date()
-            try await disabled.save(on: app.db)
+            try await disabled.replacing(disabledAt: .some(Date())).save(on: app.db)
             let can = try await WhoCanService.can(
                 principalType: .user, principalID: disabled.id!, action: "network:read",
                 node: node, app: app, on: app.db)
@@ -195,7 +196,7 @@ final class WhoCanEvaluatorAgreementTests {
     func inapplicableActionAnswersFalse() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "Inapplicable")
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let member = try await builder.createUser(
                 username: "inapp-member", email: "inapp-member@example.com")
             try await builder.addUserToOrganization(user: member, organization: tree.org)
@@ -225,7 +226,7 @@ final class WhoCanEvaluatorAgreementTests {
     func groupPrincipalPath() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "GroupPath")
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let group = try await builder.createGroup(
                 name: "group-path", description: "d", organization: tree.org)
             try await RoleBindingService.grant(

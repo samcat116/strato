@@ -3,7 +3,7 @@ import SQLKit
 
 struct CreateStorageDevices: AsyncMigration {
     func prepare(on database: any Database) async throws {
-        try await database.schema(StorageDevice.schema)
+        try await database.schema("storage_devices")
             .id()
             .field(
                 "agent_id", .uuid, .required,
@@ -77,6 +77,6 @@ struct CreateStorageDevices: AsyncMigration {
     }
 
     func revert(on database: any Database) async throws {
-        try await database.schema(StorageDevice.schema).delete()
+        try await database.schema("storage_devices").delete()
     }
 }

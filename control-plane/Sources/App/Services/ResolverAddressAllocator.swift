@@ -63,10 +63,9 @@ enum ResolverAddressAllocator {
             used = Set(rows.compactMap { try? $0.decode(column: "resolver_index", as: Int.self) })
         } else {
             used = Set(
-                try await LogicalNetwork.query(on: db)
-                    .filter(\.$resolverIndex != nil)
-                    .all()
-                    .compactMap(\.resolverIndex))
+                try await LegacyLogicalNetworkStore.networks(
+                    resolverIndexPresent: true, on: db
+                ).compactMap(\.resolverIndex))
         }
 
         guard let index = firstFree(after: used) else {
@@ -77,7 +76,6 @@ enum ResolverAddressAllocator {
                     + "addresses in \(NetworkResolverEndpoint.v4Space) are in use. Disable the "
                     + "resolver on networks that no longer need one to free them.")
         }
-        network.resolverIndex = index
         return index
     }
 

@@ -2,6 +2,7 @@ import Testing
 import Vapor
 import VaporTesting
 import Fluent
+import ControlPlanePostgres
 import AppTestSupport
 @testable import App
 
@@ -23,25 +24,27 @@ struct APIKeyAuthenticatorTests {
 
     func createTestAPIKey(
         for user: User,
-        on db: Database,
+        on app: Application,
         isActive: Bool = true,
         expiresAt: Date? = nil,
         restriction: CredentialRestriction = .unrestricted
-    ) async throws -> (APIKey, String) {
-        let fullKey = APIKey.generateAPIKey()
-        let hashedKey = APIKey.hashAPIKey(fullKey)
+    ) async throws -> (APIKeySnapshot, String) {
+        let fullKey = APIKeyCredential.generate()
+        let hashedKey = APIKeyCredential.hash(fullKey)
         let prefix = String(fullKey.prefix(8))
 
-        let apiKey = APIKey(
-            userID: try user.requireID(),
-            name: "Test API Key",
-            keyHash: hashedKey,
-            keyPrefix: prefix,
-            restriction: restriction,
-            isActive: isActive,
-            expiresAt: expiresAt
+        let apiKey = try await app.apiKeysPersistence.issue(
+            APIKeyWrite(
+                userID: try user.requireID(),
+                name: "Test API Key",
+                keyHash: hashedKey,
+                keyPrefix: prefix,
+                restriction: restriction.stored,
+                isActive: isActive,
+                expiresAt: expiresAt
+            ),
+            maximumKeysPerUser: 10
         )
-        try await apiKey.save(on: db)
         return (apiKey, fullKey)
     }
 
@@ -55,14 +58,19 @@ struct APIKeyAuthenticatorTests {
         try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
-        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db)
+        let (_, fullKey) = try await createTestAPIKey(for: user, on: app)
 
         // Create a test route that requires authentication
         app.routes.all.removeAll()
         // Ad-hoc routes outside the production classification; declare them so
         // the default-deny middleware treats them as login-gated (#482).
         app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
-        let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
+        let protected = app.grouped(
+            BearerAuthorizationHeaderAuthenticator(
+                apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
+                users: app.userDirectoryPersistence
+            )
+        )
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
                 throw Abort(.unauthorized)
@@ -91,14 +99,17 @@ struct APIKeyAuthenticatorTests {
         try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
-        _ = try await createTestAPIKey(for: user, on: app.db)
+        _ = try await createTestAPIKey(for: user, on: app)
 
         // Create a test route that requires authentication
         app.routes.all.removeAll()
         // Ad-hoc routes outside the production classification; declare them so
         // the default-deny middleware treats them as login-gated (#482).
         app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
-        let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
+        let protected = app.grouped(
+            BearerAuthorizationHeaderAuthenticator(
+                apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
+                users: app.userDirectoryPersistence))
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
                 throw Abort(.unauthorized)
@@ -126,7 +137,7 @@ struct APIKeyAuthenticatorTests {
         try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
-        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db)
+        let (_, fullKey) = try await createTestAPIKey(for: user, on: app)
 
         app.routes.all.removeAll()
         app.testOnlyLoginRoutePrefixes = ["/test"]
@@ -162,7 +173,10 @@ struct APIKeyAuthenticatorTests {
         // Ad-hoc routes outside the production classification; declare them so
         // the default-deny middleware treats them as login-gated (#482).
         app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
-        let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
+        let protected = app.grouped(
+            BearerAuthorizationHeaderAuthenticator(
+                apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
+                users: app.userDirectoryPersistence))
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
                 throw Abort(.unauthorized)
@@ -187,14 +201,17 @@ struct APIKeyAuthenticatorTests {
         try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
-        _ = try await createTestAPIKey(for: user, on: app.db)
+        _ = try await createTestAPIKey(for: user, on: app)
 
         // Create a test route that requires authentication
         app.routes.all.removeAll()
         // Ad-hoc routes outside the production classification; declare them so
         // the default-deny middleware treats them as login-gated (#482).
         app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
-        let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
+        let protected = app.grouped(
+            BearerAuthorizationHeaderAuthenticator(
+                apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
+                users: app.userDirectoryPersistence))
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
                 throw Abort(.unauthorized)
@@ -225,14 +242,17 @@ struct APIKeyAuthenticatorTests {
         try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
-        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, isActive: false)
+        let (_, fullKey) = try await createTestAPIKey(for: user, on: app, isActive: false)
 
         // Create a test route that requires authentication
         app.routes.all.removeAll()
         // Ad-hoc routes outside the production classification; declare them so
         // the default-deny middleware treats them as login-gated (#482).
         app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
-        let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
+        let protected = app.grouped(
+            BearerAuthorizationHeaderAuthenticator(
+                apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
+                users: app.userDirectoryPersistence))
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
                 throw Abort(.unauthorized)
@@ -261,14 +281,17 @@ struct APIKeyAuthenticatorTests {
 
         let user = try await createTestUser(on: app.db)
         let expiredDate = Date().addingTimeInterval(-86400)  // 1 day ago
-        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, expiresAt: expiredDate)
+        let (_, fullKey) = try await createTestAPIKey(for: user, on: app, expiresAt: expiredDate)
 
         // Create a test route that requires authentication
         app.routes.all.removeAll()
         // Ad-hoc routes outside the production classification; declare them so
         // the default-deny middleware treats them as login-gated (#482).
         app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
-        let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
+        let protected = app.grouped(
+            BearerAuthorizationHeaderAuthenticator(
+                apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
+                users: app.userDirectoryPersistence))
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
                 throw Abort(.unauthorized)
@@ -297,14 +320,17 @@ struct APIKeyAuthenticatorTests {
 
         let user = try await createTestUser(on: app.db)
         let futureDate = Date().addingTimeInterval(86400)  // 1 day from now
-        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, expiresAt: futureDate)
+        let (_, fullKey) = try await createTestAPIKey(for: user, on: app, expiresAt: futureDate)
 
         // Create a test route that requires authentication
         app.routes.all.removeAll()
         // Ad-hoc routes outside the production classification; declare them so
         // the default-deny middleware treats them as login-gated (#482).
         app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
-        let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
+        let protected = app.grouped(
+            BearerAuthorizationHeaderAuthenticator(
+                apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
+                users: app.userDirectoryPersistence))
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
                 throw Abort(.unauthorized)
@@ -335,14 +361,17 @@ struct APIKeyAuthenticatorTests {
         try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
-        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db)
+        let (_, fullKey) = try await createTestAPIKey(for: user, on: app)
 
         // Create a test route that checks user details
         app.routes.all.removeAll()
         // Ad-hoc routes outside the production classification; declare them so
         // the default-deny middleware treats them as login-gated (#482).
         app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
-        let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
+        let protected = app.grouped(
+            BearerAuthorizationHeaderAuthenticator(
+                apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
+                users: app.userDirectoryPersistence))
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
                 throw Abort(.unauthorized)
@@ -373,14 +402,17 @@ struct APIKeyAuthenticatorTests {
         try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
-        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db)
+        let (_, fullKey) = try await createTestAPIKey(for: user, on: app)
 
         // Create a test route that checks API key storage
         app.routes.all.removeAll()
         // Ad-hoc routes outside the production classification; declare them so
         // the default-deny middleware treats them as login-gated (#482).
         app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
-        let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
+        let protected = app.grouped(
+            BearerAuthorizationHeaderAuthenticator(
+                apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
+                users: app.userDirectoryPersistence))
         protected.get("test") { req -> String in
             guard let storedKey = req.apiKey else {
                 throw Abort(.internalServerError, reason: "API key not stored")
@@ -414,7 +446,9 @@ struct APIKeyAuthenticatorTests {
         // the default-deny middleware treats them as login-gated (#482).
         app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
         let protected = app.grouped(
-            BearerAuthorizationHeaderAuthenticator(),
+            BearerAuthorizationHeaderAuthenticator(
+                apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
+                users: app.userDirectoryPersistence),
             CredentialRestrictionMiddleware()
         )
         protected.get("resource") { _ in "read-ok" }
@@ -428,7 +462,7 @@ struct APIKeyAuthenticatorTests {
         try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
-        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, restriction: .readOnly)
+        let (_, fullKey) = try await createTestAPIKey(for: user, on: app, restriction: .readOnly)
         registerScopedRoutes(on: app)
 
         try await app.test(
@@ -451,7 +485,7 @@ struct APIKeyAuthenticatorTests {
         try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
-        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, restriction: .readOnly)
+        let (_, fullKey) = try await createTestAPIKey(for: user, on: app, restriction: .readOnly)
         registerScopedRoutes(on: app)
 
         try await app.test(
@@ -476,17 +510,18 @@ struct APIKeyAuthenticatorTests {
 
         let user = try await createTestUser(on: app.db)
         let accessToken = CLISession.generateAccessToken()
-        let session = CLISession(
-            userID: try user.requireID(),
-            clientName: "cli",
-            restriction: .readOnly,
-            accessTokenHash: CLISession.hashToken(accessToken),
-            accessTokenPrefix: String(accessToken.prefix(12)) + "...",
-            accessTokenExpiresAt: Date().addingTimeInterval(3600),
-            refreshTokenHash: CLISession.hashToken(CLISession.generateRefreshToken()),
-            refreshTokenExpiresAt: Date().addingTimeInterval(86400)
+        _ = try await app.oauthDeviceSessionsPersistence.createSession(
+            CLISessionWrite(
+                userID: try user.requireID(),
+                clientName: "cli",
+                restriction: CredentialRestriction.readOnly.stored,
+                accessTokenHash: CLISession.hashToken(accessToken),
+                accessTokenPrefix: String(accessToken.prefix(12)) + "...",
+                accessTokenExpiresAt: Date().addingTimeInterval(3600),
+                refreshTokenHash: CLISession.hashToken(CLISession.generateRefreshToken()),
+                refreshTokenExpiresAt: Date().addingTimeInterval(86400)
+            )
         )
-        try await session.save(on: app.db)
         registerScopedRoutes(on: app)
 
         try await app.test(
@@ -521,7 +556,7 @@ struct APIKeyAuthenticatorTests {
 
         let user = try await createTestUser(on: app.db)
         let (apiKey, fullKey) = try await createTestAPIKey(
-            for: user, on: app.db, restriction: .readOnly)
+            for: user, on: app, restriction: .readOnly)
         registerScopedRoutes(on: app)
 
         try await app.test(
@@ -541,13 +576,14 @@ struct APIKeyAuthenticatorTests {
         // on the whole table, so another middleware recording something on this
         // request doesn't turn this into a flake.
         await app.iamDecisionRecorder.flush()
-        let entries = try await IAMDecisionLog.query(on: app.db)
-            .filter(\.$decision == "credential_restricted")
-            .all()
+        let entries = try await app.decisionLogsPersistence.entries(
+            matching: DecisionLogFilter(decision: "credential_restricted"),
+            limit: 500
+        ).entries
         #expect(entries.count == 1)
         let entry = try #require(entries.first)
         let userID = try user.requireID()
-        let apiKeyID = try apiKey.requireID()
+        let apiKeyID = apiKey.id
         #expect(entry.subject == userID.uuidString)
         #expect(entry.action == nil)
         #expect(entry.nodeType == nil)
@@ -568,7 +604,7 @@ struct APIKeyAuthenticatorTests {
         try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
-        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db)
+        let (_, fullKey) = try await createTestAPIKey(for: user, on: app)
         registerScopedRoutes(on: app)
 
         try await app.test(
@@ -606,7 +642,7 @@ struct APIKeyAuthenticatorTests {
         let restriction = try CredentialRestriction.validated(
             actions: ["vm:*"], nodeType: nil, nodeID: nil)
         let (_, fullKey) = try await createTestAPIKey(
-            for: user, on: app.db, restriction: restriction)
+            for: user, on: app, restriction: restriction)
         registerScopedRoutes(on: app)
 
         try await app.test(
@@ -623,30 +659,30 @@ struct APIKeyAuthenticatorTests {
 
     // MARK: - Hash Function Tests
 
-    @Test("APIKey.hashAPIKey produces consistent hashes")
+    @Test("API key hashing produces consistent hashes")
     func testHashConsistency() {
         let key = "sk_test_1234567890"
-        let hash1 = APIKey.hashAPIKey(key)
-        let hash2 = APIKey.hashAPIKey(key)
+        let hash1 = APIKeyCredential.hash(key)
+        let hash2 = APIKeyCredential.hash(key)
 
         #expect(hash1 == hash2)
     }
 
-    @Test("APIKey.hashAPIKey produces different hashes for different keys")
+    @Test("API key hashing produces different hashes for different keys")
     func testHashUniqueness() {
         let key1 = "sk_test_1234567890"
         let key2 = "sk_test_0987654321"
 
-        let hash1 = APIKey.hashAPIKey(key1)
-        let hash2 = APIKey.hashAPIKey(key2)
+        let hash1 = APIKeyCredential.hash(key1)
+        let hash2 = APIKeyCredential.hash(key2)
 
         #expect(hash1 != hash2)
     }
 
-    @Test("APIKey.hashAPIKey produces valid SHA256 hash")
+    @Test("API key hashing produces a valid SHA256 hash")
     func testHashFormat() {
         let key = "sk_test_1234567890"
-        let hash = APIKey.hashAPIKey(key)
+        let hash = APIKeyCredential.hash(key)
 
         // SHA256 hash should be 64 hexadecimal characters
         #expect(hash.count == 64)
@@ -659,9 +695,9 @@ struct APIKeyAuthenticatorTests {
 
     // MARK: - API Key Generation Tests
 
-    @Test("APIKey.generateAPIKey produces valid format")
+    @Test("API key generation produces a valid format")
     func testGenerateAPIKeyFormat() {
-        let key = APIKey.generateAPIKey()
+        let key = APIKeyCredential.generate()
 
         #expect(key.hasPrefix("sk_"))
         #expect(key.count > 10)  // Should be reasonably long
@@ -672,10 +708,10 @@ struct APIKeyAuthenticatorTests {
         #expect(components[0] == "sk")
     }
 
-    @Test("APIKey.generateAPIKey produces unique keys")
+    @Test("API key generation produces unique keys")
     func testGenerateAPIKeyUniqueness() {
-        let key1 = APIKey.generateAPIKey()
-        let key2 = APIKey.generateAPIKey()
+        let key1 = APIKeyCredential.generate()
+        let key2 = APIKeyCredential.generate()
 
         #expect(key1 != key2)
     }

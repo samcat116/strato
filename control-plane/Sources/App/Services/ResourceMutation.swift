@@ -92,50 +92,34 @@ struct ResourceMutation {
         var errorDescription: String? { message }
     }
 
-    /// Applies `mutation` to `resource`, records it, and dispatches.
-    ///
-    /// One transaction covers the desired-state change, the convergence
-    /// deadline, and the attribution event, so a mutation can never apply
-    /// unrecorded (nor be recorded without applying). `mutation` need not save
-    /// the resource — this saves it once afterwards, which is also what
-    /// persists the deadline.
-    ///
-    /// The transaction opens by locking the row and refreshing the columns the
-    /// reconciliation loop owns (`lockAndRefresh`). That is what replaces the
-    /// dropped `409` — not by refusing the second mutation, but by serializing
-    /// it: the caller's instance was loaded before the request and its `save`
-    /// writes the whole row, so without the refresh a racing mutation's
-    /// generation bump would be lost and a concurrent observed-state report's
-    /// `observedGeneration` would be written *backwards*.
-    @discardableResult
-    func accept<R: ConvergingResource>(
+    /// Value-oriented counterpart used by immutable persistence records. The
+    /// committed replacement is returned with the acceptance metadata so no
+    /// caller relies on reference mutation or Fluent dirty tracking.
+    func acceptValue<R: ConvergingResource>(
         _ kind: VMOperationKind,
         on resource: R,
         actor: MutationActor,
         dispatch strategy: Dispatch,
         on db: any Database,
         app: Application,
-        applying mutation: @escaping @Sendable (any Database) async throws -> Void = { _ in }
-    ) async throws -> Accepted {
+        applying mutation: @escaping @Sendable (R, any Database) async throws -> R = { value, _ in value }
+    ) async throws -> (resource: R, accepted: Accepted) {
         let resourceID = try resource.requireID()
-        let (accepted, placementAgentIDs) = try await db.transaction { db in
-            guard try await resource.lockAndRefresh(on: db) else {
+        let (committed, accepted, placementAgentIDs) = try await db.transaction { db in
+            guard var current = try await resource.lockingAndRefreshing(on: db) else {
                 throw Abort(
                     .notFound,
                     reason: "This \(R.operationResourceKind.displayName) no longer exists")
             }
-            let expectedGeneration = resource.generation
-
-            // Resolve the delivery/attribution scope before the mutation: the
-            // organization lookup walks the hierarchy, and only the generation
-            // moves under a mutation.
+            let expectedGeneration = current.generation
             var scope = try await ResourceEvent.scope(
                 of: R.operationResourceKind, id: resourceID, on: db)
 
-            try await mutation(db)
-            switch try await resource.advanceDesiredStateGeneration(
+            current = try await mutation(current, db)
+            let advance = try await current.advancingDesiredStateGeneration(
                 expectedGeneration: expectedGeneration, on: db)
-            {
+            current = advance.resource
+            switch advance.outcome {
             case .applied:
                 break
             case .missing:
@@ -143,28 +127,23 @@ struct ResourceMutation {
                     .notFound,
                     reason: "This \(R.operationResourceKind.displayName) no longer exists")
             case .superseded(let actualGeneration):
-                // `lockAndRefresh` holds this row through the transaction, so
-                // this is an invariant violation rather than an ordinary race.
                 throw Abort(
                     .internalServerError,
                     reason: "Desired-state generation advanced unexpectedly from "
                         + "\(expectedGeneration) to \(actualGeneration) while its row was locked")
             }
-            resource.extendConvergenceDeadline(
+            current = current.extendingConvergenceDeadline(
                 by: R.operationResourceKind.completionBudgetSeconds(for: kind))
-            try await resource.save(on: db)
+            try await current.persist(on: db)
 
-            scope.generation = resource.generation
+            scope.generation = current.generation
             let event = try await ResourceEvent.record(
-                kind,
-                resourceKind: R.operationResourceKind,
-                resourceID: resourceID,
-                actor: actor,
-                scope: scope,
-                on: db)
+                kind, resourceKind: R.operationResourceKind, resourceID: resourceID,
+                actor: actor, scope: scope, on: db)
             return (
-                Accepted(mutationID: try event.requireID(), targetGeneration: resource.generation),
-                try await resource.placementAgentIDs(on: db)
+                current,
+                Accepted(mutationID: try event.requireID(), targetGeneration: current.generation),
+                try await current.placementAgentIDs(on: db)
             )
         }
 
@@ -172,7 +151,7 @@ struct ResourceMutation {
             kind, resourceType: R.self, resourceID: resourceID,
             targetGeneration: accepted.targetGeneration,
             agentIDs: placementAgentIDs, strategy: strategy, app: app)
-        return accepted
+        return (committed, accepted)
     }
 
     /// Dispatches a mutation applied *outside* `accept` — the create paths,
@@ -259,7 +238,7 @@ struct ResourceMutation {
     ) async {
         guard let db = app.liveDB else { return }
         do {
-            guard let resource = try await R.find(id, on: db) else { return }
+            guard let resource = try await R.load(id, on: db) else { return }
             guard resource.generation == expectedGeneration else {
                 Telemetry.desiredStateWriteConflict(
                     resourceKind: R.operationResourceKind.rawValue, writer: "mutation_failed")
@@ -273,9 +252,10 @@ struct ResourceMutation {
                     ])
                 return
             }
-            let outcome = try await ResourceConvergence.recordFailure(
+            let result = try await ResourceConvergence.recordValueFailure(
                 resource, mutation: mutation, reason: reason,
                 telemetryReason: "mutation_failed", on: db)
+            let outcome = result.outcome
             if case .superseded(let actualGeneration) = outcome {
                 logger.warning(
                     "Dropped a mutation failure after newer desired state superseded it",
@@ -334,6 +314,127 @@ enum ResourceConvergence {
         case missing
     }
 
+    struct ValueWrite<R: ConvergingResource>: Sendable {
+        let resource: R
+        let outcome: WriteOutcome
+    }
+
+    /// Immutable-record failure transition. It mirrors the mutable path below
+    /// but threads each replacement through the transaction and returns the
+    /// exact value that was persisted.
+    static func recordValueFailure<R: ConvergingResource>(
+        _ resource: R,
+        mutation: VMOperationKind,
+        reason: String,
+        telemetryReason: String,
+        alreadyRecordedAt: Int64?? = nil,
+        on db: any Database
+    ) async throws -> ValueWrite<R> {
+        let expectedGeneration = resource.generation
+        let recorded = alreadyRecordedAt ?? resource.failedGeneration
+        if recorded == expectedGeneration {
+            let outcome = try await db.transaction { tx -> WriteOutcome in
+                switch try await DesiredStateGenerationWriter.lockCurrent(
+                    schema: R.schema, id: try resource.requireID(),
+                    expectedGeneration: expectedGeneration, on: tx)
+                {
+                case .applied: return .alreadyRecorded
+                case .missing: return .missing
+                case .superseded(let actualGeneration):
+                    return .superseded(actualGeneration: actualGeneration)
+                }
+            }
+            if case .superseded = outcome {
+                Telemetry.desiredStateWriteConflict(
+                    resourceKind: R.operationResourceKind.rawValue, writer: telemetryReason)
+            }
+            return ValueWrite(resource: resource, outcome: outcome)
+        }
+
+        let withFailure = resource.replacingConvergence(
+            phase: nil, lastError: reason, failedGeneration: expectedGeneration)
+        let withoutDeadline = withFailure.replacingConvergenceDeadline(nil)
+        let resolution = withoutDeadline.resolvingForStuckOperation(
+            mutation: mutation, telemetryReason: telemetryReason)
+        let prepared = resolution.resource
+
+        let result = try await db.transaction { tx -> ValueWrite<R> in
+            var updated = prepared
+            switch try await DesiredStateGenerationWriter.lockCurrent(
+                schema: R.schema, id: try updated.requireID(),
+                expectedGeneration: expectedGeneration, on: tx)
+            {
+            case .missing:
+                return ValueWrite(resource: resource, outcome: .missing)
+            case .superseded(let actualGeneration):
+                return ValueWrite(
+                    resource: resource,
+                    outcome: .superseded(actualGeneration: actualGeneration))
+            case .applied:
+                break
+            }
+
+            if resolution.desiredStateChanged {
+                let advance = try await updated.advancingDesiredStateGeneration(
+                    expectedGeneration: expectedGeneration, on: tx)
+                updated = advance.resource
+                switch advance.outcome {
+                case .applied: break
+                case .missing:
+                    return ValueWrite(resource: resource, outcome: .missing)
+                case .superseded(let actualGeneration):
+                    return ValueWrite(
+                        resource: resource,
+                        outcome: .superseded(actualGeneration: actualGeneration))
+                }
+            }
+            try await updated.persist(on: tx)
+            try await WebhookEvents.enqueueMutationOutcome(
+                for: updated, succeeded: false, error: reason, on: tx)
+            return ValueWrite(resource: updated, outcome: .recorded)
+        }
+        if case .superseded = result.outcome {
+            Telemetry.desiredStateWriteConflict(
+                resourceKind: R.operationResourceKind.rawValue, writer: telemetryReason)
+        }
+        return result
+    }
+
+    static func recordValueSuccess<R: ConvergingResource>(
+        _ resource: R, on db: any Database
+    ) async throws -> ValueWrite<R> {
+        let expectedGeneration = resource.generation
+        let wasOutstanding = resource.convergenceDeadline != nil
+        let updated = resource.replacingConvergenceDeadline(nil)
+        let result = try await db.transaction { tx -> ValueWrite<R> in
+            switch try await DesiredStateGenerationWriter.lockCurrent(
+                schema: R.schema, id: try updated.requireID(),
+                expectedGeneration: expectedGeneration, on: tx)
+            {
+            case .missing:
+                return ValueWrite(resource: resource, outcome: .missing)
+            case .superseded(let actualGeneration):
+                return ValueWrite(
+                    resource: resource,
+                    outcome: .superseded(actualGeneration: actualGeneration))
+            case .applied:
+                break
+            }
+            try await updated.persist(on: tx)
+            guard wasOutstanding else {
+                return ValueWrite(resource: updated, outcome: .alreadyRecorded)
+            }
+            try await WebhookEvents.enqueueMutationOutcome(
+                for: updated, succeeded: true, error: nil, on: tx)
+            return ValueWrite(resource: updated, outcome: .recorded)
+        }
+        if case .superseded = result.outcome {
+            Telemetry.desiredStateWriteConflict(
+                resourceKind: R.operationResourceKind.rawValue, writer: "observed_success")
+        }
+        return result
+    }
+
     /// Marks a resource degraded for `reason` and resolves the in-flight state
     /// the failed mutation left, saving the row and enqueuing the
     /// `operation.failed` webhook **in one transaction**.
@@ -372,139 +473,6 @@ enum ResourceConvergence {
     /// failure that stands against a newer target — and it is why the
     /// stuck-convergence sweep claims the deadline rather than relying on this
     /// guard to stay true across passes.
-    @discardableResult
-    static func recordFailure<R: ConvergingResource>(
-        _ resource: R,
-        mutation: VMOperationKind,
-        reason: String,
-        telemetryReason: String,
-        alreadyRecordedAt: Int64?? = nil,
-        on db: any Database
-    ) async throws -> WriteOutcome {
-        let expectedGeneration = resource.generation
-        let recorded = alreadyRecordedAt ?? resource.failedGeneration
-        if recorded == expectedGeneration {
-            let outcome = try await db.transaction { tx -> WriteOutcome in
-                switch try await DesiredStateGenerationWriter.lockCurrent(
-                    schema: R.schema,
-                    id: try resource.requireID(),
-                    expectedGeneration: expectedGeneration,
-                    on: tx)
-                {
-                case .applied:
-                    return .alreadyRecorded
-                case .missing:
-                    return .missing
-                case .superseded(let actualGeneration):
-                    return .superseded(actualGeneration: actualGeneration)
-                }
-            }
-            if case .superseded = outcome {
-                Telemetry.desiredStateWriteConflict(
-                    resourceKind: R.operationResourceKind.rawValue, writer: telemetryReason)
-            }
-            return outcome
-        }
-
-        let failurePairChanged =
-            resource.lastError != reason || resource.failedGeneration != resource.generation
-        resource.convergencePhase = nil
-        resource.lastError = reason
-        resource.failedGeneration = expectedGeneration
-        if let timestamped = resource as? any TimestampedConvergenceObservable {
-            // The observed-state path timestamps before it enters this shared
-            // mutation verdict. Preserve that first-observed instant; direct
-            // dispatch and sweep failures still need a timestamp of their own.
-            if failurePairChanged || timestamped.lastErrorAt == nil {
-                timestamped.lastErrorAt = Date()
-            }
-        }
-        resource.convergenceDeadline = nil
-        let desiredStateChanged = resource.resolveForStuckOperation(
-            mutation: mutation, telemetryReason: telemetryReason)
-
-        let outcome = try await db.transaction { tx -> WriteOutcome in
-            switch try await DesiredStateGenerationWriter.lockCurrent(
-                schema: R.schema,
-                id: try resource.requireID(),
-                expectedGeneration: expectedGeneration,
-                on: tx)
-            {
-            case .missing:
-                return .missing
-            case .superseded(let actualGeneration):
-                return .superseded(actualGeneration: actualGeneration)
-            case .applied:
-                break
-            }
-
-            if desiredStateChanged {
-                switch try await resource.advanceDesiredStateGeneration(
-                    expectedGeneration: expectedGeneration, on: tx)
-                {
-                case .applied:
-                    break
-                case .missing:
-                    return .missing
-                case .superseded(let actualGeneration):
-                    return .superseded(actualGeneration: actualGeneration)
-                }
-            }
-            try await resource.save(on: tx)
-            try await WebhookEvents.enqueueMutationOutcome(
-                for: resource, succeeded: false, error: reason, on: tx)
-            return .recorded
-        }
-        if case .superseded = outcome {
-            Telemetry.desiredStateWriteConflict(
-                resourceKind: R.operationResourceKind.rawValue, writer: telemetryReason)
-        }
-        return outcome
-    }
-
-    /// Persists a converged resource and enqueues `operation.completed`, in one
-    /// transaction for the reason `recordFailure` opens one: clearing the
-    /// deadline is what closes the transition, and committing that without the
-    /// outbox row loses the completion permanently — the next report sees a
-    /// resource that was already converged and never re-enters.
-    ///
-    /// A live deadline is what says a mutation was actually outstanding, and it
-    /// gates the *webhook*, not the save. Without that gate, a resource that
-    /// drifts into its desired state on its own — a guest powering itself off
-    /// while desired is `shutdown` — would fire a completion naming whichever
-    /// mutation happened to be the most recent, which is not what converged.
-    static func recordSuccess<R: ConvergingResource>(
-        _ resource: R, on db: any Database
-    ) async throws -> WriteOutcome {
-        let expectedGeneration = resource.generation
-        let wasOutstanding = resource.convergenceDeadline != nil
-        resource.convergenceDeadline = nil
-        let outcome = try await db.transaction { tx -> WriteOutcome in
-            switch try await DesiredStateGenerationWriter.lockCurrent(
-                schema: R.schema,
-                id: try resource.requireID(),
-                expectedGeneration: expectedGeneration,
-                on: tx)
-            {
-            case .missing:
-                return .missing
-            case .superseded(let actualGeneration):
-                return .superseded(actualGeneration: actualGeneration)
-            case .applied:
-                break
-            }
-            try await resource.save(on: tx)
-            guard wasOutstanding else { return .alreadyRecorded }
-            try await WebhookEvents.enqueueMutationOutcome(
-                for: resource, succeeded: true, error: nil, on: tx)
-            return .recorded
-        }
-        if case .superseded = outcome {
-            Telemetry.desiredStateWriteConflict(
-                resourceKind: R.operationResourceKind.rawValue, writer: "observed_success")
-        }
-        return outcome
-    }
 }
 
 // MARK: - Response

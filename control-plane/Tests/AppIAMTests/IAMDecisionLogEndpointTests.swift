@@ -1,4 +1,5 @@
 import Fluent
+import ControlPlanePostgres
 import Foundation
 import Testing
 import Vapor
@@ -40,10 +41,9 @@ final class IAMDecisionLogEndpointTests {
             )
             let org = try await builder.createOrganization(name: "Decision Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
             try await test(app, Fixture(user: user, token: token))
         } catch {
             try await app.shutdownForTesting()
@@ -52,8 +52,7 @@ final class IAMDecisionLogEndpointTests {
         try await app.shutdownForTesting()
     }
 
-    /// Insert one row, optionally backdated. `@Timestamp(on: .create)` stamps
-    /// `createdAt` on insert, so an explicit age is a second save.
+    /// Insert one immutable decision fact, optionally backdated.
     @discardableResult
     private func insert(
         _ app: Application,
@@ -62,22 +61,22 @@ final class IAMDecisionLogEndpointTests {
         decision: String = "allow",
         tier: String? = "grant",
         age: TimeInterval = 0
-    ) async throws -> IAMDecisionLog {
-        let entry = IAMDecisionLog()
-        entry.subject = UUID().uuidString
-        entry.action = action
-        entry.nodeType = nodeType?.rawValue
-        entry.nodeID = nodeType == nil ? nil : UUID()
-        entry.decision = decision
-        entry.tier = tier
-        entry.path = "/api/vms"
-        entry.method = "GET"
-        try await entry.save(on: app.db)
-        if age > 0 {
-            entry.createdAt = Date().addingTimeInterval(-age)
-            try await entry.save(on: app.db)
-        }
-        return entry
+    ) async throws -> DecisionLogSnapshot {
+        try #require(
+            try await app.decisionLogsPersistence.append([
+                DecisionLogWrite(
+                    path: "/api/vms",
+                    method: "GET",
+                    subject: UUID().uuidString,
+                    action: action,
+                    nodeType: nodeType?.rawValue,
+                    nodeID: nodeType == nil ? nil : UUID(),
+                    decision: decision,
+                    tier: tier,
+                    createdAt: age > 0 ? Date().addingTimeInterval(-age) : nil
+                )
+            ]).first
+        )
     }
 
     /// Matches how the JSON response encodes `createdAt`, so the cursor under

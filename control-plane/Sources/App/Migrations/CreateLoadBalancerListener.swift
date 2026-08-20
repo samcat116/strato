@@ -2,7 +2,7 @@ import Fluent
 
 struct CreateLoadBalancerListener: AsyncMigration {
     func prepare(on database: Database) async throws {
-        try await database.schema(LoadBalancerListener.schema)
+        try await database.schema("load_balancer_listeners")
             .id()
             .field(
                 "load_balancer_id", .uuid, .required,
@@ -17,6 +17,6 @@ struct CreateLoadBalancerListener: AsyncMigration {
     }
 
     func revert(on database: Database) async throws {
-        try await database.schema(LoadBalancerListener.schema).delete()
+        try await database.schema("load_balancer_listeners").delete()
     }
 }

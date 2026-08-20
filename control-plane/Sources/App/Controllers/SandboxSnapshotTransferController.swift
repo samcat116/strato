@@ -81,7 +81,7 @@ extension SandboxController {
             // complete copy already exists, since re-exporting overwrites the
             // same keys and adds nothing.
             if !current.isExported {
-                guard let project = try await Project.find(current.$project.id, on: db) else {
+                guard let project = try await Project.find(current.projectID, on: db) else {
                     throw Abort(.conflict, reason: "Snapshot's project no longer exists")
                 }
                 try await QuotaEnforcementService.reserveSnapshotStorage(
@@ -125,7 +125,7 @@ extension SandboxController {
         let (snapshot, kind) = try await authenticatedSnapshotArtifactRequest(req: req)
         let snapshotID = try snapshot.requireID()
         let key = SandboxSnapshotObjectKey.artifact(
-            projectId: snapshot.$project.id, snapshotId: snapshotID, kind: kind)
+            projectId: snapshot.projectID, snapshotId: snapshotID, kind: kind)
 
         // No single artifact can legitimately exceed the recorded archive
         // footprint; double it for filesystem rounding, with a floor for
@@ -173,7 +173,6 @@ extension SandboxController {
         artifacts.removeAll { $0.kind == kind }
         artifacts.append(
             SandboxSnapshotExportedArtifact(kind: kind, sizeBytes: size, sha256: sha256))
-        current.exportedArtifacts = artifacts
         // Completion is decided here now, not by an export operation's
         // background half (STR-150). The rule is unchanged and deliberately
         // strict: the copy is complete when *this route* has hashed every
@@ -186,12 +185,17 @@ extension SandboxController {
         // is left alone, so a re-export that dies partway cannot demote a
         // snapshot whose stored copy is still complete and valid.
         let recorded = Set(artifacts.map(\.kind))
+        let completedAt: Date?
         if current.exportedAt == nil,
             SandboxSnapshotArtifactKind.allCases.allSatisfy({ recorded.contains($0) })
         {
-            current.exportedAt = Date()
+            completedAt = Date()
+        } else {
+            completedAt = current.exportedAt
         }
-        try await current.save(on: req.db)
+        let updated = current.replacing(
+            exportedAt: .some(completedAt), exportedArtifacts: .some(artifacts))
+        try await updated.persist(on: req.db)
 
         req.logger.info(
             "Sandbox snapshot artifact stored",
@@ -214,7 +218,7 @@ extension SandboxController {
             throw Abort(.notFound, reason: "Artifact '\(kind.rawValue)' has not been exported")
         }
         let key = SandboxSnapshotObjectKey.artifact(
-            projectId: snapshot.$project.id, snapshotId: snapshotID, kind: kind)
+            projectId: snapshot.projectID, snapshotId: snapshotID, kind: kind)
         return try await req.application.imageObjectStore.stream(
             key: key, filename: kind.filename, on: req)
     }
@@ -243,7 +247,7 @@ extension SandboxController {
             throw Abort(.badRequest, reason: "Invalid snapshot artifact path")
         }
         guard let snapshot = try await SandboxSnapshot.find(snapshotID, on: req.db),
-            snapshot.$sandbox.id == sandboxID
+            snapshot.sandboxID == sandboxID
         else {
             throw Abort(.notFound, reason: "Snapshot not found")
         }

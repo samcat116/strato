@@ -1,8 +1,8 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 /// What a policy-set row's owner type means to the API and the database, kept
-/// with the owner rather than on the wire enum in `IAMRoleDefinition`: the enum
+/// with the owner rather than on the role row: the enum
 /// declares the stored vocabulary, and this is the behaviour roles and authored
 /// policies read off it.
 extension IAMRoleOwnerType {
@@ -13,24 +13,6 @@ extension IAMRoleOwnerType {
     /// coerced.
     static let creatableOwners: Set<IAMRoleOwnerType> = [.organization, .project]
 
-    /// Whether an owner of this type with this id is a row that exists.
-    ///
-    /// The single place the owner types are resolved to tables: roles and
-    /// authored policies both refuse an owner that isn't there, and a new owner
-    /// type joining the enum has exactly one switch to answer for. Platform is
-    /// never a real row — it is the zero-UUID sentinel
-    /// (`IAMRoleDefinition.platformOwnerID`), not something an owner lookup can
-    /// find — so it answers false and the caller's "no such owner" applies.
-    func ownerExists(id: UUID, on db: any Database) async throws -> Bool {
-        switch self {
-        case .organization:
-            return try await Organization.find(id, on: db) != nil
-        case .project:
-            return try await Project.find(id, on: db) != nil
-        case .platform:
-            return false
-        }
-    }
 }
 
 /// The owner of a policy-set row — a role definition (issue #605) or an
@@ -136,8 +118,8 @@ struct IAMPolicySetOwner {
     /// A row scoped to an owner that does not exist would be bindable and
     /// attributable nowhere, so this is a `404` at the boundary rather than an
     /// orphan row.
-    func requireExists(on db: any Database) async throws {
-        guard try await type.ownerExists(id: id, on: db) else {
+    func requireExists(using iam: IAMPersistence) async throws {
+        guard try await iam.policyOwnerExists(type: type.rawValue, id: id) else {
             throw kind.unknownOwner("\(type.rawValue)/\(id)")
         }
     }

@@ -1,4 +1,6 @@
 import Fluent
+import Foundation
+import SQLKit
 import Vapor
 
 /// The record types the model can carry.
@@ -33,88 +35,200 @@ enum DNSRecordView: String, Codable, Sendable, CaseIterable {
     case both
 }
 
-/// A user-authored DNS record.
-///
-/// The other half of a zone's contents is *derived* — VM hostname → allocated
-/// addresses, plus the matching PTR — which is assembled on demand and never
-/// stored (`DNSZoneAssembler`). Authored records are the tier where CNAME,
-/// TXT, and SRV live, matching what OpenStack Designate and Proxmox's
-/// PowerDNS plugin both do: auto-generate only A and PTR, and let operators
-/// write the rest.
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class DNSRecord: Model, @unchecked Sendable {
+enum DNSRecord {
     static let schema = "dns_records"
-
-    /// Default TTL when a record doesn't set one. Five minutes: long enough to
-    /// be worth caching, short enough that a correction propagates within a
-    /// coffee break.
     static let defaultTTL = 300
-
-    /// TTL bounds. Zero is legal DNS ("do not cache") but a footgun against
-    /// resolvers that treat it as a busy loop, and a year is the practical
-    /// ceiling every implementation agrees on.
     static let ttlRange = 1...31_536_000
-
-    @ID(key: .id)
-    var id: UUID?
-
-    @Parent(key: "zone_id")
-    var zone: DNSZone
-
-    /// Owner name relative to the zone, or `@` for the apex. Lowercased at
-    /// write time; `DNSName.qualified(name:inZone:)` renders the FQDN.
-    @Field(key: "name")
-    var name: String
-
-    @Enum(key: "type")
-    var type: DNSRecordType
-
-    /// The record's RDATA in zone-file text form: an address for A/AAAA, a
-    /// target name for CNAME/PTR, the quoted-string contents for TXT, and
-    /// `priority weight port target` for SRV.
-    @Field(key: "value")
-    var value: String
-
-    @Field(key: "ttl")
-    var ttl: Int
-
-    @Enum(key: "view")
-    var view: DNSRecordView
-
-    @OptionalParent(key: "created_by_id")
-    var createdBy: User?
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
-
-    init(
-        id: UUID? = nil,
-        zoneID: UUID,
-        name: String,
-        type: DNSRecordType,
-        value: String,
-        ttl: Int = DNSRecord.defaultTTL,
-        view: DNSRecordView = .both,
-        createdByID: UUID? = nil
-    ) {
-        self.id = id
-        self.$zone.id = zoneID
-        self.name = name
-        self.type = type
-        self.value = value
-        self.ttl = ttl
-        self.view = view
-        self.$createdBy.id = createdByID
-    }
 }
 
-extension DNSRecord: Content {}
+struct DNSRecordSnapshot: Equatable, Sendable {
+    let id: UUID
+    let zoneID: UUID
+    let name: String
+    let type: DNSRecordType
+    let value: String
+    let ttl: Int
+    let view: DNSRecordView
+    let createdByID: UUID?
+    let createdAt: Date?
+    let updatedAt: Date?
+}
+
+enum LegacyDNSRecordStore {
+    static func records(zoneIDs: [UUID], on db: any Database) async throws -> [DNSRecordSnapshot] {
+        guard !zoneIDs.isEmpty else { return [] }
+        return try await snapshots(from: requireSQL(db).raw(
+            "SELECT \(unsafeRaw: columns) FROM dns_records WHERE zone_id = ANY(\(bind: zoneIDs)) ORDER BY name, id"
+        ).all(decoding: Record.self))
+    }
+
+    static func records(zoneID: UUID, on db: any Database) async throws -> [DNSRecordSnapshot] {
+        try await records(zoneIDs: [zoneID], on: db)
+    }
+
+    static func records(zoneID: UUID, name: String, on db: any Database) async throws
+        -> [DNSRecordSnapshot]
+    {
+        try await snapshots(from: requireSQL(db).raw(
+            "SELECT \(unsafeRaw: columns) FROM dns_records WHERE zone_id = \(bind: zoneID) AND name = \(bind: name) ORDER BY id"
+        ).all(decoding: Record.self))
+    }
+
+    static func records(ids: [UUID], on db: any Database) async throws -> [DNSRecordSnapshot] {
+        guard !ids.isEmpty else { return [] }
+        return try await snapshots(from: requireSQL(db).raw(
+            "SELECT \(unsafeRaw: columns) FROM dns_records WHERE id = ANY(\(bind: ids)) ORDER BY id"
+        ).all(decoding: Record.self))
+    }
+
+    static func record(id: UUID, zoneID: UUID? = nil, on db: any Database) async throws
+        -> DNSRecordSnapshot?
+    {
+        var query: SQLQueryString =
+            "SELECT \(unsafeRaw: columns) FROM dns_records WHERE id = \(bind: id)"
+        if let zoneID { query += " AND zone_id = \(bind: zoneID)" }
+        query += " LIMIT 1"
+        guard let row = try await requireSQL(db).raw(query).first(decoding: Record.self) else {
+            return nil
+        }
+        return try row.snapshot()
+    }
+
+    static func first(zoneID: UUID, names: [String], on db: any Database) async throws
+        -> DNSRecordSnapshot?
+    {
+        guard !names.isEmpty else { return nil }
+        guard let row = try await requireSQL(db).raw(
+            "SELECT \(unsafeRaw: columns) FROM dns_records WHERE zone_id = \(bind: zoneID) AND name = ANY(\(bind: names)) ORDER BY id LIMIT 1"
+        ).first(decoding: Record.self) else { return nil }
+        return try row.snapshot()
+    }
+
+    @discardableResult
+    static func insert(
+        id: UUID = UUID(), zoneID: UUID, name: String, type: DNSRecordType,
+        value: String, ttl: Int = DNSRecord.defaultTTL, view: DNSRecordView = .both,
+        createdByID: UUID? = nil, on db: any Database
+    ) async throws -> DNSRecordSnapshot {
+        guard let row = try await requireSQL(db).raw(
+            """
+            INSERT INTO dns_records (
+                id, zone_id, name, type, value, ttl, view, created_by_id, created_at, updated_at
+            ) VALUES (
+                \(bind: id), \(bind: zoneID), \(bind: name), \(bind: type.rawValue),
+                \(bind: value), \(bind: ttl), \(bind: view.rawValue), \(bind: createdByID),
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            RETURNING \(unsafeRaw: columns)
+            """
+        ).first(decoding: Record.self) else {
+            throw Abort(.internalServerError, reason: "Could not create DNS record")
+        }
+        return try row.snapshot()
+    }
+
+    @discardableResult
+    static func update(
+        id: UUID, value: String, ttl: Int, view: DNSRecordView, on db: any Database
+    ) async throws -> DNSRecordSnapshot? {
+        guard let row = try await requireSQL(db).raw(
+            """
+            UPDATE dns_records
+            SET value = \(bind: value), ttl = \(bind: ttl), view = \(bind: view.rawValue),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = \(bind: id)
+            RETURNING \(unsafeRaw: columns)
+            """
+        ).first(decoding: Record.self) else { return nil }
+        return try row.snapshot()
+    }
+
+    static func applyRRsetSettings(
+        zoneID: UUID, name: String, type: DNSRecordType, ttl: Int,
+        view: DNSRecordView, on db: any Database
+    ) async throws {
+        try await requireSQL(db).raw(
+            """
+            UPDATE dns_records
+            SET ttl = \(bind: ttl), view = \(bind: view.rawValue), updated_at = CURRENT_TIMESTAMP
+            WHERE zone_id = \(bind: zoneID) AND name = \(bind: name) AND type = \(bind: type.rawValue)
+            """
+        ).run()
+    }
+
+    static func count(zoneID: UUID, on db: any Database) async throws -> Int {
+        struct Count: Decodable { let count: Int }
+        return try await requireSQL(db).raw(
+            "SELECT count(*)::bigint AS count FROM dns_records WHERE zone_id = \(bind: zoneID)"
+        ).first(decoding: Count.self)?.count ?? 0
+    }
+
+    static func counts(zoneIDs: [UUID], on db: any Database) async throws -> [UUID: Int] {
+        struct Count: Decodable { let zoneID: UUID; let count: Int }
+        guard !zoneIDs.isEmpty else { return [:] }
+        return Dictionary(uniqueKeysWithValues: try await requireSQL(db).raw(
+            """
+            SELECT zone_id AS "zoneID", count(*)::bigint AS count
+            FROM dns_records WHERE zone_id = ANY(\(bind: zoneIDs)) GROUP BY zone_id
+            """
+        ).all(decoding: Count.self).map { ($0.zoneID, $0.count) })
+    }
+
+    static func ids(zoneIDs: [UUID], on db: any Database) async throws -> [UUID] {
+        struct ID: Decodable { let id: UUID }
+        guard !zoneIDs.isEmpty else { return [] }
+        return try await requireSQL(db).raw(
+            "SELECT id FROM dns_records WHERE zone_id = ANY(\(bind: zoneIDs))"
+        ).all(decoding: ID.self).map(\.id)
+    }
+
+    @discardableResult
+    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+        struct ID: Decodable { let id: UUID }
+        return try await requireSQL(db).raw(
+            "DELETE FROM dns_records WHERE id = \(bind: id) RETURNING id"
+        ).first(decoding: ID.self)?.id
+    }
+
+    private struct Record: Decodable, Sendable {
+        let id: UUID
+        let zoneID: UUID
+        let name: String
+        let type: String
+        let value: String
+        let ttl: Int
+        let view: String
+        let createdByID: UUID?
+        let createdAt: Date?
+        let updatedAt: Date?
+
+        func snapshot() throws -> DNSRecordSnapshot {
+            guard let type = DNSRecordType(rawValue: type), let view = DNSRecordView(rawValue: view) else {
+                throw Abort(.internalServerError, reason: "DNS record has invalid persisted values")
+            }
+            return DNSRecordSnapshot(
+                id: id, zoneID: zoneID, name: name, type: type, value: value,
+                ttl: ttl, view: view, createdByID: createdByID,
+                createdAt: createdAt, updatedAt: updatedAt)
+        }
+    }
+
+    private static let columns = """
+        id, zone_id AS "zoneID", name, type, value, ttl, view,
+        created_by_id AS "createdByID", created_at AS "createdAt", updated_at AS "updatedAt"
+        """
+
+    private static func snapshots(from rows: [Record]) throws -> [DNSRecordSnapshot] {
+        try rows.map { try $0.snapshot() }
+    }
+
+    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "DNS records require PostgreSQL")
+        }
+        return sql
+    }
+}
 
 // MARK: - Request/Response DTOs
 
@@ -194,9 +308,9 @@ struct DNSRecordResponse: Content {
     let createdAt: Date?
     let updatedAt: Date?
 
-    init(from record: DNSRecord, zoneName: String) throws {
-        self.id = try record.requireID()
-        self.zoneId = record.$zone.id
+    init(from record: DNSRecordSnapshot, zoneName: String) {
+        self.id = record.id
+        self.zoneId = record.zoneID
         self.name = record.name
         self.fqdn = DNSName.qualified(name: record.name, inZone: zoneName)
         self.type = record.type

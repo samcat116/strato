@@ -41,7 +41,7 @@ final class HierarchyMaintenanceTests {
                 engineering: engineering,
                 platform: platform,
                 project: project,
-                sysadminToken: try await sysadmin.generateAPIKey(on: app.db)
+                sysadminToken: try await sysadmin.generateAPIKey(on: app)
             )
             try await test(app, builder, fixture)
         } catch {
@@ -70,8 +70,9 @@ final class HierarchyMaintenanceTests {
         try await withApp { app, _, fx in
             // The drift a folder move used to leave behind: the project still
             // names an ancestor it no longer has.
-            fx.project.path = "/\(fx.organization.id!)/\(UUID())/\(fx.project.id!)"
-            try await fx.project.save(on: app.db)
+            try await fx.project.replacingPath(
+                "/\(fx.organization.id!)/\(UUID())/\(fx.project.id!)"
+            ).save(on: app.db)
 
             try await app.test(.GET, "/api/hierarchy/validate") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fx.sysadminToken)
@@ -95,9 +96,9 @@ final class HierarchyMaintenanceTests {
     @Test("A folder path that disagrees with its parent chain is reported")
     func staleFolderPathIsReported() async throws {
         try await withApp { app, _, fx in
-            fx.platform.path = "/\(fx.organization.id!)/\(fx.platform.id!)"
-            fx.platform.depth = 0
-            try await fx.platform.save(on: app.db)
+            try await fx.platform.replacingPath(
+                "/\(fx.organization.id!)/\(fx.platform.id!)", depth: 0
+            ).save(on: app.db)
 
             let issues = try await HierarchyMaintenanceService.findHierarchyIssues(on: app.db)
             // The project beneath it is not reported: expected paths come from
@@ -117,11 +118,12 @@ final class HierarchyMaintenanceTests {
             let correctFolderPath = fx.platform.path
             let correctProjectPath = fx.project.path
 
-            fx.platform.path = "/\(fx.organization.id!)/\(fx.platform.id!)"
-            fx.platform.depth = 0
-            try await fx.platform.save(on: app.db)
-            fx.project.path = "/\(fx.organization.id!)/\(fx.project.id!)"
-            try await fx.project.save(on: app.db)
+            try await fx.platform.replacingPath(
+                "/\(fx.organization.id!)/\(fx.platform.id!)", depth: 0
+            ).save(on: app.db)
+            try await fx.project.replacingPath(
+                "/\(fx.organization.id!)/\(fx.project.id!)"
+            ).save(on: app.db)
 
             try await app.test(.POST, "/api/hierarchy/repair") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fx.sysadminToken)
@@ -150,8 +152,7 @@ final class HierarchyMaintenanceTests {
     func repairRespectsOptions() async throws {
         try await withApp { app, _, fx in
             let drifted = "/\(fx.organization.id!)/\(fx.project.id!)"
-            fx.project.path = drifted
-            try await fx.project.save(on: app.db)
+            try await fx.project.replacingPath(drifted).save(on: app.db)
 
             // A body naming only `repairAll` decodes: every option defaults off.
             try await app.test(.POST, "/api/hierarchy/repair") { req in
@@ -178,10 +179,10 @@ final class HierarchyMaintenanceTests {
             let other = try await builder.createProject(
                 name: "other", description: "", ou: fx.engineering)
             let otherDrifted = "/\(fx.organization.id!)/\(other.id!)"
-            other.path = otherDrifted
-            try await other.save(on: app.db)
-            fx.project.path = "/\(fx.organization.id!)/\(fx.project.id!)"
-            try await fx.project.save(on: app.db)
+            try await other.replacingPath(otherDrifted).save(on: app.db)
+            try await fx.project.replacingPath(
+                "/\(fx.organization.id!)/\(fx.project.id!)"
+            ).save(on: app.db)
 
             try await app.test(.POST, "/api/hierarchy/repair") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fx.sysadminToken)
@@ -213,12 +214,17 @@ final class HierarchyMaintenanceTests {
             let left = try await builder.createOU(name: "left", description: "", organization: fx.organization)
             let right = try await builder.createOU(
                 name: "right", description: "", organization: fx.organization, parentOU: left)
-            left.$parentOU.id = right.id
-            try await left.save(on: app.db)
+            try await OrganizationalUnit(
+                id: left.id, name: left.name, description: left.description,
+                organizationID: left.organizationID, parentOUID: right.id,
+                path: left.path, depth: left.depth,
+                createdAt: left.createdAt, updatedAt: left.updatedAt
+            ).save(on: app.db)
 
             let correct = fx.project.path
-            fx.project.path = "/\(fx.organization.id!)/\(fx.project.id!)"
-            try await fx.project.save(on: app.db)
+            try await fx.project.replacingPath(
+                "/\(fx.organization.id!)/\(fx.project.id!)"
+            ).save(on: app.db)
 
             try await app.test(.POST, "/api/hierarchy/repair") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fx.sysadminToken)
@@ -244,9 +250,9 @@ final class HierarchyMaintenanceTests {
         try await withApp { app, _, fx in
             // Reachable: both columns are nullable and no check constraint
             // forbids the pair, so only `Project.validate()` stands in the way.
-            fx.project.$organizationalUnit.id = nil
-            fx.project.$organization.id = nil
-            try await fx.project.save(on: app.db)
+            try await fx.project.replacingScope(
+                organizationID: nil, organizationalUnitID: nil
+            ).save(on: app.db)
 
             let issues = try await HierarchyMaintenanceService.findHierarchyIssues(on: app.db)
             #expect(issues.count == 1)
@@ -271,8 +277,12 @@ final class HierarchyMaintenanceTests {
             // Nothing in the schema forbids this: the foreign key only requires
             // the parent row to exist, so engineering ⇄ platform is storable and
             // the path derivation has to terminate on it.
-            fx.engineering.$parentOU.id = fx.platform.id
-            try await fx.engineering.save(on: app.db)
+            try await OrganizationalUnit(
+                id: fx.engineering.id, name: fx.engineering.name, description: fx.engineering.description,
+                organizationID: fx.engineering.organizationID, parentOUID: fx.platform.id,
+                path: fx.engineering.path, depth: fx.engineering.depth,
+                createdAt: fx.engineering.createdAt, updatedAt: fx.engineering.updatedAt
+            ).save(on: app.db)
 
             let issues = try await HierarchyMaintenanceService.findHierarchyIssues(on: app.db)
             #expect(issues.count == 2)
@@ -287,8 +297,9 @@ final class HierarchyMaintenanceTests {
     func maintenanceRepairRebuildsDrift() async throws {
         try await withApp { app, _, fx in
             let correct = fx.project.path
-            fx.project.path = "/\(fx.organization.id!)/\(UUID())/\(fx.project.id!)"
-            try await fx.project.save(on: app.db)
+            try await fx.project.replacingPath(
+                "/\(fx.organization.id!)/\(UUID())/\(fx.project.id!)"
+            ).save(on: app.db)
 
             let request = HierarchyRepairRequest(
                 repairAll: true, repairOptions: .init(rebuildPaths: true))
@@ -310,7 +321,7 @@ final class HierarchyMaintenanceTests {
         try await withApp { app, builder, fx in
             let member = try await builder.createUser(username: "hm-member", email: "hm-member@example.com")
             try await builder.addUserToOrganization(user: member, organization: fx.organization, role: "admin")
-            let token = try await member.generateAPIKey(on: app.db)
+            let token = try await member.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/hierarchy/validate") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)

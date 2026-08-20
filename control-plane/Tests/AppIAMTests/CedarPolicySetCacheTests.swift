@@ -6,6 +6,7 @@ import Vapor
 import VaporTesting
 
 import AppTestSupport
+import ControlPlanePostgres
 @testable import App
 
 /// IAM phase 3 (issue #480): the per-replica compiled policy set and its
@@ -29,7 +30,7 @@ final class CedarPolicySetCacheTests {
     @Test("A fresh database builds the static set at the current version")
     func freshBuild() async throws {
         try await withApp { app in
-            let cache = CedarPolicySetCache(logger: app.logger)
+            let cache = await app.policySetVersion.makeCedarPolicySetCache(logger: app.logger)
             // Not 0: the boot-time registry sync bumps the version when it
             // first seeds `iam_roles`, and the build must reflect that.
             let expectedVersion = try await PolicySetVersionService.current(on: app.db)
@@ -58,52 +59,56 @@ final class CedarPolicySetCacheTests {
         try await withApp { app in
             // Boot seeded the four defaults; add a user-created role the way
             // the role API will (issue #605).
-            let custom = IAMRoleDefinition(
+            let customID = UUID()
+            let custom = try await RoleStore.insertLegacy(IAMRoleSnapshot(
+                id: customID,
                 name: "auditor",
-                ownerType: .organization,
+                description: nil,
+                ownerType: IAMRoleOwnerType.organization.rawValue,
                 ownerID: UUID(),
-                cedarText: "",
-                actions: ["vm:read"]
-            )
-            custom.id = UUID()
-            custom.cedarText = RoleDescriptor.canonicalPermitText(id: custom.id!, actions: ["vm:read"])
-            try await custom.create(on: app.db)
+                cedarText: RoleDescriptor.canonicalPermitText(id: customID, actions: ["vm:read"]),
+                actions: ["vm:read"],
+                managed: false,
+                createdBy: nil), on: app.db)
 
-            let cache = CedarPolicySetCache(logger: app.logger)
+            let cache = await app.policySetVersion.makeCedarPolicySetCache(logger: app.logger)
             await cache.rebuild(version: 1, on: app.db)
 
             let built = await cache.current
-            #expect(built?.roleIDs == Set(IAMRole.allCases.map(\.seededID) + [custom.id!]))
+            #expect(built?.roleIDs == Set(IAMRole.allCases.map(\.seededID) + [custom.id]))
             #expect(built?.skippedRolePolicies.isEmpty == true)
-            #expect(built?.policyText.contains(RoleDescriptor.policyID(custom.id!)) == true)
-            #expect(built?.schemaText.contains(RoleDescriptor.grantsUsersField(custom.id!)) == true)
+            #expect(built?.policyText.contains(RoleDescriptor.policyID(custom.id)) == true)
+            #expect(built?.schemaText.contains(RoleDescriptor.grantsUsersField(custom.id)) == true)
         }
     }
 
     @Test("A role row with broken Cedar is skipped alone; the rest of the set still compiles")
     func brokenRoleRowSkipped() async throws {
         try await withApp { app in
-            let broken = IAMRoleDefinition(
+            let brokenID = UUID()
+            let broken = try await RoleStore.insertLegacy(IAMRoleSnapshot(
+                id: brokenID,
                 name: "broken",
-                ownerType: .organization,
+                description: nil,
+                ownerType: IAMRoleOwnerType.organization.rawValue,
                 ownerID: UUID(),
                 // An action the registry (and so the schema) does not know:
                 // the shape an upgrade that drops an action leaves behind.
                 cedarText: #"permit (principal, action == Action::"no:such-action", resource);"#,
-                actions: ["no:such-action"]
-            )
-            try await broken.create(on: app.db)
+                actions: ["no:such-action"],
+                managed: false,
+                createdBy: nil), on: app.db)
 
-            let cache = CedarPolicySetCache(logger: app.logger)
+            let cache = await app.policySetVersion.makeCedarPolicySetCache(logger: app.logger)
             await cache.rebuild(version: 1, on: app.db)
 
             let built = await cache.current
             #expect(built != nil, "one bad row must not fail the whole build")
-            #expect(built?.skippedRolePolicies.map(\.id) == [broken.id!])
+            #expect(built?.skippedRolePolicies.map(\.id) == [broken.id])
             // Its grants fields stay declared (the row exists; it grants
             // nothing), and the seeded roles still compiled.
-            #expect(built?.roleIDs.contains(broken.id!) == true)
-            #expect(built?.policyText.contains(RoleDescriptor.policyID(broken.id!)) == false)
+            #expect(built?.roleIDs.contains(broken.id) == true)
+            #expect(built?.policyText.contains(RoleDescriptor.policyID(broken.id)) == false)
             #expect(built?.policyText.contains(RoleDescriptor.policyID(IAMRole.admin.seededID)) == true)
         }
     }
@@ -124,14 +129,14 @@ final class CedarPolicySetCacheTests {
                 actions: ["volume:*"], principalMatch: .any, resourceMatch: .any,
                 enabled: false, createdBy: nil, on: app.db)
 
-            let cache = CedarPolicySetCache(logger: app.logger)
+            let cache = await app.policySetVersion.makeCedarPolicySetCache(logger: app.logger)
             await cache.rebuild(version: 1, on: app.db)
 
             let built = await cache.current
             #expect(built?.version == 1)
             #expect(built?.guardrailCount == 1)
-            #expect(built?.policyText.contains("guardrail-\(enabled.id!.uuidString.lowercased())") == true)
-            #expect(built?.policyText.contains("guardrail-\(disabled.id!.uuidString.lowercased())") == false)
+            #expect(built?.policyText.contains("guardrail-\(enabled.id.uuidString.lowercased())") == true)
+            #expect(built?.policyText.contains("guardrail-\(disabled.id.uuidString.lowercased())") == false)
             #expect(built?.policyText.contains("action in [Action::\"svc:vm\"]") == true)
         }
     }
@@ -149,7 +154,7 @@ final class CedarPolicySetCacheTests {
                 actions: [], principalMatch: .externalToOrganization, resourceMatch: .any,
                 createdBy: nil, on: app.db)
 
-            let cache = CedarPolicySetCache(logger: app.logger)
+            let cache = await app.policySetVersion.makeCedarPolicySetCache(logger: app.logger)
             await cache.rebuild(version: 1, on: app.db)
 
             let built = await cache.current
@@ -168,7 +173,7 @@ final class CedarPolicySetCacheTests {
             // .testing environment skips the auto-start on purpose). The
             // watch's initial refresh is what performs the boot-time build.
             await app.startCedarPolicySetCache()
-            await app.policySetVersion.refresh(on: app.db)
+            await app.policySetVersion.refresh()
             let initialVersion = try await PolicySetVersionService.current(on: app.db)
             let before = await app.cedarPolicySet.current
             #expect(before?.version == initialVersion)
@@ -188,12 +193,12 @@ final class CedarPolicySetCacheTests {
 
             // The refresh is what the Valkey nudge and the periodic re-read
             // both funnel into.
-            await app.policySetVersion.refresh(on: app.db)
+            await app.policySetVersion.refresh()
 
             let after = await app.cedarPolicySet.current
             #expect(after?.version == initialVersion + 1)
             #expect(after?.guardrailCount == 1)
-            #expect(after?.policyText.contains("guardrail-\(guardrail.id!.uuidString.lowercased())") == true)
+            #expect(after?.policyText.contains("guardrail-\(guardrail.id.uuidString.lowercased())") == true)
         }
     }
 
@@ -222,7 +227,10 @@ final class CedarPolicySetCacheTests {
             }
 
             let engine = ToggleEngine()
-            let cache = CedarPolicySetCache(engine: engine, logger: app.logger)
+            let cache = await app.policySetVersion.makeCedarPolicySetCache(
+                engine: engine,
+                logger: app.logger
+            )
             await cache.rebuild(version: 1, on: app.db)
             let first = await cache.current
             #expect(first?.version == 1)

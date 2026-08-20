@@ -84,13 +84,6 @@ enum IPAMService {
         "ipam:\(networkID.uuidString)"
     }
 
-    /// Lock key for a floating IP pool's address range. Keyed on the id for
-    /// the same reason as networks: pool names are unique only within their
-    /// owning org or folder (STR-105).
-    private static func allocationLockKey(floatingIPPoolID: UUID) -> String {
-        "fip:\(floatingIPPoolID.uuidString)"
-    }
-
     /// Allocates the lowest free host address in `network`'s subnet.
     static func allocateIP(for network: LogicalNetwork, on db: Database) async throws -> Allocation {
         // The used set is the union of VM and sandbox addresses on the network
@@ -102,24 +95,19 @@ enum IPAMService {
         // covers.
         let networkID = try network.requireID()
         try await lockAllocations(key: allocationLockKey(networkID: networkID), on: db)
-        let usedVM = try await VMInterfaceAddress.query(on: db)
-            .filter(\.$logicalNetwork.$id == networkID)
-            .filter(\.$family == IPFamily.ipv4.rawValue)
-            .all()
+        let usedVM = try await LegacyInterfaceAddressStore.addresses(
+            kind: .vm, logicalNetworkID: networkID, family: .ipv4, on: db)
             .compactMap { parseIPv4($0.address) }
-        let usedSandbox = try await SandboxInterfaceAddress.query(on: db)
-            .filter(\.$logicalNetwork.$id == networkID)
-            .filter(\.$family == IPFamily.ipv4.rawValue)
-            .all()
+        let usedSandbox = try await LegacyInterfaceAddressStore.addresses(
+            kind: .sandbox, logicalNetworkID: networkID, family: .ipv4, on: db)
             .compactMap { parseIPv4($0.address) }
         // Load-balancer VIPs are first-class allocations from this same
         // subnet (STR-28). They participate under the same advisory lock so a
         // VM, sandbox and load balancer created concurrently cannot receive
         // the same address even though they live in three tables.
-        let usedLoadBalancers = try await LoadBalancer.query(on: db)
-            .filter(\.$logicalNetwork.$id == networkID)
-            .all()
-            .compactMap { parseIPv4($0.vip) }
+        let usedLoadBalancers = try await LegacyLoadBalancerStore.usedIPv4Addresses(
+            networkID: networkID, on: db
+        ).compactMap(parseIPv4)
         let used = Set(usedVM).union(usedSandbox).union(usedLoadBalancers)
 
         do {
@@ -179,15 +167,11 @@ enum IPAMService {
         // for the same reason as the v4 path, under the same advisory lock.
         let networkID = try network.requireID()
         try await lockAllocations(key: allocationLockKey(networkID: networkID), on: db)
-        let usedVM = try await VMInterfaceAddress.query(on: db)
-            .filter(\.$logicalNetwork.$id == networkID)
-            .filter(\.$family == IPFamily.ipv6.rawValue)
-            .all()
+        let usedVM = try await LegacyInterfaceAddressStore.addresses(
+            kind: .vm, logicalNetworkID: networkID, family: .ipv6, on: db)
             .compactMap { IPv6Address($0.address)?.lo }
-        let usedSandbox = try await SandboxInterfaceAddress.query(on: db)
-            .filter(\.$logicalNetwork.$id == networkID)
-            .filter(\.$family == IPFamily.ipv6.rawValue)
-            .all()
+        let usedSandbox = try await LegacyInterfaceAddressStore.addresses(
+            kind: .sandbox, logicalNetworkID: networkID, family: .ipv6, on: db)
             .compactMap { IPv6Address($0.address)?.lo }
 
         do {
@@ -244,27 +228,6 @@ enum IPAMService {
 
         return Allocation6(
             ipAddress: base.replacingInterfaceID(candidate).description, prefixLength: cidr.prefix)
-    }
-
-    /// Allocates the lowest free floating address in `pool`'s CIDR (issue
-    /// #344). Same shape as NIC allocation: the used set is the pool's
-    /// existing `FloatingIP` rows, a per-pool advisory lock serializes
-    /// concurrent allocations, and the `(pool_id, address)` unique index
-    /// backstops same-table races. Callers run inside the transaction that
-    /// saves the new row.
-    static func allocateFloatingIP(for pool: FloatingIPPool, on db: Database) async throws -> String {
-        let poolID = try pool.requireID()
-        try await lockAllocations(key: allocationLockKey(floatingIPPoolID: poolID), on: db)
-        let used = try await FloatingIP.query(on: db)
-            .filter(\.$pool.$id == poolID)
-            .all()
-            .compactMap { parseIPv4($0.address) }
-        return try allocateIP(
-            networkName: pool.name,
-            subnet: pool.cidr,
-            gateway: pool.gateway,
-            used: Set(used)
-        ).ipAddress
     }
 
     /// The first host address of a subnet (conventionally the gateway), e.g.

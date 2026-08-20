@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import Foundation
 import Vapor
@@ -10,6 +11,16 @@ import Vapor
 /// its project role is an ordinary `role_bindings` row written through the
 /// same ceiling-reported path user and group grants use.
 struct ServiceAccountController: RouteCollection {
+    private let serviceAccounts: ServiceAccountsPersistence
+    private let workloads: WorkloadsPersistence
+
+    init(
+        serviceAccounts: ServiceAccountsPersistence,
+        workloads: WorkloadsPersistence
+    ) {
+        self.serviceAccounts = serviceAccounts
+        self.workloads = workloads
+    }
     func boot(routes: RoutesBuilder) throws {
         let projectScoped = routes.grouped("api", "projects", ":projectID", "service-accounts")
         projectScoped.get(use: list)
@@ -79,14 +90,14 @@ struct ServiceAccountController: RouteCollection {
         /// - Parameter displayName: overrides the stored label. VM-owned rows
         ///   store none and are hydrated from the VM's current name, so the
         ///   registry never shows a name a rename has already invalidated.
-        init(_ row: WorkloadRegistration, displayName: String? = nil) throws {
-            self.id = try row.requireID()
+        init(_ row: WorkloadRegistrationSnapshot, displayName: String? = nil) throws {
+            self.id = row.id
             self.spiffeId = row.spiffeID
-            self.kind = row.kind.rawValue
+            self.kind = row.kind
             self.agentName = row.agentName
-            self.serviceAccountId = row.$serviceAccount.id
-            self.organizationId = row.$organization.id
-            self.vmId = row.$vm.id
+            self.serviceAccountId = row.serviceAccountID
+            self.organizationId = row.organizationID
+            self.vmId = row.vmID
             self.displayName = displayName ?? row.displayName
             self.createdAt = row.createdAt
         }
@@ -104,15 +115,11 @@ struct ServiceAccountController: RouteCollection {
         let projectID = try project.requireID()
         try await req.authorize("serviceaccount:list", on: IAMNode(type: .project, id: projectID))
 
-        let accounts = try await ServiceAccount.query(on: req.db)
-            .filter(\.$project.$id == projectID)
-            .sort(\.$name)
-            .all()
+        let accounts = try await serviceAccounts.accounts(projectID: projectID)
         let rolesByAccount = try await projectRolesByAccount(
-            accountIDs: accounts.compactMap(\.id), projectID: projectID, on: req.db)
-        return try accounts.map { account in
-            let id = try account.requireID()
-            return response(account, id: id, projectID: projectID, projectRoles: rolesByAccount[id] ?? [])
+            accountIDs: accounts.map(\.id), projectID: projectID, on: req.db)
+        return accounts.map { account in
+            response(account, projectRoles: rolesByAccount[account.id] ?? [])
         }
     }
 
@@ -125,41 +132,25 @@ struct ServiceAccountController: RouteCollection {
         let body = try req.content.decodeValidated(CreateServiceAccountRequest.self)
         let name = body.name
 
-        let existing = try await ServiceAccount.query(on: req.db)
-            .filter(\.$project.$id == projectID)
-            .filter(\.$name == name)
-            .first()
-        guard existing == nil else {
-            throw Abort(.conflict, reason: "A service account with this name already exists in the project")
-        }
-
-        let account = ServiceAccount(name: name, description: body.description ?? "", projectID: projectID)
         let actorID = req.auth.get(User.self)?.id
+        let account: ServiceAccountSnapshot
         do {
-            try await req.db.transaction { db in
-                try await account.save(on: db)
-                // The creator's explicit, revocable binding on the account, in
-                // the create transaction (docs/architecture/iam.md: creating a
-                // resource writes an ordinary binding for the creator).
-                if let actorID {
-                    try await RoleBindingService.grant(
-                        principalType: .user,
-                        principalID: actorID,
-                        role: .admin,
-                        nodeType: .serviceAccount,
-                        nodeID: account.requireID(),
-                        createdBy: actorID,
-                        on: db
-                    )
-                }
-            }
-        } catch let error as any DatabaseError where error.isConstraintFailure {
-            // A concurrent create won the (project, name) uniqueness race
-            // after our pre-check; same answer as losing the pre-check.
+            account = try await serviceAccounts.create(
+                ServiceAccountWrite(
+                    name: name,
+                    description: body.description ?? "",
+                    projectID: projectID),
+                creatorGrant: actorID.map {
+                    ServiceAccountCreatorGrant(
+                        principalID: $0,
+                        roleID: IAMRole.admin.seededID,
+                        createdBy: $0)
+                })
+        } catch ServiceAccountsPersistenceError.duplicateName {
             throw Abort(.conflict, reason: "A service account with this name already exists in the project")
         }
 
-        let payload = try response(account, id: account.requireID(), projectID: projectID, projectRoles: [])
+        let payload = response(account, projectRoles: [])
         let response = Response(status: .created)
         try response.content.encode(payload)
         return response
@@ -168,47 +159,42 @@ struct ServiceAccountController: RouteCollection {
     /// GET /api/service-accounts/:serviceAccountID
     func read(req: Request) async throws -> ServiceAccountResponse {
         let account = try await loadAccount(req)
-        let accountID = try account.requireID()
+        let accountID = account.id
         try await req.authorize("serviceaccount:read", on: IAMNode(type: .serviceAccount, id: accountID))
         let roles = try await projectRolesByAccount(
-            accountIDs: [accountID], projectID: account.$project.id, on: req.db)
-        return response(
-            account, id: accountID, projectID: account.$project.id, projectRoles: roles[accountID] ?? [])
+            accountIDs: [accountID], projectID: account.projectID, on: req.db)
+        return response(account, projectRoles: roles[accountID] ?? [])
     }
 
     /// PATCH /api/service-accounts/:serviceAccountID
     func update(req: Request) async throws -> ServiceAccountResponse {
         let account = try await loadAccount(req)
-        let accountID = try account.requireID()
+        let accountID = account.id
         try await req.authorize("serviceaccount:update", on: IAMNode(type: .serviceAccount, id: accountID))
 
         let body = try req.content.decodeValidated(UpdateServiceAccountRequest.self)
+        let updated: ServiceAccountSnapshot
         if let description = body.description {
-            account.accountDescription = description
+            guard let replacement = try await serviceAccounts.replaceDescription(
+                id: accountID, description: description)
+            else { throw Abort(.notFound, reason: "Service account not found") }
+            updated = replacement
+        } else {
+            updated = account
         }
-        try await account.save(on: req.db)
         let roles = try await projectRolesByAccount(
-            accountIDs: [accountID], projectID: account.$project.id, on: req.db)
-        return response(
-            account, id: accountID, projectID: account.$project.id, projectRoles: roles[accountID] ?? [])
+            accountIDs: [accountID], projectID: account.projectID, on: req.db)
+        return response(updated, projectRoles: roles[accountID] ?? [])
     }
 
     /// DELETE /api/service-accounts/:serviceAccountID
     func delete(req: Request) async throws -> HTTPStatus {
         let account = try await loadAccount(req)
-        let accountID = try account.requireID()
+        let accountID = account.id
         try await req.authorize("serviceaccount:delete", on: IAMNode(type: .serviceAccount, id: accountID))
 
-        try await req.db.transaction { db in
-            // Registrations cascade with the row; the bindings need explicit
-            // cleanup on both sides — those attached *to* the account (it is
-            // a node) and those *held by* it (it is a principal). Leaving the
-            // held bindings behind would let a recreated principal id (never,
-            // with UUIDs, but the offboarding rule stands) inherit them.
-            try await RoleBindingService.revokeAll(nodeType: .serviceAccount, nodeID: accountID, on: db)
-            try await RoleBindingService.revokeAll(
-                principalType: .serviceAccount, principalID: accountID, on: db)
-            try await account.delete(on: db)
+        guard try await serviceAccounts.delete(id: accountID) else {
+            throw Abort(.notFound, reason: "Service account not found")
         }
         return .noContent
     }
@@ -221,8 +207,8 @@ struct ServiceAccountController: RouteCollection {
     /// exactly like user and group grants.
     func setProjectRole(req: Request) async throws -> Response {
         let account = try await loadAccount(req)
-        let accountID = try account.requireID()
-        let projectID = account.$project.id
+        let accountID = account.id
+        let projectID = account.projectID
         try await req.authorize("iam:setPolicy", on: IAMNode(type: .project, id: projectID))
 
         let body = try req.content.decode(SetProjectRoleRequest.self)
@@ -267,8 +253,8 @@ struct ServiceAccountController: RouteCollection {
     /// DELETE /api/service-accounts/:serviceAccountID/project-role
     func clearProjectRole(req: Request) async throws -> HTTPStatus {
         let account = try await loadAccount(req)
-        let accountID = try account.requireID()
-        let projectID = account.$project.id
+        let accountID = account.id
+        let projectID = account.projectID
         try await req.authorize("iam:setPolicy", on: IAMNode(type: .project, id: projectID))
 
         try await RoleBindingService.revoke(
@@ -286,13 +272,10 @@ struct ServiceAccountController: RouteCollection {
     /// GET /api/service-accounts/:serviceAccountID/registrations
     func listRegistrations(req: Request) async throws -> [WorkloadRegistrationResponse] {
         let account = try await loadAccount(req)
-        let accountID = try account.requireID()
+        let accountID = account.id
         try await req.authorize("serviceaccount:read", on: IAMNode(type: .serviceAccount, id: accountID))
 
-        return try await WorkloadRegistration.query(on: req.db)
-            .filter(\.$serviceAccount.$id == accountID)
-            .sort(\.$spiffeID)
-            .all()
+        return try await workloads.registrations(serviceAccountID: accountID)
             // No label hydration: a service account's registrations never carry
             // a `vm_id`, so there is no VM to read a current name from.
             .map { try WorkloadRegistrationResponse($0) }
@@ -309,21 +292,21 @@ struct ServiceAccountController: RouteCollection {
     /// editor reach.
     func createRegistration(req: Request) async throws -> Response {
         let account = try await loadAccount(req)
-        let accountID = try account.requireID()
-        try await req.authorize("iam:setPolicy", on: IAMNode(type: .project, id: account.$project.id))
+        let accountID = account.id
+        try await req.authorize("iam:setPolicy", on: IAMNode(type: .project, id: account.projectID))
 
         let body = try req.content.decode(CreateRegistrationRequest.self)
         let spiffeID = try WorkloadRegistry.validateRegistrable(spiffeID: body.spiffeId)
 
-        let registration = WorkloadRegistration(
-            spiffeID: spiffeID,
-            kind: .serviceAccount,
-            serviceAccountID: accountID,
-            createdBy: req.auth.get(User.self)?.id
-        )
+        let registration: WorkloadRegistrationSnapshot
         do {
-            try await registration.save(on: req.db)
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+            registration = try await workloads.createRegistration(
+                WorkloadRegistrationWrite(
+                    spiffeID: spiffeID,
+                    kind: WorkloadRegistrationKind.serviceAccount.rawValue,
+                    serviceAccountID: accountID,
+                    createdBy: req.auth.get(User.self)?.id))
+        } catch WorkloadsPersistenceError.duplicateSPIFFEID {
             // One identity, one principal: the registry is a function.
             throw Abort(.conflict, reason: "This SPIFFE ID is already registered")
         }
@@ -337,34 +320,30 @@ struct ServiceAccountController: RouteCollection {
     /// — same grant-shaped gate as attaching one.
     func deleteRegistration(req: Request) async throws -> HTTPStatus {
         let account = try await loadAccount(req)
-        let accountID = try account.requireID()
-        try await req.authorize("iam:setPolicy", on: IAMNode(type: .project, id: account.$project.id))
+        let accountID = account.id
+        try await req.authorize("iam:setPolicy", on: IAMNode(type: .project, id: account.projectID))
 
         guard let registrationID = req.parameters.get("registrationID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid registration ID")
         }
-        guard
-            let registration = try await WorkloadRegistration.query(on: req.db)
-                .filter(\.$id == registrationID)
-                .filter(\.$serviceAccount.$id == accountID)
-                .first()
+        guard try await workloads.deleteRegistration(
+            id: registrationID, serviceAccountID: accountID)
         else {
             throw Abort(.notFound, reason: "Registration not found")
         }
-        try await registration.delete(on: req.db)
         return .noContent
     }
 
     // MARK: - Helpers
 
     private func response(
-        _ account: ServiceAccount, id: UUID, projectID: UUID, projectRoles: [String]
+        _ account: ServiceAccountSnapshot, projectRoles: [String]
     ) -> ServiceAccountResponse {
         ServiceAccountResponse(
-            id: id,
+            id: account.id,
             name: account.name,
-            description: account.accountDescription,
-            projectId: projectID,
+            description: account.description,
+            projectId: account.projectID,
             projectRoles: projectRoles,
             createdAt: account.createdAt,
             updatedAt: account.updatedAt
@@ -378,13 +357,13 @@ struct ServiceAccountController: RouteCollection {
         accountIDs: [UUID], projectID: UUID, on db: any Database
     ) async throws -> [UUID: [String]] {
         guard !accountIDs.isEmpty else { return [:] }
-        let bindings = try await RoleBinding.query(on: db)
-            .filter(\.$principalType == IAMPrincipalType.serviceAccount.rawValue)
-            .filter(\.$principalID ~~ accountIDs)
-            .filter(\.$nodeType == IAMNodeType.project.rawValue)
-            .filter(\.$nodeID == projectID)
-            .active()
-            .all()
+        let bindings = try await LegacyRoleBindingStore.bindings(
+            principalType: IAMPrincipalType.serviceAccount.rawValue,
+            principalIDs: accountIDs,
+            nodeType: IAMNodeType.project.rawValue,
+            nodeID: projectID,
+            activeAt: Date(),
+            on: db)
         var roles: [UUID: [String]] = [:]
         for binding in bindings {
             guard let role = IAMRole(seededID: binding.roleID) else { continue }
@@ -393,11 +372,11 @@ struct ServiceAccountController: RouteCollection {
         return roles.mapValues { $0.sorted() }
     }
 
-    private func loadAccount(_ req: Request) async throws -> ServiceAccount {
+    private func loadAccount(_ req: Request) async throws -> ServiceAccountSnapshot {
         guard let accountID = req.parameters.get("serviceAccountID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid service account ID")
         }
-        guard let account = try await ServiceAccount.find(accountID, on: req.db) else {
+        guard let account = try await serviceAccounts.account(id: accountID) else {
             throw Abort(.notFound, reason: "Service account not found")
         }
         return account

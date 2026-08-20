@@ -37,11 +37,10 @@ struct VolumeAttachProjectContainmentTests {
                 email: "attach-containment-admin@example.com",
                 displayName: "Attach Containment Admin",
                 isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
             let org = try await builder.createOrganization(name: "Attach Containment Org")
             try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
-            admin.currentOrganizationId = org.id
-            try await admin.save(on: app.db)
+            try await admin.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let volumeProject = try await builder.createProject(
                 name: "Volume Project",
@@ -70,7 +69,7 @@ struct VolumeAttachProjectContainmentTests {
                 using: app.db
             )
 
-            let vm = try await builder.createVM(
+            var vm = try await builder.createVM(
                 name: "containment-vm", project: vmProject, environment: vmEnvironment)
             vm.hypervisorId = "agent-that-is-not-connected"
             try await vm.save(on: app.db)
@@ -97,7 +96,7 @@ struct VolumeAttachProjectContainmentTests {
             // still unbound.
             let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
             #expect(reloaded.status == .available)
-            #expect(reloaded.$vm.id == nil)
+            #expect(reloaded.vmID == nil)
             #expect(reloaded.deviceName == nil)
         }
     }
@@ -134,7 +133,7 @@ struct VolumeAttachProjectContainmentTests {
                 reloaded = try #require(try await Volume.find(volume.id, on: app.db))
             }
             #expect(reloaded.conditions.degraded != nil)
-            #expect(reloaded.$vm.id == nil)
+            #expect(reloaded.vmID == nil)
         }
     }
 
@@ -156,7 +155,7 @@ struct VolumeAttachProjectContainmentTests {
             }
 
             let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
-            #expect(reloaded.$vm.id == nil)
+            #expect(reloaded.vmID == nil)
             #expect(reloaded.deviceName == nil)
         }
     }

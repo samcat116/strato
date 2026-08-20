@@ -1,4 +1,5 @@
 import Fluent
+import ControlPlanePostgres
 import Foundation
 import Testing
 import Vapor
@@ -314,9 +315,10 @@ final class CredentialRestrictionEnforcementTests {
                 restriction: try restriction(["vm:read"]), credential: credential)
 
             await app.iamDecisionRecorder.flush()
-            let rows = try await IAMDecisionLog.query(on: app.db)
-                .filter(\.$credentialID == credentialID)
-                .all()
+            let rows = try await app.decisionLogsPersistence.entries(
+                matching: DecisionLogFilter(credentialID: credentialID),
+                limit: 500
+            ).entries
             #expect(rows.count == 2)
             #expect(rows.allSatisfy { $0.credentialType == "cli_session" })
 
@@ -343,9 +345,10 @@ final class CredentialRestrictionEnforcementTests {
             #expect(decision.allowed)
 
             await app.iamDecisionRecorder.flush()
-            let rows = try await IAMDecisionLog.query(on: app.db)
-                .filter(\.$nodeID == vmNode.id)
-                .all()
+            let rows = try await app.decisionLogsPersistence.entries(
+                matching: DecisionLogFilter(nodeID: vmNode.id),
+                limit: 500
+            ).entries
             #expect(!rows.isEmpty)
             #expect(rows.allSatisfy { $0.credentialType == nil && $0.credentialID == nil })
         }
@@ -366,10 +369,13 @@ final class CredentialRestrictionEnforcementTests {
         let request = Request(
             application: app, method: method, url: "/api/audit-events", on: app.eventLoopGroup.next())
         request.auth.login(user)
-        let key = APIKey(
-            id: UUID(), userID: (try? user.requireID()) ?? UUID(), name: "k", keyHash: "h", keyPrefix: "p")
-        key.store(restriction: restriction)
-        request.apiKey = key
+        request.apiKey = APIKeySnapshot(
+            id: UUID(),
+            userID: (try? user.requireID()) ?? UUID(),
+            name: "k",
+            keyPrefix: "p",
+            restriction: restriction.stored
+        )
         return request
     }
 
@@ -455,10 +461,13 @@ final class CredentialRestrictionEnforcementTests {
             #expect(request.iamAuthState.restriction.isUnrestricted)
 
             request.auth.login(user)
-            let key = APIKey(
-                id: UUID(), userID: try user.requireID(), name: "k", keyHash: "h", keyPrefix: "p")
-            key.store(restriction: try restriction(["vm:read"]))
-            request.apiKey = key
+            request.apiKey = APIKeySnapshot(
+                id: UUID(),
+                userID: try user.requireID(),
+                name: "k",
+                keyPrefix: "p",
+                restriction: try restriction(["vm:read"]).stored
+            )
 
             #expect(!request.iamAuthState.restriction.isUnrestricted)
             #expect(request.iamAuthState.restriction.permits(action: "vm:read"))
@@ -481,9 +490,10 @@ final class CredentialRestrictionEnforcementTests {
             #expect((thrown as? any AbortError)?.status == .forbidden)
 
             await app.iamDecisionRecorder.flush()
-            let rows = try await IAMDecisionLog.query(on: app.db)
-                .filter(\.$decision == "credential_restricted")
-                .all()
+            let rows = try await app.decisionLogsPersistence.entries(
+                matching: DecisionLogFilter(decision: "credential_restricted"),
+                limit: 500
+            ).entries
             #expect(rows.count == 1)
             let row = try #require(rows.first)
             #expect(row.action == nil)

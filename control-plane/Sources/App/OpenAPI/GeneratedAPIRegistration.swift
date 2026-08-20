@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import OpenAPIVapor
 import Vapor
 
@@ -23,13 +24,21 @@ extension Application {
 /// block in `openapi-generator-config.yaml`: the generator emits `APIProtocol`
 /// from exactly those operations, so a surface is migrated by porting its
 /// controller, listing its operations there, and conforming a service type.
-func registerGeneratedAPIHandlers(on app: Application) throws {
+func registerGeneratedAPIHandlers(
+    on app: Application,
+    persistence: ControlPlanePersistence
+) throws {
     let before = Set(app.routes.all.map(generatedRouteKey))
 
     // The injection middleware must be the innermost one: it publishes the
     // request as a task local that the handlers read.
     let transport = VaporTransport(routesBuilder: app.grouped(OpenAPIRequestInjectionMiddleware()))
-    try ProjectsAPIService().registerHandlers(on: transport)
+    try ProjectsAPIService(
+        projects: persistence.projects,
+        quotas: persistence.resourceQuotas,
+        iam: persistence.iam,
+        hierarchy: persistence.hierarchy
+    ).registerHandlers(on: transport)
 
     let after = Set(app.routes.all.map(generatedRouteKey))
     app.setStorageValue(GeneratedAPIRouteKeys.self, to: after.subtracting(before))

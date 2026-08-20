@@ -72,9 +72,7 @@ final class OrgTrustDomainTests {
                 organizationID: orgID, configuration: configuration, on: app.db)
 
             let claimed = try #require(
-                try await OrgTrustDomain.query(on: app.db)
-                    .filter(\.$organizationID == orgID)
-                    .first())
+                try await OrgTrustDomainStore.find(organizationID: orgID, on: app.db))
             #expect(claimed.phase == .pending)
             #expect(claimed.generation == 1)
             #expect(claimed.deletedAt == nil)
@@ -86,9 +84,8 @@ final class OrgTrustDomainTests {
             // Idempotent: the domain is immutable once any SVID exists under it.
             try await OrgTrustDomainProvisioning.claim(
                 organizationID: orgID, configuration: configuration, on: app.db)
-            let count = try await OrgTrustDomain.query(on: app.db)
-                .filter(\.$organizationID == orgID)
-                .count()
+            let count = try await OrgTrustDomainStore.count(
+                organizationID: orgID, on: app.db)
             #expect(count == 1)
 
             // Teardown is deliberately NOT flag-gated: the flag may flip between
@@ -97,9 +94,7 @@ final class OrgTrustDomainTests {
             try await OrgTrustDomainProvisioning.markForTeardown(organizationID: orgID, on: app.db)
 
             let tombstoned = try #require(
-                try await OrgTrustDomain.query(on: app.db)
-                    .filter(\.$organizationID == orgID)
-                    .first())
+                try await OrgTrustDomainStore.find(organizationID: orgID, on: app.db))
             #expect(tombstoned.phase == .deleting)
             #expect(tombstoned.generation == 2)
             #expect(tombstoned.deletedAt != nil)
@@ -115,8 +110,10 @@ final class OrgTrustDomainTests {
             let configuration = try await self.configuration(orgTrustDomainsEnabled: true)
             let contendedDomain = OrgTrustDomain.trustDomain(
                 forOrganization: squatter, platformTrustDomain: PlatformTrustDomain.current)
-            try await OrgTrustDomain(organizationID: UUID(), trustDomain: contendedDomain)
-                .save(on: app.db)
+            try await OrgTrustDomainStore.insert(
+                OrgTrustDomainWrite(
+                    organizationID: UUID(), trustDomain: contendedDomain),
+                on: app.db)
 
             // Must surface as itself rather than tripping the unique index
             // inside the org-create transaction, where it would become an
@@ -134,22 +131,20 @@ final class OrgTrustDomainTests {
     func rowRoundTrips() async throws {
         try await withApp { app in
             let orgID = UUID()
-            let row = OrgTrustDomain(
+            let row = try await OrgTrustDomainStore.insert(
+                OrgTrustDomainWrite(
                 organizationID: orgID,
                 trustDomain: OrgTrustDomain.trustDomain(
-                    forOrganization: orgID, platformTrustDomain: "strato.local")
-            )
-            row.serverAddress = "spire-org.example:8081"
-            row.bundleEndpointURL = "https://spire-org.example/bundle"
-            row.nodeAddress = "spire-org.example:8443"
-            row.orgBundlePEM = "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----"
-            row.phase = .active
-            try await row.save(on: app.db)
+                    forOrganization: orgID, platformTrustDomain: "strato.local"),
+                phase: .active,
+                serverAddress: "spire-org.example:8081",
+                bundleEndpointURL: "https://spire-org.example/bundle",
+                nodeAddress: "spire-org.example:8443",
+                orgBundlePEM: "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----"),
+                on: app.db)
 
             let loaded = try #require(
-                try await OrgTrustDomain.query(on: app.db)
-                    .filter(\.$organizationID == orgID)
-                    .first())
+                try await OrgTrustDomainStore.find(organizationID: orgID, on: app.db))
             #expect(loaded.phase == .active)
             #expect(loaded.generation == 1)
             #expect(loaded.observedGeneration == 0)
@@ -159,14 +154,21 @@ final class OrgTrustDomainTests {
             // The tombstone must stay *findable*: it is the instruction to
             // destroy the CA, so a soft-delete that hid it from queries would
             // strand the teardown.
-            loaded.phase = .deleting
-            loaded.deletedAt = Date()
-            try await loaded.save(on: app.db)
+            _ = try await OrgTrustDomainStore.updateState(
+                id: row.id,
+                phase: .deleting,
+                generation: loaded.generation,
+                observedGeneration: loaded.observedGeneration,
+                serverAddress: loaded.serverAddress,
+                bundleEndpointURL: loaded.bundleEndpointURL,
+                nodeAddress: loaded.nodeAddress,
+                orgBundlePEM: loaded.orgBundlePEM,
+                lastError: loaded.lastError,
+                deletedAt: Date(),
+                on: app.db)
 
             let tombstoned = try #require(
-                try await OrgTrustDomain.query(on: app.db)
-                    .filter(\.$organizationID == orgID)
-                    .first())
+                try await OrgTrustDomainStore.find(organizationID: orgID, on: app.db))
             #expect(tombstoned.phase == .deleting)
             #expect(tombstoned.deletedAt != nil)
             #expect(!tombstoned.acceptsIdentities)
@@ -175,15 +177,17 @@ final class OrgTrustDomainTests {
 
     @Test("A row with no cached bundle is not accepted for identity validation")
     func pendingRowRejectsIdentities() {
-        let row = OrgTrustDomain(organizationID: UUID(), trustDomain: "org-abc.strato.local")
-        #expect(!row.acceptsIdentities)
-        row.phase = .active
+        let pending = orgTrustDomainRecord(phase: .pending, bundlePEM: nil)
+        #expect(!pending.acceptsIdentities)
+        let activeWithoutBundle = orgTrustDomainRecord(phase: .active, bundlePEM: nil)
         // Active but bundle-less: there are no roots to verify against, and
         // accepting on the strength of the row alone would be the union-of-roots
         // mistake per-org domains exist to prevent.
-        #expect(!row.acceptsIdentities)
-        row.orgBundlePEM = "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----"
-        #expect(row.acceptsIdentities)
+        #expect(!activeWithoutBundle.acceptsIdentities)
+        let ready = orgTrustDomainRecord(
+            phase: .active,
+            bundlePEM: "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----")
+        #expect(ready.acceptsIdentities)
     }
 
     // MARK: - Provisioning hooks are dormant behind the flag
@@ -196,11 +200,30 @@ final class OrgTrustDomainTests {
             try await OrgTrustDomainProvisioning.claim(
                 organizationID: orgID, configuration: configuration, on: app.db)
 
-            let count = try await OrgTrustDomain.query(on: app.db)
-                .filter(\.$organizationID == orgID)
-                .count()
+            let count = try await OrgTrustDomainStore.count(
+                organizationID: orgID, on: app.db)
             #expect(count == 0)
         }
+    }
+
+    private func orgTrustDomainRecord(
+        phase: OrgTrustDomainPhase, bundlePEM: String?
+    ) -> OrgTrustDomainRecord {
+        OrgTrustDomainRecord(
+            id: UUID(),
+            organizationID: UUID(),
+            trustDomain: "org-abc.strato.local",
+            phase: phase,
+            generation: 1,
+            observedGeneration: 0,
+            serverAddress: nil,
+            bundleEndpointURL: nil,
+            nodeAddress: nil,
+            orgBundlePEM: bundlePEM,
+            lastError: nil,
+            createdAt: nil,
+            updatedAt: nil,
+            deletedAt: nil)
     }
 
     // MARK: - Per-trust-domain bundle selection
@@ -347,28 +370,29 @@ final class OrgTrustDomainTests {
             let domainA = "org-aaaaaaaaaaaa.strato.local"
             let domainB = "org-bbbbbbbbbbbb.strato.local"
 
-            let enrollmentA = AgentEnrollment(
+            let enrollmentA = TestAgentEnrollment(
                 agentName: "agent-1",
                 spiffeID: "spiffe://\(domainA)/agent/agent-1",
                 trustDomain: domainA,
                 organizationScope: .organization(try orgA.requireID())
             )
-            try await enrollmentA.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollmentA, on: app.db)
 
             // Globally unique names would reject this insert, which is the
             // blocking correctness bug: two tenants may legitimately both call
             // their first node `agent-1`.
-            let enrollmentB = AgentEnrollment(
+            let enrollmentB = TestAgentEnrollment(
                 agentName: "agent-1",
                 spiffeID: "spiffe://\(domainB)/agent/agent-1",
                 trustDomain: domainB,
                 organizationScope: .organization(try orgB.requireID())
             )
-            try await enrollmentB.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollmentB, on: app.db)
 
-            let count = try await AgentEnrollment.query(on: app.db)
-                .filter(\.$agentName == "agent-1")
-                .count()
+            let count = try await testAgentEnrollmentCount(
+                agentName: "agent-1",
+                on: app.db
+            )
             #expect(count == 2)
         }
     }
@@ -379,6 +403,14 @@ final class OrgTrustDomainTests {
             let builder = TestDataBuilder(db: app.db)
             let orgA = try await builder.createOrganization(name: "Agent TD Org A")
             let orgB = try await builder.createOrganization(name: "Agent TD Org B")
+            let siteA = Site(
+                name: "agent-td-a",
+                organizationScope: .organization(try orgA.requireID()))
+            try await siteA.save(on: app.db)
+            let siteB = Site(
+                name: "agent-td-b",
+                organizationScope: .organization(try orgB.requireID()))
+            try await siteB.save(on: app.db)
 
             let domainA = "org-aaaaaaaaaaaa.strato.local"
             let domainB = "org-bbbbbbbbbbbb.strato.local"
@@ -386,10 +418,12 @@ final class OrgTrustDomainTests {
             let idA = try await app.agentService.registerAgent(
                 Self.registration(name: "agent-1"),
                 identity: AgentIdentity(trustDomain: domainA, name: "agent-1"),
+                siteID: try siteA.requireID(),
                 organizationScope: .organization(try orgA.requireID()))
             let idB = try await app.agentService.registerAgent(
                 Self.registration(name: "agent-1"),
                 identity: AgentIdentity(trustDomain: domainB, name: "agent-1"),
+                siteID: try siteB.requireID(),
                 organizationScope: .organization(try orgB.requireID()))
 
             // Two rows, not one row re-registered: a name-keyed lookup would
@@ -398,8 +432,8 @@ final class OrgTrustDomainTests {
 
             let rowA = try #require(try await Agent.find(idA, on: app.db))
             let rowB = try #require(try await Agent.find(idB, on: app.db))
-            #expect(rowA.$organization.id == orgA.id)
-            #expect(rowB.$organization.id == orgB.id)
+            #expect(rowA.organizationID == orgA.id)
+            #expect(rowB.organizationID == orgB.id)
             #expect(rowA.identity.key == "spiffe://\(domainA)/agent/agent-1")
             #expect(rowB.identity.key != rowA.identity.key)
         }
@@ -432,14 +466,17 @@ final class OrgTrustDomainTests {
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Inherit Org")
             let orgID = try org.requireID()
+            let site = Site(name: "inherit-dc", organizationScope: .organization(orgID))
+            try await site.save(on: app.db)
 
             let agentID = try await app.agentService.registerAgent(
                 Self.registration(name: "inheriting"),
                 identity: AgentIdentity(trustDomain: "org-dddddddddddd.strato.local", name: "inheriting"),
-                identityOrganizationID: orgID)
+                identityOrganizationID: orgID,
+                siteID: try site.requireID())
 
             let row = try #require(try await Agent.find(agentID, on: app.db))
-            #expect(row.$organization.id == orgID)
+            #expect(row.organizationID == orgID)
         }
     }
 
@@ -450,11 +487,16 @@ final class OrgTrustDomainTests {
         try await withApp { app in
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Teardown Org")
+            let site = Site(
+                name: "teardown-dc",
+                organizationScope: .organization(try org.requireID()))
+            try await site.save(on: app.db)
 
             let agentID = try await app.agentService.registerAgent(
                 Self.registration(name: "teardown-agent"),
                 identity: AgentIdentity(
                     trustDomain: PlatformTrustDomain.current, name: "teardown-agent"),
+                siteID: try site.requireID(),
                 organizationScope: .organization(try org.requireID()))
 
             let row = try #require(try await Agent.find(agentID, on: app.db))

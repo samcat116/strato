@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import SQLKit
 import StratoShared
@@ -14,6 +15,8 @@ import Vapor
 /// silently drop each other's rules. Every rule mutation bumps the group's
 /// `generation` so replayed syncs can't resurrect old ACLs.
 struct SecurityGroupController: RouteCollection {
+    let iam: IAMPersistence
+    let projects: ProjectsPersistence
     func boot(routes: RoutesBuilder) throws {
         let groups = routes.grouped("api", "security-groups").grouped(User.guardMiddleware())
         groups.get(use: listGroups)
@@ -44,43 +47,46 @@ struct SecurityGroupController: RouteCollection {
         _ = try req.auth.require(User.self)
         let requestedProjectId = req.query[String.self, at: "project_id"].flatMap(UUID.init(uuidString:))
 
-        var query = SecurityGroup.query(on: req.db)
-            .with(\.$rules)
-            .sort(\.$name)
-            .sort(\.$id)
-
         // Project scoping runs for every caller, admins included: their
         // fleet-wide view comes from the tier-1 `platform-system-admin` policy
         // answering each `view_project` check, so it lands in the decision log
         // and a tier-2 guardrail can narrow it.
         var visibility: ProjectVisibility?
+        var projectIDs: [UUID]?
         if let requestedProjectId {
             let hasAccess = try await req.can(
                 "project:read", on: IAMNode(type: .project, id: requestedProjectId))
             guard hasAccess else {
                 throw Abort(.forbidden, reason: "You don't have access to this project")
             }
-            query = query.filter(\.$project.$id == requestedProjectId)
+            projectIDs = [requestedProjectId]
         } else {
             // Narrow to the projects the caller could reach, then let the
             // evaluator decide the ones that carry rows (`ProjectVisibility`).
-            let resolved = try await ProjectVisibility.resolve(on: req)
+            let resolved = try await ProjectVisibility.resolve(on: req, using: iam, projects: projects)
             guard !resolved.reachesNoProject else { return [] }
             if let candidates = resolved.candidateProjectIDs {
-                query = query.filter(\.$project.$id ~~ candidates)
+                projectIDs = candidates
             }
             visibility = resolved
         }
 
-        var groups = try await query.all()
+        var groups = try await LegacySecurityGroupStore.groups(
+            projectIDs: projectIDs, on: req.db)
         if let visibility {
-            groups = try await visibility.readableRows(groups, projectID: { $0.$project.id }, on: req)
+            groups = try await visibility.readableRows(groups, projectID: \.projectID, on: req)
         }
         // Two membership queries for the whole page instead of a COUNT per group.
-        let groupIds = try groups.map { try $0.requireID() }
+        let groupIds = groups.map(\.id)
         let counts = try await SecurityGroupService.attachmentCounts(forGroups: groupIds, on: req.db)
-        return try groups.map { group in
-            try SecurityGroupResponse(from: group, attachmentCount: counts[group.requireID()] ?? 0)
+        let rules = try await LegacySecurityGroupRuleStore.rules(
+            securityGroupIDs: groupIds, on: req.db)
+        let rulesByGroup = Dictionary(grouping: rules, by: \.securityGroupID)
+        return groups.map { group in
+            SecurityGroupResponse(
+                from: group,
+                rules: rulesByGroup[group.id] ?? [],
+                attachmentCount: counts[group.id] ?? 0)
         }
     }
 
@@ -101,9 +107,8 @@ struct SecurityGroupController: RouteCollection {
             throw Abort(.conflict, reason: "'\(SecurityGroup.defaultGroupName)' is reserved for the default group")
         }
 
-        let existingCount = try await SecurityGroup.query(on: req.db)
-            .filter(\.$project.$id == projectId)
-            .count()
+        let existingCount = try await LegacySecurityGroupStore.count(
+            projectID: projectId, on: req.db)
         guard existingCount < SecurityGroup.maxGroupsPerProject else {
             throw Abort(
                 .forbidden,
@@ -111,25 +116,23 @@ struct SecurityGroupController: RouteCollection {
         }
 
         let creatorID = user.id!
-        let group = SecurityGroup(
-            projectID: projectId,
-            name: name,
-            description: request.description,
-            createdByID: creatorID
-        )
+        let group: SecurityGroupSnapshot
         do {
-            try await req.db.transaction { db in
-                try await group.save(on: db)
+            group = try await req.db.transaction { db in
+                let group = try await LegacySecurityGroupStore.insert(
+                    projectID: projectId, name: name, description: request.description,
+                    createdByID: creatorID, on: db)
                 // Creator binding (issue #477), mirroring network create.
                 try await RoleBindingService.grant(
                     principalType: .user,
                     principalID: creatorID,
                     role: .admin,
                     nodeType: .securityGroup,
-                    nodeID: group.id!,
+                    nodeID: group.id,
                     createdBy: creatorID,
                     on: db
                 )
+                return group
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A security group named '\(name)' already exists in this project")
@@ -138,22 +141,23 @@ struct SecurityGroupController: RouteCollection {
         req.logger.info(
             "Security group created",
             metadata: [
-                "securityGroupId": .string(group.id!.uuidString),
+                "securityGroupId": .string(group.id.uuidString),
                 "name": .string(name),
                 "projectId": .string(projectId.uuidString),
             ])
         // A fresh group has no rules and no attachments.
-        return try SecurityGroupResponse(from: loadedEmpty(group), attachmentCount: 0)
+        return SecurityGroupResponse(from: group, attachmentCount: 0)
     }
 
     /// GET /api/security-groups/:groupId
     @Sendable
     func getGroup(req: Request) async throws -> SecurityGroupResponse {
         let group = try await fetchGroupWithAction(req: req, action: "securitygroup:read")
-        try await group.$rules.load(on: req.db)
+        let rules = try await LegacySecurityGroupRuleStore.rules(
+            securityGroupID: group.id, on: req.db)
         let count = try await SecurityGroupService.attachmentCount(
-            forGroup: try group.requireID(), on: req.db)
-        return try SecurityGroupResponse(from: group, attachmentCount: count)
+            forGroup: group.id, on: req.db)
+        return SecurityGroupResponse(from: group, rules: rules, attachmentCount: count)
     }
 
     /// PUT /api/security-groups/:groupId — name/description only; rules have
@@ -163,7 +167,9 @@ struct SecurityGroupController: RouteCollection {
         let group = try await fetchGroupWithAction(req: req, action: "securitygroup:update")
         let request = try req.content.decodeValidated(UpdateSecurityGroupRequest.self)
 
-        if let newName = request.name, newName != group.name {
+        var name = group.name
+        var description = group.groupDescription
+        if let newName = request.name, newName != name {
             guard !group.isDefault else {
                 throw Abort(.conflict, reason: "The default security group cannot be renamed")
             }
@@ -171,29 +177,34 @@ struct SecurityGroupController: RouteCollection {
                 throw Abort(
                     .conflict, reason: "'\(SecurityGroup.defaultGroupName)' is reserved for the default group")
             }
-            group.name = newName
+            name = newName
         }
-        if let description = request.description {
-            group.groupDescription = description.isEmpty ? nil : description
+        if let requestedDescription = request.description {
+            description = requestedDescription.isEmpty ? nil : requestedDescription
         }
 
+        let updated: SecurityGroupSnapshot
         do {
-            try await group.save(on: req.db)
+            guard let saved = try await LegacySecurityGroupStore.update(
+                id: group.id, name: name, description: description, on: req.db)
+            else { throw Abort(.notFound, reason: "Security group no longer exists") }
+            updated = saved
         } catch let error as any DatabaseError where error.isConstraintFailure {
-            throw Abort(.conflict, reason: "A security group named '\(group.name)' already exists in this project")
+            throw Abort(.conflict, reason: "A security group named '\(name)' already exists in this project")
         }
 
-        try await group.$rules.load(on: req.db)
+        let rules = try await LegacySecurityGroupRuleStore.rules(
+            securityGroupID: group.id, on: req.db)
         let count = try await SecurityGroupService.attachmentCount(
-            forGroup: try group.requireID(), on: req.db)
-        return try SecurityGroupResponse(from: group, attachmentCount: count)
+            forGroup: group.id, on: req.db)
+        return SecurityGroupResponse(from: updated, rules: rules, attachmentCount: count)
     }
 
     /// DELETE /api/security-groups/:groupId
     @Sendable
     func deleteGroup(req: Request) async throws -> HTTPStatus {
         let group = try await fetchGroupWithAction(req: req, action: "securitygroup:delete")
-        let groupId = try group.requireID()
+        let groupId = group.id
 
         guard !group.isDefault else {
             throw Abort(.conflict, reason: "The default security group cannot be deleted")
@@ -205,10 +216,10 @@ struct SecurityGroupController: RouteCollection {
         // Rules in *other* groups referencing this one keep their FK rows, so
         // deletion would break their address-set matches; the group's own
         // self-referencing rules cascade away and don't block.
-        let references = try await SecurityGroupRule.query(on: req.db)
-            .filter(\.$remoteGroup.$id == groupId)
-            .filter(\.$securityGroup.$id != groupId)
-            .count()
+        let references = try await LegacySecurityGroupRuleStore.externalReferenceCount(
+            remoteGroupID: groupId,
+            excludingSecurityGroupID: groupId,
+            on: req.db)
         guard references == 0 else {
             throw Abort(
                 .conflict,
@@ -221,10 +232,9 @@ struct SecurityGroupController: RouteCollection {
                 // the owner-side CASCADE can remove the same rule. Delete the
                 // group's own rules explicitly so a self rule does not make a
                 // non-default group undeletable.
-                try await SecurityGroupRule.query(on: db)
-                    .filter(\.$securityGroup.$id == groupId)
-                    .delete()
-                try await group.delete(on: db)
+                try await LegacySecurityGroupRuleStore.delete(
+                    securityGroupIDs: [groupId], on: db)
+                _ = try await LegacySecurityGroupStore.delete(id: groupId, on: db)
                 try await RoleBindingService.revokeAll(nodeType: .securityGroup, nodeID: groupId, on: db)
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
@@ -248,61 +258,59 @@ struct SecurityGroupController: RouteCollection {
     @Sendable
     func createRule(req: Request) async throws -> SecurityGroupRuleResponse {
         let group = try await fetchGroupWithAction(req: req, action: "securitygroup:update")
-        let groupId = try group.requireID()
+        let groupId = group.id
         let request = try req.content.decodeValidated(CreateSecurityGroupRuleRequest.self)
 
         let protocolName = try await SecurityGroupService.validateRule(
-            request, groupProjectID: group.$project.id, on: req.db)
+            request, groupProjectID: group.projectID, on: req.db)
 
-        let ruleCount = try await SecurityGroupRule.query(on: req.db)
-            .filter(\.$securityGroup.$id == groupId)
-            .count()
+        let ruleCount = try await LegacySecurityGroupRuleStore.count(
+            securityGroupID: groupId, on: req.db)
         guard ruleCount < SecurityGroup.maxRulesPerGroup else {
             throw Abort(
                 .forbidden,
                 reason: "Rule limit reached: \(SecurityGroup.maxRulesPerGroup) rules per security group")
         }
 
-        let rule = SecurityGroupRule(
-            securityGroupID: groupId,
-            direction: request.direction,
-            ethertype: request.ethertype,
-            protocolName: protocolName,
-            portRangeMin: request.portRangeMin,
-            portRangeMax: request.portRangeMax,
-            remoteCIDR: request.remoteCIDR,
-            remoteGroupID: request.remoteGroupId,
-            log: request.log ?? false,
-            description: request.description
-        )
-        try await req.db.transaction { db in
-            try await rule.save(on: db)
+        let rule = try await req.db.transaction { db in
+            let rule = try await LegacySecurityGroupRuleStore.insert(
+                securityGroupID: groupId,
+                direction: request.direction,
+                ethertype: request.ethertype,
+                protocolName: protocolName,
+                portRangeMin: request.portRangeMin,
+                portRangeMax: request.portRangeMax,
+                remoteCIDR: request.remoteCIDR,
+                remoteGroupID: request.remoteGroupId,
+                log: request.log ?? false,
+                description: request.description,
+                on: db)
             try await Self.bumpGeneration(of: groupId, on: db)
+            return rule
         }
 
         await req.application.agentService.syncDesiredStateToFleet()
-        return try SecurityGroupRuleResponse(from: rule)
+        return SecurityGroupRuleResponse(from: rule)
     }
 
     /// DELETE /api/security-groups/:groupId/rules/:ruleId
     @Sendable
     func deleteRule(req: Request) async throws -> HTTPStatus {
         let group = try await fetchGroupWithAction(req: req, action: "securitygroup:update")
-        let groupId = try group.requireID()
+        let groupId = group.id
         guard let ruleId = req.parameters.get("ruleId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid rule ID")
         }
-        guard
-            let rule = try await SecurityGroupRule.query(on: req.db)
-                .filter(\.$id == ruleId)
-                .filter(\.$securityGroup.$id == groupId)
-                .first()
+        guard try await LegacySecurityGroupRuleStore.rule(
+            id: ruleId, securityGroupID: groupId, on: req.db) != nil
         else {
             throw Abort(.notFound, reason: "Rule not found in this security group")
         }
 
         try await req.db.transaction { db in
-            try await rule.delete(on: db)
+            guard try await LegacySecurityGroupRuleStore.delete(
+                id: ruleId, securityGroupID: groupId, on: db) != nil
+            else { throw Abort(.notFound, reason: "Rule not found in this security group") }
             try await Self.bumpGeneration(of: groupId, on: db)
         }
 
@@ -337,7 +345,7 @@ struct SecurityGroupController: RouteCollection {
     @Sendable
     func attachGroup(req: Request) async throws -> HTTPStatus {
         let group = try await fetchGroupWithAction(req: req, action: "securitygroup:attach")
-        let groupId = try group.requireID()
+        let groupId = group.id
         let request = try req.content.decode(AttachSecurityGroupRequest.self)
 
         let target = try await resolveTargetNIC(req: req, request: request, group: group)
@@ -414,7 +422,7 @@ struct SecurityGroupController: RouteCollection {
     @Sendable
     func detachGroup(req: Request) async throws -> HTTPStatus {
         let group = try await fetchGroupWithAction(req: req, action: "securitygroup:detach")
-        let groupId = try group.requireID()
+        let groupId = group.id
         let request = try req.content.decode(AttachSecurityGroupRequest.self)
 
         let target = try await resolveTargetNIC(req: req, request: request, group: group)
@@ -481,40 +489,35 @@ struct SecurityGroupController: RouteCollection {
         func attachedGroupIDs(on db: Database) async throws -> [UUID] {
             switch workload {
             case .vm:
-                return try await VMInterfaceSecurityGroup.query(on: db)
-                    .filter(\.$interface.$id == interfaceID)
-                    .all()
-                    .map { $0.$securityGroup.id }
+                return try await LegacyInterfaceSecurityGroupStore.memberships(
+                    kind: .vm, interfaceIDs: [interfaceID], on: db
+                ).map(\.securityGroupID)
             case .sandbox:
-                return try await SandboxInterfaceSecurityGroup.query(on: db)
-                    .filter(\.$interface.$id == interfaceID)
-                    .all()
-                    .map { $0.$securityGroup.id }
+                return try await LegacyInterfaceSecurityGroupStore.memberships(
+                    kind: .sandbox, interfaceIDs: [interfaceID], on: db
+                ).map(\.securityGroupID)
             }
         }
 
         func attach(groupID: UUID, on db: Database) async throws {
             switch workload {
             case .vm:
-                try await VMInterfaceSecurityGroup(interfaceID: interfaceID, securityGroupID: groupID).save(on: db)
+                try await LegacyInterfaceSecurityGroupStore.insert(
+                    kind: .vm, interfaceID: interfaceID, securityGroupID: groupID, on: db)
             case .sandbox:
-                try await SandboxInterfaceSecurityGroup(interfaceID: interfaceID, securityGroupID: groupID)
-                    .save(on: db)
+                try await LegacyInterfaceSecurityGroupStore.insert(
+                    kind: .sandbox, interfaceID: interfaceID, securityGroupID: groupID, on: db)
             }
         }
 
         func detach(groupID: UUID, on db: Database) async throws {
             switch workload {
             case .vm:
-                try await VMInterfaceSecurityGroup.query(on: db)
-                    .filter(\.$interface.$id == interfaceID)
-                    .filter(\.$securityGroup.$id == groupID)
-                    .delete()
+                _ = try await LegacyInterfaceSecurityGroupStore.delete(
+                    kind: .vm, interfaceID: interfaceID, securityGroupID: groupID, on: db)
             case .sandbox:
-                try await SandboxInterfaceSecurityGroup.query(on: db)
-                    .filter(\.$interface.$id == interfaceID)
-                    .filter(\.$securityGroup.$id == groupID)
-                    .delete()
+                _ = try await LegacyInterfaceSecurityGroupStore.delete(
+                    kind: .sandbox, interfaceID: interfaceID, securityGroupID: groupID, on: db)
             }
         }
     }
@@ -524,7 +527,7 @@ struct SecurityGroupController: RouteCollection {
     /// (de)attaching changes that workload's traffic filtering (the
     /// volume/floating-IP rule).
     private func resolveTargetNIC(
-        req: Request, request: AttachSecurityGroupRequest, group: SecurityGroup
+        req: Request, request: AttachSecurityGroupRequest, group: SecurityGroupSnapshot
     ) async throws -> NICTarget {
         switch try request.requireTarget() {
         case .vm(let vmId):
@@ -535,7 +538,7 @@ struct SecurityGroupController: RouteCollection {
     }
 
     private func resolveVMNIC(
-        req: Request, vmId: UUID, request: AttachSecurityGroupRequest, group: SecurityGroup
+        req: Request, vmId: UUID, request: AttachSecurityGroupRequest, group: SecurityGroupSnapshot
     ) async throws -> NICTarget {
         // Owning the group is not enough, and an unreachable VM is answered as
         // absent whether it is missing or merely forbidden — see
@@ -545,13 +548,11 @@ struct SecurityGroupController: RouteCollection {
         // caller who can't touch the VM would tell them it exists in another
         // project (issue #777).
         try ProjectContainment.require(
-            "VM", in: vm.$project.id,
-            sameProjectAs: "the security group", in: group.$project.id)
+            "VM", in: vm.projectID,
+            sameProjectAs: "the security group", in: group.projectID)
 
-        let interfaces = try await VMNetworkInterface.query(on: req.db)
-            .filter(\.$vm.$id == vmId)
-            .sort(\.$orderIndex)
-            .all()
+        let interfaces = try await LegacyVMNetworkInterfaceStore.interfaces(
+            vmID: vmId, on: req.db)
         if let interfaceId = request.interfaceId {
             guard let match = interfaces.first(where: { $0.id == interfaceId }) else {
                 throw Abort(.badRequest, reason: "Interface \(interfaceId) does not belong to VM \(vmId)")
@@ -569,17 +570,15 @@ struct SecurityGroupController: RouteCollection {
     /// no NIC at all (naming none is not an error the way it is for a VM), so
     /// "no interfaces" is an ordinary state rather than a corrupt one.
     private func resolveSandboxNIC(
-        req: Request, sandboxId: UUID, request: AttachSecurityGroupRequest, group: SecurityGroup
+        req: Request, sandboxId: UUID, request: AttachSecurityGroupRequest, group: SecurityGroupSnapshot
     ) async throws -> NICTarget {
         let sandbox = try await req.authorizedSandbox(sandboxId, action: "sandbox:update")
         try ProjectContainment.require(
-            "Sandbox", in: sandbox.$project.id,
-            sameProjectAs: "the security group", in: group.$project.id)
+            "Sandbox", in: sandbox.projectID,
+            sameProjectAs: "the security group", in: group.projectID)
 
-        let interfaces = try await SandboxNetworkInterface.query(on: req.db)
-            .filter(\.$sandbox.$id == sandboxId)
-            .sort(\.$deviceName)
-            .all()
+        let interfaces = try await LegacySandboxNetworkInterfaceStore.interfaces(
+            sandboxID: sandboxId, on: req.db)
         if let interfaceId = request.interfaceId {
             guard let match = interfaces.first(where: { $0.id == interfaceId }) else {
                 throw Abort(.badRequest, reason: "Interface \(interfaceId) does not belong to sandbox \(sandboxId)")
@@ -650,11 +649,13 @@ struct SecurityGroupController: RouteCollection {
         }
     }
 
-    private func fetchGroupWithAction(req: Request, action: String) async throws -> SecurityGroup {
+    private func fetchGroupWithAction(req: Request, action: String) async throws
+        -> SecurityGroupSnapshot
+    {
         guard let groupId = req.parameters.get("groupId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid security group ID")
         }
-        guard let group = try await SecurityGroup.find(groupId, on: req.db) else {
+        guard let group = try await LegacySecurityGroupStore.group(id: groupId, on: req.db) else {
             throw Abort(.notFound, reason: "Security group not found")
         }
         let allowed = try await req.can(
@@ -665,10 +666,4 @@ struct SecurityGroupController: RouteCollection {
         return group
     }
 
-    /// A just-created group with its (empty) rules relation marked loaded, so
-    /// the response builder can map it without a database round trip.
-    private func loadedEmpty(_ group: SecurityGroup) -> SecurityGroup {
-        group.$rules.value = []
-        return group
-    }
 }

@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import SwiftSSF
 import Vapor
@@ -19,6 +19,12 @@ import Vapor
 /// bearer token):
 /// - `POST /ssf/events/:streamID`
 struct SSFStreamController: RouteCollection {
+    private let streams: SSFStreamsPersistence
+
+    init(streams: SSFStreamsPersistence) {
+        self.streams = streams
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let streams = routes.grouped("api", "organizations", ":organizationID", "ssf-streams")
         streams.get(use: list)
@@ -44,11 +50,8 @@ struct SSFStreamController: RouteCollection {
         let organizationID = try requireOrganizationID(req)
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
-        let streams = try await SSFStream.query(on: req.db)
-            .filter(\.$organization.$id == organizationID)
-            .sort(\.$createdAt)
-            .all()
-        return streams.map { response(for: $0, on: req) }
+        return try await streams.streams(organizationID: organizationID)
+            .map { response(for: $0, on: req) }
     }
 
     func create(req: Request) async throws -> Response {
@@ -62,19 +65,20 @@ struct SSFStreamController: RouteCollection {
         try SSFValidation.validateTransmitterURL(
             request.transmitterURL, configuration: req.controlPlaneConfiguration)
 
-        let stream = SSFStream(
-            organizationID: organizationID,
-            name: request.name,
-            description: request.description,
-            transmitterURL: request.transmitterURL,
-            authToken: try request.authToken.map { try req.secretsEncryption.encrypt($0) },
-            expectedIssuer: request.expectedIssuer,
-            expectedAudience: request.expectedAudience ?? [],
-            deliveryMethod: request.deliveryMethod,
-            eventsRequested: request.eventsRequested ?? [],
-            createdByID: try user.requireID()
+        let stream = try await streams.create(
+            SSFStreamWrite(
+                organizationID: organizationID,
+                name: request.name,
+                description: request.description,
+                transmitterURL: request.transmitterURL,
+                encryptedAuthToken: try request.authToken.map { try req.secretsEncryption.encrypt($0) },
+                expectedIssuer: request.expectedIssuer,
+                expectedAudience: request.expectedAudience ?? [],
+                deliveryMethod: request.deliveryMethod,
+                eventsRequested: request.eventsRequested ?? [],
+                createdByID: try user.requireID()
+            )
         )
-        try await stream.save(on: req.db)
 
         let body = response(for: stream, on: req)
         let response = Response(status: .created)
@@ -85,44 +89,56 @@ struct SSFStreamController: RouteCollection {
     func get(req: Request) async throws -> SSFStreamResponse {
         let stream = try await requireStream(req)
         try await OrganizationAccessService.requireMember(
-            organizationID: stream.$organization.id, on: req)
+            organizationID: stream.organizationID, on: req)
         return response(for: stream, on: req)
     }
 
     func update(req: Request) async throws -> SSFStreamResponse {
         let stream = try await requireStream(req)
         try await OrganizationAccessService.requireAdmin(
-            organizationID: stream.$organization.id, on: req)
+            organizationID: stream.organizationID, on: req)
 
         let request = try req.content.decodeValidated(UpdateSSFStreamRequest.self)
-        if let name = request.name { stream.name = name }
-        if let description = request.description { stream.description = description }
-        if let authToken = request.authToken {
-            stream.authToken = try req.secretsEncryption.encrypt(authToken)
+        guard
+            let updated = try await streams.updateOwnedStream(
+                id: stream.id,
+                organizationID: stream.organizationID,
+                changes: SSFStreamChanges(
+                    name: request.name,
+                    description: request.description,
+                    encryptedAuthToken: try request.authToken.map {
+                        try req.secretsEncryption.encrypt($0)
+                    },
+                    expectedIssuer: request.expectedIssuer,
+                    expectedAudience: request.expectedAudience,
+                    eventsRequested: request.eventsRequested,
+                    enabled: request.enabled
+                )
+            )
+        else {
+            throw Abort(.notFound, reason: "SSF stream not found")
         }
-        if let expectedIssuer = request.expectedIssuer { stream.expectedIssuer = expectedIssuer }
-        if let expectedAudience = request.expectedAudience {
-            stream.expectedAudienceArray = expectedAudience
-        }
-        if let eventsRequested = request.eventsRequested {
-            stream.eventsRequestedArray = eventsRequested
-        }
-        if let enabled = request.enabled { stream.enabled = enabled }
-        try await stream.save(on: req.db)
 
         // The receiver caches transmitter metadata and verification settings.
-        await req.application.ssf.invalidateReceiver(for: try stream.requireID())
-        return response(for: stream, on: req)
+        await req.application.ssf.invalidateReceiver(for: updated.id)
+        return response(for: updated, on: req)
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
         let stream = try await requireStream(req)
         try await OrganizationAccessService.requireAdmin(
-            organizationID: stream.$organization.id, on: req)
+            organizationID: stream.organizationID, on: req)
 
         await req.application.ssf.deleteRemoteStream(stream)
-        await req.application.ssf.invalidateReceiver(for: try stream.requireID())
-        try await stream.delete(on: req.db)
+        await req.application.ssf.invalidateReceiver(for: stream.id)
+        guard
+            try await streams.deleteOwnedStream(
+                id: stream.id,
+                organizationID: stream.organizationID
+            )
+        else {
+            throw Abort(.notFound, reason: "SSF stream not found")
+        }
         return .noContent
     }
 
@@ -131,19 +147,22 @@ struct SSFStreamController: RouteCollection {
     func register(req: Request) async throws -> RegisterSSFStreamResponse {
         let stream = try await requireStream(req)
         try await OrganizationAccessService.requireAdmin(
-            organizationID: stream.$organization.id, on: req)
+            organizationID: stream.organizationID, on: req)
         guard stream.enabled else {
             throw Abort(.conflict, reason: "Stream is disabled")
         }
 
-        let pushToken = try await req.application.ssf.registerStream(stream, on: req.db)
-        return RegisterSSFStreamResponse(stream: response(for: stream, on: req), pushToken: pushToken)
+        let result = try await req.application.ssf.registerStream(stream)
+        return RegisterSSFStreamResponse(
+            stream: response(for: result.stream, on: req),
+            pushToken: result.pushToken
+        )
     }
 
     func verify(req: Request) async throws -> HTTPStatus {
         let stream = try await requireStream(req)
         try await OrganizationAccessService.requireAdmin(
-            organizationID: stream.$organization.id, on: req)
+            organizationID: stream.organizationID, on: req)
         try await req.application.ssf.requestVerification(of: stream)
         return .accepted
     }
@@ -151,7 +170,7 @@ struct SSFStreamController: RouteCollection {
     func status(req: Request) async throws -> SSFStreamStatusResponse {
         let stream = try await requireStream(req)
         try await OrganizationAccessService.requireMember(
-            organizationID: stream.$organization.id, on: req)
+            organizationID: stream.organizationID, on: req)
         let status = try await req.application.ssf.streamStatus(of: stream)
         return SSFStreamStatusResponse(
             remoteStreamID: status.stream_id,
@@ -163,8 +182,8 @@ struct SSFStreamController: RouteCollection {
     func pollNow(req: Request) async throws -> SSFPollResultResponse {
         let stream = try await requireStream(req)
         try await OrganizationAccessService.requireAdmin(
-            organizationID: stream.$organization.id, on: req)
-        return try await req.application.ssf.pollStream(stream, on: req.db)
+            organizationID: stream.organizationID, on: req)
+        return try await req.application.ssf.pollStream(stream)
     }
 
     // MARK: - RFC 8935 push delivery
@@ -172,7 +191,7 @@ struct SSFStreamController: RouteCollection {
     func receivePush(req: Request) async throws -> Response {
         guard let streamIDParam = req.parameters.get("streamID"),
             let streamID = UUID(uuidString: streamIDParam),
-            let stream = try await SSFStream.find(streamID, on: req.db)
+            let stream = try await streams.stream(id: streamID)
         else {
             return setErrorResponse(.notFound, err: "invalid_request", description: "Unknown stream")
         }
@@ -187,7 +206,7 @@ struct SSFStreamController: RouteCollection {
         }
 
         guard let bearer = req.headers.bearerAuthorization?.token,
-            stream.matchesPushToken(bearer)
+            stream.pushTokenHash == SSFPushCredential.hashPushToken(bearer)
         else {
             return setErrorResponse(
                 .unauthorized, err: "authentication_failed",
@@ -239,29 +258,28 @@ struct SSFStreamController: RouteCollection {
         return id
     }
 
-    private func requireStream(_ req: Request) async throws -> SSFStream {
+    private func requireStream(_ req: Request) async throws -> SSFStreamSnapshot {
         let organizationID = try requireOrganizationID(req)
         guard let raw = req.parameters.get("streamID"), let id = UUID(uuidString: raw) else {
             throw Abort(.badRequest, reason: "Invalid stream ID")
         }
         guard
-            let stream = try await SSFStream.query(on: req.db)
-                .filter(\.$id == id)
-                .filter(\.$organization.$id == organizationID)
-                .first()
+            let stream = try await streams.ownedStream(
+                id: id,
+                organizationID: organizationID
+            )
         else {
             throw Abort(.notFound, reason: "SSF stream not found")
         }
         return stream
     }
 
-    private func response(for stream: SSFStream, on req: Request) -> SSFStreamResponse {
+    private func response(for stream: SSFStreamSnapshot, on req: Request) -> SSFStreamResponse {
         let pushEndpoint =
             stream.deliveryMethodValue == .push
-            ? stream.id.flatMap {
-                SSFService.pushEndpointURL(
-                    for: $0, configuration: req.controlPlaneConfiguration)
-            } : nil
+            ? SSFService.pushEndpointURL(
+                for: stream.id, configuration: req.controlPlaneConfiguration)
+            : nil
         return SSFStreamResponse(from: stream, pushEndpoint: pushEndpoint)
     }
 }

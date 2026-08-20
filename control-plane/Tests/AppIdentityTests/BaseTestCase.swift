@@ -20,7 +20,8 @@ class BaseTestCase {
     }
 
     /// Set up common test data
-    func setupCommonTestData(on db: Database) async throws {
+    func setupCommonTestData(on app: Application) async throws {
+        let db = app.db
         // Create test user
         testUser = User(
             username: "testuser",
@@ -38,12 +39,12 @@ class BaseTestCase {
         try await testOrganization.save(on: db)
 
         // Add user to organization as admin
-        let userOrg = UserOrganization(
+        _ = try await OrganizationMembershipStore.insert(
             userID: testUser.id!,
             organizationID: testOrganization.id!,
-            roleID: IAMRole.admin.seededID
+            roleID: IAMRole.admin.seededID,
+            on: db
         )
-        try await userOrg.save(on: db)
 
         // The admin role binding the API/backfill would have written alongside
         // the membership row. Since cutover (#482) the Cedar evaluator answers
@@ -60,10 +61,9 @@ class BaseTestCase {
         )
 
         // Set current organization
-        testUser.currentOrganizationId = testOrganization.id
-        try await testUser.save(on: db)
+        try await testUser.replacingCurrentOrganization(testOrganization.id).save(on: db)
 
         // Generate auth token
-        authToken = try await testUser.generateAPIKey(on: db)
+        authToken = try await testUser.generateAPIKey(on: app)
     }
 }

@@ -76,7 +76,7 @@ final class HierarchyPathVisibilityTests {
     ) async throws -> (User, String) {
         let user = try await builder.createUser(username: username, email: "\(username)@example.com")
         try await builder.addUserToOrganization(user: user, organization: organization, role: "member")
-        return (user, try await user.generateAPIKey(on: app.db))
+        return (user, try await user.generateAPIKey(on: app))
     }
 
     private func grantViewer(_ app: Application, to user: User, on node: IAMNode) async throws {
@@ -161,7 +161,7 @@ final class HierarchyPathVisibilityTests {
             let admin = try await builder.createUser(username: "path-admin", email: "path-admin@example.com")
             try await builder.addUserToOrganization(
                 user: admin, organization: fixture.organization, role: "admin")
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             let components = try await entityPath(
                 app, organization: fixture.organization, type: "vm", id: fixture.nestedVM.id!, token: token)
@@ -220,7 +220,7 @@ final class HierarchyPathVisibilityTests {
             let admin = try await builder.createUser(username: "quota-admin", email: "quota-admin@example.com")
             try await builder.addUserToOrganization(
                 user: admin, organization: fixture.organization, role: "admin")
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             let response = try await summary(app, organization: fixture.organization, token: token)
 
@@ -247,7 +247,7 @@ final class HierarchyPathVisibilityTests {
                 user: folderViewer, organization: fixture.organization, role: "member")
             try await grantViewer(
                 app, to: folderViewer, on: IAMNode(type: .organizationalUnit, id: fixture.folder.id!))
-            let folderToken = try await folderViewer.generateAPIKey(on: app.db)
+            let folderToken = try await folderViewer.generateAPIKey(on: app)
 
             // A folder grant reaches the folder's own quota and the quota of the
             // project nested under it, and stops there.
@@ -283,7 +283,7 @@ final class HierarchyPathVisibilityTests {
                 app, builder: builder, organization: fixture.organization, username: "usage-bare")
 
             let orgQuota = try #require(
-                try await ResourceQuota.query(on: app.db).filter(\.$name == "org-quota").first())
+                try await LegacyResourceQuotaStore.quotas(name: "org-quota", on: app.db).first)
             let quotaID = try orgQuota.requireID()
 
             // The direct door: measured live, with a per-VM breakdown.
@@ -327,10 +327,10 @@ final class HierarchyPathVisibilityTests {
             let admin = try await builder.createUser(username: "usage-admin", email: "usage-admin@example.com")
             try await builder.addUserToOrganization(
                 user: admin, organization: fixture.organization, role: "admin")
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             let orgQuota = try #require(
-                try await ResourceQuota.query(on: app.db).filter(\.$name == "org-quota").first())
+                try await LegacyResourceQuotaStore.quotas(name: "org-quota", on: app.db).first)
 
             try await app.test(.GET, "/api/quotas/\(try orgQuota.requireID())/usage") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)

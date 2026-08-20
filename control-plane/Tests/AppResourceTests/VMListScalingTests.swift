@@ -46,8 +46,7 @@ final class VMListScalingTests {
                 username: "scaleuser", email: "scale@example.com", isSystemAdmin: false)
             let org = try await builder.createOrganization(name: "Scale Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "member")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "Scale Project", description: "many VMs", organization: org)
@@ -69,7 +68,9 @@ final class VMListScalingTests {
                     on: app.eventLoopGroup.next())
                 req.auth.login(user)
                 req.fluent.history.start()
-                let vms = try await VMController().visibleVMs(req: req)
+                let vms = try await VMController(
+                    workloads: app.workloadsPersistence
+                ).visibleVMs(req: req)
                 req.fluent.history.stop()
                 #expect(vms.count == expected)
                 return req.fluent.history.queries.count

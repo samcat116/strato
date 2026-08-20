@@ -59,7 +59,7 @@ final class ImageControllerTests {
         let outsider = try await TestDataBuilder(db: app.db).createUser(
             username: "img-outsider-\(suffix)",
             email: "img-outsider-\(suffix)@example.com")
-        return try await outsider.generateAPIKey(on: app.db)
+        return try await outsider.generateAPIKey(on: app)
     }
 
     /// Creates a temporary storage directory
@@ -238,12 +238,12 @@ final class ImageControllerTests {
             try await testOrganization.save(on: app.db)
 
             // Add user to organization
-            let userOrg = UserOrganization(
+            _ = try await OrganizationMembershipStore.insert(
                 userID: testUser.id!,
                 organizationID: testOrganization.id!,
-                roleID: IAMRole.admin.seededID
+                roleID: IAMRole.admin.seededID,
+                on: app.db
             )
-            try await userOrg.save(on: app.db)
 
             // The admin role binding the API/backfill would have written
             // alongside the membership row — the Cedar evaluator (#482)
@@ -253,18 +253,18 @@ final class ImageControllerTests {
                 nodeType: .organization, nodeID: testOrganization.id!, createdBy: nil, on: app.db)
 
             // Create test project
-            let testProject = Project(
+            var testProject = Project(
                 name: "Image Test Project",
                 description: "Project for image tests",
                 organizationID: testOrganization.id,
                 path: ""
             )
             try await testProject.save(on: app.db)
-            testProject.path = try await testProject.buildPath(on: app.db)
+            testProject = testProject.replacingPath(try await testProject.buildPath(on: app.db))
             try await testProject.save(on: app.db)
 
             // Generate auth token
-            let authToken = try await testUser.generateAPIKey(on: app.db)
+            let authToken = try await testUser.generateAPIKey(on: app)
 
             try await test(app, testUser, testOrganization, testProject, authToken, tempStoragePath)
 
@@ -539,10 +539,8 @@ final class ImageControllerTests {
 
             let id = try #require(imageID)
             let artifact = try #require(
-                try await ImageArtifact.query(on: app.db)
-                    .filter(\.$image.$id == id)
-                    .filter(\.$kind == .diskImage)
-                    .first())
+                try await LegacyImageArtifactStore.artifact(
+                    imageID: id, kind: .diskImage, on: app.db))
             #expect(artifact.expectedChecksum == supplied.lowercased())
             // The observed digest stays empty until the download actually runs;
             // the caller's claim must never be mistaken for it.
@@ -568,10 +566,8 @@ final class ImageControllerTests {
 
             let id = try #require(imageID)
             let artifact = try #require(
-                try await ImageArtifact.query(on: app.db)
-                    .filter(\.$image.$id == id)
-                    .filter(\.$kind == .diskImage)
-                    .first())
+                try await LegacyImageArtifactStore.artifact(
+                    imageID: id, kind: .diskImage, on: app.db))
             #expect(artifact.expectedChecksum == nil)
         }
     }
@@ -769,12 +765,12 @@ final class ImageControllerTests {
                 }
             }
 
-            #expect(try await Image.query(on: app.db).count() == 0)
-            #expect(try await ImageArtifact.query(on: app.db).count() == 0)
+            #expect(try await LegacyImageStore.count(on: app.db) == 0)
+            #expect(try await LegacyImageArtifactStore.count(on: app.db) == 0)
             #expect(
-                try await RoleBinding.query(on: app.db)
-                    .filter(\.$nodeType == IAMNodeType.image.rawValue)
-                    .count() == 0)
+                try await LegacyRoleBindingStore.bindings(
+                    nodeType: IAMNodeType.image.rawValue,
+                    on: app.db).isEmpty)
         }
     }
 
@@ -1114,13 +1110,13 @@ final class ImageControllerTests {
             }
 
             // Verify image is deleted from database
-            let deletedImage = try await Image.find(imageId, on: app.db)
+            let deletedImage = try await LegacyImageStore.image(id: imageId, on: app.db)
             #expect(deletedImage == nil)
 
-            let bindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$nodeType == IAMNodeType.image.rawValue)
-                .filter(\.$nodeID == imageId)
-                .count()
+            let bindings = try await LegacyRoleBindingStore.bindings(
+                nodeType: IAMNodeType.image.rawValue,
+                nodeID: imageId,
+                on: app.db).count
             #expect(bindings == 0)
         }
     }
@@ -1488,8 +1484,9 @@ final class ImageControllerTests {
                 #expect(res.status == .ok)
             }
 
-            let image = try #require(try await Image.find(imageID, on: app.db))
-            try await image.$artifacts.load(on: app.db)
+            let image = try await LegacyImageArtifactStore.loading(
+                #require(try await LegacyImageStore.image(id: imageID, on: app.db)),
+                on: app.db)
             let info = try VMSpecBuilder.buildImageInfo(from: image)
             // Only the two ready artifacts are offered; the pending disk-image is withheld.
             #expect(info.artifacts.count == 2)
@@ -1757,7 +1754,7 @@ final class ImageControllerTests {
                 #expect(res.status == .badRequest)
             }
 
-            let images = try await Image.query(on: app.db).all()
+            let images = try await LegacyImageStore.images(on: app.db)
             #expect(images.isEmpty)
 
             // And no orphaned bytes under the project prefix.
@@ -1791,7 +1788,7 @@ final class ImageControllerTests {
                 }
             }
 
-            #expect(try await Image.query(on: app.db).count() == 0)
+            #expect(try await LegacyImageStore.count(on: app.db) == 0)
 
             let projectDirectory = "\(tempStoragePath)/\(project.id!)"
             let subpaths =
@@ -1875,7 +1872,7 @@ final class ImageControllerTests {
             }
 
             // The rejected upload must leave neither a row nor stray bytes.
-            let images = try await Image.query(on: app.db).all()
+            let images = try await LegacyImageStore.images(on: app.db)
             #expect(images.isEmpty)
             let leftovers =
                 FileManager.default.enumerator(atPath: tempStoragePath)?
@@ -1923,7 +1920,7 @@ final class ImageControllerTests {
                 #expect(res.status == .badRequest)
             }
 
-            let images = try await Image.query(on: app.db).all()
+            let images = try await LegacyImageStore.images(on: app.db)
             #expect(images.isEmpty)
         }
     }
@@ -2014,7 +2011,7 @@ final class ImageControllerTests {
             }
 
             // The temporary row is gone...
-            let remaining = try await Image.query(on: app.db).count()
+            let remaining = try await LegacyImageStore.count(on: app.db)
             #expect(remaining == 0)
 
             // ...and so are the bytes it was pointing at. Empty directories may
@@ -2051,7 +2048,7 @@ final class ImageControllerTests {
                 #expect(res.status == .badRequest)
             }
 
-            let remaining = try await Image.query(on: app.db).count()
+            let remaining = try await LegacyImageStore.count(on: app.db)
             #expect(remaining == 0)
         }
     }
@@ -2075,7 +2072,7 @@ final class ImageControllerTests {
                 #expect(res.status == .ok)
             }
 
-            let stored = try await Image.query(on: app.db).first()
+            let stored = try await LegacyImageStore.images(on: app.db).first
             #expect(stored?.name == atLimit)
         }
     }

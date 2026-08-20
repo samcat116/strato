@@ -68,18 +68,14 @@ final class VolumeStuckSweepTests {
             projectID: project.id!, environment: "development",
             size: 10 * 1024 * 1024 * 1024,
             status: status,
-            createdByID: user.id!
+            desiredStatus: desired,
+            generation: generation,
+            observedGeneration: observedGeneration,
+            convergenceDeadline: overdueBy.map { Date().addingTimeInterval(-$0) },
+            createdByID: user.id!,
+            vmID: vmID,
+            deviceName: vmID == nil ? nil : "disk0"
         )
-        volume.desiredStatus = desired
-        volume.generation = generation
-        volume.observedGeneration = observedGeneration
-        volume.$vm.id = vmID
-        // An attached row names its device; the schema enforces that as a check
-        // constraint (STR-129).
-        volume.deviceName = vmID == nil ? nil : "disk0"
-        if let overdueBy {
-            volume.convergenceDeadline = Date().addingTimeInterval(-overdueBy)
-        }
         try await volume.save(on: app.db)
         return volume
     }
@@ -160,8 +156,8 @@ final class VolumeStuckSweepTests {
         try await withVolumeTestApp { app, user, project in
             let volume = try await makeVolume(
                 deadlineOverdueBy: 60, status: .available, desired: .absent,
-                generation: 2, observedGeneration: 2, on: app, user: user, project: project)
-            volume.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
+                generation: 2, observedGeneration: 2, on: app, user: user, project: project
+            ).replacing(finalizers: [ResourceFinalizer.agentAbsent.rawValue])
             try await volume.save(on: app.db)
 
             await app.agentService.sweepStuckConvergence()
@@ -185,9 +181,9 @@ final class VolumeStuckSweepTests {
         try await withVolumeTestApp { app, user, project in
             let volume = try await makeVolume(
                 deadlineOverdueBy: 60, status: .available, generation: 3, observedGeneration: 3,
-                on: app, user: user, project: project)
-            volume.errorMessage = "resize failed: no space left on device"
-            volume.failedGeneration = 3
+                on: app, user: user, project: project
+            ).replacing(
+                errorMessage: "resize failed: no space left on device", failedGeneration: 3)
             try await volume.save(on: app.db)
 
             await app.agentService.sweepStuckConvergence()
@@ -228,9 +224,9 @@ final class VolumeStuckSweepTests {
         try await withVolumeTestApp { app, user, project in
             let volume = try await makeVolume(
                 deadlineOverdueBy: nil, status: .available, desired: .absent,
-                generation: 2, observedGeneration: 2, on: app, user: user, project: project)
+                generation: 2, observedGeneration: 2, on: app, user: user, project: project
+            ).replacing(finalizers: [ResourceFinalizer.agentAbsent.rawValue])
             let volumeID = try #require(volume.id)
-            volume.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
             try await volume.save(on: app.db)
             try await placeVolume(volume, on: UUID().uuidString, using: app.db)
 

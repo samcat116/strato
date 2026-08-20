@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import Foundation
 import Vapor
@@ -14,6 +15,15 @@ import Vapor
 // markers the members and who-can APIs carry.
 
 enum CrossOrgBindingGate {
+
+    static func rootOrganizationID(
+        of node: IAMNode,
+        using iam: IAMPersistence
+    ) async throws -> UUID? {
+        let chain = try await IAMResourceTree.ancestors(of: node, using: iam)
+        guard let root = chain.last, root.type == .organization else { return nil }
+        return root.id
+    }
 
     /// The root organization of a tree node, from the same ancestor walk the
     /// evaluator's entity slice uses. Nil when the chain does not reach an org
@@ -35,28 +45,30 @@ enum CrossOrgBindingGate {
     ) async throws -> Bool {
         switch principalType {
         case .user:
-            let memberships = try await UserOrganization.query(on: db)
-                .filter(\.$user.$id == principalID)
-                .filter(\.$organization.$id == organizationID)
-                .count()
-            return memberships == 0
+            return try await OrganizationMembershipStore.membership(
+                userID: principalID, organizationID: organizationID, on: db) == nil
         case .group:
-            guard let group = try await Group.find(principalID, on: db) else { return true }
-            return group.$organization.id != organizationID
+            guard let group = try await LegacyGroupSQLBridge.group(id: principalID, on: db) else {
+                return true
+            }
+            return group.organizationID != organizationID
         case .serviceAccount:
             // A service account lives where its project lives (issue #491) —
             // unlike users, it has a home org derived from the tree rather
             // than memberships.
-            guard let account = try await ServiceAccount.find(principalID, on: db) else { return true }
+            guard let account = try await LegacyServiceAccountStore.account(
+                id: principalID, on: db)
+            else { return true }
             let root = try await rootOrganizationID(
-                of: IAMNode(type: .project, id: account.$project.id), on: db)
+                of: IAMNode(type: .project, id: account.projectID), on: db)
             return root != organizationID
         case .workload:
             // A registered workload is scoped to the org named on its
             // registration row; anything unresolvable is external.
-            guard let registration = try await WorkloadRegistration.find(principalID, on: db),
+            guard let registration = try await LegacyWorkloadRegistrationStore.registration(
+                id: principalID, on: db),
                 registration.kind == .workload,
-                let registrationOrgID = registration.$organization.id
+                let registrationOrgID = registration.organizationID
             else { return true }
             return registrationOrgID != organizationID
         }
@@ -74,6 +86,22 @@ enum CrossOrgBindingGate {
             organizationID: organizationID, on: db)
     }
 
+    static func isCrossOrg(
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        node: IAMNode,
+        using iam: IAMPersistence
+    ) async throws -> Bool {
+        guard let organizationID = try await rootOrganizationID(of: node, using: iam) else {
+            return false
+        }
+        return try await iam.principalIsExternal(
+            type: principalType.rawValue,
+            id: principalID,
+            organizationID: organizationID
+        )
+    }
+
     /// Gate a proposed grant. When the principal is external to the node's
     /// root org, the actor needs `iam:grantExternal` on the node — through the
     /// evaluator like everything else, so guardrails and custom roles apply.
@@ -87,6 +115,31 @@ enum CrossOrgBindingGate {
         guard
             try await isCrossOrg(
                 principalType: principalType, principalID: principalID, node: node, on: req.db)
+        else { return false }
+        guard try await req.can("iam:grantExternal", on: node) else {
+            throw Abort(
+                .forbidden,
+                reason:
+                    "The principal is outside this resource's organization; granting it a role requires the iam:grantExternal permission on the resource"
+            )
+        }
+        return true
+    }
+
+    static func requireGrantPermitted(
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        node: IAMNode,
+        using iam: IAMPersistence,
+        req: Request
+    ) async throws -> Bool {
+        guard
+            try await isCrossOrg(
+                principalType: principalType,
+                principalID: principalID,
+                node: node,
+                using: iam
+            )
         else { return false }
         guard try await req.can("iam:grantExternal", on: node) else {
             throw Abort(
@@ -132,5 +185,38 @@ enum CrossOrgBindingGate {
                 sourceIP: req.auditClientIP,
                 metadata: metadata
             ))
+    }
+
+    static func recordCrossOrgEvent(
+        _ type: AuditEventType,
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        role: String?,
+        node: IAMNode,
+        using iam: IAMPersistence,
+        req: Request
+    ) async {
+        let actor = req.auth.get(User.self)
+        var metadata: [String: String] = [
+            "principalType": principalType.rawValue,
+            "principalId": principalID.uuidString,
+        ]
+        if let role { metadata["role"] = role }
+        await req.audit.record(
+            AuditRecord(
+                eventType: type.rawValue,
+                userID: actor?.id,
+                username: actor?.username,
+                apiKeyID: req.apiKey?.id,
+                organizationID: try? await rootOrganizationID(of: node, using: iam),
+                method: req.method.rawValue,
+                path: req.url.path,
+                resourceType: node.type.rawValue,
+                resourceID: node.id.uuidString,
+                action: type == .crossOrgGrant ? "iam:grantExternal" : nil,
+                sourceIP: req.auditClientIP,
+                metadata: metadata
+            )
+        )
     }
 }

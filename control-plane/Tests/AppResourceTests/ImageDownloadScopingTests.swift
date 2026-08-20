@@ -60,7 +60,7 @@ final class ImageDownloadScopingTests {
             ),
             protocolVersion: protocolVersion
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.db).first?.id
         let uuid = try await app.agentService.registerAgent(
             message, agentName: name, organizationScope: orgID.map { .organization($0) })
         return uuid.uuidString
@@ -78,9 +78,9 @@ final class ImageDownloadScopingTests {
             let placedAgent = try await self.registerAgent(app: app, named: "placed-agent")
             let otherAgent = try await self.registerAgent(app: app, named: "other-agent")
 
-            let vm = try await builder.createVM(name: "scoped-vm", project: project)
+            var vm = try await builder.createVM(name: "scoped-vm", project: project)
             vm.hypervisorId = placedAgent
-            vm.$sourceImage.id = image.id
+            vm.sourceImageID = image.id
             try await vm.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: placedAgent)
@@ -105,9 +105,9 @@ final class ImageDownloadScopingTests {
                 project: project, status: .pending, uploadedBy: user)
             let agentId = try await self.registerAgent(app: app, named: "pending-image-agent")
 
-            let vm = try await builder.createVM(name: "pending-image-vm", project: project)
+            var vm = try await builder.createVM(name: "pending-image-vm", project: project)
             vm.hypervisorId = agentId
-            vm.$sourceImage.id = image.id
+            vm.sourceImageID = image.id
             try await vm.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
@@ -199,9 +199,9 @@ final class ImageDownloadScopingTests {
                 storagePath: "scoping/repeat-other.qcow2")
             let agentId = try await self.registerAgent(app: app, named: "repeat-agent")
 
-            let vm = try await builder.createVM(name: "repeat-vm", project: project)
+            var vm = try await builder.createVM(name: "repeat-vm", project: project)
             vm.hypervisorId = agentId
-            vm.$sourceImage.id = image.id
+            vm.sourceImageID = image.id
             try await vm.save(on: app.db)
 
             for _ in 0..<3 {
@@ -226,9 +226,9 @@ final class ImageDownloadScopingTests {
                 project: project, uploadedBy: user, storagePath: "scoping/undelivered.qcow2")
             let agentId = try await self.registerAgent(app: app, named: "undelivered-agent")
 
-            let vm = try await builder.createVM(name: "undelivered-vm", project: project)
+            var vm = try await builder.createVM(name: "undelivered-vm", project: project)
             vm.hypervisorId = agentId
-            vm.$sourceImage.id = image.id
+            vm.sourceImageID = image.id
             try await vm.save(on: app.db)
 
             // Assemble and throw the payload away, exactly as the poll handler

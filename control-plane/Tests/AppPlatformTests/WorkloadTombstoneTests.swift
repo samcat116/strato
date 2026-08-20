@@ -37,11 +37,10 @@ final class WorkloadTombstoneTests {
             )
             let org = try await builder.createOrganization(name: "Tombstone Org")
             try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
-            admin.currentOrganizationId = org.id
-            try await admin.save(on: app.db)
+            try await admin.replacingCurrentOrganization(org.id).save(on: app.db)
             let project = try await builder.createProject(
                 name: "Tombstone Project", description: "STR-98", organization: org)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             try await test(app, builder, org, project, token)
         } catch {
@@ -65,9 +64,9 @@ final class WorkloadTombstoneTests {
             ),
             architecture: .x86_64,
             lastHeartbeat: Date()
-        )
-        agent.wireProtocolVersion = WireProtocol.currentVersion
-        agent.organizationScope = .organization(try org.requireID())
+        ).replacing(
+            wireProtocolVersion: .some(WireProtocol.currentVersion)
+        ).replacingOrganizationScope(.organization(try org.requireID()))
         try await agent.save(on: app.db)
         return agent
     }
@@ -91,10 +90,9 @@ final class WorkloadTombstoneTests {
         )
     }
 
-    private func claims(for agentId: String, on app: Application) async throws -> [AgentWorkloadClaim] {
-        try await AgentWorkloadClaim.query(on: app.db)
-            .filter(\.$agentId == agentId)
-            .all()
+    private func claims(for agentId: String, on app: Application) async throws -> [AgentWorkloadClaimRecord] {
+        try await app.workloadsPersistence.claims(agentID: agentId)
+            .map(AgentWorkloadClaimRecord.init)
     }
 
     // MARK: - The three verdicts
@@ -486,7 +484,7 @@ final class WorkloadTombstoneTests {
             let oldId = try oldAgent.requireID().uuidString
             let newId = try newAgent.requireID().uuidString
             let user = try #require(
-                await User.query(on: app.db).filter(\.$username == "tombstoneadmin").first())
+                await LegacyUserStore.users(username: "tombstoneadmin", on: app.db).first)
 
             let vm = try await builder.createVM(name: "held-vm", project: project)
             vm.hypervisorId = oldId
@@ -504,17 +502,25 @@ final class WorkloadTombstoneTests {
             // check constraint (STR-129).
             attached.deviceName = "disk0"
             try await attached.save(on: app.db)
-            try await VolumeReplica(
-                volumeID: try attached.requireID(), agentId: oldId, diskAttachment: nil, state: .healthy
-            ).create(on: app.db)
+            _ = try await LegacyVolumeReplicaStore.insert(
+                volumeID: try attached.requireID(),
+                agentId: oldId,
+                diskAttachment: nil,
+                state: .healthy,
+                on: app.db
+            )
 
             let detached = Volume(
                 name: "detached-vol", description: "", projectID: try project.requireID(), environment: "development",
                 size: 1 << 30, createdByID: try user.requireID())
             try await detached.save(on: app.db)
-            try await VolumeReplica(
-                volumeID: try detached.requireID(), agentId: oldId, diskAttachment: nil, state: .healthy
-            ).create(on: app.db)
+            _ = try await LegacyVolumeReplicaStore.insert(
+                volumeID: try detached.requireID(),
+                agentId: oldId,
+                diskAttachment: nil,
+                state: .healthy,
+                on: app.db
+            )
 
             _ = try await app.observedStateApplier.apply(
                 self.report(
@@ -539,8 +545,7 @@ final class WorkloadTombstoneTests {
 
             // Replica placement is the dispatch source, so this proves future
             // operations on both disks reach the adopting host.
-            let replicaAgents = try await VolumeReplica.query(on: app.db)
-                .all()
+            let replicaAgents = try await LegacyVolumeReplicaStore.replicas(on: app.db)
                 .map(\.agentId)
             #expect(Set(replicaAgents) == [newId])
 
@@ -557,7 +562,7 @@ final class WorkloadTombstoneTests {
             let oldId = try oldAgent.requireID().uuidString
             let newId = try newAgent.requireID().uuidString
             let user = try #require(
-                await User.query(on: app.db).filter(\.$username == "tombstoneadmin").first())
+                await LegacyUserStore.users(username: "tombstoneadmin", on: app.db).first)
 
             let held = try await builder.createVM(name: "held-vm", project: project)
             held.hypervisorId = oldId

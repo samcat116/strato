@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import Foundation
 import Vapor
@@ -19,57 +20,76 @@ import Vapor
 /// the same envelope as every hand-written controller; the shared access-control
 /// helpers throw `Abort` too, so this keeps one error path for the whole API.
 struct ProjectsAPIService: APIProtocol {
+    let projects: ProjectsPersistence
+    let quotas: ResourceQuotasPersistence
+    let iam: IAMPersistence
+    let hierarchy: HierarchyPersistence
 
     // MARK: - Project CRUD
 
     func listProjects(_ input: Operations.ListProjects.Input) async throws -> Operations.ListProjects.Output {
         let req = try OpenAPIRequestContext.require()
-        guard let user = req.auth.get(User.self) else {
+        guard let user = req.auth.get(User.self), let userID = user.id else {
             throw Abort(.unauthorized)
         }
 
-        // Every organization the caller belongs to.
-        try await user.$organizations.load(on: req.db)
-        let organizationIDs = user.organizations.compactMap { $0.id }
+        // Preserve the existing membership boundary of this unscoped endpoint:
+        // a direct binding in an unrelated organization does not make that
+        // organization's project appear in the global project switcher.
+        let organizationIDs = try await hierarchy.organizations(forUser: userID)
+            .map(\.organization.id)
         if organizationIDs.isEmpty {
             return .ok(.init(body: .json([])))
         }
 
-        var allProjects = try await Project.query(on: req.db)
-            .filter(\.$organization.$id ~~ organizationIDs)
-            .sort(\.$name)
-            .all()
-
-        // Projects nested under folders (OUs) within those organizations.
-        let ous = try await OrganizationalUnit.query(on: req.db)
-            .filter(\.$organization.$id ~~ organizationIDs)
-            .all()
-        let ouIDs = ous.compactMap { $0.id }
-        if !ouIDs.isEmpty {
-            let ouProjects = try await Project.query(on: req.db)
-                .filter(\.$organizationalUnit.$id ~~ ouIDs)
-                .sort(\.$name)
-                .all()
-            allProjects.append(contentsOf: ouProjects)
+        let membershipCandidates = Set(
+            try await projects.candidateProjectIDs(
+                organizationIDs: organizationIDs,
+                organizationalUnitIDs: [],
+                projectIDs: []
+            )
+        )
+        let visibility = try await ProjectVisibility.resolve(
+            on: req, using: iam, projects: projects)
+        if visibility.reachesNoProject {
+            return .ok(.init(body: .json([])))
         }
-
-        return .ok(.init(body: .json(try await readableSummaries(for: allProjects, on: req))))
+        let candidateIDs: [UUID]
+        if let visibleCandidates = visibility.candidateProjectIDs {
+            candidateIDs = Array(membershipCandidates.intersection(visibleCandidates))
+        } else {
+            candidateIDs = Array(membershipCandidates)
+        }
+        let overviews = try await projects.projectOverviews(ids: candidateIDs)
+        let readable = try await visibility.readableProjects(
+            among: overviews.map(\.project.id), on: req)
+        return .ok(.init(body: .json(
+            overviews.compactMap { overview in
+                guard readable.contains(overview.project.id) else { return nil }
+                return .init(
+                    project: overview.project,
+                    vmCount: overview.virtualMachineCount
+                )
+            }
+        )))
     }
 
     func getProject(_ input: Operations.GetProject.Input) async throws -> Operations.GetProject.Output {
         let req = try OpenAPIRequestContext.require()
         try Self.requireAuthenticated(req)
         let projectID = try Self.uuid(input.path.projectID, name: "project ID")
-        let project = try await Self.findProject(projectID, on: req.db)
+        guard let overview = try await projects.projectOverview(id: projectID) else {
+            throw Abort(.notFound, reason: "Project not found")
+        }
 
-        try await OrganizationAccessService.requireProjectMember(project: project, on: req)
+        try await OrganizationAccessService.requireProjectMember(projectID: projectID, on: req)
+        let projectQuotas = try await quotas.quotas(projectID: projectID)
 
-        let vmCount = try await Self.vmCount(projectID, on: req.db)
-        let quotas = try await ResourceQuota.query(on: req.db)
-            .filter(\.$project.$id == projectID)
-            .all()
-
-        return .ok(.init(body: .json(try .init(project: project, vmCount: vmCount, quotas: quotas))))
+        return .ok(.init(body: .json(.init(
+            project: overview.project,
+            vmCount: overview.virtualMachineCount,
+            quotas: projectQuotas
+        ))))
     }
 
     func updateProject(_ input: Operations.UpdateProject.Input) async throws -> Operations.UpdateProject.Output {
@@ -80,9 +100,12 @@ struct ProjectsAPIService: APIProtocol {
             switch input.body {
             case .json(let payload): payload
             }
-        let project = try await Self.findProject(projectID, on: req.db)
+        guard let current = try await projects.project(id: projectID) else {
+            throw Abort(.notFound, reason: "Project not found")
+        }
 
-        try await OrganizationAccessService.requireProjectAction("project:update", project: project, on: req)
+        try await OrganizationAccessService.requireProjectAction(
+            "project:update", projectID: projectID, on: req)
 
         let destinationOrganizationIDParam = try update.organizationId.map {
             try Self.uuid($0, name: "organization ID")
@@ -90,105 +113,74 @@ struct ProjectsAPIService: APIProtocol {
         let destinationOUID = try update.organizationalUnitId.map {
             try Self.uuid($0, name: "folder ID")
         }
-        let destination = try await Self.resolveDestination(
-            organizationID: destinationOrganizationIDParam,
-            ouID: destinationOUID,
-            required: false,
-            on: req.db)
 
-        if let destination {
-            try await OrganizationAccessService.requireProjectAction(
-                "project:transfer", project: project, on: req)
-            try await OrganizationAccessService.requireAdmin(
-                organizationID: destination.rootOrganizationID, on: req)
-        }
-
-        // Metadata and parentage are one edit operation. Keep every validation,
-        // save, and quota reservation update on the same connection so a
-        // refused destination cannot leave the metadata half-applied.
-        try await req.db.transaction { db in
-            let name = try update.name.map { try Validate.name($0) } ?? project.name
-            if update.name != nil || destination != nil {
-                let targetOrganizationID: UUID?
-                let targetOUID: UUID?
-                if let destination {
-                    targetOrganizationID = destination.organizationID
-                    targetOUID = destination.ouID
-                } else {
-                    targetOrganizationID = project.$organization.id
-                    targetOUID = project.$organizationalUnit.id
-                }
-                try await Self.validateNameUniqueness(
-                    name: name,
-                    excludeProjectID: projectID,
-                    organizationID: targetOrganizationID,
-                    ouID: targetOUID,
-                    on: db
+        if destinationOrganizationIDParam == nil, destinationOUID == nil {
+            let name = try update.name.map { try Validate.name($0) } ?? current.name
+            let description = update.description ?? current.description
+            try Validate.text(description)
+            let environments = try update.environments.map(Self.normalizedEnvironments)
+                ?? current.environments
+            guard !environments.isEmpty else {
+                throw Abort(.badRequest, reason: "Project must have at least one environment")
+            }
+            let defaultEnvironment = try update.defaultEnvironment.map {
+                try Validate.name($0, "defaultEnvironment")
+            } ?? current.defaultEnvironment
+            guard environments.contains(defaultEnvironment) else {
+                throw Abort(.badRequest, reason: "Default environment must be in the environments list")
+            }
+            switch try await projects.updateMetadata(.init(
+                id: projectID,
+                name: name,
+                description: description,
+                defaultEnvironment: defaultEnvironment,
+                environments: environments
+            )) {
+            case .updated(let overview):
+                return .ok(.init(body: .json(.init(
+                    project: overview.project,
+                    vmCount: overview.virtualMachineCount
+                ))))
+            case .notFound:
+                throw Abort(.notFound, reason: "Project not found")
+            case .duplicateName:
+                throw Abort(.conflict, reason: "Project name already exists in this scope")
+            case .environmentsInUseByVirtualMachines(let removed):
+                throw Abort(
+                    .conflict,
+                    reason: "Cannot remove environments that are in use by VMs: \(removed.joined(separator: ", "))"
+                )
+            case .environmentsInUseBySandboxes(let removed):
+                throw Abort(
+                    .conflict,
+                    reason: "Cannot remove environments that are in use by sandboxes: \(removed.joined(separator: ", "))"
                 )
             }
-            project.name = name
-
-            if let description = update.description {
-                project.description = description
-            }
-
-            if let requestedEnvironments = update.environments {
-                let environments = try Self.normalizedEnvironments(requestedEnvironments)
-                guard !environments.isEmpty else {
-                    throw Abort(.badRequest, reason: "Project must have at least one environment")
-                }
-
-                // Environments still in use by a VM or sandbox cannot be dropped.
-                let removed = Set(project.environments).subtracting(Set(environments))
-                if !removed.isEmpty {
-                    let vmsUsingRemoved = try await VM.query(on: db)
-                        .filter(\.$project.$id == projectID)
-                        .filter(\.$environment ~~ Array(removed))
-                        .count()
-                    if vmsUsingRemoved > 0 {
-                        throw Abort(
-                            .conflict,
-                            reason:
-                                "Cannot remove environments that are in use by VMs: \(removed.joined(separator: ", "))"
-                        )
-                    }
-
-                    let sandboxesUsingRemoved = try await Sandbox.query(on: db)
-                        .filter(\.$project.$id == projectID)
-                        .filter(\.$environment ~~ Array(removed))
-                        .count()
-                    if sandboxesUsingRemoved > 0 {
-                        throw Abort(
-                            .conflict,
-                            reason:
-                                "Cannot remove environments that are in use by sandboxes: \(removed.joined(separator: ", "))"
-                        )
-                    }
-                }
-
-                project.environments = environments
-            }
-
-            if let requestedDefault = update.defaultEnvironment {
-                let defaultEnvironment = try Validate.name(requestedDefault, "defaultEnvironment")
-                if !project.environments.contains(defaultEnvironment) {
-                    throw Abort(.badRequest, reason: "Default environment must be in the environments list")
-                }
-                project.defaultEnvironment = defaultEnvironment
-            }
-
-            try project.validate()
-            if let destination {
-                try await Self.moveProject(
-                    project, projectID: projectID, to: destination, on: db)
-            } else {
-                project.path = try await project.buildPath(on: db)
-                try await project.save(on: db)
-            }
         }
 
-        let vmCount = try await Self.vmCount(projectID, on: req.db)
-        return .ok(.init(body: .json(try .init(project: project, vmCount: vmCount))))
+        let destination = try await resolveDestination(
+            organizationID: destinationOrganizationIDParam,
+            ouID: destinationOUID,
+            required: true)
+        guard let destination else {
+            throw Abort(.badRequest, reason: "Transfer must specify a destination organization or folder")
+        }
+        try await OrganizationAccessService.requireProjectAction(
+            "project:transfer", projectID: projectID, on: req)
+        try await OrganizationAccessService.requireAdmin(
+            organizationID: destination.rootOrganizationID, on: req)
+
+        let metadata = try Self.projectMetadata(current: current, update: update)
+        let overview = try Self.requireTransferredProject(
+            try await projects.transfer(.init(
+                project: metadata,
+                organizationID: destination.organizationID,
+                organizationalUnitID: destination.ouID
+            )))
+        return .ok(.init(body: .json(.init(
+            project: overview.project,
+            vmCount: overview.virtualMachineCount
+        ))))
     }
 
     func deleteProject(_ input: Operations.DeleteProject.Input) async throws -> Operations.DeleteProject.Output {
@@ -204,9 +196,8 @@ struct ProjectsAPIService: APIProtocol {
             throw Abort(.conflict, reason: "Cannot delete project with VMs. Delete or move VMs first.")
         }
 
-        let sandboxCount = try await Sandbox.query(on: req.db)
-            .filter(\.$project.$id == projectID)
-            .count()
+        let sandboxCount = try await LegacySandboxStore.sandboxes(
+            projectID: projectID, on: req.db).count
         if sandboxCount > 0 {
             throw Abort(.conflict, reason: "Cannot delete project with sandboxes. Delete sandboxes first.")
         }
@@ -243,13 +234,11 @@ struct ProjectsAPIService: APIProtocol {
             // otherwise-empty project became undeletable. Mirror the explicit
             // rule teardown in SecurityGroupController before deleting the
             // project and letting its groups cascade.
-            let securityGroupIDs = try await SecurityGroup.query(on: db)
-                .filter(\.$project.$id == projectID)
-                .all(\.$id)
+            let securityGroupIDs = try await LegacySecurityGroupStore.ids(
+                projectIDs: [projectID], on: db)
             if !securityGroupIDs.isEmpty {
-                try await SecurityGroupRule.query(on: db)
-                    .filter(\.$securityGroup.$id ~~ securityGroupIDs)
-                    .delete()
+                try await LegacySecurityGroupRuleStore.delete(
+                    securityGroupIDs: securityGroupIDs, on: db)
             }
 
             // The emptiness checks above and this delete are not one atomic
@@ -297,26 +286,10 @@ struct ProjectsAPIService: APIProtocol {
 
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
-        // The full project set within the organization's hierarchy, so callers
-        // (e.g. the project switcher) can reach folder-scoped projects too.
-        var projects = try await Project.query(on: req.db)
-            .filter(\.$organization.$id == organizationID)
-            .sort(\.$name)
-            .all()
-
-        let ous = try await OrganizationalUnit.query(on: req.db)
-            .filter(\.$organization.$id == organizationID)
-            .all()
-        let ouIDs = ous.compactMap { $0.id }
-        if !ouIDs.isEmpty {
-            let ouProjects = try await Project.query(on: req.db)
-                .filter(\.$organizationalUnit.$id ~~ ouIDs)
-                .sort(\.$name)
-                .all()
-            projects.append(contentsOf: ouProjects)
-        }
-
-        return .ok(.init(body: .json(try await readableSummaries(for: projects, on: req))))
+        let projectIDs = try await projects.candidateProjectIDs(
+            organizationIDs: [organizationID], organizationalUnitIDs: [], projectIDs: [])
+        let overviews = try await projects.projectOverviews(ids: projectIDs)
+        return .ok(.init(body: .json(try await readableOverviews(overviews, on: req))))
     }
 
     func createOrganizationProject(
@@ -339,22 +312,14 @@ struct ProjectsAPIService: APIProtocol {
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
         let name = try Validate.name(create.name)
-        try await Self.validateNameUniqueness(
-            name: name,
-            excludeProjectID: nil,
-            organizationID: organizationID,
-            ouID: nil,
-            on: req.db
-        )
-
-        let project = try await Self.createProject(
+        let project = try await createProject(
             create,
             name: name,
             organizationID: organizationID,
             ouID: nil,
             on: req
         )
-        return .ok(.init(body: .json(try .init(project: project, vmCount: 0))))
+        return .ok(.init(body: .json(.init(project: project, vmCount: 0))))
     }
 
     func listFolderProjects(
@@ -369,18 +334,14 @@ struct ProjectsAPIService: APIProtocol {
 
         // Verify the folder belongs to that organization. Without this a member
         // of org A could enumerate org B's projects by supplying B's folder id.
-        guard let ou = try await OrganizationalUnit.find(ouID, on: req.db),
-            ou.$organization.id == organizationID
+        guard let ou = try await hierarchy.organizationalUnit(id: ouID),
+            ou.organizationalUnit.organizationID == organizationID
         else {
             throw Abort(.notFound, reason: "Folder not found")
         }
 
-        let projects = try await Project.query(on: req.db)
-            .filter(\.$organizationalUnit.$id == ouID)
-            .sort(\.$name)
-            .all()
-
-        return .ok(.init(body: .json(try await readableSummaries(for: projects, on: req))))
+        let overviews = try await projects.projectOverviews(organizationalUnitID: ouID)
+        return .ok(.init(body: .json(try await readableOverviews(overviews, on: req))))
     }
 
     func createFolderProject(
@@ -397,30 +358,22 @@ struct ProjectsAPIService: APIProtocol {
 
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
-        guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
+        guard let ou = try await hierarchy.organizationalUnit(id: ouID) else {
             throw Abort(.notFound, reason: "Folder not found")
         }
-        if ou.$organization.id != organizationID {
+        if ou.organizationalUnit.organizationID != organizationID {
             throw Abort(.badRequest, reason: "Folder does not belong to the specified organization")
         }
 
         let name = try Validate.name(create.name)
-        try await Self.validateNameUniqueness(
-            name: name,
-            excludeProjectID: nil,
-            organizationID: nil,
-            ouID: ouID,
-            on: req.db
-        )
-
-        let project = try await Self.createProject(
+        let project = try await createProject(
             create,
             name: name,
             organizationID: nil,
             ouID: ouID,
             on: req
         )
-        return .ok(.init(body: .json(try .init(project: project, vmCount: 0))))
+        return .ok(.init(body: .json(.init(project: project, vmCount: 0))))
     }
 
     // MARK: - Environments
@@ -435,15 +388,23 @@ struct ProjectsAPIService: APIProtocol {
             switch input.body {
             case .json(let payload): payload.environment
             }
-        let project = try await Self.findProject(projectID, on: req.db)
+        guard try await projects.project(id: projectID) != nil else {
+            throw Abort(.notFound, reason: "Project not found")
+        }
+        try await OrganizationAccessService.requireProjectAction(
+            "project:update", projectID: projectID, on: req)
 
-        try await OrganizationAccessService.requireProjectAction("project:update", project: project, on: req)
-
-        project.addEnvironment(environment)
-        try await project.save(on: req.db)
-
-        let vmCount = try await Self.vmCount(projectID, on: req.db)
-        return .ok(.init(body: .json(try .init(project: project, vmCount: vmCount))))
+        switch try await projects.addEnvironment(projectID: projectID, environment: environment) {
+        case .updated(let overview):
+            return .ok(.init(body: .json(.init(
+                project: overview.project,
+                vmCount: overview.virtualMachineCount
+            ))))
+        case .notFound:
+            throw Abort(.notFound, reason: "Project not found")
+        case .inUseByVirtualMachines, .inUseBySandboxes, .cannotRemove:
+            preconditionFailure("Add environment returned a removal-only result")
+        }
     }
 
     func removeProjectEnvironment(
@@ -453,33 +414,30 @@ struct ProjectsAPIService: APIProtocol {
         try Self.requireAuthenticated(req)
         let projectID = try Self.uuid(input.path.projectID, name: "project ID")
         let environment = input.path.environment
-        let project = try await Self.findProject(projectID, on: req.db)
+        guard try await projects.project(id: projectID) != nil else {
+            throw Abort(.notFound, reason: "Project not found")
+        }
+        try await OrganizationAccessService.requireProjectAction(
+            "project:update", projectID: projectID, on: req)
 
-        try await OrganizationAccessService.requireProjectAction("project:update", project: project, on: req)
-
-        let vmsUsingEnv = try await VM.query(on: req.db)
-            .filter(\.$project.$id == projectID)
-            .filter(\.$environment == environment)
-            .count()
-        if vmsUsingEnv > 0 {
+        switch try await projects.removeEnvironment(projectID: projectID, environment: environment) {
+        case .updated(let overview):
+            return .ok(.init(body: .json(.init(
+                project: overview.project,
+                vmCount: overview.virtualMachineCount
+            ))))
+        case .notFound:
+            throw Abort(.notFound, reason: "Project not found")
+        case .inUseByVirtualMachines:
             throw Abort(.conflict, reason: "Cannot remove environment that is in use by VMs")
-        }
-
-        let sandboxesUsingEnv = try await Sandbox.query(on: req.db)
-            .filter(\.$project.$id == projectID)
-            .filter(\.$environment == environment)
-            .count()
-        if sandboxesUsingEnv > 0 {
+        case .inUseBySandboxes:
             throw Abort(.conflict, reason: "Cannot remove environment that is in use by sandboxes")
+        case .cannotRemove:
+            throw Abort(
+                .badRequest,
+                reason: "Cannot remove default environment or environment does not exist"
+            )
         }
-
-        if !project.removeEnvironment(environment) {
-            throw Abort(.badRequest, reason: "Cannot remove default environment or environment does not exist")
-        }
-        try await project.save(on: req.db)
-
-        let vmCount = try await Self.vmCount(projectID, on: req.db)
-        return .ok(.init(body: .json(try .init(project: project, vmCount: vmCount))))
     }
 
     // MARK: - Stats, path, transfer
@@ -490,52 +448,47 @@ struct ProjectsAPIService: APIProtocol {
         let req = try OpenAPIRequestContext.require()
         try Self.requireAuthenticated(req)
         let projectID = try Self.uuid(input.path.projectID, name: "project ID")
-        let project = try await Self.findProject(projectID, on: req.db)
+        guard let project = try await projects.project(id: projectID) else {
+            throw Abort(.notFound, reason: "Project not found")
+        }
 
-        try await OrganizationAccessService.requireProjectMember(project: project, on: req)
+        try await OrganizationAccessService.requireProjectMember(projectID: projectID, on: req)
 
-        let vms = try await VM.query(on: req.db)
-            .filter(\.$project.$id == projectID)
-            .all()
-
-        return .ok(.init(body: .json(.init(stats: ProjectStatsService.stats(for: project, vms: vms)))))
+        return .ok(.init(body: .json(.init(stats: try await projects.stats(project: project)))))
     }
 
     func getProjectPath(_ input: Operations.GetProjectPath.Input) async throws -> Operations.GetProjectPath.Output {
         let req = try OpenAPIRequestContext.require()
         try Self.requireAuthenticated(req)
         let projectID = try Self.uuid(input.path.projectID, name: "project ID")
-        let project = try await Self.findProject(projectID, on: req.db)
+        guard let project = try await projects.project(id: projectID) else {
+            throw Abort(.notFound, reason: "Project not found")
+        }
 
-        try await OrganizationAccessService.requireProjectMember(project: project, on: req)
+        try await OrganizationAccessService.requireProjectMember(projectID: projectID, on: req)
 
         var components: [Components.Schemas.ProjectPathComponent] = []
 
-        if let orgID = project.$organization.id {
-            if let org = try await Organization.find(orgID, on: req.db) {
+        if let orgID = project.organizationID {
+            if let org = try await hierarchy.organization(id: orgID) {
                 components.append(.init(id: orgID.uuidString, name: org.name, _type: .organization))
             }
-        } else if let ouID = project.$organizationalUnit.id {
-            // Walk up to the root organization, then emit the folders top-down.
-            var ouPath: [OrganizationalUnit] = []
-            var currentOU = try await OrganizationalUnit.find(ouID, on: req.db)
-
-            while let ou = currentOU {
-                ouPath.insert(ou, at: 0)
-                if let parentID = ou.$parentOU.id {
-                    currentOU = try await OrganizationalUnit.find(parentID, on: req.db)
-                } else {
-                    if let org = try await Organization.find(ou.$organization.id, on: req.db) {
-                        components.append(
-                            .init(id: ou.$organization.id.uuidString, name: org.name, _type: .organization))
-                    }
-                    break
-                }
+        } else if let ouID = project.organizationalUnitID {
+            let ouPath = try await hierarchy.organizationalUnitAncestors(id: ouID)
+            if let organizationID = project.rootOrganizationID,
+                let organization = try await hierarchy.organization(id: organizationID)
+            {
+                components.append(
+                    .init(
+                        id: organizationID.uuidString,
+                        name: organization.name,
+                        _type: .organization
+                    ))
             }
 
             for ou in ouPath {
                 components.append(
-                    .init(id: try ou.requireID().uuidString, name: ou.name, _type: .organizationalUnit))
+                    .init(id: ou.id.uuidString, name: ou.name, _type: .organizationalUnit))
             }
         }
 
@@ -563,15 +516,17 @@ struct ProjectsAPIService: APIProtocol {
             try Self.uuid($0, name: "organization ID")
         }
         let destinationOUID = try transfer.organizationalUnitId.map { try Self.uuid($0, name: "folder ID") }
-        let project = try await Self.findProject(projectID, on: req.db)
+        guard let project = try await projects.project(id: projectID) else {
+            throw Abort(.notFound, reason: "Project not found")
+        }
 
-        try await OrganizationAccessService.requireProjectAction("project:transfer", project: project, on: req)
+        try await OrganizationAccessService.requireProjectAction(
+            "project:transfer", projectID: projectID, on: req)
 
-        let destination = try await Self.resolveDestination(
+        let destination = try await resolveDestination(
             organizationID: destinationOrganizationIDParam,
             ouID: destinationOUID,
-            required: true,
-            on: req.db)
+            required: true)
         guard let destination else {
             throw Abort(.badRequest, reason: "Transfer must specify a destination organization or folder")
         }
@@ -582,40 +537,25 @@ struct ProjectsAPIService: APIProtocol {
         try await OrganizationAccessService.requireAdmin(
             organizationID: destination.rootOrganizationID, on: req)
 
-        try await Self.validateNameUniqueness(
-            name: project.name,
-            excludeProjectID: projectID,
-            organizationID: destination.organizationID,
-            ouID: destination.ouID,
-            on: req.db
-        )
-
-        try await req.db.transaction { db in
-            try await Self.moveProject(
-                project, projectID: projectID, to: destination, on: db)
-        }
-
-        let vmCount = try await Self.vmCount(projectID, on: req.db)
-        return .ok(.init(body: .json(try .init(project: project, vmCount: vmCount))))
+        let overview = try Self.requireTransferredProject(
+            try await projects.transfer(.init(
+                project: .init(
+                    id: project.id,
+                    name: project.name,
+                    description: project.description,
+                    defaultEnvironment: project.defaultEnvironment,
+                    environments: project.environments
+                ),
+                organizationID: destination.organizationID,
+                organizationalUnitID: destination.ouID
+            )))
+        return .ok(.init(body: .json(.init(
+            project: overview.project,
+            vmCount: overview.virtualMachineCount
+        ))))
     }
 
     // MARK: - Helpers
-
-    /// `GET /api/projects` backs the frontend's project switcher, so its VM
-    /// counts come from one grouped aggregate rather than a `COUNT` per project.
-    private func summaries(for projects: [Project], on db: any Database) async throws
-        -> [Components.Schemas.ProjectSummary]
-    {
-        let projectIDs = projects.compactMap { $0.id }
-        let vmCounts = try await VM.counts(groupedBy: \.$project, in: projectIDs, on: db)
-
-        var summaries: [Components.Schemas.ProjectSummary] = []
-        for project in projects {
-            guard let projectID = project.id else { continue }
-            summaries.append(try .init(project: project, vmCount: vmCounts[projectID] ?? 0))
-        }
-        return summaries
-    }
 
     /// Summarize only the projects the caller may actually read.
     ///
@@ -636,27 +576,31 @@ struct ProjectsAPIService: APIProtocol {
     /// writes only that many decision rows. `nil` candidates means "no bound"
     /// (a system admin, an unbounded authored permit), and every candidate is
     /// still decided below.
-    private func readableSummaries(for projects: [Project], on req: Request) async throws
+    private func readableOverviews(_ overviews: [ProjectOverview], on req: Request) async throws
         -> [Components.Schemas.ProjectSummary]
     {
-        let visibility = try await ProjectVisibility.resolve(on: req)
+        let visibility = try await ProjectVisibility.resolve(
+            on: req, using: iam, projects: projects)
         if visibility.reachesNoProject { return [] }
 
         // Bound the candidates to the SQL-narrowed set before deciding, when
         // one exists (nil = no bound, e.g. a system admin).
-        let narrowed: [Project]
+        let narrowed: [ProjectOverview]
         if let candidateIDs = visibility.candidateProjectIDs.map(Set.init) {
-            narrowed = projects.filter { $0.id.map(candidateIDs.contains) ?? false }
+            narrowed = overviews.filter { candidateIDs.contains($0.project.id) }
         } else {
-            narrowed = projects
+            narrowed = overviews
         }
 
         let readable = try await visibility.readableProjects(
-            among: narrowed.compactMap(\.id), on: req)
-        let filtered = narrowed.filter { project in
-            project.id.map(readable.contains) ?? false
+            among: narrowed.map(\.project.id), on: req)
+        return narrowed.compactMap { overview in
+            guard readable.contains(overview.project.id) else { return nil }
+            return .init(
+                project: overview.project,
+                vmCount: overview.virtualMachineCount
+            )
         }
-        return try await summaries(for: filtered, on: req.db)
     }
 
     /// The authentication middlewares run ahead of every API route, so this only
@@ -690,27 +634,26 @@ struct ProjectsAPIService: APIProtocol {
         let rootOrganizationID: UUID
     }
 
-    private static func resolveDestination(
+    private func resolveDestination(
         organizationID: UUID?,
         ouID: UUID?,
-        required: Bool,
-        on db: any Database
+        required: Bool
     ) async throws -> ProjectDestination? {
         if let ouID {
-            guard let ou = try await OrganizationalUnit.find(ouID, on: db) else {
+            guard let ou = try await hierarchy.organizationalUnit(id: ouID) else {
                 throw Abort(.notFound, reason: "Destination folder not found")
             }
-            if let organizationID, ou.$organization.id != organizationID {
+            if let organizationID, ou.organizationalUnit.organizationID != organizationID {
                 throw Abort(.badRequest, reason: "Folder does not belong to the specified organization")
             }
             return .init(
                 organizationID: nil,
                 ouID: ouID,
-                rootOrganizationID: ou.$organization.id)
+                rootOrganizationID: ou.organizationalUnit.organizationID)
         }
 
         if let organizationID {
-            guard try await Organization.find(organizationID, on: db) != nil else {
+            guard try await hierarchy.organization(id: organizationID) != nil else {
                 throw Abort(.notFound, reason: "Destination organization not found")
             }
             return .init(
@@ -725,47 +668,8 @@ struct ProjectsAPIService: APIProtocol {
         return nil
     }
 
-    private static func moveProject(
-        _ project: Project,
-        projectID: UUID,
-        to destination: ProjectDestination,
-        on db: any Database
-    ) async throws {
-        try await QuotaEnforcementService.lockProjectNetworkMutations(
-            for: project, on: db)
-        let sourceQuotas = try await QuotaEnforcementService.applicableProjectWideQuotas(
-            for: project, on: db)
-        let networkCount = try await LogicalNetwork.query(on: db)
-            .filter(\.$project.$id == projectID)
-            .count()
-        let loadBalancerCount = try await LoadBalancer.query(on: db)
-            .filter(\.$project.$id == projectID)
-            .count()
-
-        project.$organization.id = destination.organizationID
-        project.$organizationalUnit.id = destination.ouID
-        project.path = try await project.buildPath(on: db)
-        try project.validate()
-
-        let destinationQuotas = try await QuotaEnforcementService.applicableProjectWideQuotas(
-            for: project, on: db)
-        let affectedQuotas = try await QuotaEnforcementService.validateNetworkTransfer(
-            networkCount: networkCount,
-            loadBalancerCount: loadBalancerCount,
-            sourceQuotas: sourceQuotas,
-            destinationQuotas: destinationQuotas,
-            on: db)
-
-        try await project.save(on: db)
-        try await QuotaEnforcementService.resyncAndSaveReservations(
-            affectedQuotas, on: db)
-    }
-
     private static func vmCount(_ projectID: UUID, on db: any Database) async throws -> Int {
-        Int(
-            try await VM.query(on: db)
-                .filter(\.$project.$id == projectID)
-                .count())
+        try await LegacyVMStore.vms(projectID: projectID, on: db).count
     }
 
     /// The caller's environment list, normalized the way `name` is: every label
@@ -784,95 +688,108 @@ struct ProjectsAPIService: APIProtocol {
         }
     }
 
-    /// Refuses a project name already taken in the same scope.
-    ///
-    /// `name` must already be normalized (STR-195): the comparison is an exact
-    /// match, and `Project.validate()` trims before the row is saved, so
-    /// checking a raw value here would let `"Foo "` past a scope that already
-    /// holds `"Foo"` and then save it as `"Foo"` — two projects with the same
-    /// name, and no unique index to catch it. Every caller runs its input
-    /// through `Validate.name` first and hands the same string to the save.
-    private static func validateNameUniqueness(
-        name: String,
-        excludeProjectID: UUID?,
-        organizationID: UUID?,
-        ouID: UUID?,
-        on db: any Database
-    ) async throws {
-        let query = Project.query(on: db)
-            .filter(\.$name == name)
 
-        if let excludeProjectID {
-            query.filter(\.$id != excludeProjectID)
+    private static func projectMetadata(
+        current: ProjectSnapshot,
+        update: Components.Schemas.UpdateProjectRequest
+    ) throws -> ProjectMetadataWrite {
+        let name = try update.name.map { try Validate.name($0) } ?? current.name
+        let description = update.description ?? current.description
+        try Validate.text(description)
+        let environments = try update.environments.map(normalizedEnvironments)
+            ?? current.environments
+        guard !environments.isEmpty else {
+            throw Abort(.badRequest, reason: "Project must have at least one environment")
         }
-
-        if let organizationID {
-            query.filter(\.$organization.$id == organizationID)
-        } else if let ouID {
-            query.filter(\.$organizationalUnit.$id == ouID)
+        let defaultEnvironment = try update.defaultEnvironment.map {
+            try Validate.name($0, "defaultEnvironment")
+        } ?? current.defaultEnvironment
+        guard environments.contains(defaultEnvironment) else {
+            throw Abort(.badRequest, reason: "Default environment must be in the environments list")
         }
+        return .init(
+            id: current.id,
+            name: name,
+            description: description,
+            defaultEnvironment: defaultEnvironment,
+            environments: environments
+        )
+    }
 
-        if try await query.first() != nil {
+    private static func requireTransferredProject(_ result: ProjectTransferResult) throws
+        -> ProjectOverview
+    {
+        switch result {
+        case .updated(let overview): return overview
+        case .notFound: throw Abort(.notFound, reason: "Project not found")
+        case .invalidDestination:
+            throw Abort(.badRequest, reason: "Transfer must specify a destination organization or folder")
+        case .organizationNotFound:
+            throw Abort(.notFound, reason: "Destination organization not found")
+        case .organizationalUnitNotFound:
+            throw Abort(.notFound, reason: "Destination folder not found")
+        case .duplicateName:
             throw Abort(.conflict, reason: "Project name already exists in this scope")
+        case .environmentsInUseByVirtualMachines(let removed):
+            throw Abort(
+                .conflict,
+                reason: "Cannot remove environments that are in use by VMs: \(removed.joined(separator: ", "))"
+            )
+        case .environmentsInUseBySandboxes(let removed):
+            throw Abort(
+                .conflict,
+                reason: "Cannot remove environments that are in use by sandboxes: \(removed.joined(separator: ", "))"
+            )
+        case .networkQuotaExceeded(let name, let limit):
+            throw Abort(
+                .forbidden,
+                reason: "Quota '\(name)' exceeded: Network limit reached: \(limit) networks allowed"
+            )
+        case .loadBalancerQuotaExceeded(let name, let limit):
+            throw Abort(
+                .forbidden,
+                reason: "Quota '\(name)' exceeded: Load balancer limit reached: \(limit) load balancers allowed"
+            )
         }
     }
 
-    private static func createProject(
+    private func createProject(
         _ create: Components.Schemas.CreateProjectRequest,
         name: String,
         organizationID: UUID?,
         ouID: UUID?,
         on req: Request
-    ) async throws -> Project {
+    ) async throws -> ProjectSnapshot {
         let environments = try Self.normalizedEnvironments(
             create.environments ?? DeploymentEnvironment.defaults.map { $0.name })
         let defaultEnvironment = try Validate.name(
             create.defaultEnvironment ?? "development", "defaultEnvironment")
+        try Validate.text(create.description)
 
         if !environments.contains(defaultEnvironment) {
             throw Abort(.badRequest, reason: "Default environment must be in the environments list")
         }
 
-        let project = Project(
-            // Already normalized by the caller, which had to normalize before
-            // its uniqueness query — see `validateNameUniqueness`.
+        switch try await projects.create(.init(
             name: name,
             description: create.description,
             organizationID: organizationID,
             organizationalUnitID: ouID,
-            path: "",  // Filled in after save: the path embeds the generated id.
             defaultEnvironment: defaultEnvironment,
-            environments: environments
-        )
-
-        try project.validate()
-
-        // Persist the project (two saves, for the path) and the creator's
-        // explicit admin binding in one transaction, so a member-created project
-        // always has an administrator besides org admins.
-        let creatorID = req.auth.get(User.self)?.id
-        try await req.db.transaction { transaction in
-            try await project.save(on: transaction)
-            project.path = try await project.buildPath(on: transaction)
-            try await project.save(on: transaction)
-            if let creatorID {
-                try await RoleBindingService.grant(
-                    principalType: .user,
-                    principalID: creatorID,
-                    role: .admin,
-                    nodeType: .project,
-                    nodeID: try project.requireID(),
-                    createdBy: creatorID,
-                    on: transaction
-                )
-            }
-            // Every project carries its mandatory default security group from
-            // birth; paths that assume it (VM create) also ensure it
-            // defensively.
-            _ = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: try project.requireID(), on: transaction)
+            environments: environments,
+            creatorID: req.auth.get(User.self)?.id,
+            administratorRoleID: IAMRole.admin.seededID
+        )) {
+        case .created(let project):
+            return project
+        case .duplicateName:
+            throw Abort(.conflict, reason: "Project name already exists in this scope")
+        case .organizationNotFound:
+            throw Abort(.notFound, reason: "Destination organization not found")
+        case .organizationalUnitNotFound:
+            throw Abort(.notFound, reason: "Destination folder not found")
+        case .invalidScope:
+            throw Abort(.badRequest, reason: "Project must belong to either an organization or a folder")
         }
-
-        return project
     }
 }

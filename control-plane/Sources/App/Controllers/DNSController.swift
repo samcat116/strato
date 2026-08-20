@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import StratoShared
 import Vapor
@@ -24,6 +25,8 @@ import Vapor
 /// created or deleted with no attachments — an unattached zone is never sent
 /// to any agent) deliberately don't ring.
 struct DNSController: RouteCollection {
+    let iam: IAMPersistence
+    let projects: ProjectsPersistence
     func boot(routes: RoutesBuilder) throws {
         let zones = routes.grouped("api", "dns-zones").grouped(User.guardMiddleware())
         zones.get(use: listZones)
@@ -59,7 +62,7 @@ struct DNSController: RouteCollection {
         _ = try req.auth.require(User.self)
         let requestedProjectID = req.query[String.self, at: "project_id"].flatMap(UUID.init(uuidString:))
 
-        var query = DNSZone.query(on: req.db).sort(\.$name).sort(\.$id)
+        var projectIDs: [UUID]?
 
         // Project scoping runs for every caller, admins included: their
         // fleet-wide view comes from the tier-1 `platform-system-admin` policy
@@ -72,19 +75,17 @@ struct DNSController: RouteCollection {
             guard hasAccess else {
                 throw Abort(.forbidden, reason: "You don't have access to this project")
             }
-            query = query.filter(\.$project.$id == requestedProjectID)
+            projectIDs = [requestedProjectID]
         } else {
-            let resolved = try await ProjectVisibility.resolve(on: req)
+            let resolved = try await ProjectVisibility.resolve(on: req, using: iam, projects: projects)
             guard !resolved.reachesNoProject else { return [] }
-            if let candidates = resolved.candidateProjectIDs {
-                query = query.filter(\.$project.$id ~~ candidates)
-            }
+            projectIDs = resolved.candidateProjectIDs
             visibility = resolved
         }
 
-        var zones = try await query.all()
+        var zones = try await LegacyDNSZoneStore.zones(projectIDs: projectIDs, on: req.db)
         if let visibility {
-            zones = try await visibility.readableRows(zones, projectID: { $0.$project.id }, on: req)
+            zones = try await visibility.readableRows(zones, projectID: \.projectID, on: req)
         }
         return try await Self.responses(for: zones, on: req.db)
     }
@@ -102,25 +103,27 @@ struct DNSController: RouteCollection {
 
         let name = try DNSName.normalizedZoneName(request.name)
         let creatorID = try user.requireID()
-        let zone = DNSZone(
-            name: name,
-            description: request.description?.trimmingCharacters(in: .whitespacesAndNewlines).nilWhenEmpty,
-            projectID: projectID,
-            createdByID: creatorID
-        )
+        let zone: DNSZoneSnapshot
         do {
-            try await req.db.transaction { db in
-                try await zone.save(on: db)
+            zone = try await req.db.transaction { db in
+                let zone = try await LegacyDNSZoneStore.insert(
+                    name: name,
+                    description: request.description?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .nilWhenEmpty,
+                    projectID: projectID,
+                    createdByID: creatorID,
+                    on: db)
                 // Creator binding (issue #477), mirroring network create.
                 try await RoleBindingService.grant(
                     principalType: .user,
                     principalID: creatorID,
                     role: .admin,
                     nodeType: .dnsZone,
-                    nodeID: try zone.requireID(),
+                    nodeID: zone.id,
                     createdBy: creatorID,
                     on: db
                 )
+                return zone
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A DNS zone named '\(name)' already exists in this project")
@@ -129,11 +132,11 @@ struct DNSController: RouteCollection {
         req.logger.info(
             "DNS zone created",
             metadata: [
-                "dnsZoneId": .string(zone.id!.uuidString),
+                "dnsZoneId": .string(zone.id.uuidString),
                 "name": .string(name),
                 "projectId": .string(projectID.uuidString),
             ])
-        return try DNSZoneResponse(from: zone, networks: [], recordCount: 0)
+        return DNSZoneResponse(from: zone, networks: [], recordCount: 0)
     }
 
     /// GET /api/dns-zones/:zoneId
@@ -149,65 +152,66 @@ struct DNSController: RouteCollection {
         let zone = try await fetchZone(req: req, action: "dns:update")
         let request = try req.content.decodeValidated(UpdateDNSZoneRequest.self)
         let originalName = zone.name
-
+        let nextName: String
         if let requestedName = request.name {
-            let name = try DNSName.normalizedZoneName(requestedName)
+            nextName = try DNSName.normalizedZoneName(requestedName)
             // Renaming moves every derived record in the zone, and every
             // authored one with it. That is the operator's call to make — the
             // zone name is the suffix, not an identity anything resolves
             // through — but it is worth being a deliberate PUT rather than a
             // side effect.
-            zone.name = name
+        } else {
+            nextName = zone.name
         }
-        if let description = request.description {
-            zone.zoneDescription = description.trimmingCharacters(in: .whitespacesAndNewlines).nilWhenEmpty
-        }
+        let nextDescription = request.description.map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).nilWhenEmpty
+        } ?? zone.zoneDescription
 
+        let updated: DNSZoneSnapshot
         do {
-            try await req.db.transaction { db in
-                try await zone.save(on: db)
+            updated = try await req.db.transaction { db in
+                guard let updated = try await LegacyDNSZoneStore.update(
+                    id: zone.id, name: nextName, description: nextDescription, on: db)
+                else { throw Abort(.notFound, reason: "DNS zone no longer exists") }
 
                 // A search domain that still spells this primary zone is
                 // following it, so a rename has to move both columns together.
                 // Otherwise the stale spelling can no longer be distinguished
                 // from one the operator chose and will never follow again.
-                guard zone.name != originalName else { return }
-                let primaryNetworks = try await LogicalNetwork.query(on: db)
-                    .filter(\.$primaryDNSZone.$id == zone.requireID())
-                    .all()
+                guard updated.name != originalName else { return updated }
+                let primaryNetworks = try await LegacyLogicalNetworkStore.networks(
+                    primaryDNSZoneID: zone.id, on: db)
                 for network in primaryNetworks {
                     let next = DNSZoneService.searchDomainFollowingPrimaryZone(
                         current: network.domainName,
                         previousZoneName: originalName,
-                        nextZoneName: zone.name)
+                        nextZoneName: updated.name)
                     guard next != network.domainName else { continue }
-                    network.domainName = next
-                    try await network.save(on: db)
+                    try await network.replacing(domainName: .some(next)).save(on: db)
                 }
+                return updated
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
-            throw Abort(.conflict, reason: "A DNS zone named '\(zone.name)' already exists in this project")
+            throw Abort(.conflict, reason: "A DNS zone named '\(nextName)' already exists in this project")
         }
         // A rename moves every name in the zone; a description edit realizes
         // nothing, so only the former is worth a fleet-wide re-assembly.
-        if zone.name != originalName {
+        if updated.name != originalName {
             await req.application.agentService.syncDesiredStateToFleet()
         }
-        return try await Self.responses(for: [zone], on: req.db)[0]
+        return try await Self.responses(for: [updated], on: req.db)[0]
     }
 
     /// DELETE /api/dns-zones/:zoneId
     @Sendable
     func deleteZone(req: Request) async throws -> HTTPStatus {
         let zone = try await fetchZone(req: req, action: "dns:delete")
-        let zoneID = try zone.requireID()
+        let zoneID = zone.id
 
         // Attachments are the zone's blast radius: deleting one that networks
         // still resolve would silently stop answering for every VM on them.
         // Detach first, so losing resolution is always an explicit act.
-        let attachments = try await DNSZoneNetwork.query(on: req.db)
-            .filter(\.$zone.$id == zoneID)
-            .count()
+        let attachments = try await DNSZoneNetworkStore.count(zoneID: zoneID, on: req.db)
         guard attachments == 0 else {
             throw Abort(
                 .conflict,
@@ -220,7 +224,7 @@ struct DNSController: RouteCollection {
             // records' are dropped here (STR-137) — before the delete, which
             // takes the record rows the sweep reads with it.
             try await ResourceBindingCleanup.revokeBindings(forDeletedDNSZone: zoneID, on: db)
-            try await zone.delete(on: db)
+            _ = try await LegacyDNSZoneStore.delete(id: zoneID, on: db)
         }
 
         req.logger.info(
@@ -246,13 +250,9 @@ struct DNSController: RouteCollection {
     func listRecords(req: Request) async throws -> PagedResponse<DNSRecordResponse> {
         let paging = try ListPaging.decode(from: req)
         let zone = try await fetchZone(req: req, action: "dns:read")
-        let zoneID = try zone.requireID()
-        let records = try await DNSRecord.query(on: req.db)
-            .filter(\.$zone.$id == zoneID)
-            .sort(\.$name)
-            .sort(\.$id)
-            .all()
-        return paging.page(try records.map { try DNSRecordResponse(from: $0, zoneName: zone.name) })
+        let zoneID = zone.id
+        let records = try await LegacyDNSRecordStore.records(zoneID: zoneID, on: req.db)
+        return paging.page(records.map { DNSRecordResponse(from: $0, zoneName: zone.name) })
     }
 
     /// POST /api/dns-zones/:zoneId/records
@@ -260,22 +260,15 @@ struct DNSController: RouteCollection {
     func createRecord(req: Request) async throws -> DNSRecordResponse {
         let user = try req.auth.require(User.self)
         let zone = try await fetchZone(req: req, action: "dns:create")
-        let zoneID = try zone.requireID()
+        let zoneID = zone.id
         let request = try req.content.decodeValidated(CreateDNSRecordRequest.self)
 
         let name = try DNSName.normalizedRecordName(request.name ?? DNSName.apex)
         let value = try DNSZoneService.validatedValue(request.value, type: request.type)
         let ttl = try Self.validatedTTL(request.ttl)
 
-        let record = DNSRecord(
-            zoneID: zoneID,
-            name: name,
-            type: request.type,
-            value: value,
-            ttl: ttl,
-            view: request.view ?? .both,
-            createdByID: try user.requireID()
-        )
+        let view = request.view ?? .both
+        let record: DNSRecordSnapshot
         do {
             // Every check here is read-then-write, and none of them is backed
             // by an index: the unique index is `(zone, name, type, value)`,
@@ -286,10 +279,10 @@ struct DNSController: RouteCollection {
             // way `attachNetwork` has one). Serializing a zone's record writes
             // on an advisory lock costs nothing — record writes are rare — and
             // makes the checks mean what they say.
-            try await req.db.transaction { db in
+            record = try await req.db.transaction { db in
                 try await DNSZoneService.lockZone(zoneID, on: db)
 
-                let count = try await DNSRecord.query(on: db).filter(\.$zone.$id == zoneID).count()
+                let count = try await LegacyDNSRecordStore.count(zoneID: zoneID, on: db)
                 guard count < DNSZone.maxRecordsPerZone else {
                     throw Abort(
                         .forbidden,
@@ -298,9 +291,11 @@ struct DNSController: RouteCollection {
                 try await DNSZoneService.assertNoConflict(
                     zone: zone, name: name, type: request.type, on: db)
                 try await DNSZoneService.assertRRsetSettingsAgree(
-                    zone: zone, name: name, type: request.type, ttl: record.ttl, view: record.view, on: db)
+                    zone: zone, name: name, type: request.type, ttl: ttl, view: view, on: db)
 
-                try await record.save(on: db)
+                return try await LegacyDNSRecordStore.insert(
+                    zoneID: zoneID, name: name, type: request.type, value: value,
+                    ttl: ttl, view: view, createdByID: user.requireID(), on: db)
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(
@@ -309,14 +304,14 @@ struct DNSController: RouteCollection {
                     + "'\(DNSName.qualified(name: name, inZone: zone.name))'")
         }
         await req.application.agentService.syncDesiredStateToFleet()
-        return try DNSRecordResponse(from: record, zoneName: zone.name)
+        return DNSRecordResponse(from: record, zoneName: zone.name)
     }
 
     /// GET /api/dns-zones/:zoneId/records/:recordId
     @Sendable
     func getRecord(req: Request) async throws -> DNSRecordResponse {
         let (zone, record) = try await fetchRecord(req: req, action: "dns:read")
-        return try DNSRecordResponse(from: record, zoneName: zone.name)
+        return DNSRecordResponse(from: record, zoneName: zone.name)
     }
 
     /// PUT /api/dns-zones/:zoneId/records/:recordId — value, TTL, and view.
@@ -331,29 +326,29 @@ struct DNSController: RouteCollection {
     @Sendable
     func updateRecord(req: Request) async throws -> DNSRecordResponse {
         let (zone, record) = try await fetchRecord(req: req, action: "dns:update")
-        let zoneID = try zone.requireID()
+        let zoneID = zone.id
         let request = try req.content.decodeValidated(UpdateDNSRecordRequest.self)
 
-        if let value = request.value {
-            record.value = try DNSZoneService.validatedValue(value, type: record.type)
-        }
-        if let ttl = request.ttl {
-            record.ttl = try Self.validatedTTL(ttl)
-        }
-        if let view = request.view {
-            record.view = view
-        }
+        let value = try request.value.map {
+            try DNSZoneService.validatedValue($0, type: record.type)
+        } ?? record.value
+        let ttl = try request.ttl.map(Self.validatedTTL) ?? record.ttl
+        let view = request.view ?? record.view
         let ttlOrViewChanged = request.ttl != nil || request.view != nil
 
+        let updated: DNSRecordSnapshot
         do {
-            try await req.db.transaction { db in
+            updated = try await req.db.transaction { db in
                 try await DNSZoneService.lockZone(zoneID, on: db)
-                try await record.save(on: db)
+                guard let saved = try await LegacyDNSRecordStore.update(
+                    id: record.id, value: value, ttl: ttl, view: view, on: db)
+                else { throw Abort(.notFound, reason: "DNS record no longer exists") }
                 if ttlOrViewChanged {
                     try await DNSZoneService.applyRRsetSettings(
                         zoneID: zoneID, name: record.name, type: record.type,
-                        ttl: record.ttl, view: record.view, on: db)
+                        ttl: ttl, view: view, on: db)
                 }
+                return saved
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(
@@ -362,14 +357,14 @@ struct DNSController: RouteCollection {
                     + "'\(DNSName.qualified(name: record.name, inZone: zone.name))'")
         }
         await req.application.agentService.syncDesiredStateToFleet()
-        return try DNSRecordResponse(from: record, zoneName: zone.name)
+        return DNSRecordResponse(from: updated, zoneName: zone.name)
     }
 
     /// DELETE /api/dns-zones/:zoneId/records/:recordId
     @Sendable
     func deleteRecord(req: Request) async throws -> HTTPStatus {
         let (_, record) = try await fetchRecord(req: req, action: "dns:delete")
-        try await record.delete(on: req.db)
+        _ = try await LegacyDNSRecordStore.delete(id: record.id, on: req.db)
         await req.application.agentService.syncDesiredStateToFleet()
         return .noContent
     }
@@ -381,7 +376,7 @@ struct DNSController: RouteCollection {
     @Sendable
     func attachNetwork(req: Request) async throws -> DNSZoneResponse {
         let zone = try await fetchZone(req: req, action: "dns:attach")
-        let zoneID = try zone.requireID()
+        let zoneID = zone.id
         let request = try req.content.decode(AttachDNSZoneRequest.self)
 
         let network = try await Self.authorizedNetwork(req: req, id: request.networkId, zone: zone)
@@ -390,7 +385,7 @@ struct DNSController: RouteCollection {
         // Checked before anything is written, so a request that asks for
         // `primary` and cannot have it changes nothing at all rather than
         // leaving a half-applied attachment behind.
-        let promoting = request.primary == true && network.$primaryDNSZone.id != zoneID
+        let promoting = request.primary == true && network.primaryDNSZoneID != zoneID
         var promotedDomainName: String?
         if promoting {
             try await DNSZoneService.assertPrimaryZoneAssignable(
@@ -406,23 +401,12 @@ struct DNSController: RouteCollection {
                 nextZoneName: zone.name)
         }
 
-        // Deliberately not one transaction: the duplicate-attach catch below is
-        // the idempotency path, and inside a Postgres transaction a constraint
-        // violation aborts the whole thing — the recovery would poison the
-        // `network.save` that follows it. Pre-validating the promotion is what
-        // makes the two writes safe to do separately.
-        let alreadyAttached = try await DNSZoneNetwork.query(on: req.db)
-            .filter(\.$zone.$id == zoneID)
-            .filter(\.$logicalNetwork.$id == networkID)
-            .count()
-        if alreadyAttached == 0 {
-            do {
-                try await DNSZoneNetwork(zoneID: zoneID, logicalNetworkID: networkID).save(on: req.db)
-            } catch let error as any DatabaseError where error.isConstraintFailure {
-                // Lost the race with a concurrent attach; the unique pair index
-                // makes that a no-op rather than an error.
-            }
-        }
+        // Attachment is one idempotent INSERT ... ON CONFLICT statement, so a
+        // concurrent attach neither leaks a uniqueness error nor poisons the
+        // primary-zone update that follows. Promotion is validated before this
+        // write so a rejected request still cannot leave an attachment behind.
+        _ = try await DNSZoneNetworkStore.attach(
+            zoneID: zoneID, networkID: networkID, on: req.db)
         if promoting {
             // The search domain follows the zone unless an operator has set one
             // of their own (STR-201). Without it a guest resolves
@@ -430,9 +414,10 @@ struct DNSController: RouteCollection {
             // primary zone points guests at it" that the resolver cannot supply
             // — a search list is guest-side config, not something a resolver
             // answers with.
-            network.domainName = promotedDomainName
-            network.$primaryDNSZone.id = zoneID
-            try await network.save(on: req.db)
+            try await network.replacing(
+                domainName: .some(promotedDomainName),
+                primaryDNSZoneID: .some(zoneID)
+            ).save(on: req.db)
         }
 
         await req.application.agentService.syncDesiredStateToFleet()
@@ -451,7 +436,7 @@ struct DNSController: RouteCollection {
     @Sendable
     func detachNetwork(req: Request) async throws -> HTTPStatus {
         let zone = try await fetchZone(req: req, action: "dns:detach")
-        let zoneID = try zone.requireID()
+        let zoneID = zone.id
         guard let networkID = req.parameters.get("networkId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid network ID")
         }
@@ -460,22 +445,18 @@ struct DNSController: RouteCollection {
         // Detaching a network's primary zone would strand its VMs' derived
         // records with no zone to live in, so clearing the primary is a
         // separate, explicit edit on the network.
-        guard network.$primaryDNSZone.id != zoneID else {
+        guard network.primaryDNSZoneID != zoneID else {
             throw Abort(
                 .conflict,
                 reason: "This zone is the network's primary DNS zone; clear the network's primary zone "
                     + "before detaching it")
         }
 
-        guard
-            let attachment = try await DNSZoneNetwork.query(on: req.db)
-                .filter(\.$zone.$id == zoneID)
-                .filter(\.$logicalNetwork.$id == networkID)
-                .first()
+        guard try await DNSZoneNetworkStore.detach(
+            zoneID: zoneID, networkID: networkID, on: req.db)
         else {
             return .noContent
         }
-        try await attachment.delete(on: req.db)
         await req.application.agentService.syncDesiredStateToFleet()
 
         req.logger.info(
@@ -490,11 +471,11 @@ struct DNSController: RouteCollection {
     // MARK: - Helpers
 
     /// The zone's own canonical action check.
-    private func fetchZone(req: Request, action: String) async throws -> DNSZone {
+    private func fetchZone(req: Request, action: String) async throws -> DNSZoneSnapshot {
         guard let zoneID = req.parameters.get("zoneId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid DNS zone ID")
         }
-        guard let zone = try await DNSZone.find(zoneID, on: req.db) else {
+        guard let zone = try await LegacyDNSZoneStore.find(id: zoneID, on: req.db) else {
             throw Abort(.notFound, reason: "DNS zone not found")
         }
         let allowed = try await req.can(action, on: IAMNode(type: .dnsZone, id: zoneID))
@@ -507,22 +488,20 @@ struct DNSController: RouteCollection {
     /// A record and its zone, authorized on the *record* — a binding on the
     /// zone reaches it through the tree, and a binding on the record alone
     /// reaches only that row.
-    private func fetchRecord(req: Request, action: String) async throws -> (DNSZone, DNSRecord) {
+    private func fetchRecord(
+        req: Request, action: String
+    ) async throws -> (DNSZoneSnapshot, DNSRecordSnapshot) {
         guard let zoneID = req.parameters.get("zoneId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid DNS zone ID")
         }
         guard let recordID = req.parameters.get("recordId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid DNS record ID")
         }
-        guard let zone = try await DNSZone.find(zoneID, on: req.db) else {
+        guard let zone = try await LegacyDNSZoneStore.find(id: zoneID, on: req.db) else {
             throw Abort(.notFound, reason: "DNS zone not found")
         }
-        guard
-            let record = try await DNSRecord.query(on: req.db)
-                .filter(\.$id == recordID)
-                .filter(\.$zone.$id == zoneID)
-                .first()
-        else {
+        guard let record = try await LegacyDNSRecordStore.record(
+            id: recordID, zoneID: zoneID, on: req.db) else {
             throw Abort(.notFound, reason: "Record not found in this DNS zone")
         }
         let allowed = try await req.can(action, on: IAMNode(type: .dnsRecord, id: recordID))
@@ -536,7 +515,7 @@ struct DNSController: RouteCollection {
     /// may also modify. Attaching changes what the network's VMs resolve, so
     /// owning the zone alone is not enough (the volume/floating-IP rule).
     private static func authorizedNetwork(
-        req: Request, id networkID: UUID, zone: DNSZone
+        req: Request, id networkID: UUID, zone: DNSZoneSnapshot
     ) async throws -> LogicalNetwork {
         guard let network = try await LogicalNetwork.find(networkID, on: req.db) else {
             throw Abort(.badRequest, reason: "Network \(networkID) does not exist")
@@ -549,8 +528,8 @@ struct DNSController: RouteCollection {
         // to a caller who can't touch the network would tell them it exists in
         // another project (issue #777).
         try ProjectContainment.require(
-            "Network", in: network.$project.id,
-            sameProjectAs: "the DNS zone", in: zone.$project.id)
+            "Network", in: network.projectID,
+            sameProjectAs: "the DNS zone", in: zone.projectID)
         return network
     }
 
@@ -567,54 +546,50 @@ struct DNSController: RouteCollection {
 
     /// Build responses for a page of zones with two batched queries rather
     /// than a pair per zone.
-    private static func responses(for zones: [DNSZone], on db: any Database) async throws -> [DNSZoneResponse] {
-        let zoneIDs = try zones.map { try $0.requireID() }
+    private static func responses(
+        for zones: [DNSZoneSnapshot], on db: any Database
+    ) async throws -> [DNSZoneResponse] {
+        let zoneIDs = zones.map(\.id)
         guard !zoneIDs.isEmpty else { return [] }
 
-        let attachments = try await DNSZoneNetwork.query(on: db)
-            .filter(\.$zone.$id ~~ zoneIDs)
-            .all()
-        let networkIDs = Array(Set(attachments.map { $0.$logicalNetwork.id }))
+        let attachments = try await DNSZoneNetworkStore.attachments(zoneIDs: zoneIDs, on: db)
+        let networkIDs = Array(Set(attachments.map(\.logicalNetworkID)))
         var networks: [UUID: LogicalNetwork] = [:]
         if !networkIDs.isEmpty {
-            for network in try await LogicalNetwork.query(on: db).filter(\.$id ~~ networkIDs).all() {
+            for network in try await LegacyLogicalNetworkStore.networks(ids: networkIDs, on: db) {
                 if let id = network.id { networks[id] = network }
             }
         }
         // The warning is about the *network*, so it counts every zone attached
         // to it — not just the ones on this page — and is computed once per
         // network rather than once per attachment (STR-201).
-        let zoneCounts = try await DNSZoneNetwork.counts(
-            groupedBy: \.$logicalNetwork, in: networkIDs, on: db)
+        let zoneCounts = try await DNSZoneNetworkStore.counts(networkIDs: networkIDs, on: db)
         let capability = try await ResolverCapability.index(on: db)
         var warnings: [UUID: String] = [:]
         for (networkID, network) in networks {
             warnings[networkID] = ResolverCapability.zoneResolutionWarning(
                 network: network, attachedZoneCount: zoneCounts[networkID] ?? 0,
-                incapableAgentNames: capability.incapableAgentNames(forSite: network.$site.id))
+                incapableAgentNames: capability.incapableAgentNames(forSite: network.siteID))
         }
 
         var attachedByZone: [UUID: [DNSZoneNetworkResponse]] = [:]
         for attachment in attachments {
-            guard let network = networks[attachment.$logicalNetwork.id], let networkID = network.id else {
+            guard let network = networks[attachment.logicalNetworkID], let networkID = network.id else {
                 continue
             }
-            attachedByZone[attachment.$zone.id, default: []].append(
+            attachedByZone[attachment.zoneID, default: []].append(
                 DNSZoneNetworkResponse(
                     networkId: networkID,
                     networkName: network.name,
-                    isPrimary: network.$primaryDNSZone.id == attachment.$zone.id,
+                    isPrimary: network.primaryDNSZoneID == attachment.zoneID,
                     zoneResolutionWarning: warnings[networkID]))
         }
 
-        var recordCounts: [UUID: Int] = [:]
-        for record in try await DNSRecord.query(on: db).filter(\.$zone.$id ~~ zoneIDs).all() {
-            recordCounts[record.$zone.id, default: 0] += 1
-        }
+        let recordCounts = try await LegacyDNSRecordStore.counts(zoneIDs: zoneIDs, on: db)
 
-        return try zones.map { zone in
-            let id = try zone.requireID()
-            return try DNSZoneResponse(
+        return zones.map { zone in
+            let id = zone.id
+            return DNSZoneResponse(
                 from: zone,
                 networks: (attachedByZone[id] ?? []).sorted { $0.networkName < $1.networkName },
                 recordCount: recordCounts[id] ?? 0)

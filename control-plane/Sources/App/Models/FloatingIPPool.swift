@@ -1,94 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
-
-/// A pool of external (floating) IPv4 addresses the control plane's IPAM
-/// allocates `FloatingIP`s from (issue #344). The pool's CIDR is address
-/// space the *customer* owns and routes to the site's provider network —
-/// typically the uplink subnet itself, or a separate prefix their fabric
-/// statically routes (or BGP-learns, with OVN dynamic routing + FRR) toward
-/// the site's gateway.
-///
-/// Pools are infrastructure, scoped like sites: an org-or-OU owner, plus an
-/// required placement in one site. A pool only attaches to NICs on networks
-/// of that site (one OVN deployment advertises/answers for the addresses).
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class FloatingIPPool: Model, @unchecked Sendable {
-    static let schema = "floating_ip_pools"
-
-    @ID(key: .id)
-    var id: UUID?
-
-    /// Operator-facing name, unique within the pool's owning org or folder
-    /// (STR-105) — two organizations may each own a pool named `public`.
-    @Field(key: "name")
-    var name: String
-
-    /// The external address range in CIDR notation (e.g. `203.0.113.0/24`).
-    /// Floating IPs are allocated from its host range, lowest-free.
-    @Field(key: "cidr")
-    var cidr: String
-
-    /// Router/gateway address inside the range, excluded from allocation.
-    /// Operators should also size or split the range so agents' dedicated
-    /// uplink IPs (`[ovn_uplink] external_cidr`) fall outside it.
-    @OptionalField(key: "gateway")
-    var gateway: String?
-
-    /// Site whose OVN deployment answers for these addresses.
-    @Parent(key: "site_id")
-    var site: Site
-
-    /// Owning organization scope (exactly one of the two), mirroring `Site`.
-    @OptionalParent(key: "organization_id")
-    var organization: Organization?
-
-    @OptionalParent(key: "organizational_unit_id")
-    var organizationalUnit: OrganizationalUnit?
-
-    @Children(for: \.$pool)
-    var floatingIPs: [FloatingIP]
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
-
-    init(
-        id: UUID? = nil,
-        name: String,
-        cidr: String,
-        gateway: String? = nil,
-        siteID: UUID,
-        organizationScope: OrganizationScope? = nil
-    ) {
-        self.id = id
-        self.name = name
-        self.cidr = cidr
-        self.gateway = gateway
-        self.$site.id = siteID
-        self.$organization.id = organizationScope?.organizationID
-        self.$organizationalUnit.id = organizationScope?.organizationalUnitID
-    }
-
-    /// The pool's org-or-OU owner; nil only for rows that predate scoping.
-    var organizationScope: OrganizationScope? {
-        get {
-            if let orgID = self.$organization.id { return .organization(orgID) }
-            if let ouID = self.$organizationalUnit.id { return .organizationalUnit(ouID) }
-            return nil
-        }
-        set {
-            self.$organization.id = newValue?.organizationID
-            self.$organizationalUnit.id = newValue?.organizationalUnitID
-        }
-    }
-}
-
-extension FloatingIPPool: Content {}
 
 // MARK: - DTOs
 
@@ -127,15 +38,15 @@ struct FloatingIPPoolResponse: Content {
     let allocatedCount: Int
     let createdAt: Date?
 
-    init(from pool: FloatingIPPool, allocatedCount: Int) throws {
-        self.id = try pool.requireID()
+    init(from pool: FloatingIPPoolSnapshot) {
+        self.id = pool.id
         self.name = pool.name
         self.cidr = pool.cidr
         self.gateway = pool.gateway
-        self.siteId = pool.$site.id
-        self.organizationId = pool.$organization.id
-        self.organizationalUnitId = pool.$organizationalUnit.id
-        self.allocatedCount = allocatedCount
+        self.siteId = pool.siteID
+        self.organizationId = pool.organizationID
+        self.organizationalUnitId = pool.organizationalUnitID
+        self.allocatedCount = pool.allocatedCount
         self.createdAt = pool.createdAt
     }
 }

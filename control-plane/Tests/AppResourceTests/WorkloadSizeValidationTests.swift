@@ -22,17 +22,16 @@ final class WorkloadSizeValidationTests {
     private func gb(_ value: Double) -> Int64 { Int64(value * 1024 * 1024 * 1024) }
 
     private func quota(reservedStorage: Int64, isEnabled: Bool = true) -> ResourceQuota {
-        let quota = ResourceQuota(
+        ResourceQuota(
             name: "snapshot-quota",
             projectID: UUID(),
             maxVCPUs: 10,
             maxMemory: gb(20),
             maxStorage: gb(100),
-            maxVMs: 5
+            maxVMs: 5,
+            isEnabled: isEnabled,
+            reservedStorage: reservedStorage
         )
-        quota.reservedStorage = reservedStorage
-        quota.isEnabled = isEnabled
-        return quota
     }
 
     // MARK: - Quota arithmetic
@@ -53,7 +52,7 @@ final class WorkloadSizeValidationTests {
     func reserveSnapshotStorageThrowsOnOverflow() async throws {
         let quota = quota(reservedStorage: gb(10))
         let error = #expect(throws: Abort.self) {
-            try quota.reserveStorage(Int64.max, for: "the snapshot")
+            _ = try quota.reservingStorage(Int64.max, for: "the snapshot")
         }
         #expect(error?.status == .forbidden)
         // The rejection must not have moved the counter.
@@ -65,28 +64,28 @@ final class WorkloadSizeValidationTests {
         // A disabled quota never blocks but still tracks reservations, so the
         // unbounded operand reaches the add with no check in front of it.
         let quota = quota(reservedStorage: Int64.max - 10, isEnabled: false)
-        try quota.reserveStorage(Int64.max, for: "the snapshot")
-        #expect(quota.reservedStorage == Int64.max)
+        let updated = try quota.reservingStorage(Int64.max, for: "the snapshot")
+        #expect(updated.reservedStorage == Int64.max)
     }
 
     @Test("A disabled quota saturates the VM and sandbox counters too, rather than trapping")
     func disabledQuotaSaturatesWorkloadCounters() async throws {
         let vmQuota = quota(reservedStorage: Int64.max - 10, isEnabled: false)
-        vmQuota.reservedVCPUs = Int.max - 1
-        vmQuota.reservedMemory = Int64.max - 10
-        try vmQuota.reserveResources(vcpus: Int.max, memory: Int64.max, storage: Int64.max)
-        #expect(vmQuota.reservedVCPUs == Int.max)
-        #expect(vmQuota.reservedMemory == Int64.max)
-        #expect(vmQuota.reservedStorage == Int64.max)
-        #expect(vmQuota.vmCount == 1)
+            .replacingCounters(reservedVCPUs: Int.max - 1, reservedMemory: Int64.max - 10)
+        let updatedVMQuota = try vmQuota.reservingResources(
+            vcpus: Int.max, memory: Int64.max, storage: Int64.max)
+        #expect(updatedVMQuota.reservedVCPUs == Int.max)
+        #expect(updatedVMQuota.reservedMemory == Int64.max)
+        #expect(updatedVMQuota.reservedStorage == Int64.max)
+        #expect(updatedVMQuota.vmCount == 1)
 
         let sandboxQuota = quota(reservedStorage: 0, isEnabled: false)
-        sandboxQuota.reservedVCPUs = Int.max - 1
-        sandboxQuota.reservedMemory = Int64.max - 10
-        try sandboxQuota.reserveSandboxResources(vcpus: Int.max, memory: Int64.max)
-        #expect(sandboxQuota.reservedVCPUs == Int.max)
-        #expect(sandboxQuota.reservedMemory == Int64.max)
-        #expect(sandboxQuota.sandboxCount == 1)
+            .replacingCounters(reservedVCPUs: Int.max - 1, reservedMemory: Int64.max - 10)
+        let updatedSandboxQuota = try sandboxQuota.reservingSandboxResources(
+            vcpus: Int.max, memory: Int64.max)
+        #expect(updatedSandboxQuota.reservedVCPUs == Int.max)
+        #expect(updatedSandboxQuota.reservedMemory == Int64.max)
+        #expect(updatedSandboxQuota.sandboxCount == 1)
     }
 
     @Test("A negative snapshot size floors the counter at zero rather than going negative")
@@ -95,8 +94,8 @@ final class WorkloadSizeValidationTests {
         // operand is not hypothetical; a negative reservation is meaningless
         // for a counter that caches measured usage.
         let quota = quota(reservedStorage: gb(1))
-        try quota.reserveStorage(gb(-5), for: "the snapshot")
-        #expect(quota.reservedStorage == 0)
+        let updated = try quota.reservingStorage(gb(-5), for: "the snapshot")
+        #expect(updated.reservedStorage == 0)
     }
 
     @Test("A snapshot that fits is still admitted and reserved")
@@ -104,8 +103,8 @@ final class WorkloadSizeValidationTests {
         let quota = quota(reservedStorage: gb(10))
         let check = quota.canAccommodateStorage(gb(5), for: "the snapshot")
         #expect(check.allowed)
-        try quota.reserveStorage(gb(5), for: "the snapshot")
-        #expect(quota.reservedStorage == gb(15))
+        let updated = try quota.reservingStorage(gb(5), for: "the snapshot")
+        #expect(updated.reservedStorage == gb(15))
     }
 
     @Test("A snapshot exactly filling the remaining storage is admitted")
@@ -114,8 +113,8 @@ final class WorkloadSizeValidationTests {
         let remaining = quota.maxStorage - quota.reservedStorage
         let check = quota.canAccommodateStorage(remaining, for: "the snapshot")
         #expect(check.allowed)
-        try quota.reserveStorage(remaining, for: "the snapshot")
-        #expect(quota.reservedStorage == quota.maxStorage)
+        let updated = try quota.reservingStorage(remaining, for: "the snapshot")
+        #expect(updated.reservedStorage == quota.maxStorage)
     }
 
     // MARK: - Admission through the service
@@ -183,7 +182,7 @@ final class WorkloadSizeValidationTests {
                 // snapshot path later trapped the process on it.
                 self.expectSizeRejection(res)
             }
-            let count = try await VM.query(on: app.db).count()
+            let count = try await VM.all(on: app.db).count
             #expect(count == 0)
         }
     }
@@ -203,7 +202,7 @@ final class WorkloadSizeValidationTests {
             } afterResponse: { res in
                 self.expectSizeRejection(res)
             }
-            let count = try await VM.query(on: app.db).count()
+            let count = try await VM.all(on: app.db).count
             #expect(count == 0)
         }
     }
@@ -220,7 +219,7 @@ final class WorkloadSizeValidationTests {
             } afterResponse: { res in
                 self.expectSizeRejection(res)
             }
-            let count = try await VM.query(on: app.db).count()
+            let count = try await VM.all(on: app.db).count
             #expect(count == 0)
         }
     }
@@ -318,7 +317,7 @@ final class WorkloadSizeValidationTests {
             } afterResponse: { res in
                 self.expectSizeRejection(res)
             }
-            let count = try await Sandbox.query(on: app.db).count()
+            let count = try await Sandbox.all(on: app.db).count
             #expect(count == 0)
         }
     }
@@ -341,7 +340,7 @@ final class WorkloadSizeValidationTests {
             } afterResponse: { res in
                 self.expectSizeRejection(res)
             }
-            let count = try await Sandbox.query(on: app.db).count()
+            let count = try await Sandbox.all(on: app.db).count
             #expect(count == 0)
         }
     }
@@ -402,14 +401,13 @@ final class WorkloadSizeValidationTests {
                 username: "sizeuser", email: "size@example.com", displayName: "Size User")
             let org = try await builder.createOrganization(name: "Size Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "Size Project", description: "p", organization: org)
             _ = try await builder.createNetwork(name: "default", project: project)
             let image = try await builder.createImage(project: project, uploadedBy: user)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, project, image, token)
         } catch {

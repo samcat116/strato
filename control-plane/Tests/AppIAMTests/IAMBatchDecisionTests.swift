@@ -1,4 +1,5 @@
 import Fluent
+import ControlPlanePostgres
 import Foundation
 import Testing
 import Vapor
@@ -78,7 +79,7 @@ final class IAMBatchDecisionTests {
     }
 
     private func buildFixture(_ app: Application, prefix: String) async throws -> Fixture {
-        let builder = TestDataBuilder(db: app.db)
+        let builder = TestDataBuilder(app: app)
         let org = try await builder.createOrganization(name: "\(prefix) Org")
         let otherOrg = try await builder.createOrganization(name: "\(prefix) Other Org")
         let ou = try await builder.createOU(name: "\(prefix) OU", description: "d", organization: org)
@@ -104,7 +105,8 @@ final class IAMBatchDecisionTests {
         try await builder.addUserToOrganization(user: member, organization: org)
         let viaGroup = try await builder.createUser(username: "\(prefix)-group", email: "\(prefix)g@example.com")
         let group = try await builder.createGroup(name: "\(prefix)-ops", description: "d", organization: org)
-        try await UserGroup(userID: viaGroup.id!, groupID: group.id!).save(on: app.db)
+        try await builder.addUserToOrganization(user: viaGroup, organization: org)
+        try await builder.addUserToGroup(user: viaGroup, group: group)
         let outsider = try await builder.createUser(username: "\(prefix)-out", email: "\(prefix)o@example.com")
         try await builder.addUserToOrganization(user: outsider, organization: otherOrg)
         let admin = try await builder.createUser(
@@ -228,7 +230,7 @@ final class IAMBatchDecisionTests {
     @Test("List scoping costs the same number of queries for twenty-five items as for one")
     func listScopingCostIsFlatInListSize() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let org = try await builder.createOrganization(name: "flat Org")
             let ou = try await builder.createOU(name: "flat OU", description: "d", organization: org)
             let project = try await builder.createProject(
@@ -307,7 +309,7 @@ final class IAMBatchDecisionTests {
             #expect(sameVerdicts)
 
             await app.iamDecisionRecorder.flush()
-            let rows = try await IAMDecisionLog.query(on: app.db).count()
+            let rows = try await app.decisionLogsPersistence.entries(limit: 500).total
             #expect(rows == nodes.count, "expected one row per node, got \(rows)")
 
             // And the whole batch cost one insert pass (#736): the rows ride
@@ -316,7 +318,9 @@ final class IAMBatchDecisionTests {
             let writes = app.iamDecisionRecorder.writeCount.withLockedValue { $0 }
             #expect(writes == 1, "expected one insert for \(nodes.count) decisions, got \(writes)")
 
-            let actions = Set(try await IAMDecisionLog.query(on: app.db).all().compactMap(\.action))
+            let actions = Set(
+                try await app.decisionLogsPersistence.entries(limit: 500).entries.compactMap(\.action)
+            )
             #expect(actions == ["vm:read"])
         }
     }
@@ -325,7 +329,7 @@ final class IAMBatchDecisionTests {
     func batchedChecksKeepTheirOwnActions() async throws {
         try await withApp { app in
             let fixture = try await buildFixture(app, prefix: "phrase")
-            let token = try await fixture.admin.generateAPIKey(on: app.db)
+            let token = try await fixture.admin.generateAPIKey(on: app)
             let node = IAMNode(type: .virtualMachine, id: fixture.vms[0].id!)
             // `vm:read` and `vm:start` on the same node — what a UI rendering
             // per-resource action buttons sends.
@@ -343,9 +347,10 @@ final class IAMBatchDecisionTests {
             }
 
             await app.iamDecisionRecorder.flush()
-            let rows = try await IAMDecisionLog.query(on: app.db)
-                .filter(\.$nodeID == fixture.vms[0].id!)
-                .all()
+            let rows = try await app.decisionLogsPersistence.entries(
+                matching: DecisionLogFilter(nodeID: fixture.vms[0].id!),
+                limit: 500
+            ).entries
             #expect(Set(rows.compactMap(\.action)) == ["vm:read", "vm:start"])
         }
     }

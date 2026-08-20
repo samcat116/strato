@@ -1,93 +1,146 @@
 import Fluent
+import Foundation
+import SQLKit
 import Vapor
 
-/// A stateful, NIC-level firewall: a named set of ingress/egress rules that
-/// VM NICs attach to, realized agent-side as OVN ACLs on an OVN port group.
-/// The model is AWS-shaped: groups are project-scoped, every NIC must belong
-/// to at least one group, and each project has an auto-created, undeletable
-/// `default` group that NICs fall back to when the caller picks none.
-///
-/// `generation` is bumped on every rule mutation and travels with the group
-/// on the desired-state sync, so a replayed or reordered sync can never
-/// resurrect a deleted rule (the `LogicalNetwork.generation` pattern).
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class SecurityGroup: Model, @unchecked Sendable {
+enum SecurityGroup {
     static let schema = "security_groups"
-
-    /// Name of the auto-created per-project group.
     static let defaultGroupName = "default"
-
-    /// Hard cap on rules per group — a guard against unbounded ACL growth on
-    /// the agents, not a quota (quotas cap the group count).
     static let maxRulesPerGroup = 100
-
-    /// Hard cap on groups per NIC. OVN evaluates every attached group's ACLs
-    /// for every packet, so this bounds per-port match complexity.
     static let maxGroupsPerNIC = 5
-
-    /// Hard cap on groups per project. Deliberately a constant, not a
-    /// `ResourceQuota` column: the quota model's network columns are
-    /// bookkeeping-only today, and dead quota plumbing would be worse than an
-    /// honest cap. Promote to a real quota when networks get one.
     static let maxGroupsPerProject = 100
-
-    @ID(key: .id)
-    var id: UUID?
-
-    @Parent(key: "project_id")
-    var project: Project
-
-    /// Unique per project (schema-enforced).
-    @Field(key: "name")
-    var name: String
-
-    @OptionalField(key: "description")
-    var groupDescription: String?
-
-    /// The project's auto-created fallback group: undeletable and
-    /// un-renamable, though its rules are editable (AWS semantics). At most
-    /// one per project (schema-enforced via partial unique index).
-    @Field(key: "is_default")
-    var isDefault: Bool
-
-    /// Monotonic counter bumped on every rule mutation; see the type doc.
-    @Field(key: "generation")
-    var generation: Int64
-
-    @OptionalParent(key: "created_by_id")
-    var createdBy: User?
-
-    @Children(for: \.$securityGroup)
-    var rules: [SecurityGroupRule]
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
-
-    init(
-        id: UUID? = nil,
-        projectID: UUID,
-        name: String,
-        description: String? = nil,
-        isDefault: Bool = false,
-        createdByID: UUID? = nil
-    ) {
-        self.id = id
-        self.$project.id = projectID
-        self.name = name
-        self.groupDescription = description
-        self.isDefault = isDefault
-        self.generation = 0
-        self.$createdBy.id = createdByID
-    }
 }
 
-extension SecurityGroup: Content {}
+struct SecurityGroupSnapshot: Equatable, Sendable {
+    let id: UUID
+    let projectID: UUID
+    let name: String
+    let groupDescription: String?
+    let isDefault: Bool
+    let generation: Int64
+    let createdByID: UUID?
+    let createdAt: Date?
+    let updatedAt: Date?
+}
+
+enum LegacySecurityGroupStore {
+    static func groups(
+        ids: [UUID]? = nil, projectIDs: [UUID]? = nil, isDefault: Bool? = nil,
+        on db: any Database
+    ) async throws -> [SecurityGroupSnapshot] {
+        if let ids, ids.isEmpty { return [] }
+        if let projectIDs, projectIDs.isEmpty { return [] }
+        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM security_groups WHERE TRUE"
+        if let ids { query += " AND id = ANY(\(bind: ids))" }
+        if let projectIDs { query += " AND project_id = ANY(\(bind: projectIDs))" }
+        if let isDefault { query += " AND is_default = \(bind: isDefault)" }
+        query += " ORDER BY name, id"
+        return try await requireSQL(db).raw(query).all(decoding: Record.self).map(\.snapshot)
+    }
+
+    static func group(id: UUID, on db: any Database) async throws -> SecurityGroupSnapshot? {
+        try await groups(ids: [id], on: db).first
+    }
+
+    static func defaultGroup(projectID: UUID, on db: any Database) async throws
+        -> SecurityGroupSnapshot?
+    {
+        try await groups(projectIDs: [projectID], isDefault: true, on: db).first
+    }
+
+    @discardableResult
+    static func insert(
+        id: UUID = UUID(), projectID: UUID, name: String,
+        description: String? = nil, isDefault: Bool = false,
+        createdByID: UUID? = nil, on db: any Database
+    ) async throws -> SecurityGroupSnapshot {
+        guard let row = try await requireSQL(db).raw(
+            """
+            INSERT INTO security_groups (
+                id, project_id, name, description, is_default, generation,
+                created_by_id, created_at, updated_at
+            ) VALUES (
+                \(bind: id), \(bind: projectID), \(bind: name), \(bind: description),
+                \(bind: isDefault), 0, \(bind: createdByID), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            ) RETURNING \(unsafeRaw: columns)
+            """
+        ).first(decoding: Record.self) else {
+            throw Abort(.internalServerError, reason: "Could not create security group")
+        }
+        return row.snapshot
+    }
+
+    @discardableResult
+    static func update(
+        id: UUID, name: String, description: String?, on db: any Database
+    ) async throws -> SecurityGroupSnapshot? {
+        try await requireSQL(db).raw(
+            """
+            UPDATE security_groups
+            SET name = \(bind: name), description = \(bind: description),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = \(bind: id)
+            RETURNING \(unsafeRaw: columns)
+            """
+        ).first(decoding: Record.self)?.snapshot
+    }
+
+    static func count(projectID: UUID, on db: any Database) async throws -> Int {
+        struct Count: Decodable { let count: Int }
+        return try await requireSQL(db).raw(
+            "SELECT count(*)::bigint AS count FROM security_groups WHERE project_id = \(bind: projectID)"
+        ).first(decoding: Count.self)?.count ?? 0
+    }
+
+    static func ids(projectIDs: [UUID], on db: any Database) async throws -> [UUID] {
+        struct ID: Decodable { let id: UUID }
+        guard !projectIDs.isEmpty else { return [] }
+        return try await requireSQL(db).raw(
+            "SELECT id FROM security_groups WHERE project_id = ANY(\(bind: projectIDs))"
+        ).all(decoding: ID.self).map(\.id)
+    }
+
+    @discardableResult
+    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+        struct ID: Decodable { let id: UUID }
+        return try await requireSQL(db).raw(
+            "DELETE FROM security_groups WHERE id = \(bind: id) RETURNING id"
+        ).first(decoding: ID.self)?.id
+    }
+
+    private struct Record: Decodable, Sendable {
+        let id: UUID
+        let projectID: UUID
+        let name: String
+        let groupDescription: String?
+        let isDefault: Bool
+        let generation: Int64
+        let createdByID: UUID?
+        let createdAt: Date?
+        let updatedAt: Date?
+
+        var snapshot: SecurityGroupSnapshot {
+            SecurityGroupSnapshot(
+                id: id, projectID: projectID, name: name,
+                groupDescription: groupDescription, isDefault: isDefault,
+                generation: generation, createdByID: createdByID,
+                createdAt: createdAt, updatedAt: updatedAt)
+        }
+    }
+
+    private static let columns = """
+        id, project_id AS "projectID", name, description AS "groupDescription",
+        is_default AS "isDefault", generation, created_by_id AS "createdByID",
+        created_at AS "createdAt", updated_at AS "updatedAt"
+        """
+
+    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Security groups require PostgreSQL")
+        }
+        return sql
+    }
+}
 
 // MARK: - DTOs
 
@@ -172,7 +225,7 @@ struct CreateSecurityGroupRuleRequest: Content, ValidatedRequestBody {
 struct AttachSecurityGroupRequest: Content {
     let vmId: UUID?
     /// The sandbox to attach to. Realizes the group's port group and ACLs, but
-    /// not yet the membership — see `SandboxInterfaceSecurityGroup` for which
+    /// not yet the membership — see the sandbox NIC membership store for which
     /// half of the sync reaches an agent today.
     let sandboxId: UUID?
     /// The NIC to attach to; defaults to the workload's first interface.
@@ -218,15 +271,15 @@ struct SecurityGroupRuleResponse: Content {
     let description: String?
     let createdAt: Date?
 
-    init(from rule: SecurityGroupRule) throws {
-        self.id = try rule.requireID()
+    init(from rule: SecurityGroupRuleSnapshot) {
+        self.id = rule.id
         self.direction = rule.direction
         self.ethertype = rule.ethertype
         self.protocolName = rule.protocolName
         self.portRangeMin = rule.portRangeMin
         self.portRangeMax = rule.portRangeMax
         self.remoteCIDR = rule.remoteCIDR
-        self.remoteGroupId = rule.$remoteGroup.id
+        self.remoteGroupId = rule.remoteGroupID
         self.log = rule.log
         self.description = rule.ruleDescription
         self.createdAt = rule.createdAt
@@ -246,13 +299,17 @@ struct SecurityGroupResponse: Content {
     let createdAt: Date?
     let updatedAt: Date?
 
-    init(from group: SecurityGroup, attachmentCount: Int) throws {
-        self.id = try group.requireID()
+    init(
+        from group: SecurityGroupSnapshot,
+        rules: [SecurityGroupRuleSnapshot] = [],
+        attachmentCount: Int
+    ) {
+        self.id = group.id
         self.name = group.name
         self.description = group.groupDescription
-        self.projectId = group.$project.id
+        self.projectId = group.projectID
         self.isDefault = group.isDefault
-        self.rules = try group.rules.map(SecurityGroupRuleResponse.init(from:))
+        self.rules = rules.map(SecurityGroupRuleResponse.init(from:))
         self.attachmentCount = attachmentCount
         self.createdAt = group.createdAt
         self.updatedAt = group.updatedAt

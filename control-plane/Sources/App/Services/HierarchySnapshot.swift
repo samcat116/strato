@@ -33,11 +33,8 @@ struct HierarchySnapshot {
     private let decidedFolderIDs: Set<UUID>?
 
     static func load(organizationID: UUID, on db: Database) async throws -> HierarchySnapshot {
-        let folders = try await OrganizationalUnit.query(on: db)
-            .filter(\.$organization.$id == organizationID)
-            .sort(\.$depth)
-            .sort(\.$name)
-            .all()
+        let folders = try await LegacyOrganizationalUnitStore.organizationalUnits(
+            organizationIDs: [organizationID], on: db)
         let folderIDs = folders.compactMap { $0.id }
 
         let projects = try await Project.all(inOrganization: organizationID, folders: folderIDs, on: db)
@@ -45,22 +42,14 @@ struct HierarchySnapshot {
 
         var vms: [VM] = []
         if !projectIDs.isEmpty {
-            vms = try await VM.query(on: db)
-                .filter(\.$project.$id ~~ projectIDs)
-                .all()
+            vms = try await LegacyVMStore.vms(projectIDs: projectIDs, on: db)
         }
 
-        let quotas = try await ResourceQuota.query(on: db)
-            .group(.or) { anyQuota in
-                anyQuota.filter(\.$organization.$id == organizationID)
-                if !folderIDs.isEmpty {
-                    anyQuota.filter(\.$organizationalUnit.$id ~~ folderIDs)
-                }
-                if !projectIDs.isEmpty {
-                    anyQuota.filter(\.$project.$id ~~ projectIDs)
-                }
-            }
-            .all()
+        let quotas = try await LegacyResourceQuotaStore.hierarchy(
+            organizationID: organizationID,
+            organizationalUnitIDs: folderIDs,
+            projectIDs: projectIDs,
+            on: db)
 
         return HierarchySnapshot(
             organizationID: organizationID,
@@ -131,18 +120,18 @@ struct HierarchySnapshot {
             var current = folderID
             while let id = current, !keptFolderIDs.contains(id) {
                 keptFolderIDs.insert(id)
-                current = foldersByID[id]?.$parentOU.id
+                current = foldersByID[id]?.parentOUID
             }
         }
         for folderID in readableFolderIDs { retainChain(from: folderID) }
-        for project in keptProjects { retainChain(from: project.$organizationalUnit.id) }
+        for project in keptProjects { retainChain(from: project.organizationalUnitID) }
 
         return HierarchySnapshot(
             organizationID: organizationID,
             folders: folders.filter { folder in folder.id.map(keptFolderIDs.contains) ?? false },
             projects: keptProjects,
             vms: vms.filter { vm in
-                readableProjectIDs.contains(vm.$project.id) && (vm.id.map(readableVMIDs.contains) ?? false)
+                readableProjectIDs.contains(vm.projectID) && (vm.id.map(readableVMIDs.contains) ?? false)
             },
             quotas: try await QuotaVisibility.readable(quotas, on: req),
             decidedFolderIDs: readableFolderIDs
@@ -153,36 +142,36 @@ struct HierarchySnapshot {
 
     /// The folders directly under the organization.
     var topLevelFolders: [OrganizationalUnit] {
-        folders.filter { $0.$parentOU.id == nil }
+        folders.filter { $0.parentOUID == nil }
     }
 
     func childFolders(of folderID: UUID) -> [OrganizationalUnit] {
-        folders.filter { $0.$parentOU.id == folderID }
+        folders.filter { $0.parentOUID == folderID }
     }
 
     func projects(in folderID: UUID) -> [Project] {
-        projects.filter { $0.$organizationalUnit.id == folderID }
+        projects.filter { $0.organizationalUnitID == folderID }
     }
 
     /// Projects hanging directly off the organization rather than off a folder.
     var directProjects: [Project] {
-        projects.filter { $0.$organization.id == organizationID }
+        projects.filter { $0.organizationID == organizationID }
     }
 
     func vms(in projectID: UUID) -> [VM] {
-        vms.filter { $0.$project.id == projectID }
+        vms.filter { $0.projectID == projectID }
     }
 
     func quotas(forOrganization organizationID: UUID) -> [ResourceQuota] {
-        quotas.filter { $0.$organization.id == organizationID }
+        quotas.filter { $0.organizationID == organizationID }
     }
 
     func quotas(forFolder folderID: UUID) -> [ResourceQuota] {
-        quotas.filter { $0.$organizationalUnit.id == folderID }
+        quotas.filter { $0.organizationalUnitID == folderID }
     }
 
     func quotas(forProject projectID: UUID) -> [ResourceQuota] {
-        quotas.filter { $0.$project.id == projectID }
+        quotas.filter { $0.projectID == projectID }
     }
 
     var maxDepth: Int {

@@ -40,12 +40,11 @@ final class GuardrailEndpointTests {
             )
             let org = try await builder.createOrganization(name: "Guardrail Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
             let project = try await builder.createProject(
                 name: "Guardrail Project", description: "d", organization: org)
 
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
             try await test(app, Fixture(user: user, token: token, org: org, project: project))
         } catch {
             try await app.shutdownForTesting()
@@ -120,7 +119,7 @@ final class GuardrailEndpointTests {
                     #expect(res.body.string.contains("forbid-only"))
                 })
 
-            let stored = try await Guardrail.query(on: app.db).count()
+            let stored = try await LegacyGuardrailStore.count(on: app.db)
             let after = try await PolicySetVersionService.current(on: app.db)
             #expect(stored == 0)
             // A rejected write must not move the version: replicas would
@@ -180,7 +179,7 @@ final class GuardrailEndpointTests {
                 username: "guardrail-member", email: "guardrail-member@example.com")
             try await TestDataBuilder(db: app.db).addUserToOrganization(
                 user: member, organization: fixture.org, role: "member")
-            let memberToken = try await member.generateAPIKey(on: app.db)
+            let memberToken = try await member.generateAPIKey(on: app)
 
             try await app.test(
                 .POST, "/api/iam/guardrails",
@@ -192,7 +191,7 @@ final class GuardrailEndpointTests {
                     #expect(res.status == .forbidden)
                 })
 
-            let stored = try await Guardrail.query(on: app.db).count()
+            let stored = try await LegacyGuardrailStore.count(on: app.db)
             #expect(stored == 0)
         }
     }
@@ -222,7 +221,7 @@ final class GuardrailEndpointTests {
                     #expect(res.status == .noContent)
                 })
 
-            let stored = try await Guardrail.query(on: app.db).count()
+            let stored = try await LegacyGuardrailStore.count(on: app.db)
             let afterDelete = try await PolicySetVersionService.current(on: app.db)
             #expect(stored == 0)
             #expect(afterDelete == afterCreate + 1)
@@ -305,7 +304,7 @@ final class GuardrailEndpointTests {
                     #expect(res.status == .badRequest)
                 })
 
-            let count = try await Guardrail.query(on: app.db).count()
+            let count = try await LegacyGuardrailStore.count(on: app.db)
             #expect(count == 0)
         }
     }

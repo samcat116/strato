@@ -117,13 +117,8 @@ enum DNSZoneService {
         zoneID: UUID, name: String, type: DNSRecordType, ttl: Int, view: DNSRecordView,
         on db: any Database
     ) async throws {
-        try await DNSRecord.query(on: db)
-            .filter(\.$zone.$id == zoneID)
-            .filter(\.$name == name)
-            .filter(\.$type == type)
-            .set(\.$ttl, to: ttl)
-            .set(\.$view, to: view)
-            .update()
+        try await LegacyDNSRecordStore.applyRRsetSettings(
+            zoneID: zoneID, name: name, type: type, ttl: ttl, view: view, on: db)
     }
 
     // MARK: - Authored/derived conflicts
@@ -139,9 +134,9 @@ enum DNSZoneService {
     /// are immutable, so the only conflict a value edit can introduce is a
     /// duplicate within one RRset, which the uniqueness index catches.
     static func assertNoConflict(
-        zone: DNSZone, name: String, type: DNSRecordType, on db: any Database
+        zone: DNSZoneSnapshot, name: String, type: DNSRecordType, on db: any Database
     ) async throws {
-        let zoneID = try zone.requireID()
+        let zoneID = zone.id
         let fqdn = DNSName.qualified(name: name, inZone: zone.name)
         let derived = try await DNSZoneAssembler.derivedNames(zoneID: zoneID, zoneName: zone.name, on: db)
         let derivedTypes = derived[fqdn] ?? []
@@ -160,10 +155,8 @@ enum DNSZoneService {
                     + "share an owner name with other data")
         }
 
-        let siblings = try await DNSRecord.query(on: db)
-            .filter(\.$zone.$id == zoneID)
-            .filter(\.$name == name)
-            .all()
+        let siblings = try await LegacyDNSRecordStore.records(
+            zoneID: zoneID, name: name, on: db)
         if type == .cname, let other = siblings.first {
             throw Abort(
                 .conflict,
@@ -188,18 +181,13 @@ enum DNSZoneService {
     /// from carrying a state its drivers would each have to invent a
     /// resolution for.
     static func assertRRsetSettingsAgree(
-        zone: DNSZone, name: String, type: DNSRecordType, ttl: Int, view: DNSRecordView,
+        zone: DNSZoneSnapshot, name: String, type: DNSRecordType, ttl: Int, view: DNSRecordView,
         excluding recordID: UUID? = nil, on db: any Database
     ) async throws {
-        let zoneID = try zone.requireID()
-        var query = DNSRecord.query(on: db)
-            .filter(\.$zone.$id == zoneID)
-            .filter(\.$name == name)
-            .filter(\.$type == type)
-        if let recordID {
-            query = query.filter(\.$id != recordID)
-        }
-        guard let sibling = try await query.first() else { return }
+        let zoneID = zone.id
+        guard let sibling = try await LegacyDNSRecordStore.records(
+            zoneID: zoneID, name: name, on: db
+        ).first(where: { $0.type == type && $0.id != recordID }) else { return }
         let fqdn = DNSName.qualified(name: name, inZone: zone.name)
         guard sibling.ttl == ttl else {
             throw Abort(
@@ -220,23 +208,20 @@ enum DNSZoneService {
 
     /// The zones a VM registers derived records into: the primary zone of
     /// every network it has a NIC on. Usually zero or one.
-    static func registrationZones(vmID: UUID, on db: any Database) async throws -> [DNSZone] {
-        let networkIDs = try await VMNetworkInterface.query(on: db)
-            .filter(\.$vm.$id == vmID)
-            .all()
-            .map { $0.$logicalNetwork.id }
+    static func registrationZones(vmID: UUID, on db: any Database) async throws -> [DNSZoneSnapshot] {
+        let networkIDs = try await LegacyVMNetworkInterfaceStore.interfaces(vmID: vmID, on: db)
+            .map(\.logicalNetworkID)
         guard !networkIDs.isEmpty else { return [] }
         return try await registrationZones(networkIDs: networkIDs, on: db)
     }
 
     /// The primary zones of a set of networks, deduplicated.
-    static func registrationZones(networkIDs: [UUID], on db: any Database) async throws -> [DNSZone] {
-        let zoneIDs = try await LogicalNetwork.query(on: db)
-            .filter(\.$id ~~ Array(Set(networkIDs)))
-            .all()
-            .compactMap { $0.$primaryDNSZone.id }
+    static func registrationZones(networkIDs: [UUID], on db: any Database) async throws -> [DNSZoneSnapshot] {
+        let zoneIDs = try await LegacyLogicalNetworkStore.networks(
+            ids: Array(Set(networkIDs)), on: db)
+            .compactMap(\.primaryDNSZoneID)
         guard !zoneIDs.isEmpty else { return [] }
-        return try await DNSZone.query(on: db).filter(\.$id ~~ Array(Set(zoneIDs))).all()
+        return try await LegacyDNSZoneStore.zones(ids: Array(Set(zoneIDs)), on: db)
     }
 
     /// Whether `hostname` is free in every zone `vmID` registers into.
@@ -244,29 +229,23 @@ enum DNSZoneService {
     /// Two things can take the name: another VM registering into the same zone
     /// (a derived collision), and an authored record at the same owner name.
     static func hostnameIsAvailable(
-        _ hostname: String, forVM vmID: UUID?, in zones: [DNSZone], on db: any Database
+        _ hostname: String, forVM vmID: UUID?, in zones: [DNSZoneSnapshot], on db: any Database
     ) async throws -> Bool {
         for zone in zones {
-            let zoneID = try zone.requireID()
-            let networkIDs = try await LogicalNetwork.query(on: db)
-                .filter(\.$primaryDNSZone.$id == zoneID)
-                .all()
+            let zoneID = zone.id
+            let networkIDs = try await LegacyLogicalNetworkStore.networks(
+                primaryDNSZoneID: zoneID, on: db)
                 .compactMap(\.id)
             if !networkIDs.isEmpty {
-                var query = VM.query(on: db)
-                    .join(VMNetworkInterface.self, on: \VMNetworkInterface.$vm.$id == \VM.$id)
-                    .filter(VMNetworkInterface.self, \.$logicalNetwork.$id ~~ networkIDs)
-                    .filter(\.$hostname == hostname)
-                if let vmID {
-                    query = query.filter(\.$id != vmID)
-                }
-                if try await query.count() > 0 { return false }
+                if try await LegacyVMNetworkInterfaceStore.hostnameExists(
+                    hostname,
+                    logicalNetworkIDs: networkIDs,
+                    excludingVMID: vmID,
+                    on: db)
+                { return false }
             }
-            let authored = try await DNSRecord.query(on: db)
-                .filter(\.$zone.$id == zoneID)
-                .filter(\.$name == hostname)
-                .count()
-            if authored > 0 { return false }
+            if !(try await LegacyDNSRecordStore.records(
+                zoneID: zoneID, name: hostname, on: db)).isEmpty { return false }
         }
         return true
     }
@@ -280,7 +259,7 @@ enum DNSZoneService {
     /// hostname writes are strict instead — there the caller named the value,
     /// so a conflict is worth reporting.
     static func availableHostname(
-        basedOn name: String, forVM vmID: UUID?, in zones: [DNSZone], on db: any Database
+        basedOn name: String, forVM vmID: UUID?, in zones: [DNSZoneSnapshot], on db: any Database
     ) async throws -> String {
         let base = DNSName.slugify(name)
         guard !zones.isEmpty else { return base }
@@ -308,24 +287,22 @@ enum DNSZoneService {
     /// unique within the zones a VM registers into" holds from the assignment
     /// onward, rather than being something assembly quietly papers over.
     static func assertPrimaryZoneAssignable(
-        zone: DNSZone, networkID: UUID, on db: any Database
+        zone: DNSZoneSnapshot, networkID: UUID, on db: any Database
     ) async throws {
-        let zoneID = try zone.requireID()
+        let zoneID = zone.id
 
         // Every network that would register into the zone once this one does.
-        var networkIDs = try await LogicalNetwork.query(on: db)
-            .filter(\.$primaryDNSZone.$id == zoneID)
-            .all()
+        var networkIDs = try await LegacyLogicalNetworkStore.networks(
+            primaryDNSZoneID: zoneID, on: db)
             .compactMap(\.id)
         if !networkIDs.contains(networkID) { networkIDs.append(networkID) }
 
-        let vmIDs = try await VMNetworkInterface.query(on: db)
-            .filter(\.$logicalNetwork.$id ~~ networkIDs)
-            .all()
-            .map { $0.$vm.id }
+        let vmIDs = try await LegacyVMNetworkInterfaceStore.interfaces(
+            logicalNetworkIDs: networkIDs, on: db)
+            .map(\.vmID)
         var seen: Set<String> = []
         if !vmIDs.isEmpty {
-            for vm in try await VM.query(on: db).filter(\.$id ~~ Array(Set(vmIDs))).all() {
+            for vm in try await LegacyVMStore.vms(ids: Array(Set(vmIDs)), on: db) {
                 guard let hostname = vm.hostname else { continue }
                 guard seen.insert(hostname).inserted else {
                     throw Abort(
@@ -337,10 +314,8 @@ enum DNSZoneService {
         }
         guard !seen.isEmpty else { return }
 
-        let clashing = try await DNSRecord.query(on: db)
-            .filter(\.$zone.$id == zoneID)
-            .filter(\.$name ~~ Array(seen))
-            .first()
+        let clashing = try await LegacyDNSRecordStore.first(
+            zoneID: zoneID, names: Array(seen), on: db)
         if let clashing {
             throw Abort(
                 .conflict,
@@ -381,14 +356,14 @@ enum DNSZoneService {
     static func primaryZoneName(of network: LogicalNetwork, on db: any Database) async throws
         -> String?
     {
-        guard let zoneID = network.$primaryDNSZone.id else { return nil }
-        return try await DNSZone.find(zoneID, on: db)?.name
+        guard let zoneID = network.primaryDNSZoneID else { return nil }
+        return try await LegacyDNSZoneStore.find(id: zoneID, on: db)?.name
     }
 
     /// Enforce an explicitly requested hostname: valid label, free everywhere
     /// the VM registers.
     static func validatedExplicitHostname(
-        _ raw: String, forVM vmID: UUID?, in zones: [DNSZone], on db: any Database
+        _ raw: String, forVM vmID: UUID?, in zones: [DNSZoneSnapshot], on db: any Database
     ) async throws -> String {
         let hostname = try DNSName.normalizedHostname(raw)
         guard try await hostnameIsAvailable(hostname, forVM: vmID, in: zones, on: db) else {

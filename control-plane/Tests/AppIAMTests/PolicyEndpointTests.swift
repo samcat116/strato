@@ -1,4 +1,5 @@
 import Fluent
+import ControlPlanePostgres
 import Foundation
 import Testing
 import Vapor
@@ -40,12 +41,11 @@ final class PolicyEndpointTests {
                 username: "policyuser", email: "policy@example.com", displayName: "Policy User")
             let org = try await builder.createOrganization(name: "Policy Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
             let project = try await builder.createProject(
                 name: "Policy Project", description: "d", organization: org)
 
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
             try await test(app, Fixture(user: user, token: token, org: org, project: project))
         } catch {
             try await app.shutdownForTesting()
@@ -111,7 +111,7 @@ final class PolicyEndpointTests {
     private func insertPolicy(
         _ app: Application, name: String, ownerType: IAMRoleOwnerType, ownerID: UUID,
         cedarText: String, enabled: Bool = true
-    ) async throws -> IAMPolicy {
+    ) async throws -> LegacyIAMPolicyRecord {
         let id = UUID()
         let prepared = try await PolicyStore.prepare(
             id: id, cedarText: cedarText, ownerType: ownerType, ownerID: ownerID,
@@ -135,9 +135,9 @@ final class PolicyEndpointTests {
         ).allowed
     }
 
-    private func onlyDecision(_ app: Application) async throws -> IAMDecisionLog {
+    private func onlyDecision(_ app: Application) async throws -> DecisionLogSnapshot {
         await app.iamDecisionRecorder.flush()
-        let entries = try await IAMDecisionLog.query(on: app.db).all()
+        let entries = try await app.decisionLogsPersistence.entries(limit: 500).entries
         #expect(entries.count == 1)
         return try #require(entries.first)
     }
@@ -215,7 +215,7 @@ final class PolicyEndpointTests {
                     #expect(res.body.string.contains("not inside its owner"))
                 })
 
-            let stored = try await IAMPolicy.query(on: app.db).count()
+            let stored = try await PolicyStore.count(on: app.db)
             #expect(stored == 0)
             let after = try await PolicySetVersionService.current(on: app.db)
             #expect(after == before)
@@ -314,7 +314,7 @@ final class PolicyEndpointTests {
                 username: "policy-member", email: "policy-member@example.com")
             try await TestDataBuilder(db: app.db).addUserToOrganization(
                 user: member, organization: fixture.org, role: "member")
-            let memberToken = try await member.generateAPIKey(on: app.db)
+            let memberToken = try await member.generateAPIKey(on: app)
 
             try await app.test(
                 .POST, "/api/iam/policies",
@@ -335,7 +335,7 @@ final class PolicyEndpointTests {
                     #expect(res.body.string.contains("Managing policies requires admin on the policy's owner"))
                 })
 
-            let stored = try await IAMPolicy.query(on: app.db).count()
+            let stored = try await PolicyStore.count(on: app.db)
             #expect(stored == 0)
         }
     }
@@ -350,7 +350,7 @@ final class PolicyEndpointTests {
                     try req.content.encode(
                         self.createBody(
                             name: "fake-default", ownerType: .platform,
-                            ownerId: IAMRoleDefinition.platformOwnerID,
+                            ownerId: IAMRoleOwnerType.platformOwnerID,
                             cedarText: self.permitText(
                                 user: fixture.user.id!, action: "vm:read", project: fixture.project.id!)))
                 },
@@ -359,7 +359,7 @@ final class PolicyEndpointTests {
                     #expect(res.body.string.contains("Authored policies are owned by an organization or a project"))
                 })
 
-            let stored = try await IAMPolicy.query(on: app.db).count()
+            let stored = try await PolicyStore.count(on: app.db)
             #expect(stored == 0)
         }
     }
@@ -370,7 +370,7 @@ final class PolicyEndpointTests {
     func listRejectsUnusableOwners() async throws {
         try await withApp { app, fixture in
             try await app.test(
-                .GET, "/api/iam/policies?ownerType=platform&ownerId=\(IAMRoleDefinition.platformOwnerID)",
+                .GET, "/api/iam/policies?ownerType=platform&ownerId=\(IAMRoleOwnerType.platformOwnerID)",
                 beforeRequest: { req in
                     req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
                 },
@@ -452,7 +452,7 @@ final class PolicyEndpointTests {
                 })
 
             // Still stored, but the compiled set skips disabled rows.
-            let stored = try await IAMPolicy.query(on: app.db).count()
+            let stored = try await PolicyStore.count(on: app.db)
             #expect(stored == 1)
             let version = try await PolicySetVersionService.current(on: app.db)
             await app.cedarPolicySet.rebuild(version: version, on: app.db)
@@ -481,7 +481,7 @@ final class PolicyEndpointTests {
                     #expect(res.status == .noContent)
                 })
 
-            let stored = try await IAMPolicy.query(on: app.db).count()
+            let stored = try await PolicyStore.count(on: app.db)
             #expect(stored == 0)
             let after = try await PolicySetVersionService.current(on: app.db)
             #expect(after == afterCreate + 1)
@@ -509,7 +509,7 @@ final class PolicyEndpointTests {
                 })
 
             // Nothing stored, no version bump paths hit.
-            let stored = try await IAMPolicy.query(on: app.db).count()
+            let stored = try await PolicyStore.count(on: app.db)
             #expect(stored == 0)
         }
     }

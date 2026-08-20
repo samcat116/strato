@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import Foundation
 import Testing
@@ -50,8 +51,8 @@ final class ServiceAccountAPITests {
         return Env(
             org: org,
             project: project,
-            adminToken: try await admin.generateAPIKey(on: app.db),
-            memberToken: try await member.generateAPIKey(on: app.db)
+            adminToken: try await admin.generateAPIKey(on: app),
+            memberToken: try await member.generateAPIKey(on: app)
         )
     }
 
@@ -135,7 +136,7 @@ final class ServiceAccountAPITests {
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            #expect(try await ServiceAccount.find(accountID, on: app.db) == nil)
+            #expect(try await LegacyServiceAccountStore.account(id: accountID, on: app.db) == nil)
             // Both binding directions were cleaned up.
             let leftover = try await RoleBindingService.activeBindings(
                 nodeType: .serviceAccount, nodeID: accountID, on: app.db)
@@ -148,8 +149,8 @@ final class ServiceAccountAPITests {
         try await withApp { app in
             let env = try await makeEnv(app, prefix: "denied")
             let projectID = try env.project.requireID()
-            let account = ServiceAccount(name: "hidden", projectID: projectID)
-            try await account.save(on: app.db)
+            let account = try await LegacyServiceAccountStore.insert(
+                ServiceAccountWrite(name: "hidden", projectID: projectID), on: app.db)
 
             try await app.test(.POST, "/api/projects/\(projectID)/service-accounts") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: env.memberToken)
@@ -157,7 +158,7 @@ final class ServiceAccountAPITests {
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
-            try await app.test(.GET, "/api/service-accounts/\(try account.requireID())") { req in
+            try await app.test(.GET, "/api/service-accounts/\(account.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: env.memberToken)
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
@@ -172,9 +173,9 @@ final class ServiceAccountAPITests {
         try await withApp { app in
             let env = try await makeEnv(app, prefix: "role")
             let projectID = try env.project.requireID()
-            let account = ServiceAccount(name: "roled", projectID: projectID)
-            try await account.save(on: app.db)
-            let accountID = try account.requireID()
+            let account = try await LegacyServiceAccountStore.insert(
+                ServiceAccountWrite(name: "roled", projectID: projectID), on: app.db)
+            let accountID = account.id
 
             try await app.test(.PUT, "/api/service-accounts/\(accountID)/project-role") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: env.adminToken)
@@ -237,9 +238,9 @@ final class ServiceAccountAPITests {
         try await withApp { app in
             let env = try await makeEnv(app, prefix: "spiffe")
             let projectID = try env.project.requireID()
-            let account = ServiceAccount(name: "registered", projectID: projectID)
-            try await account.save(on: app.db)
-            let accountID = try account.requireID()
+            let account = try await LegacyServiceAccountStore.insert(
+                ServiceAccountWrite(name: "registered", projectID: projectID), on: app.db)
+            let accountID = account.id
             var registrationID: UUID!
 
             try await app.test(.POST, "/api/service-accounts/\(accountID)/registrations") { req in
@@ -284,7 +285,7 @@ final class ServiceAccountAPITests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: editor.id!, role: .editor,
                 nodeType: .project, nodeID: projectID, createdBy: nil, on: app.db)
-            let editorToken = try await editor.generateAPIKey(on: app.db)
+            let editorToken = try await editor.generateAPIKey(on: app)
             try await app.test(.PATCH, "/api/service-accounts/\(accountID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: editorToken)
                 try req.content.encode(["description": "editors may edit"])
@@ -359,15 +360,15 @@ final class ServiceAccountAPITests {
 
             // The account cascaded away with the project — and neither the
             // creator binding on its node nor the binding it held survived.
-            #expect(try await ServiceAccount.find(accountID, on: app.db) == nil)
-            let onNode = try await RoleBinding.query(on: app.db)
-                .filter(\.$nodeType == IAMNodeType.serviceAccount.rawValue)
-                .filter(\.$nodeID == accountID)
-                .count()
-            let held = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalType == IAMPrincipalType.serviceAccount.rawValue)
-                .filter(\.$principalID == accountID)
-                .count()
+            #expect(try await LegacyServiceAccountStore.account(id: accountID, on: app.db) == nil)
+            let onNode = try await LegacyRoleBindingStore.bindings(
+                nodeType: IAMNodeType.serviceAccount.rawValue,
+                nodeID: accountID,
+                on: app.db).count
+            let held = try await LegacyRoleBindingStore.bindings(
+                principalType: IAMPrincipalType.serviceAccount.rawValue,
+                principalID: accountID,
+                on: app.db).count
             #expect(onNode == 0)
             #expect(held == 0)
         }
@@ -385,7 +386,7 @@ final class ServiceAccountAPITests {
             let builder = TestDataBuilder(db: app.db)
             let sysAdmin = try await builder.createUser(
                 username: "wlreg-root", email: "wlreg-root@example.com", isSystemAdmin: true)
-            let sysAdminToken = try await sysAdmin.generateAPIKey(on: app.db)
+            let sysAdminToken = try await sysAdmin.generateAPIKey(on: app)
 
             // Org admin is not enough for the registry surface.
             try await app.test(.GET, "/api/workload-registrations") { req in
@@ -415,16 +416,17 @@ final class ServiceAccountAPITests {
             // iam:setPolicy). This is the same bindable-role vocabulary the
             // VM instance-identity UI consumes.
             let roleID = UUID()
-            let role = IAMRoleDefinition(
+            _ = try await RoleStore.insertLegacy(IAMRoleSnapshot(
                 id: roleID,
                 name: "workload-reader",
-                ownerType: .project,
+                description: nil,
+                ownerType: IAMRoleOwnerType.project.rawValue,
                 ownerID: projectID,
                 cedarText: RoleDescriptor.canonicalPermitText(
                     id: roleID, actions: ["project:read"]),
                 actions: ["project:read"],
-                managed: false)
-            try await role.save(on: app.db)
+                managed: false,
+                createdBy: nil), on: app.db)
             try await app.test(
                 .PUT, "/api/projects/\(projectID)/workload-grants/\(registrationID!)"
             ) { req in

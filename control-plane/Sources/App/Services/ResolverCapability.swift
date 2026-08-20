@@ -28,9 +28,7 @@ enum ResolverCapability {
     static func incapableAgentNames(inSite siteID: UUID, on db: any Database) async throws
         -> [String]
     {
-        try await Agent.query(on: db)
-            .filter(\.$site.$id == siteID)
-            .all()
+        try await LegacyAgentStore.agents(siteID: siteID, on: db)
             .filter { !$0.effectiveResolverCapable }
             .map(\.name)
             .sorted()
@@ -42,8 +40,7 @@ enum ResolverCapability {
     /// common case materializes zero rows.
     static func index(on db: any Database) async throws -> Index {
         Index(
-            incapable: try await Agent.query(on: db)
-                .all()
+            incapable: try await Agent.all(on: db)
                 .filter { !$0.effectiveResolverCapable })
     }
 
@@ -51,7 +48,7 @@ enum ResolverCapability {
     struct Index: Sendable {
         private let bySite: [UUID: [String]]
         init(incapable: [Agent]) {
-            self.bySite = Dictionary(grouping: incapable) { $0.$site.id }
+            self.bySite = Dictionary(grouping: incapable, by: \.siteID)
                 .mapValues { $0.map(\.name).sorted() }
         }
 

@@ -1,5 +1,6 @@
-import Fluent
 import Vapor
+import Fluent
+import ControlPlanePostgres
 import StratoShared
 
 /// Read API for asynchronous resource operations (issue #259).
@@ -19,6 +20,12 @@ import StratoShared
 ///
 /// Per-resource history lives under `GET /api/vms/:vmID/operations`.
 struct OperationController: RouteCollection {
+    private let vmCommands: VMCommandExecutionsPersistence
+
+    init(vmCommands: VMCommandExecutionsPersistence) {
+        self.vmCommands = vmCommands
+    }
+
     func boot(routes: any RoutesBuilder) throws {
         let operations = routes.grouped("api", "operations")
         operations.get(":operationID", use: show)
@@ -31,9 +38,9 @@ struct OperationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid operation ID")
         }
 
-        if let execution = try await VMCommandExecution.find(operationID, on: req.db) {
+        if let execution = try await vmCommands.execution(id: operationID) {
             try await authorizeCommandExecution(execution, for: user, req: req)
-            return try await execution.operationResponse(on: req.db)
+            return try await execution.operationResponse(using: vmCommands)
         }
 
         // The id names a recorded mutation. Only `.requested` rows are
@@ -58,9 +65,9 @@ struct OperationController: RouteCollection {
     /// always poll the command they initiated; every other caller must still
     /// hold `vm:runCommand` on the VM at read time.
     private func authorizeCommandExecution(
-        _ execution: VMCommandExecution, for user: User, req: Request
+        _ execution: VMCommandExecutionSnapshot, for user: User, req: Request
     ) async throws {
-        if execution.actorType == .user, execution.actorID == user.id {
+        if execution.actorType == MutationActorType.user.rawValue, execution.actorID == user.id {
             try await req.markRowScopedAuthorization()
             return
         }

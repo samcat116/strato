@@ -39,8 +39,7 @@ final class AgentManifestQuarantineTests {
             )
             let org = try await builder.createOrganization(name: "Manifest Org")
             try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
-            admin.currentOrganizationId = org.id
-            try await admin.save(on: app.db)
+            try await admin.replacingCurrentOrganization(org.id).save(on: app.db)
             let project = try await builder.createProject(
                 name: "Manifest Project", description: "STR-138", organization: org)
 
@@ -66,9 +65,9 @@ final class AgentManifestQuarantineTests {
             ),
             architecture: .x86_64,
             lastHeartbeat: Date()
-        )
-        agent.wireProtocolVersion = WireProtocol.currentVersion
-        agent.organizationScope = .organization(try org.requireID())
+        ).replacing(
+            wireProtocolVersion: .some(WireProtocol.currentVersion)
+        ).replacingOrganizationScope(.organization(try org.requireID()))
         try await agent.save(on: app.db)
         return agent
     }
@@ -119,7 +118,7 @@ final class AgentManifestQuarantineTests {
             let agent = try await self.makeAgent(app: app, org: org, name: "mq-agent")
             let agentId = try agent.requireID().uuidString
 
-            let vm = try await builder.createVM(name: "deleting-vm", project: project)
+            var vm = try await builder.createVM(name: "deleting-vm", project: project)
             let vmID = try vm.requireID()
             vm.hypervisorId = agentId
             vm.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
@@ -142,7 +141,7 @@ final class AgentManifestQuarantineTests {
             let agent = try await self.makeAgent(app: app, org: org, name: "mq-agent")
             let agentId = try agent.requireID().uuidString
 
-            let vm = try await builder.createVM(name: "live-vm", project: project)
+            var vm = try await builder.createVM(name: "live-vm", project: project)
             let vmID = try vm.requireID()
             vm.hypervisorId = agentId
             vm.setStatus(.running)
@@ -166,9 +165,7 @@ final class AgentManifestQuarantineTests {
 
             // No claims either way: a host that cannot see itself cannot tell
             // the control plane that anything is a stray.
-            let claims = try await AgentWorkloadClaim.query(on: app.db)
-                .filter(\.$agentId == agentId)
-                .all()
+            let claims = try await app.workloadsPersistence.claims(agentID: agentId)
             #expect(claims.isEmpty)
         }
     }
@@ -212,7 +209,7 @@ final class AgentManifestQuarantineTests {
             let agent = try await self.makeAgent(app: app, org: org, name: "mq-agent")
             let agentId = try agent.requireID().uuidString
 
-            let vm = try await builder.createVM(name: "gone-vm", project: project)
+            var vm = try await builder.createVM(name: "gone-vm", project: project)
             let vmID = try vm.requireID()
             vm.hypervisorId = agentId
             vm.setStatus(.running)

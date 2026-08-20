@@ -176,6 +176,10 @@ spec:
                 secretKeyRef:
                   name: "{{ include "strato-control-plane.databaseSecretName" . }}"
                   key: "{{ include "strato-control-plane.databaseSecretKey" . }}"
+            - name: DATABASE_MAX_CONNECTIONS
+              value: "{{ .Values.strato.database.maxConnections }}"
+            - name: DATABASE_CONNECTION_ACQUIRE_TIMEOUT_MS
+              value: "{{ .Values.strato.database.connectionAcquireTimeoutMs }}"
             # Bound statements on every pooled connection (STR-207). The
             # in-process migrator uses the same bounded budget by default on
             # its pinned connection and restores it before the pod serves.

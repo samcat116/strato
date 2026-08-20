@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 /// The decision-log read API (IAM phase 4, issue #481).
@@ -8,6 +7,12 @@ import Vapor
 /// whatever the caller touched), and this is an operator tool, not a
 /// customer surface.
 struct IAMDecisionLogController: RouteCollection {
+    private let decisionLogs: DecisionLogsPersistence
+
+    init(decisionLogs: DecisionLogsPersistence) {
+        self.decisionLogs = decisionLogs
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let logs = routes.grouped("api", "iam", "decision-logs")
         logs.get(use: list)
@@ -38,8 +43,8 @@ struct IAMDecisionLogController: RouteCollection {
         let credentialID: UUID?
         let createdAt: Date?
 
-        init(_ entry: IAMDecisionLog) throws {
-            self.id = try entry.requireID()
+        init(_ entry: DecisionLogSnapshot) {
+            self.id = entry.id
             self.requestID = entry.requestID
             self.path = entry.path
             self.method = entry.method
@@ -79,14 +84,11 @@ struct IAMDecisionLogController: RouteCollection {
 
         let limit = try req.intQuery("limit", default: 100, in: 1...500)
 
-        let query = IAMDecisionLog.query(on: req.db)
-            .sort(\.$createdAt, .descending)
-            .limit(limit)
-        if let before = try timestampQuery(req, "before") {
-            query.filter(\.$createdAt < before)
-        }
-
-        return try await query.all().map { try DecisionLogDTO($0) }
+        let page = try await decisionLogs.entries(
+            matching: DecisionLogFilter(createdBefore: try timestampQuery(req, "before")),
+            limit: limit
+        )
+        return page.entries.map(DecisionLogDTO.init)
     }
 
     /// `GET /api/iam/decision-logs/summary?sinceHours=24&limit=200` — the
@@ -100,31 +102,11 @@ struct IAMDecisionLogController: RouteCollection {
     func summary(req: Request) async throws -> [DecisionSummaryDTO] {
         try await requireSystemAdmin(req)
 
-        guard let sql = req.db as? SQLDatabase else {
-            throw Abort(.internalServerError, reason: "Decision-log summary requires an SQL database")
-        }
-
         let sinceHours = try req.intQuery("sinceHours", default: 24, in: 1...(24 * 90))
         let limit = try req.intQuery("limit", default: 200, in: 1...1000)
         let since = Date().addingTimeInterval(-Double(sinceHours) * 3600)
 
-        struct Row: Decodable {
-            let action: String?
-            let decision: String
-            let tier: String?
-            let count: Int
-        }
-
-        let rows = try await sql.raw(
-            """
-            SELECT action, decision, tier, COUNT(*) AS count
-            FROM iam_decision_logs
-            WHERE created_at >= \(bind: since)
-            GROUP BY action, decision, tier
-            ORDER BY count DESC
-            LIMIT \(bind: limit)
-            """
-        ).all(decoding: Row.self)
+        let rows = try await decisionLogs.summary(createdAtOrAfter: since, limit: limit)
 
         return rows.map {
             DecisionSummaryDTO(

@@ -43,14 +43,13 @@ final class QuotaEnforcementTests {
             let user = try await builder.createUser(username: "quotauser", email: "quota@example.com")
             let org = try await builder.createOrganization(name: "Quota Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "Quota Project", description: "p", organization: org)
             try await builder.createNetwork(name: "default", project: project)
             let image = try await builder.createImage(project: project, uploadedBy: user)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, org, project, image, token)
         } catch {
@@ -254,8 +253,7 @@ final class QuotaEnforcementTests {
         try await withApp { app, _, _, project, _, _ in
             let builder = TestDataBuilder(db: app.db)
             let quota = try await builder.createResourceQuota(
-                name: "disabled", maxVCPUs: 1, project: project)
-            quota.isEnabled = false
+                name: "disabled", maxVCPUs: 1, project: project).withEnabled(false)
             try await quota.save(on: app.db)
 
             // vcpus(4) exceeds max(1) but the quota is disabled → no throw.
@@ -355,7 +353,7 @@ final class QuotaEnforcementTests {
             let builder = TestDataBuilder(db: app.db)
             let quota = try await builder.createResourceQuota(
                 name: "counted", maxVCPUs: 100, maxVMs: 5, project: project)
-            quota.maxSandboxes = 1
+                .withMaxSandboxes(1)
             try await quota.save(on: app.db)
 
             try await QuotaEnforcementService.reserveSandbox(
@@ -457,7 +455,7 @@ final class QuotaEnforcementTests {
             let refreshed = try await ResourceQuota.find(quota.id, on: app.db)!
             #expect(refreshed.reservedVCPUs == 0)
             #expect(refreshed.sandboxCount == 0)
-            let sandboxCount = try await Sandbox.query(on: app.db).count()
+            let sandboxCount = try await Sandbox.all(on: app.db).count
             #expect(sandboxCount == 0)
         }
     }
@@ -489,7 +487,7 @@ final class QuotaEnforcementTests {
             let refreshed = try await ResourceQuota.find(quota.id, on: app.db)!
             #expect(refreshed.reservedVCPUs == 0)
             #expect(refreshed.vmCount == 0)
-            let vmCount = try await VM.query(on: app.db).count()
+            let vmCount = try await VM.all(on: app.db).count
             #expect(vmCount == 0)
         }
     }
@@ -548,9 +546,7 @@ final class QuotaEnforcementTests {
             #expect(afterDelete.vmCount == 0)
             #expect(afterDelete.volumeCount == 0)
             #expect(
-                try await Volume.query(on: app.db)
-                    .filter(\.$vm.$id == createdVMID!)
-                    .count() == 0)
+                try await Volume.all(on: app.db).count { $0.vmID == createdVMID! } == 0)
         }
     }
 

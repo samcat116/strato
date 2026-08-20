@@ -62,8 +62,7 @@ final class CrossProjectContainmentTests {
                 isSystemAdmin: true)
             let org = try await builder.createOrganization(name: "Containment Org")
             try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
-            admin.currentOrganizationId = org.id
-            try await admin.save(on: app.db)
+            try await admin.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let home = try await builder.createProject(
                 name: "Home Project", description: "Owns the resource under test", organization: org)
@@ -77,8 +76,7 @@ final class CrossProjectContainmentTests {
                 email: "containment-editor@example.com",
                 displayName: "Containment Editor")
             try await builder.addUserToOrganization(user: editor, organization: org, role: "member")
-            editor.currentOrganizationId = org.id
-            try await editor.save(on: app.db)
+            try await editor.replacingCurrentOrganization(org.id).save(on: app.db)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: try editor.requireID(), role: .editor,
                 nodeType: .project, nodeID: try home.requireID(), createdBy: nil, on: app.db)
@@ -86,8 +84,8 @@ final class CrossProjectContainmentTests {
             try await test(
                 Fixture(
                     app: app, org: org, home: home, other: other, image: image,
-                    adminToken: try await admin.generateAPIKey(on: app.db),
-                    homeEditorToken: try await editor.generateAPIKey(on: app.db)))
+                    adminToken: try await admin.generateAPIKey(on: app),
+                    homeEditorToken: try await editor.generateAPIKey(on: app)))
         } catch {
             try await app.shutdownForTesting()
             throw error
@@ -143,10 +141,11 @@ final class CrossProjectContainmentTests {
             macAddress: VMNetworkInterface.generateMACAddress())
         try await nic.save(on: app.db)
         if let address {
-            try await VMInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: try nic.requireID(), logicalNetworkID: networkID,
-                family: .ipv4, address: address, prefixLength: 24, gateway: network.gateway
-            ).save(on: app.db)
+                family: .ipv4, address: address, prefixLength: 24, gateway: network.gateway,
+                on: app.db)
         }
         return vm
     }
@@ -267,9 +266,9 @@ final class CrossProjectContainmentTests {
                 unknown.reason.replacingOccurrences(of: unknownId.uuidString, with: "")
                     == foreign.reason.replacingOccurrences(of: group.id.uuidString, with: ""))
 
-            let created = try await VM.query(on: fixture.app.db)
-                .filter(\.$name ~~ ["containment-create-vm", "containment-create-vm-2"])
-                .count()
+            let created = try await VM.all(on: fixture.app.db).count {
+                ["containment-create-vm", "containment-create-vm-2"].contains($0.name)
+            }
             #expect(created == 0)
         }
     }
@@ -295,7 +294,8 @@ final class CrossProjectContainmentTests {
                 #expect(res.body.string.contains("VM \(Self.sharedReason) the security group"))
             }
 
-            let memberships = try await VMInterfaceSecurityGroup.query(on: fixture.app.db).all()
+            let memberships = try await LegacyInterfaceSecurityGroupStore.memberships(
+                kind: .vm, on: fixture.app.db)
             #expect(memberships.isEmpty)
         }
     }
@@ -320,8 +320,9 @@ final class CrossProjectContainmentTests {
                 #expect(res.body.string.contains("VM \(Self.sharedReason) the floating IP"))
             }
 
-            let floatingIP = try #require(try await FloatingIP.find(floatingIpId, on: fixture.app.db))
-            #expect(floatingIP.$interface.id == nil)
+            let floatingIP = try #require(
+                try await LegacyFloatingIPStore.find(id: floatingIpId, on: fixture.app.db))
+            #expect(floatingIP.interfaceID == nil)
         }
     }
 
@@ -344,7 +345,7 @@ final class CrossProjectContainmentTests {
                 #expect(res.body.string.contains("Network \(Self.sharedReason) the DNS zone"))
             }
 
-            let attachments = try await DNSZoneNetwork.query(on: fixture.app.db).all()
+            let attachments = try await DNSZoneNetworkStore.attachments(on: fixture.app.db)
             #expect(attachments.isEmpty)
         }
     }
@@ -405,9 +406,8 @@ final class CrossProjectContainmentTests {
             #expect(unknown.status == foreign.status)
             #expect(unknown.reason == foreign.reason)
 
-            let rules = try await SecurityGroupRule.query(on: fixture.app.db)
-                .filter(\.$securityGroup.$id == group.id)
-                .count()
+            let rules = try await LegacySecurityGroupRuleStore.count(
+                securityGroupID: group.id, on: fixture.app.db)
             #expect(rules == 0)
         }
     }

@@ -1,5 +1,5 @@
-import Fluent
 import SQLKit
+import Fluent
 
 // MARK: - Case-insensitive search filters
 //

@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 /// The tier-2 guardrail API (issue #479): ceilings on what grants beneath a
@@ -8,6 +8,12 @@ import Vapor
 /// a ceiling is `iam:setPolicy`-shaped, and reading one tells you how the
 /// subtree is constrained.
 struct GuardrailController: RouteCollection {
+    let iam: IAMPersistence
+    let groups: GroupsPersistence
+    let hierarchy: HierarchyPersistence
+    let projects: ProjectsPersistence
+    let users: UserDirectoryPersistence
+
     func boot(routes: RoutesBuilder) throws {
         let iam = routes.grouped("api", "iam")
 
@@ -85,11 +91,11 @@ struct GuardrailController: RouteCollection {
         let createdAt: Date?
         let updatedAt: Date?
 
-        init(_ guardrail: Guardrail, cedarText: String?) throws {
-            guard let id = guardrail.id, let node = guardrail.node else {
-                throw Abort(.internalServerError, reason: "Guardrail row is missing its id or node")
+        init(_ guardrail: IAMGuardrailSnapshot, cedarText: String?) throws {
+            guard let node = guardrail.node else {
+                throw Abort(.internalServerError, reason: "Guardrail row names an unknown node type")
             }
-            self.id = id
+            self.id = guardrail.id
             self.name = guardrail.name
             self.description = guardrail.description
             self.node = node
@@ -176,7 +182,23 @@ struct GuardrailController: RouteCollection {
         /// normal for a moment after a change and self-corrects; a persistent
         /// one means this replica is missing invalidations.
         let replicaVersion: Int
-        let latest: PolicySetVersion?
+        let latest: PolicySetVersionDTO?
+    }
+
+    struct PolicySetVersionDTO: Content {
+        let id: UUID
+        let version: Int
+        let reason: String
+        let changedBy: UUID?
+        let createdAt: Date?
+
+        init(_ snapshot: IAMPolicySetVersionSnapshot) {
+            self.id = snapshot.id
+            self.version = snapshot.version
+            self.reason = snapshot.reason
+            self.changedBy = snapshot.changedBy
+            self.createdAt = snapshot.createdAt
+        }
     }
 
     // MARK: - Routes
@@ -199,18 +221,18 @@ struct GuardrailController: RouteCollection {
 
         let effective = req.query[Bool.self, at: "effective"] ?? false
         if effective {
-            let ancestors = try await IAMResourceTree.ancestors(of: node, on: req.db)
-            let guardrails = try await GuardrailStore.effective(along: ancestors, on: req.db)
+            let ancestors = try await IAMResourceTree.ancestors(of: node, using: iam)
+            let guardrails = try await GuardrailStore.effective(along: ancestors, using: iam)
             return GuardrailListResponse(
                 node: node,
                 ancestors: ancestors,
-                guardrails: try await dtos(guardrails, on: req.db)
+                guardrails: try await dtos(guardrails)
             )
         }
 
-        let guardrails = try await GuardrailStore.attached(to: node, on: req.db)
+        let guardrails = try await GuardrailStore.attached(to: node, using: iam)
         return GuardrailListResponse(
-            node: node, ancestors: nil, guardrails: try await dtos(guardrails, on: req.db))
+            node: node, ancestors: nil, guardrails: try await dtos(guardrails))
     }
 
     /// GET /api/iam/guardrails/:guardrailID
@@ -218,7 +240,7 @@ struct GuardrailController: RouteCollection {
         _ = try req.auth.require(User.self)
         let guardrail = try await find(req)
         try await requirePolicyAdmin(on: try nodeOf(guardrail), write: false, req: req)
-        return try await dto(guardrail, on: req.db)
+        return try await dto(guardrail)
     }
 
     /// POST /api/iam/guardrails
@@ -243,8 +265,8 @@ struct GuardrailController: RouteCollection {
         // The guardrail and the version bump commit together: a ceiling that
         // exists under a version nobody bumped is a ceiling the replicas never
         // recompile against.
-        let guardrail = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
-            let guardrail: Guardrail
+        let guardrail = try await iam.withPolicySetChange { transaction in
+            let guardrail: IAMGuardrailSnapshot
             if let cedarText = payload.cedarText {
                 guardrail = try await GuardrailStore.createAuthored(
                     name: payload.name,
@@ -254,7 +276,8 @@ struct GuardrailController: RouteCollection {
                     enabled: payload.enabled ?? true,
                     createdBy: user.id,
                     engine: req.application.cedarEngine,
-                    on: db
+                    using: iam,
+                    in: transaction
                 )
             } else {
                 guardrail = try await GuardrailStore.create(
@@ -267,11 +290,12 @@ struct GuardrailController: RouteCollection {
                     resourceMatch: resourceMatch,
                     enabled: payload.enabled ?? true,
                     createdBy: user.id,
-                    on: db
+                    using: iam,
+                    in: transaction
                 )
             }
-            try await PolicySetVersionService.bump(
-                reason: "guardrail created: \(payload.name)", changedBy: user.id, on: db)
+            try await transaction.bumpPolicySetVersion(
+                reason: "guardrail created: \(payload.name)", changedBy: user.id)
             return guardrail
         }
         await req.application.announcePolicySetChange()
@@ -279,7 +303,7 @@ struct GuardrailController: RouteCollection {
         let response = Response(status: .created)
         try response.content.encode(
             GuardrailWriteResponse(
-                guardrail: try await dto(guardrail, on: req.db),
+                guardrail: try await dto(guardrail),
                 shadowedBindings: try await shadowed(by: guardrail, req: req)
             ))
         return response
@@ -295,15 +319,13 @@ struct GuardrailController: RouteCollection {
         let principalMatch = try payload.principalMatch?.toMatch()
         let resourceMatch = try payload.resourceMatch?.toMatch()
         let name = existing.name
-        guard let id = existing.id else {
-            throw Abort(.internalServerError, reason: "Guardrail row is missing its id")
-        }
+        let id = existing.id
 
-        let updated = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
+        let updated = try await iam.withPolicySetChange { transaction in
             // Re-read inside the transaction so the update and the version bump
             // see the same row — and so a retried attempt starts from the row
             // as it is now, not from a copy loaded before the first try.
-            guard let guardrail = try await Guardrail.find(id, on: db) else {
+            guard let guardrail = try await transaction.guardrail(id: id) else {
                 throw Abort(.notFound, reason: "Guardrail not found")
             }
             let updated = try await GuardrailStore.update(
@@ -315,16 +337,17 @@ struct GuardrailController: RouteCollection {
                 cedarText: payload.cedarText,
                 enabled: payload.enabled,
                 engine: req.application.cedarEngine,
-                on: db
+                using: iam,
+                in: transaction
             )
-            try await PolicySetVersionService.bump(
-                reason: "guardrail updated: \(name)", changedBy: user.id, on: db)
+            try await transaction.bumpPolicySetVersion(
+                reason: "guardrail updated: \(name)", changedBy: user.id)
             return updated
         }
         await req.application.announcePolicySetChange()
 
         return GuardrailWriteResponse(
-            guardrail: try await dto(updated, on: req.db),
+            guardrail: try await dto(updated),
             shadowedBindings: try await shadowed(by: updated, req: req)
         )
     }
@@ -336,13 +359,11 @@ struct GuardrailController: RouteCollection {
         try await requirePolicyAdmin(on: try nodeOf(guardrail), write: true, req: req)
 
         let name = guardrail.name
-        guard let id = guardrail.id else {
-            throw Abort(.internalServerError, reason: "Guardrail row is missing its id")
-        }
-        try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
-            try await Guardrail.query(on: db).filter(\.$id == id).delete()
-            try await PolicySetVersionService.bump(
-                reason: "guardrail deleted: \(name)", changedBy: user.id, on: db)
+        let id = guardrail.id
+        try await iam.withPolicySetChange { transaction in
+            _ = try await transaction.deleteGuardrail(id: id)
+            try await transaction.bumpPolicySetVersion(
+                reason: "guardrail deleted: \(name)", changedBy: user.id)
         }
         await req.application.announcePolicySetChange()
 
@@ -356,23 +377,21 @@ struct GuardrailController: RouteCollection {
     /// deployment, not any one organization's policy.
     func policySetVersion(req: Request) async throws -> PolicySetVersionResponse {
         _ = try await req.requireSystemAdmin("Reading the policy-set version requires system admin")
-        let latest = try await PolicySetVersion.query(on: req.db)
-            .sort(\.$version, .descending)
-            .first()
+        let latest = try await iam.latestPolicySetVersion()
         return PolicySetVersionResponse(
             version: latest?.version ?? 0,
             replicaVersion: await req.application.policySetVersion.currentVersion,
-            latest: latest
+            latest: latest.map(PolicySetVersionDTO.init)
         )
     }
 
     // MARK: - Helpers
 
-    private func find(_ req: Request) async throws -> Guardrail {
+    private func find(_ req: Request) async throws -> IAMGuardrailSnapshot {
         guard let id = req.parameters.get("guardrailID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Guardrail id must be a UUID")
         }
-        guard let guardrail = try await Guardrail.find(id, on: req.db) else {
+        guard let guardrail = try await iam.guardrail(id: id) else {
             throw Abort(.notFound, reason: "Guardrail not found")
         }
         return guardrail
@@ -385,14 +404,18 @@ struct GuardrailController: RouteCollection {
     /// either way, and the report is a courtesy the write does not depend on.
     /// Binding writes take the same posture since STR-110 — both directions
     /// report, neither is decided by the analysis.
-    private func shadowed(by guardrail: Guardrail, req: Request) async throws
+    private func shadowed(by guardrail: IAMGuardrailSnapshot, req: Request) async throws
         -> [GuardrailWriteReport.ShadowedBinding]
     {
         do {
             let shadowed = try await GuardrailWriteReport.shadowedBindings(
                 by: guardrail,
                 analyzer: req.application.guardrailAnalyzer,
-                on: req.db,
+                using: iam,
+                groups: groups,
+                hierarchy: hierarchy,
+                projects: projects,
+                users: users,
                 logger: req.logger
             )
             for binding in shadowed {
@@ -417,7 +440,7 @@ struct GuardrailController: RouteCollection {
         }
     }
 
-    private func nodeOf(_ guardrail: Guardrail) throws -> IAMNode {
+    private func nodeOf(_ guardrail: IAMGuardrailSnapshot) throws -> IAMNode {
         guard let node = guardrail.node else {
             throw Abort(.internalServerError, reason: "Guardrail row names an unknown node type")
         }
@@ -425,16 +448,18 @@ struct GuardrailController: RouteCollection {
     }
 
     /// A guardrail as a DTO, with its generated Cedar forbid attached.
-    private func dto(_ guardrail: Guardrail, on db: any Database) async throws -> GuardrailDTO {
-        try GuardrailDTO(guardrail, cedarText: try await cedarText(for: guardrail, on: db))
+    private func dto(_ guardrail: IAMGuardrailSnapshot) async throws -> GuardrailDTO {
+        try GuardrailDTO(guardrail, cedarText: try await cedarText(for: guardrail))
     }
 
     /// A batch of guardrails as DTOs, each with its generated forbid.
-    private func dtos(_ guardrails: [Guardrail], on db: any Database) async throws -> [GuardrailDTO] {
+    private func dtos(_ guardrails: [IAMGuardrailSnapshot]) async throws
+        -> [GuardrailDTO]
+    {
         var result: [GuardrailDTO] = []
         result.reserveCapacity(guardrails.count)
         for guardrail in guardrails {
-            result.append(try await dto(guardrail, on: db))
+            result.append(try await dto(guardrail))
         }
         return result
     }
@@ -444,9 +469,11 @@ struct GuardrailController: RouteCollection {
     /// a null column — a row predating the migration — is regenerated from the
     /// matchers on the fly, the same generation the write path and the boot
     /// backfill use, so what the UI shows is what the evaluator enforces.
-    private func cedarText(for guardrail: Guardrail, on db: any Database) async throws -> String? {
+    private func cedarText(
+        for guardrail: IAMGuardrailSnapshot
+    ) async throws -> String? {
         if let stored = guardrail.cedarText, !stored.isEmpty { return stored }
-        return try await GuardrailRendering.cedarText(for: guardrail, on: db)
+        return try await GuardrailRendering.cedarText(for: guardrail, using: iam)
     }
 
     /// Reading a node's guardrails is `iam:readPolicy`; changing them is

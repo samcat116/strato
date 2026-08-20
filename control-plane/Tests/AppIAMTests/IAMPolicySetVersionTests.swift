@@ -4,6 +4,7 @@ import Vapor
 import VaporTesting
 
 import AppTestSupport
+import ControlPlanePostgres
 @testable import App
 
 /// IAM phase 2 (issue #479): the policy-set version log and the per-replica
@@ -41,10 +42,10 @@ final class IAMPolicySetVersionTests {
             let latest = try await PolicySetVersionService.current(on: app.db)
             #expect(latest == second)
 
-            let row = try await PolicySetVersion.query(on: app.db)
-                .filter(\.$version == second)
-                .first()
-            #expect(row?.reason == "guardrail created: b")
+            #expect(
+                try await PolicySetVersionService.reason(for: second, on: app.db)
+                    == "guardrail created: b"
+            )
         }
     }
 
@@ -81,8 +82,12 @@ final class IAMPolicySetVersionTests {
             let allocated = try await PolicySetVersionService.withPolicySetChange(on: app.db) { db in
                 let attempt = await attempts.next()
                 if attempt == 1 {
-                    try await PolicySetVersion(version: taken, reason: "collision", changedBy: nil)
-                        .save(on: db)
+                    try await PolicySetVersionService.record(
+                        version: taken,
+                        reason: "collision",
+                        changedBy: nil,
+                        on: db
+                    )
                 }
                 return try await PolicySetVersionService.bump(reason: "after collision", on: db)
             }
@@ -92,10 +97,7 @@ final class IAMPolicySetVersionTests {
             #expect(allocated == taken + 1)
 
             // The rolled-back attempt left nothing behind.
-            let rows = try await PolicySetVersion.query(on: app.db)
-                .filter(\.$reason == "collision")
-                .count()
-            #expect(rows == 0)
+            #expect(try await PolicySetVersionService.count(reason: "collision", on: app.db) == 0)
         }
     }
 
@@ -125,7 +127,7 @@ final class IAMPolicySetVersionTests {
             let before = try await PolicySetVersionService.current(on: app.db)
             #expect(before > 0)
 
-            try await RoleRegistrySync.sync(on: app.db, logger: app.logger)
+            try await app.policySetVersion.synchronizeRoleRegistry(logger: app.logger)
 
             let after = try await PolicySetVersionService.current(on: app.db)
             #expect(after == before)
@@ -139,20 +141,30 @@ final class IAMPolicySetVersionTests {
 
             // Simulate the store drifting from the code-side registry, which is
             // what a deploy carrying a registry change looks like to the sync.
-            guard let viewer = try await IAMRoleDefinition.find(IAMRole.viewer.seededID, on: app.db) else {
+            guard let viewer = try await RoleStore.legacyRole(id: IAMRole.viewer.seededID, on: app.db) else {
                 Issue.record("seeded viewer row missing")
                 return
             }
-            viewer.actions = viewer.actions.filter { $0 != "vm:read" }
-            viewer.cedarText = ""
-            try await viewer.save(on: app.db)
+            _ = try await RoleStore.replaceLegacy(IAMRoleSnapshot(
+                id: viewer.id,
+                name: viewer.name,
+                description: viewer.description,
+                ownerType: viewer.ownerType,
+                ownerID: viewer.ownerID,
+                cedarText: "",
+                actions: viewer.actions.filter { $0 != "vm:read" },
+                managed: viewer.managed,
+                createdBy: viewer.createdBy,
+                createdAt: viewer.createdAt,
+                updatedAt: viewer.updatedAt
+            ), on: app.db)
 
-            try await RoleRegistrySync.sync(on: app.db, logger: app.logger)
+            try await app.policySetVersion.synchronizeRoleRegistry(logger: app.logger)
 
             let after = try await PolicySetVersionService.current(on: app.db)
             #expect(after == before + 1)
 
-            let restored = try await IAMRoleDefinition.find(IAMRole.viewer.seededID, on: app.db)
+            let restored = try await RoleStore.legacyRole(id: IAMRole.viewer.seededID, on: app.db)
             #expect(restored?.actions.contains("vm:read") == true)
             #expect(restored?.cedarText.isEmpty == false)
         }
@@ -161,15 +173,15 @@ final class IAMPolicySetVersionTests {
     @Test("The replica cache picks up a new version")
     func cacheRefreshTracksVersion() async throws {
         try await withApp { app in
-            let cache = PolicySetVersionCache(logger: app.logger)
+            let cache = app.policySetVersion
 
-            await cache.refresh(on: app.db)
+            await cache.refresh()
             let afterFirst = await cache.currentVersion
             let expected = try await PolicySetVersionService.current(on: app.db)
             #expect(afterFirst == expected)
 
             let bumped = try await PolicySetVersionService.bump(reason: "guardrail created: c", on: app.db)
-            await cache.refresh(on: app.db)
+            await cache.refresh()
             #expect(await cache.currentVersion == bumped)
         }
     }
@@ -177,7 +189,7 @@ final class IAMPolicySetVersionTests {
     @Test("Refresh listeners fire on every successful re-read, changed or not")
     func refreshListenersAreLevelTriggered() async throws {
         try await withApp { app in
-            let cache = PolicySetVersionCache(logger: app.logger)
+            let cache = app.policySetVersion
             let observed = ObservedVersions()
             // This hook exists for work that must converge even when the
             // version already advanced — a compiled-set rebuild that failed
@@ -187,8 +199,8 @@ final class IAMPolicySetVersionTests {
             }
 
             let expected = try await PolicySetVersionService.current(on: app.db)
-            await cache.refresh(on: app.db)
-            await cache.refresh(on: app.db)
+            await cache.refresh()
+            await cache.refresh()
             let recorded = await observed.all()
             #expect(recorded == [expected, expected])
         }

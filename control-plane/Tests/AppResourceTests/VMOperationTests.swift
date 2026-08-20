@@ -31,7 +31,7 @@ final class VMOperationTests {
     /// Mirrors the harness in `VMAuthorizationTests` so requests traverse the full
     /// middleware stack (role-binding-backed authorization, API-key auth).
     private func withVMTestApp(
-        _ test: (Application, User, VM, String) async throws -> Void
+        _ test: (Application, User, inout VM, String) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
 
@@ -48,18 +48,17 @@ final class VMOperationTests {
             )
             let org = try await builder.createOrganization(name: "VM Op Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "VM Op Project",
                 description: "Project for VM operation tests",
                 organization: org
             )
-            let vm = try await builder.createVM(name: "op-vm", project: project)
-            let token = try await user.generateAPIKey(on: app.db)
+            var vm = try await builder.createVM(name: "op-vm", project: project)
+            let token = try await user.generateAPIKey(on: app)
 
-            try await test(app, user, vm, token)
+            try await test(app, user, &vm, token)
 
         } catch {
             try await app.shutdownForTesting()
@@ -103,7 +102,7 @@ final class VMOperationTests {
     /// Registers an agent and places `vm` on it, converged and running.
     @discardableResult
     private func placeOnAgent(
-        app: Application, vm: VM, wireProtocolVersion: Int = WireProtocol.currentVersion
+        app: Application, vm: inout VM, wireProtocolVersion: Int = WireProtocol.currentVersion
     ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: "reboot-agent",
@@ -114,7 +113,7 @@ final class VMOperationTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40),
             protocolVersion: wireProtocolVersion)
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.db).first?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: "reboot-agent", organizationScope: orgID.map { .organization($0) })
 
@@ -130,8 +129,8 @@ final class VMOperationTests {
     @Test("VM interface attach uses the lowest free stable slot and returns a 202 mutation")
     func attachNetworkInterfaceUsesLowestFreeSlot() async throws {
         try await withVMTestApp { app, user, vm, token in
-            try await placeOnAgent(app: app, vm: vm)
-            let project = try #require(try await Project.find(vm.$project.id, on: app.db))
+            try await placeOnAgent(app: app, vm: &vm)
+            let project = try #require(try await Project.find(vm.projectID, on: app.db))
             let network = try await TestDataBuilder(db: app.db).createNetwork(
                 name: "hotplug-net", project: project,
                 subnet: "10.240.0.0/24", gateway: "10.240.0.1")
@@ -153,10 +152,8 @@ final class VMOperationTests {
             }
 
             let created = try #require(
-                try await VMNetworkInterface.query(on: app.db)
-                    .filter(\.$vm.$id == vm.id!)
-                    .filter(\.$orderIndex == 1)
-                    .first())
+                try await LegacyVMNetworkInterfaceStore.interface(
+                    vmID: vm.id!, orderIndex: 1, on: app.db))
             #expect(created.deviceName == "net1")
             #expect(created.mtu == 1450)
             #expect(created.attachGeneration == accepted?.targetGeneration)
@@ -174,8 +171,8 @@ final class VMOperationTests {
     @Test("VM interface attach rejects networks that need static guest configuration")
     func networkInterfaceAttachRejectsStaticNetwork() async throws {
         try await withVMTestApp { app, user, vm, token in
-            try await placeOnAgent(app: app, vm: vm)
-            let project = try #require(try await Project.find(vm.$project.id, on: app.db))
+            try await placeOnAgent(app: app, vm: &vm)
+            let project = try #require(try await Project.find(vm.projectID, on: app.db))
             let network = try await TestDataBuilder(db: app.db).createNetwork(
                 name: "static-hotplug-net", project: project,
                 subnet: "10.243.0.0/24", gateway: "10.243.0.1", dhcpEnabled: false)
@@ -189,8 +186,8 @@ final class VMOperationTests {
             }
 
             #expect(
-                try await VMNetworkInterface.query(on: app.db)
-                    .filter(\.$vm.$id == vm.id!).count() == 0)
+                try await LegacyVMNetworkInterfaceStore.interfaces(
+                    vmID: vm.id!, on: app.db).isEmpty)
             #expect(try await VM.find(vm.id, on: app.db)?.generation == 1)
         }
     }
@@ -198,15 +195,15 @@ final class VMOperationTests {
     @Test("Detaching the final NIC retains it for confirmation and a failed detach can be retried")
     func detachFinalNetworkInterfaceAndRetry() async throws {
         try await withVMTestApp { app, user, vm, token in
-            try await placeOnAgent(app: app, vm: vm)
-            let project = try #require(try await Project.find(vm.$project.id, on: app.db))
+            try await placeOnAgent(app: app, vm: &vm)
+            let project = try #require(try await Project.find(vm.projectID, on: app.db))
             let network = try await TestDataBuilder(db: app.db).createNetwork(
                 name: "detach-net", project: project,
                 subnet: "10.242.0.0/24", gateway: "10.242.0.1")
             let nic = VMNetworkInterface(
                 vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),
-                macAddress: "52:54:00:00:00:42", deviceName: "net0", orderIndex: 0)
-            nic.attachGeneration = vm.generation
+                macAddress: "52:54:00:00:00:42", deviceName: "net0", orderIndex: 0,
+                attachGeneration: vm.generation)
             try await nic.save(on: app.db)
             let nicID = try nic.requireID()
 
@@ -225,13 +222,14 @@ final class VMOperationTests {
                     AcceptedMutation<VMDetailResponse>.self
                 ).targetGeneration
             }
-            let retained = try #require(try await VMNetworkInterface.find(nicID, on: app.db))
+            let retained = try #require(
+                try await LegacyVMNetworkInterfaceStore.interface(id: nicID, on: app.db))
             #expect(retained.detachGeneration == detachGeneration)
 
             // Model the agent's failed convergence report. The list surface
             // derives the failure from the interface's mutation generation and
             // keeps the row visible and reserved.
-            let failedVM = try #require(try await VM.find(vm.id, on: app.db))
+            var failedVM = try #require(try await VM.find(vm.id, on: app.db))
             failedVM.failedGeneration = detachGeneration
             failedVM.lastError = "libvirt detach failed"
             try await failedVM.save(on: app.db)
@@ -255,7 +253,8 @@ final class VMOperationTests {
             }
             #expect(retryGeneration == (detachGeneration ?? 0) + 1)
             #expect(
-                try await VMNetworkInterface.find(nicID, on: app.db)?.detachGeneration
+                try await LegacyVMNetworkInterfaceStore.interface(
+                    id: nicID, on: app.db)?.detachGeneration
                     == retryGeneration)
         }
     }
@@ -266,7 +265,7 @@ final class VMOperationTests {
     @Test("POST /api/vms/:id/restart bumps the reboot nonce and answers like every other mutation")
     func restartBumpsTheRebootNonce() async throws {
         try await withVMTestApp { app, _, vm, token in
-            try await placeOnAgent(app: app, vm: vm)
+            try await placeOnAgent(app: app, vm: &vm)
 
             var accepted: AcceptedMutation<VMDetailResponse>?
             try await app.test(.POST, "/api/vms/\(vm.id!)/restart") { req in
@@ -297,10 +296,11 @@ final class VMOperationTests {
             #expect(try await VM.find(vm.id, on: app.db)?.rebootGeneration == 2)
 
             // Attributed and auditable like every other mutation.
-            let events = try await ResourceEvent.query(on: app.db)
-                .filter(\.$resourceID == vm.id!)
-                .filter(\.$mutation == .reboot)
-                .all()
+            let events = try await ResourceEvent.matching(
+                resourceID: vm.id!,
+                mutation: .reboot,
+                on: app.db
+            )
             #expect(events.count == 2)
         }
     }
@@ -363,7 +363,7 @@ final class VMOperationTests {
                 principalType: .user, principalID: user.id!, role: .admin,
                 nodeType: .virtualMachine, nodeID: vmID, createdBy: user.id!, on: app.db)
             let snapshot = VMSnapshot(
-                name: "checkpoint", vmID: vmID, projectID: vm.$project.id,
+                name: "checkpoint", vmID: vmID, projectID: vm.projectID,
                 environment: vm.environment, agentId: nil, createdByID: user.id!)
             try await snapshot.save(on: app.db)
             let snapshotID = try snapshot.requireID()
@@ -398,15 +398,15 @@ final class VMOperationTests {
                 #expect(operation.completedAt != nil)
             }
 
-            let vmBindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$nodeType == IAMNodeType.virtualMachine.rawValue)
-                .filter(\.$nodeID == vmID)
-                .count()
+            let vmBindings = try await LegacyRoleBindingStore.bindings(
+                nodeType: IAMNodeType.virtualMachine.rawValue,
+                nodeID: vmID,
+                on: app.db).count
             #expect(vmBindings == 0)
-            let snapshotBindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$nodeType == IAMNodeType.vmSnapshot.rawValue)
-                .filter(\.$nodeID == snapshotID)
-                .count()
+            let snapshotBindings = try await LegacyRoleBindingStore.bindings(
+                nodeType: IAMNodeType.vmSnapshot.rawValue,
+                nodeID: snapshotID,
+                on: app.db).count
             #expect(snapshotBindings == 0)
         }
     }
@@ -428,7 +428,7 @@ final class VMOperationTests {
             // A mutation in flight: desired state moved and the agent has not
             // confirmed it, which is what the operation mutex used to key on.
             vm.setFixtureDesiredStatus(.shutdown)
-            vm.extendConvergenceDeadline(by: 600)
+            vm.convergenceDeadline = Date().addingTimeInterval(600)
             try await vm.save(on: app.db)
             _ = try await record(.shutdown, on: vm, by: user, on: app.db)
 
@@ -475,7 +475,7 @@ final class VMOperationTests {
             // A user with no binding on the VM cannot read its operation.
             let outsider = try await TestDataBuilder(db: app.db).createUser(
                 username: "op-outsider", email: "op-outsider@example.com")
-            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
+            let outsiderToken = try await outsider.generateAPIKey(on: app)
             try await app.test(.GET, "/api/operations/\(eventID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in
@@ -491,16 +491,17 @@ final class VMOperationTests {
             let execution = VMCommandExecution(
                 vmID: vmID, actorID: try user.requireID(), agentKey: "agent-key",
                 deadline: Date().addingTimeInterval(60))
-            try await execution.create(command: ["/usr/bin/printenv"], on: app.db)
+            try await execution.create(
+                command: ["/usr/bin/printenv"],
+                using: app.vmCommandExecutionsPersistence)
             let executionID = try execution.requireID()
-            let payload = try #require(try await VMCommandPayload.find(executionID, on: app.db))
-            payload.recordResult(
-                stdout: Data("SECRET=value\n".utf8), stderr: Data(), exitCode: 0,
-                truncated: false)
-            try await payload.update(on: app.db)
-            execution.status = .succeeded
-            execution.completedAt = Date()
-            try await execution.update(on: app.db)
+            #expect(
+                try await app.vmCommandExecutionsPersistence.complete(
+                    id: executionID,
+                    stdout: Data("SECRET=value\n".utf8),
+                    stderr: Data(),
+                    exitCode: 0,
+                    truncated: false))
 
             // The initiating user may poll the result even though no seeded
             // role grants vm:runCommand.
@@ -517,7 +518,7 @@ final class VMOperationTests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: try reader.requireID(), role: .viewer,
                 nodeType: .virtualMachine, nodeID: vmID, createdBy: nil, on: app.db)
-            let readerToken = try await reader.generateAPIKey(on: app.db)
+            let readerToken = try await reader.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/operations/\(executionID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: readerToken)
@@ -551,7 +552,7 @@ final class VMOperationTests {
                 email: "othervmop@example.com",
                 displayName: "Other User"
             )
-            let otherToken = try await other.generateAPIKey(on: app.db)
+            let otherToken = try await other.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/operations/\(eventID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: otherToken)
@@ -747,7 +748,7 @@ final class VMOperationTests {
             // is not leaked now that there is no resource to authorize against.
             let outsider = try await TestDataBuilder(db: app.db).createUser(
                 username: "facade-outsider", email: "facade-outsider@example.com")
-            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
+            let outsiderToken = try await outsider.generateAPIKey(on: app)
             try await app.test(.GET, "/api/operations/\(eventID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in

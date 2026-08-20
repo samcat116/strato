@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import FluentPostgresDriver
 import Foundation
@@ -37,10 +38,12 @@ struct CurrentSchemaBaseline: AsyncMigration {
             throw CurrentSchemaBaselineError.freshDatabaseRequired(tables: existingTables)
         }
 
-        guard let resource = Bundle.module.url(forResource: "CurrentSchema", withExtension: "sql") else {
+        let ddl: String
+        do {
+            ddl = try CurrentSchemaBaselineSQL.load()
+        } catch {
             throw CurrentSchemaBaselineError.resourceMissing
         }
-        let ddl = try String(contentsOf: resource, encoding: .utf8)
 
         // pg_dump emits a complete dependency-ordered script. PostgresNIO uses
         // the extended protocol, which intentionally accepts one statement per

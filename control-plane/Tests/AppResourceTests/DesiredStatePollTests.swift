@@ -52,11 +52,9 @@ struct DesiredStatePollTests {
                 totalMemory: 1 << 33, availableMemory: 1 << 33,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             )
-        )
-        if let siteID {
-            agent.$site.id = siteID
-        }
-        agent.$organization.id = organizationID
+        ).replacing(
+            siteID: siteID,
+            organizationID: .some(organizationID))
         try await agent.save(on: app.db)
         return agent
     }
@@ -95,7 +93,7 @@ struct DesiredStatePollTests {
             let org = try await builder.createOrganization(name: "Poll Org")
             let project = try await builder.createProject(
                 name: "Poll Project", description: "poll tests", organization: org)
-            let vm = try await builder.createVM(name: "poll-vm", project: project)
+            var vm = try await builder.createVM(name: "poll-vm", project: project)
             vm.hypervisorId = agent.id!.uuidString
             try await vm.save(on: app.db)
 
@@ -126,15 +124,14 @@ struct DesiredStatePollTests {
                 name: "poll-agent",
                 siteID: try site.requireID(),
                 organizationID: try org.requireID())
-            let vm = try await builder.createVM(name: "upgrade-poll-vm", project: project)
+            var vm = try await builder.createVM(name: "upgrade-poll-vm", project: project)
             vm.hypervisorId = agent.id!.uuidString
             try await vm.save(on: app.db)
             let boot = try await builder.createVolume(
-                name: "upgrade-poll-boot", project: project, createdBy: user)
-            boot.$vm.id = vm.id
-            boot.volumeType = .boot
-            boot.deviceName = VolumeDeviceName.disk(0).rawValue
-            boot.bootOrder = 0
+                name: "upgrade-poll-boot", project: project, createdBy: user
+            ).replacing(
+                volumeType: .boot, vmID: vm.id,
+                deviceName: VolumeDeviceName.disk(0).rawValue, bootOrder: 0)
             try await boot.save(on: app.db)
 
             // Recreate a preserved database from the release immediately before
@@ -271,7 +268,7 @@ struct DesiredStatePollTests {
             let org = try await builder.createOrganization(name: "Doorbell Org")
             let project = try await builder.createProject(
                 name: "Doorbell Project", description: "doorbell tests", organization: org)
-            let vm = try await builder.createVM(name: "doorbell-vm", project: project)
+            var vm = try await builder.createVM(name: "doorbell-vm", project: project)
             vm.hypervisorId = agent.id!.uuidString
             try await vm.save(on: app.db)
 
@@ -407,7 +404,7 @@ struct DesiredStatePollTests {
             let org = try await builder.createOrganization(name: "Burst Org")
             let project = try await builder.createProject(
                 name: "Burst Project", description: "burst tests", organization: org)
-            let vm = try await builder.createVM(name: "burst-vm", project: project)
+            var vm = try await builder.createVM(name: "burst-vm", project: project)
             vm.hypervisorId = agent.id!.uuidString
             try await vm.save(on: app.db)
 

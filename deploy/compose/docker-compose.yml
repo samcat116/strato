@@ -280,6 +280,9 @@ services:
       DATABASE_NAME: vapor_database
       DATABASE_USERNAME: vapor_username
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      # Native PostgresNIO pool cap and lease deadline, per replica.
+      DATABASE_MAX_CONNECTIONS: ${DATABASE_MAX_CONNECTIONS:-20}
+      DATABASE_CONNECTION_ACQUIRE_TIMEOUT_MS: ${DATABASE_CONNECTION_ACQUIRE_TIMEOUT_MS:-10000}
       # Bound every statement on every pooled connection. The application also
       # defaults to five minutes when this variable is absent.
       DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-300000}

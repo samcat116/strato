@@ -1,6 +1,22 @@
+import ControlPlanePostgres
 import Fluent
 import Foundation
+import SQLKit
 import Vapor
+
+struct LegacyIAMRoleRecord: Decodable, Equatable, Sendable {
+    let id: UUID
+    let name: String
+    let description: String?
+    let ownerType: String
+    let ownerID: UUID
+    let cedarText: String
+    let actions: [String]
+    let managed: Bool
+    let createdBy: UUID?
+    let createdAt: Date?
+    let updatedAt: Date?
+}
 
 /// Reads and writes role definitions (issue #605).
 ///
@@ -15,6 +31,11 @@ import Vapor
 /// same transaction — see `RoleController`. Bindings *referencing* a role are
 /// data and bump nothing.
 enum RoleStore {
+    private static let columns = """
+        id, name, description, owner_type AS "ownerType", owner_id AS "ownerID",
+        cedar_text AS "cedarText", actions, managed, created_by AS "createdBy",
+        created_at AS "createdAt", updated_at AS "updatedAt"
+        """
 
     // MARK: - Preparing a write
 
@@ -87,21 +108,26 @@ enum RoleStore {
     }
 
     /// Every role row as a descriptor — the candidate schema's other half.
+    static func allDescriptors(using iam: IAMPersistence) async throws -> [RoleDescriptor] {
+        try await iam.allRoles().map(RoleDescriptor.init(row:))
+    }
+
+    /// Transitional overload for policy/guardrail preparation paths that have
+    /// not yet moved their surrounding hierarchy transaction to PostgresNIO.
+    /// Deleted with the last Fluent transaction in this cohort.
     static func allDescriptors(on db: any Database) async throws -> [RoleDescriptor] {
-        try await IAMRoleDefinition.query(on: db).all().compactMap(RoleDescriptor.init(row:))
+        try await legacyRoles(on: db).map(RoleDescriptor.init(row:))
     }
 
     // MARK: - Queries
 
     /// The roles a node owns.
     static func owned(
-        by ownerType: IAMRoleOwnerType, ownerID: UUID, on db: any Database
-    ) async throws -> [IAMRoleDefinition] {
-        try await IAMRoleDefinition.query(on: db)
-            .filter(\.$ownerType == ownerType.rawValue)
-            .filter(\.$ownerID == ownerID)
-            .sort(\.$name)
-            .all()
+        by ownerType: IAMRoleOwnerType, ownerID: UUID, using iam: IAMPersistence
+    ) async throws -> [IAMRoleSnapshot] {
+        try await iam.roles(
+            ownedBy: IAMOwnerReference(type: ownerType.rawValue, id: ownerID)
+        )
     }
 
     /// The roles bindable on a node: the platform-owned defaults plus every
@@ -110,8 +136,8 @@ enum RoleStore {
     /// Ownership is what scopes a role, so a project's role is bindable on the
     /// project and everything beneath it and nowhere else — the same
     /// containment the chain already expresses for bindings and ceilings.
-    static func bindable(along chain: [IAMNode], on db: any Database) async throws -> [IAMRoleDefinition] {
-        try await bindableQuery(along: chain, on: db).sort(\.$name).all()
+    static func bindable(along chain: [IAMNode], using iam: IAMPersistence) async throws -> [IAMRoleSnapshot] {
+        try await iam.bindableRoles(owners: ownerReferences(along: chain))
     }
 
     /// The bindable roles at a node carrying a given name — the write path's
@@ -123,33 +149,21 @@ enum RoleStore {
     /// a grant nobody asked for. The caller decides — `MemberRoleResolver`
     /// refuses and names the candidates.
     static func bindable(
-        named name: String, along chain: [IAMNode], on db: any Database
-    ) async throws -> [IAMRoleDefinition] {
-        try await bindableQuery(along: chain, on: db).filter(\.$name == name).all()
+        named name: String, along chain: [IAMNode], using iam: IAMPersistence
+    ) async throws -> [IAMRoleSnapshot] {
+        try await iam.bindableRoles(owners: ownerReferences(along: chain)).filter { $0.name == name }
     }
 
     /// The owner predicate both `bindable` forms share, assembled from
     /// `IAMRoleOwnerType.ownerIDs(along:)` — the same containment
     /// `MemberRoleResolver` validates a by-id grant against, so the listing
     /// and the write path cannot disagree about what a node can bind.
-    private static func bindableQuery(
-        along chain: [IAMNode], on db: any Database
-    ) -> QueryBuilder<IAMRoleDefinition> {
-        IAMRoleDefinition.query(on: db)
-            .group(.or) { anyOwner in
-                for ownerType in IAMRoleOwnerType.allCases {
-                    guard let ownerIDs = ownerType.ownerIDs(along: chain) else {
-                        // No owner node: platform rows, bindable everywhere.
-                        anyOwner.filter(\.$ownerType == ownerType.rawValue)
-                        continue
-                    }
-                    guard !ownerIDs.isEmpty else { continue }
-                    anyOwner.group(.and) { owner in
-                        owner.filter(\.$ownerType == ownerType.rawValue)
-                        owner.filter(\.$ownerID ~~ ownerIDs)
-                    }
-                }
+    private static func ownerReferences(along chain: [IAMNode]) -> [IAMOwnerReference] {
+        IAMRoleOwnerType.allCases.flatMap { ownerType in
+            (ownerType.ownerIDs(along: chain) ?? []).map {
+                IAMOwnerReference(type: ownerType.rawValue, id: $0)
             }
+        }
     }
 
     /// How many live bindings name this role — what makes a delete a `409`.
@@ -157,12 +171,9 @@ enum RoleStore {
     /// Active only: an expired binding grants nothing, so it is not a reason to
     /// keep a role around, and the dangling reference it leaves behind is the
     /// same harmless under-grant every read path already drops
-    /// (`IAMRoleDefinition`).
-    static func activeBindingCount(roleID: UUID, on db: any Database) async throws -> Int {
-        try await RoleBinding.query(on: db)
-            .filter(\.$roleID == roleID)
-            .active()
-            .count()
+    /// (`iam_roles`).
+    static func activeBindingCount(roleID: UUID, using iam: IAMPersistence) async throws -> Int {
+        try await iam.activeBindingCount(roleID: roleID)
     }
 
     // MARK: - Writes
@@ -176,16 +187,16 @@ enum RoleStore {
         ownerID: UUID,
         prepared: Prepared,
         createdBy: UUID?,
-        on db: any Database
-    ) async throws -> IAMRoleDefinition {
+        in transaction: IAMPolicySetTransaction
+    ) async throws -> IAMRoleSnapshot {
         guard IAMRoleOwnerType.creatableOwners.contains(ownerType) else {
             throw RoleError.uncreatableOwnerType(ownerType.rawValue)
         }
-        let role = IAMRoleDefinition(
+        let role = IAMRoleSnapshot(
             id: id,
             name: name,
             description: description,
-            ownerType: ownerType,
+            ownerType: ownerType.rawValue,
             ownerID: ownerID,
             cedarText: prepared.cedarText,
             actions: prepared.actions,
@@ -193,11 +204,10 @@ enum RoleStore {
             createdBy: createdBy
         )
         do {
-            try await role.create(on: db)
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+            return try await transaction.createRole(role)
+        } catch IAMPersistenceError.duplicateRoleName {
             throw RoleError.duplicateName(name)
         }
-        return role
     }
 
     /// Delete every role a node owns, returning how many went.
@@ -207,18 +217,107 @@ enum RoleStore {
     /// while still contributing a grants-field pair to the schema.
     @discardableResult
     static func deleteOwned(
+        by ownerType: IAMRoleOwnerType, ownerID: UUID, in transaction: IAMPolicySetTransaction
+    ) async throws -> Int {
+        try await transaction.deleteRoles(
+            ownedBy: IAMOwnerReference(type: ownerType.rawValue, id: ownerID)
+        )
+    }
+
+    /// Transitional overload for owner-deletion transactions that still
+    /// contain non-IAM Fluent work. Removed when hierarchy ownership moves.
+    @discardableResult
+    static func deleteOwned(
         by ownerType: IAMRoleOwnerType, ownerID: UUID, on db: any Database
     ) async throws -> Int {
-        let owned = try await IAMRoleDefinition.query(on: db)
-            .filter(\.$ownerType == ownerType.rawValue)
-            .filter(\.$ownerID == ownerID)
-            .all()
-        guard !owned.isEmpty else { return 0 }
-        try await IAMRoleDefinition.query(on: db)
-            .filter(\.$ownerType == ownerType.rawValue)
-            .filter(\.$ownerID == ownerID)
-            .delete()
-        return owned.count
+        struct Identifier: Decodable { let id: UUID }
+        return try await requireSQL(db).raw(
+            """
+            DELETE FROM iam_roles
+            WHERE owner_type = \(bind: ownerType.rawValue) AND owner_id = \(bind: ownerID)
+            RETURNING id
+            """
+        ).all(decoding: Identifier.self).count
+    }
+
+    static func legacyRole(id: UUID, on db: any Database) async throws -> LegacyIAMRoleRecord? {
+        try await requireSQL(db).raw(
+            "SELECT \(unsafeRaw: columns) FROM iam_roles WHERE id = \(bind: id)"
+        ).first(decoding: LegacyIAMRoleRecord.self)
+    }
+
+    static func legacyRoles(ids: [UUID], on db: any Database) async throws -> [LegacyIAMRoleRecord] {
+        guard !ids.isEmpty else { return [] }
+        return try await requireSQL(db).raw(
+            "SELECT \(unsafeRaw: columns) FROM iam_roles WHERE id = ANY(\(bind: ids)) ORDER BY id"
+        ).all(decoding: LegacyIAMRoleRecord.self)
+    }
+
+    static func legacyRoles(on db: any Database) async throws -> [LegacyIAMRoleRecord] {
+        try await requireSQL(db).raw(
+            "SELECT \(unsafeRaw: columns) FROM iam_roles ORDER BY id"
+        ).all(decoding: LegacyIAMRoleRecord.self)
+    }
+
+    static func legacyRoleCount(managed: Bool? = nil, on db: any Database) async throws -> Int {
+        struct CountRow: Decodable { let count: Int }
+        let sql = try requireSQL(db)
+        let row: CountRow?
+        if let managed {
+            row = try await sql.raw(
+                "SELECT count(*)::bigint AS count FROM iam_roles WHERE managed = \(bind: managed)"
+            ).first(decoding: CountRow.self)
+        } else {
+            row = try await sql.raw("SELECT count(*)::bigint AS count FROM iam_roles")
+                .first(decoding: CountRow.self)
+        }
+        return row?.count ?? 0
+    }
+
+    static func insertLegacy(_ role: IAMRoleSnapshot, on db: any Database) async throws
+        -> LegacyIAMRoleRecord
+    {
+        guard let row = try await requireSQL(db).raw(
+            """
+            INSERT INTO iam_roles (
+                id, name, description, owner_type, owner_id, cedar_text, actions,
+                managed, created_by, created_at, updated_at
+            ) VALUES (
+                \(bind: role.id), \(bind: role.name), \(bind: role.description),
+                \(bind: role.ownerType), \(bind: role.ownerID), \(bind: role.cedarText),
+                \(bind: role.actions), \(bind: role.managed), \(bind: role.createdBy),
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            RETURNING \(unsafeRaw: columns)
+            """
+        ).first(decoding: LegacyIAMRoleRecord.self) else {
+            throw IAMPersistenceError.unexpectedRowCount(expected: 1, actual: 0)
+        }
+        return row
+    }
+
+    static func replaceLegacy(_ role: IAMRoleSnapshot, on db: any Database) async throws
+        -> LegacyIAMRoleRecord?
+    {
+        try await requireSQL(db).raw(
+            """
+            UPDATE iam_roles SET
+                name = \(bind: role.name), description = \(bind: role.description),
+                owner_type = \(bind: role.ownerType), owner_id = \(bind: role.ownerID),
+                cedar_text = \(bind: role.cedarText), actions = \(bind: role.actions),
+                managed = \(bind: role.managed), created_by = \(bind: role.createdBy),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = \(bind: role.id)
+            RETURNING \(unsafeRaw: columns)
+            """
+        ).first(decoding: LegacyIAMRoleRecord.self)
+    }
+
+    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
+        guard let sql = db as? any SQLDatabase else {
+            throw IAMPersistenceError.unexpectedRowCount(expected: 1, actual: 0)
+        }
+        return sql
     }
 }
 

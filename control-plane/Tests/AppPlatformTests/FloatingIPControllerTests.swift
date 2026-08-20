@@ -50,8 +50,7 @@ final class FloatingIPControllerTests {
             )
             let org = try await builder.createOrganization(name: "FIP Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "FIP Project",
@@ -63,7 +62,7 @@ final class FloatingIPControllerTests {
                 name: "Floating IP Test Site",
                 organizationScope: .organization(try org.requireID()))
             try await site.save(on: app.db)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, org, project, token)
 
@@ -106,10 +105,11 @@ final class FloatingIPControllerTests {
             vmID: vm.id!, logicalNetworkID: try network.requireID(), macAddress: VMNetworkInterface.generateMACAddress()
         )
         try await nic.save(on: app.db)
-        try await VMInterfaceAddress(
+        try await LegacyInterfaceAddressStore.insert(
+            kind: .vm,
             interfaceID: nic.id!, logicalNetworkID: try network.requireID(), family: .ipv4,
-            address: fixedIP, prefixLength: 24, gateway: network.gateway
-        ).save(on: app.db)
+            address: fixedIP, prefixLength: 24, gateway: network.gateway,
+            on: app.db)
         try await placeVM(
             vm, app: app, org: org, protocolVersion: WireProtocol.currentVersion,
             named: "agent-\(UUID().uuidString.prefix(8))")
@@ -293,15 +293,15 @@ final class FloatingIPControllerTests {
 
             // First attachment via direct row write (simulating a concurrent
             // winner the controller's pre-check didn't see).
-            let first = FloatingIP(
-                poolID: pool.id, address: "203.0.113.2", projectID: project.id!, interfaceID: nic.id!)
-            try await first.save(on: app.db)
+            try await LegacyFloatingIPStore.insert(
+                poolID: pool.id, address: "203.0.113.2", projectID: project.id!,
+                interfaceID: nic.id!, on: app.db)
 
             // Second row targeting the same NIC hits the partial unique index.
-            let second = FloatingIP(
-                poolID: pool.id, address: "203.0.113.3", projectID: project.id!, interfaceID: nic.id!)
             await #expect(throws: (any Error).self) {
-                try await second.save(on: app.db)
+                try await LegacyFloatingIPStore.insert(
+                    poolID: pool.id, address: "203.0.113.3", projectID: project.id!,
+                    interfaceID: nic.id!, on: app.db)
             }
         }
     }
@@ -488,11 +488,13 @@ final class FloatingIPControllerTests {
             _ = try await (firstAttach, secondAttach)
 
             let stored = try #require(try await LogicalNetwork.find(network.id, on: app.db))
-            let storedFirst = try #require(try await FloatingIP.find(firstFIP, on: app.db))
-            let storedSecond = try #require(try await FloatingIP.find(secondFIP, on: app.db))
+            let storedFirst = try #require(
+                try await LegacyFloatingIPStore.find(id: firstFIP, on: app.db))
+            let storedSecond = try #require(
+                try await LegacyFloatingIPStore.find(id: secondFIP, on: app.db))
             #expect(stored.generation == startGeneration + 2)
-            #expect(storedFirst.$interface.id != nil)
-            #expect(storedSecond.$interface.id != nil)
+            #expect(storedFirst.interfaceID != nil)
+            #expect(storedSecond.interfaceID != nil)
         }
     }
 
@@ -517,10 +519,10 @@ final class FloatingIPControllerTests {
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: named, siteID: Self.fixtureSiteID,
             organizationScope: .organization(org.id!))
-        let site = try #require(try await Site.find(Self.fixtureSiteID, on: app.db))
-        if site.$networkControllerAgent.id == nil {
-            site.$networkControllerAgent.id = agentUUID
-            try await site.save(on: app.db)
+        let site = try #require(try await LegacySiteStore.site(id: Self.fixtureSiteID, on: app.db))
+        if site.networkControllerAgentID == nil {
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: Self.fixtureSiteID, agentID: agentUUID, condition: .unset, on: app.db)
         }
         vm.hypervisorId = agentUUID.uuidString
         try await vm.save(on: app.db)
@@ -576,8 +578,7 @@ final class FloatingIPControllerTests {
             try await site.save(on: app.db)
             let agent = try #require(
                 try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.db))
-            agent.$site.id = try site.requireID()
-            try await agent.save(on: app.db)
+            try await agent.replacing(siteID: try site.requireID()).save(on: app.db)
 
             var fipId: UUID?
             try await app.test(.POST, "/api/floating-ips") { req in
@@ -594,8 +595,8 @@ final class FloatingIPControllerTests {
             }
 
             // Designating the (current-protocol) host as controller unblocks it.
-            site.$networkControllerAgent.id = agent.id
-            try await site.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: try site.requireID(), agentID: agent.id, on: app.db)
             try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(["vmId": vm.id!.uuidString])
@@ -623,8 +624,7 @@ final class FloatingIPControllerTests {
             let site = Site(name: "offline-controller", organizationScope: .organization(org.id!))
             try await site.save(on: app.db)
             let host = try #require(try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.db))
-            host.$site.id = try site.requireID()
-            try await host.save(on: app.db)
+            try await host.replacing(siteID: try site.requireID()).save(on: app.db)
 
             let controllerUUID = try await app.agentService.registerAgent(
                 AgentRegisterMessage(
@@ -637,11 +637,12 @@ final class FloatingIPControllerTests {
                 agentName: "fip-offline-ctl", siteID: site.id,
                 organizationScope: .organization(org.id!))
             let controller = try #require(try await Agent.find(controllerUUID, on: app.db))
-            site.$networkControllerAgent.id = controllerUUID
-            try await site.save(on: app.db)
-            controller.lastHeartbeat = Date().addingTimeInterval(
-                -(SiteNetworkAuthority.controllerOfflineGrace + 600))
-            try await controller.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: try site.requireID(), agentID: controllerUUID, on: app.db)
+            try await controller.replacing(
+                lastHeartbeat: .some(Date().addingTimeInterval(
+                    -(SiteNetworkAuthority.controllerOfflineGrace + 600)))
+            ).save(on: app.db)
 
             var fipId: UUID?
             try await app.test(.POST, "/api/floating-ips") { req in
@@ -659,8 +660,7 @@ final class FloatingIPControllerTests {
             }
 
             // A heartbeat from the controller unblocks the same attach.
-            controller.lastHeartbeat = Date()
-            try await controller.save(on: app.db)
+            try await controller.replacing(lastHeartbeat: .some(Date())).save(on: app.db)
             try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(["vmId": vm.id!.uuidString])
@@ -688,7 +688,7 @@ final class FloatingIPControllerTests {
             let bareAdmin = try await TestDataBuilder(db: app.db).createUser(
                 username: "fip-bare-admin", email: "fip-bare-admin@example.com",
                 displayName: "Bare Admin", isSystemAdmin: true)
-            let bareAdminToken = try await bareAdmin.generateAPIKey(on: app.db)
+            let bareAdminToken = try await bareAdmin.generateAPIKey(on: app)
             try await app.test(.POST, "/api/floating-ips") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: bareAdminToken)
                 try req.content.encode(["poolId": pool.id.uuidString, "projectId": project.id!.uuidString])
@@ -755,7 +755,7 @@ final class FloatingIPControllerTests {
                 isSystemAdmin: false
             )
             try await builder.addUserToOrganization(user: member, organization: org, role: "admin")
-            let memberToken = try await member.generateAPIKey(on: app.db)
+            let memberToken = try await member.generateAPIKey(on: app)
 
             try await app.test(.POST, "/api/floating-ip-pools") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
@@ -803,7 +803,7 @@ final class FloatingIPControllerTests {
                 displayName: "FIP Member",
                 isSystemAdmin: false
             )
-            let memberToken = try await member.generateAPIKey(on: app.db)
+            let memberToken = try await member.generateAPIKey(on: app)
 
             var fipId: UUID?
             try await app.test(.POST, "/api/floating-ips") { req in
@@ -977,8 +977,8 @@ final class FloatingIPControllerTests {
 /// Network fixtures unrelated to site behavior use the suite's real default
 /// site. Tests that exercise cross-site guards pass their site explicitly.
 private extension LogicalNetwork {
-    convenience init(
-        id: UUID? = nil,
+    init(
+        id: UUID? = UUID(),
         name: String,
         subnet: String,
         gateway: String? = nil,

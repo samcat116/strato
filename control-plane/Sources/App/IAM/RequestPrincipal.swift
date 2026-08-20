@@ -80,12 +80,15 @@ extension WorkloadRegistry {
         case .agent:
             return nil
         case .serviceAccount(let id):
-            guard let account = try await ServiceAccount.find(id, on: db) else { return nil }
-            let project = try await account.$project.get(on: db)
-            return project.$organization.id
+            guard let account = try await LegacyServiceAccountStore.account(id: id, on: db),
+                let project = try await Project.find(account.projectID, on: db)
+            else { return nil }
+            return project.organizationID
         case .workload(let id):
-            guard let registration = try await WorkloadRegistration.find(id, on: db) else { return nil }
-            return registration.$organization.id
+            guard let registration = try await LegacyWorkloadRegistrationStore.registration(
+                id: id, on: db)
+            else { return nil }
+            return registration.organizationID
         }
     }
 }

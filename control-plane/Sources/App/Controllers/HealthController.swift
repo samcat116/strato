@@ -1,8 +1,9 @@
-import Fluent
-import SQLKit
+import ControlPlanePostgres
 import Vapor
 
 struct HealthController: RouteCollection {
+    let database: ControlPlanePostgres.PostgresDatabase
+
     func boot(routes: RoutesBuilder) throws {
         let health = routes.grouped("health")
 
@@ -87,10 +88,7 @@ struct HealthController: RouteCollection {
         // probe interval on every replica, and counting a table that grows with
         // the fleet turns the probe into a recurring sequential scan.
         do {
-            guard let sql = req.db as? SQLDatabase else {
-                throw Abort(.internalServerError, reason: "database does not support raw SQL")
-            }
-            try await sql.raw("SELECT 1").run()
+            try await database.healthCheck()
             checks.append(HealthCheck(name: "database", status: "up"))
         } catch {
             checks.append(HealthCheck(name: "database", status: "down", error: String(reflecting: error)))

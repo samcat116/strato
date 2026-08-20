@@ -108,14 +108,14 @@ struct QuotaUsageAggregator {
     }
 
     private static func projects(of quota: ResourceQuota, on db: Database) async throws -> QuotaScope.Projects {
-        if let projectID = quota.$project.id {
+        if let projectID = quota.projectID {
             return .project(projectID)
         }
-        if let folderID = quota.$organizationalUnit.id {
+        if let folderID = quota.organizationalUnitID {
             guard let folder = try await OrganizationalUnit.find(folderID, on: db) else { return .none }
             return .folderSubtree(path: folder.path)
         }
-        if let organizationID = quota.$organization.id {
+        if let organizationID = quota.organizationID {
             return .organization(organizationID)
         }
         return .none

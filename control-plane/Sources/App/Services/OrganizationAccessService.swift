@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
 import Fluent
@@ -56,7 +57,10 @@ struct OrganizationAccessService {
     /// Throws `.forbidden` unless the current user can view the project (via a direct
     /// project role, a group grant, or inherited org/OU membership).
     static func requireProjectMember(project: Project, on req: Request) async throws {
-        let projectID = try project.requireID()
+        try await requireProjectMember(projectID: try project.requireID(), on: req)
+    }
+
+    static func requireProjectMember(projectID: UUID, on req: Request) async throws {
         guard try await req.can("project:read", on: IAMNode(type: .project, id: projectID)) else {
             throw Abort(.forbidden, reason: "Not a member of this organization")
         }
@@ -68,17 +72,28 @@ struct OrganizationAccessService {
     /// Project metadata updates use `project:update`, which editors hold; IAM
     /// policy changes require the distinct administrative action below.
     static func requireProjectPolicyAdmin(project: Project, on req: Request) async throws {
-        try await requireProjectAction("iam:setPolicy", project: project, on: req)
+        try await requireProjectPolicyAdmin(projectID: try project.requireID(), on: req)
+    }
+
+    static func requireProjectPolicyAdmin(projectID: UUID, on req: Request) async throws {
+        try await requireProjectAction("iam:setPolicy", projectID: projectID, on: req)
     }
 
     /// Throws `.forbidden` unless the current user may manage project quotas.
     static func requireProjectQuotaAdmin(project: Project, on req: Request) async throws {
-        try await requireProjectAction("quota:manage", project: project, on: req)
+        try await requireProjectQuotaAdmin(projectID: try project.requireID(), on: req)
+    }
+
+    static func requireProjectQuotaAdmin(projectID: UUID, on req: Request) async throws {
+        try await requireProjectAction("quota:manage", projectID: projectID, on: req)
     }
 
     /// Enforces a canonical IAM action against a project node.
     static func requireProjectAction(_ action: String, project: Project, on req: Request) async throws {
-        let projectID = try project.requireID()
+        try await requireProjectAction(action, projectID: try project.requireID(), on: req)
+    }
+
+    static func requireProjectAction(_ action: String, projectID: UUID, on req: Request) async throws {
         guard try await req.can(action, on: IAMNode(type: .project, id: projectID)) else {
             throw Abort(.forbidden, reason: "Admin access required")
         }
@@ -106,10 +121,29 @@ struct OrganizationAccessService {
         try await requireMembershipForNarrowing(organizationID: organizationID, on: req)
         return OrganizationListFilter(
             organizationID: organizationID,
-            organizationalUnitIDs: try await OrganizationalUnit.query(on: req.db)
-                .filter(\.$organization.$id == organizationID)
-                .all()
-                .compactMap { $0.id }
+            organizationalUnitIDs: try await LegacyOrganizationalUnitStore.organizationalUnits(
+                organizationIDs: [organizationID], on: req.db
+            ).compactMap(\.id)
+        )
+    }
+
+    /// Native-persistence variant used by migrated list endpoints. The query
+    /// parameter remains only a narrowing filter; per-row authorization still
+    /// decides which resources the caller may read.
+    static func organizationListFilter(
+        on req: Request,
+        using hierarchy: HierarchyPersistence
+    ) async throws -> OrganizationListFilter? {
+        guard let raw = req.query[String.self, at: "organization_id"] else { return nil }
+        guard let organizationID = UUID(uuidString: raw) else {
+            throw Abort(.badRequest, reason: "Invalid organization_id")
+        }
+        try await requireMembershipForNarrowing(organizationID: organizationID, on: req)
+        return OrganizationListFilter(
+            organizationID: organizationID,
+            organizationalUnitIDs: try await hierarchy.organizationalUnitIDs(
+                organizationIDs: [organizationID]
+            )
         )
     }
 }
@@ -143,14 +177,10 @@ struct OrganizationListFilter: Sendable {
     /// The projects in this organization's hierarchy — the bridge for resources that
     /// reach their org through a project (VMs, sandboxes) rather than owning a scope.
     func projectIDs(on db: any Database) async throws -> [UUID] {
-        var projects = try await Project.query(on: db)
-            .filter(\.$organization.$id == organizationID)
-            .all()
-        if !organizationalUnitIDs.isEmpty {
-            projects += try await Project.query(on: db)
-                .filter(\.$organizationalUnit.$id ~~ organizationalUnitIDs)
-                .all()
-        }
-        return projects.compactMap { $0.id }
+        try await LegacyProjectStore.projects(
+            organizationIDs: [organizationID],
+            organizationalUnitIDs: organizationalUnitIDs,
+            on: db
+        ).compactMap(\.id)
     }
 }

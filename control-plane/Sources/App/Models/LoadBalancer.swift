@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import SQLKit
 import Vapor
 
 enum LoadBalancerProtocol: String, Codable, CaseIterable, Sendable {
@@ -24,209 +25,292 @@ enum LoadBalancerBackendHealth: String, Codable, Sendable {
     case error
 }
 
-/// A project-scoped L4 virtual IP realized by OVN's native Load_Balancer
-/// table (STR-28). The VIP is allocated from the logical network's subnet by
-/// `IPAMService`, under the same per-network lock as workload NIC addresses.
-final class LoadBalancer: Model, @unchecked Sendable {
+enum LoadBalancer {
     static let schema = "load_balancers"
+}
 
-    @ID(key: .id)
-    var id: UUID?
+/// Immutable persistence value for a project-scoped L4 virtual IP realized by
+/// OVN's native Load_Balancer table. The VIP is allocated from the logical
+/// network's subnet under the same per-network lock as workload NIC addresses.
+struct LoadBalancerSnapshot: Equatable, Sendable {
+    let id: UUID
+    let name: String
+    let projectID: UUID
+    let logicalNetworkID: UUID
+    let logicalNetworkName: String?
+    let vip: String
+    let protocolName: LoadBalancerProtocol
+    let desiredState: LoadBalancerDesiredState
+    let observedState: LoadBalancerObservedState
+    let generation: Int64
+    let observedGeneration: Int64
+    let lastError: String?
+    let healthCheckEnabled: Bool
+    let healthCheckIntervalSeconds: Int
+    let healthCheckTimeoutSeconds: Int
+    let healthCheckSuccessThreshold: Int
+    let healthCheckFailureThreshold: Int
+    let createdByID: UUID?
+    let createdAt: Date?
+    let updatedAt: Date?
 
-    @Field(key: "name")
-    var name: String
+    var healthCheck: LoadBalancerHealthCheckConfig {
+        LoadBalancerHealthCheckConfig(
+            enabled: healthCheckEnabled,
+            intervalSeconds: healthCheckIntervalSeconds,
+            timeoutSeconds: healthCheckTimeoutSeconds,
+            successThreshold: healthCheckSuccessThreshold,
+            failureThreshold: healthCheckFailureThreshold)
+    }
+}
 
-    @Parent(key: "project_id")
-    var project: Project
+enum LegacyLoadBalancerStore {
+    static func rows(
+        ids: [UUID]? = nil,
+        projectIDs: [UUID]? = nil,
+        networkIDs: [UUID]? = nil,
+        on db: any Database
+    ) async throws -> [LoadBalancerSnapshot] {
+        if let ids, ids.isEmpty { return [] }
+        if let projectIDs, projectIDs.isEmpty { return [] }
+        if let networkIDs, networkIDs.isEmpty { return [] }
+        var query: SQLQueryString = """
+            SELECT \(unsafeRaw: columns)
+            FROM load_balancers AS lb
+            LEFT JOIN logical_networks AS network ON network.id = lb.logical_network_id
+            WHERE TRUE
+            """
+        if let ids { query += " AND lb.id = ANY(\(bind: ids))" }
+        if let projectIDs { query += " AND lb.project_id = ANY(\(bind: projectIDs))" }
+        if let networkIDs { query += " AND lb.logical_network_id = ANY(\(bind: networkIDs))" }
+        query += " ORDER BY lb.name, lb.id"
+        return try await snapshots(from: requireSQL(db).raw(query).all(decoding: Record.self))
+    }
 
-    @Parent(key: "logical_network_id")
-    var logicalNetwork: LogicalNetwork
+    static func find(id: UUID, on db: any Database) async throws -> LoadBalancerSnapshot? {
+        try await rows(ids: [id], on: db).first
+    }
 
-    @Field(key: "vip")
-    var vip: String
+    static func locked(id: UUID, on db: any Database) async throws -> LoadBalancerSnapshot? {
+        guard let row = try await requireSQL(db).raw(
+            """
+            SELECT \(unsafeRaw: columns)
+            FROM load_balancers AS lb
+            LEFT JOIN logical_networks AS network ON network.id = lb.logical_network_id
+            WHERE lb.id = \(bind: id)
+            FOR UPDATE OF lb
+            """
+        ).first(decoding: Record.self) else { return nil }
+        return try row.snapshot()
+    }
 
-    @Field(key: "protocol")
-    var protocolName: LoadBalancerProtocol
-
-    @Field(key: "desired_state")
-    var desiredState: LoadBalancerDesiredState
-
-    @Field(key: "observed_state")
-    var observedState: LoadBalancerObservedState
-
-    @Field(key: "generation")
-    var generation: Int64
-
-    @Field(key: "observed_generation")
-    var observedGeneration: Int64
-
-    @OptionalField(key: "last_error")
-    var lastError: String?
-
-    @Field(key: "health_check_enabled")
-    var healthCheckEnabled: Bool
-
-    @Field(key: "health_check_interval_seconds")
-    var healthCheckIntervalSeconds: Int
-
-    @Field(key: "health_check_timeout_seconds")
-    var healthCheckTimeoutSeconds: Int
-
-    @Field(key: "health_check_success_threshold")
-    var healthCheckSuccessThreshold: Int
-
-    @Field(key: "health_check_failure_threshold")
-    var healthCheckFailureThreshold: Int
-
-    @Children(for: \.$loadBalancer)
-    var listeners: [LoadBalancerListener]
-
-    @Children(for: \.$loadBalancer)
-    var backends: [LoadBalancerBackend]
-
-    @OptionalParent(key: "created_by_id")
-    var createdBy: User?
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
-
-    init(
-        id: UUID? = nil,
+    @discardableResult
+    static func insert(
+        id: UUID = UUID(),
         name: String,
         projectID: UUID,
         logicalNetworkID: UUID,
         vip: String,
         protocolName: LoadBalancerProtocol,
         healthCheck: LoadBalancerHealthCheckConfig = .disabled,
-        createdByID: UUID? = nil
-    ) {
-        self.id = id
-        self.name = name
-        self.$project.id = projectID
-        self.$logicalNetwork.id = logicalNetworkID
-        self.vip = vip
-        self.protocolName = protocolName
-        self.desiredState = .active
-        self.observedState = .pending
-        self.generation = 1
-        self.observedGeneration = 0
-        self.lastError = nil
-        self.healthCheckEnabled = healthCheck.enabled
-        self.healthCheckIntervalSeconds = healthCheck.intervalSeconds
-        self.healthCheckTimeoutSeconds = healthCheck.timeoutSeconds
-        self.healthCheckSuccessThreshold = healthCheck.successThreshold
-        self.healthCheckFailureThreshold = healthCheck.failureThreshold
-        self.$createdBy.id = createdByID
-    }
-
-    var healthCheck: LoadBalancerHealthCheckConfig {
-        get {
-            LoadBalancerHealthCheckConfig(
-                enabled: healthCheckEnabled,
-                intervalSeconds: healthCheckIntervalSeconds,
-                timeoutSeconds: healthCheckTimeoutSeconds,
-                successThreshold: healthCheckSuccessThreshold,
-                failureThreshold: healthCheckFailureThreshold)
+        createdByID: UUID? = nil,
+        on db: any Database
+    ) async throws -> LoadBalancerSnapshot {
+        guard let row = try await requireSQL(db).raw(
+            """
+            INSERT INTO load_balancers (
+                id, name, project_id, logical_network_id, vip, protocol,
+                desired_state, observed_state, generation, observed_generation,
+                last_error, health_check_enabled, health_check_interval_seconds,
+                health_check_timeout_seconds, health_check_success_threshold,
+                health_check_failure_threshold, created_by_id, created_at, updated_at
+            ) VALUES (
+                \(bind: id), \(bind: name), \(bind: projectID), \(bind: logicalNetworkID),
+                \(bind: vip), \(bind: protocolName.rawValue),
+                \(bind: LoadBalancerDesiredState.active.rawValue),
+                \(bind: LoadBalancerObservedState.pending.rawValue), 1, 0, NULL,
+                \(bind: healthCheck.enabled), \(bind: healthCheck.intervalSeconds),
+                \(bind: healthCheck.timeoutSeconds), \(bind: healthCheck.successThreshold),
+                \(bind: healthCheck.failureThreshold), \(bind: createdByID),
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            RETURNING \(unsafeRaw: returningColumns)
+            """
+        ).first(decoding: Record.self) else {
+            throw Abort(.internalServerError, reason: "Could not create load balancer")
         }
-        set {
-            healthCheckEnabled = newValue.enabled
-            healthCheckIntervalSeconds = newValue.intervalSeconds
-            healthCheckTimeoutSeconds = newValue.timeoutSeconds
-            healthCheckSuccessThreshold = newValue.successThreshold
-            healthCheckFailureThreshold = newValue.failureThreshold
+        return try row.snapshot()
+    }
+
+    @discardableResult
+    static func updateDefinition(
+        id: UUID,
+        name: String,
+        protocolName: LoadBalancerProtocol,
+        healthCheck: LoadBalancerHealthCheckConfig,
+        on db: any Database
+    ) async throws -> LoadBalancerSnapshot? {
+        guard let row = try await requireSQL(db).raw(
+            """
+            UPDATE load_balancers
+            SET name = \(bind: name), protocol = \(bind: protocolName.rawValue),
+                health_check_enabled = \(bind: healthCheck.enabled),
+                health_check_interval_seconds = \(bind: healthCheck.intervalSeconds),
+                health_check_timeout_seconds = \(bind: healthCheck.timeoutSeconds),
+                health_check_success_threshold = \(bind: healthCheck.successThreshold),
+                health_check_failure_threshold = \(bind: healthCheck.failureThreshold),
+                observed_state = \(bind: LoadBalancerObservedState.pending.rawValue),
+                last_error = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE id = \(bind: id)
+            RETURNING \(unsafeRaw: returningColumns)
+            """
+        ).first(decoding: Record.self) else { return nil }
+        return try row.snapshot()
+    }
+
+    @discardableResult
+    static func markPending(id: UUID, on db: any Database) async throws -> UUID? {
+        struct Updated: Decodable { let id: UUID }
+        return try await requireSQL(db).raw(
+            """
+            UPDATE load_balancers
+            SET observed_state = \(bind: LoadBalancerObservedState.pending.rawValue),
+                last_error = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE id = \(bind: id)
+            RETURNING id
+            """
+        ).first(decoding: Updated.self)?.id
+    }
+
+    @discardableResult
+    static func updateObserved(
+        id: UUID,
+        observedGeneration: Int64,
+        observedState: LoadBalancerObservedState,
+        lastError: String?,
+        on db: any Database
+    ) async throws -> UUID? {
+        struct Updated: Decodable { let id: UUID }
+        return try await requireSQL(db).raw(
+            """
+            UPDATE load_balancers
+            SET observed_generation = \(bind: observedGeneration),
+                observed_state = \(bind: observedState.rawValue),
+                last_error = \(bind: lastError), updated_at = CURRENT_TIMESTAMP
+            WHERE id = \(bind: id)
+            RETURNING id
+            """
+        ).first(decoding: Updated.self)?.id
+    }
+
+    static func usedIPv4Addresses(networkID: UUID, on db: any Database) async throws -> [String] {
+        struct Address: Decodable { let vip: String }
+        return try await requireSQL(db).raw(
+            "SELECT vip FROM load_balancers WHERE logical_network_id = \(bind: networkID)"
+        ).all(decoding: Address.self).map(\.vip)
+    }
+
+    static func ids(projectIDs: [UUID], on db: any Database) async throws -> [UUID] {
+        struct ID: Decodable { let id: UUID }
+        guard !projectIDs.isEmpty else { return [] }
+        return try await requireSQL(db).raw(
+            "SELECT id FROM load_balancers WHERE project_id = ANY(\(bind: projectIDs))"
+        ).all(decoding: ID.self).map(\.id)
+    }
+
+    @discardableResult
+    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+        struct Deleted: Decodable { let id: UUID }
+        return try await requireSQL(db).raw(
+            "DELETE FROM load_balancers WHERE id = \(bind: id) RETURNING id"
+        ).first(decoding: Deleted.self)?.id
+    }
+
+    private struct Record: Decodable, Sendable {
+        let id: UUID
+        let name: String
+        let projectID: UUID
+        let logicalNetworkID: UUID
+        let logicalNetworkName: String?
+        let vip: String
+        let protocolName: String
+        let desiredState: String
+        let observedState: String
+        let generation: Int64
+        let observedGeneration: Int64
+        let lastError: String?
+        let healthCheckEnabled: Bool
+        let healthCheckIntervalSeconds: Int
+        let healthCheckTimeoutSeconds: Int
+        let healthCheckSuccessThreshold: Int
+        let healthCheckFailureThreshold: Int
+        let createdByID: UUID?
+        let createdAt: Date?
+        let updatedAt: Date?
+
+        func snapshot() throws -> LoadBalancerSnapshot {
+            guard let protocolName = LoadBalancerProtocol(rawValue: protocolName),
+                let desiredState = LoadBalancerDesiredState(rawValue: desiredState),
+                let observedState = LoadBalancerObservedState(rawValue: observedState)
+            else {
+                throw Abort(.internalServerError, reason: "Load balancer has invalid persisted state")
+            }
+            return LoadBalancerSnapshot(
+                id: id, name: name, projectID: projectID,
+                logicalNetworkID: logicalNetworkID, logicalNetworkName: logicalNetworkName,
+                vip: vip, protocolName: protocolName, desiredState: desiredState,
+                observedState: observedState, generation: generation,
+                observedGeneration: observedGeneration, lastError: lastError,
+                healthCheckEnabled: healthCheckEnabled,
+                healthCheckIntervalSeconds: healthCheckIntervalSeconds,
+                healthCheckTimeoutSeconds: healthCheckTimeoutSeconds,
+                healthCheckSuccessThreshold: healthCheckSuccessThreshold,
+                healthCheckFailureThreshold: healthCheckFailureThreshold,
+                createdByID: createdByID, createdAt: createdAt, updatedAt: updatedAt)
         }
     }
-}
 
-extension LoadBalancer: Content {}
+    private static func snapshots(
+        from rows: [Record]
+    ) async throws -> [LoadBalancerSnapshot] {
+        try rows.map { try $0.snapshot() }
+    }
 
-final class LoadBalancerListener: Model, @unchecked Sendable {
-    static let schema = "load_balancer_listeners"
+    private static let columns = """
+        lb.id, lb.name, lb.project_id AS "projectID",
+        lb.logical_network_id AS "logicalNetworkID", network.name AS "logicalNetworkName",
+        lb.vip, lb.protocol AS "protocolName", lb.desired_state AS "desiredState",
+        lb.observed_state AS "observedState", lb.generation,
+        lb.observed_generation AS "observedGeneration", lb.last_error AS "lastError",
+        lb.health_check_enabled AS "healthCheckEnabled",
+        lb.health_check_interval_seconds AS "healthCheckIntervalSeconds",
+        lb.health_check_timeout_seconds AS "healthCheckTimeoutSeconds",
+        lb.health_check_success_threshold AS "healthCheckSuccessThreshold",
+        lb.health_check_failure_threshold AS "healthCheckFailureThreshold",
+        lb.created_by_id AS "createdByID", lb.created_at AS "createdAt",
+        lb.updated_at AS "updatedAt"
+        """
 
-    @ID(key: .id)
-    var id: UUID?
+    private static let returningColumns = """
+        id, name, project_id AS "projectID", logical_network_id AS "logicalNetworkID",
+        NULL::text AS "logicalNetworkName", vip, protocol AS "protocolName",
+        desired_state AS "desiredState", observed_state AS "observedState", generation,
+        observed_generation AS "observedGeneration", last_error AS "lastError",
+        health_check_enabled AS "healthCheckEnabled",
+        health_check_interval_seconds AS "healthCheckIntervalSeconds",
+        health_check_timeout_seconds AS "healthCheckTimeoutSeconds",
+        health_check_success_threshold AS "healthCheckSuccessThreshold",
+        health_check_failure_threshold AS "healthCheckFailureThreshold",
+        created_by_id AS "createdByID", created_at AS "createdAt", updated_at AS "updatedAt"
+        """
 
-    @Parent(key: "load_balancer_id")
-    var loadBalancer: LoadBalancer
-
-    @Field(key: "port")
-    var port: Int
-
-    @Field(key: "backend_port")
-    var backendPort: Int
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
-
-    init(id: UUID? = nil, loadBalancerID: UUID, port: Int, backendPort: Int) {
-        self.id = id
-        self.$loadBalancer.id = loadBalancerID
-        self.port = port
-        self.backendPort = backendPort
+    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Load balancers require PostgreSQL")
+        }
+        return sql
     }
 }
-
-extension LoadBalancerListener: Content {}
-
-/// One backend address shared by every listener on a load balancer. A backend
-/// is either a VM NIC (`interface_id`) or an off-platform address (`address`).
-/// The NIC FK is SET NULL: deleting a VM removes the target from desired state
-/// without deleting the load balancer or losing the backend row's audit trail.
-final class LoadBalancerBackend: Model, @unchecked Sendable {
-    static let schema = "load_balancer_backends"
-
-    @ID(key: .id)
-    var id: UUID?
-
-    @Parent(key: "load_balancer_id")
-    var loadBalancer: LoadBalancer
-
-    @OptionalParent(key: "interface_id")
-    var interface: VMNetworkInterface?
-
-    @OptionalField(key: "address")
-    var address: String?
-
-    @Field(key: "health_status")
-    var healthStatus: LoadBalancerBackendHealth
-
-    @OptionalField(key: "last_health_check_at")
-    var lastHealthCheckAt: Date?
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
-
-    init(
-        id: UUID? = nil,
-        loadBalancerID: UUID,
-        interfaceID: UUID? = nil,
-        address: String? = nil
-    ) {
-        self.id = id
-        self.$loadBalancer.id = loadBalancerID
-        self.$interface.id = interfaceID
-        self.address = address
-        self.healthStatus = .unknown
-        self.lastHealthCheckAt = nil
-    }
-}
-
-extension LoadBalancerBackend: Content {}
 
 // MARK: - DTOs
 
@@ -295,8 +379,8 @@ struct LoadBalancerListenerResponse: Content, Sendable {
     let port: Int
     let backendPort: Int
 
-    init(from listener: LoadBalancerListener) throws {
-        id = try listener.requireID()
+    init(from listener: LoadBalancerListenerSnapshot) {
+        id = listener.id
         port = listener.port
         backendPort = listener.backendPort
     }
@@ -311,10 +395,10 @@ struct LoadBalancerBackendResponse: Content, Sendable {
     let healthStatus: LoadBalancerBackendHealth
     let lastHealthCheckAt: Date?
 
-    init(from backend: LoadBalancerBackend, interface: VMNetworkInterface? = nil) throws {
-        id = try backend.requireID()
-        interfaceId = backend.$interface.id
-        vmId = interface?.$vm.id
+    init(from backend: LoadBalancerBackendSnapshot, interface: VMNetworkInterface? = nil) {
+        id = backend.id
+        interfaceId = backend.interfaceID
+        vmId = interface?.vmID
         nicIndex = interface?.orderIndex
         ipAddress = interface?.ipv4Address?.address ?? backend.address
         healthStatus = backend.healthStatus
@@ -342,15 +426,15 @@ struct LoadBalancerResponse: Content, Sendable {
     let updatedAt: Date?
 
     init(
-        from loadBalancer: LoadBalancer,
-        listeners: [LoadBalancerListener] = [],
-        backends: [(LoadBalancerBackend, VMNetworkInterface?)] = []
-    ) throws {
-        id = try loadBalancer.requireID()
+        from loadBalancer: LoadBalancerSnapshot,
+        listeners: [LoadBalancerListenerSnapshot] = [],
+        backends: [(LoadBalancerBackendSnapshot, VMNetworkInterface?)] = []
+    ) {
+        id = loadBalancer.id
         name = loadBalancer.name
-        projectId = loadBalancer.$project.id
-        logicalNetworkId = loadBalancer.$logicalNetwork.id
-        logicalNetworkName = loadBalancer.$logicalNetwork.value?.name
+        projectId = loadBalancer.projectID
+        logicalNetworkId = loadBalancer.logicalNetworkID
+        logicalNetworkName = loadBalancer.logicalNetworkName
         vip = loadBalancer.vip
         `protocol` = loadBalancer.protocolName
         desiredState = loadBalancer.desiredState
@@ -359,8 +443,8 @@ struct LoadBalancerResponse: Content, Sendable {
         observedGeneration = loadBalancer.observedGeneration
         lastError = loadBalancer.lastError
         healthCheck = loadBalancer.healthCheck
-        self.listeners = try listeners.map(LoadBalancerListenerResponse.init(from:))
-        self.backends = try backends.map { try LoadBalancerBackendResponse(from: $0.0, interface: $0.1) }
+        self.listeners = listeners.map(LoadBalancerListenerResponse.init(from:))
+        self.backends = backends.map { LoadBalancerBackendResponse(from: $0.0, interface: $0.1) }
         createdAt = loadBalancer.createdAt
         updatedAt = loadBalancer.updatedAt
     }

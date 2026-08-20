@@ -1,99 +1,80 @@
+import ControlPlanePostgres
 import Fluent
-import Vapor
+import Foundation
 import StratoShared
+import Vapor
 
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class Agent: Model, Content, @unchecked Sendable {
+/// Immutable application view of one registered agent. Persistence decoding is
+/// private to the agent store; callers replace values instead of sharing Fluent
+/// dirty-tracking state across tasks.
+struct Agent: Content, Sendable {
     static let schema = "agents"
 
-    @ID(key: .id)
-    var id: UUID?
+    let id: UUID?
 
-    @Field(key: "name")
-    var name: String
+    let name: String
 
     /// SPIFFE trust domain the agent's SVID is issued in. The platform domain
     /// for every agent until per-org trust domains are switched on (issue
     /// #613); `(trust_domain, name)` is the agent's unique identity, because
     /// two organizations may each enroll an `agent-1`.
-    @Field(key: "trust_domain")
-    var trustDomain: String
+    let trustDomain: String
 
-    @Field(key: "hostname")
-    var hostname: String
+    let hostname: String
 
-    @Field(key: "version")
-    var version: String
+    let version: String
 
-    @Enum(key: "status")
-    var status: AgentStatus
+    let status: AgentStatus
 
-    @Field(key: "total_cpu")
-    var totalCPU: Int
+    let totalCPU: Int
 
-    @Field(key: "total_memory")
-    var totalMemory: Int64
+    let totalMemory: Int64
 
-    @Field(key: "total_disk")
-    var totalDisk: Int64
+    let totalDisk: Int64
 
-    @Field(key: "available_cpu")
-    var availableCPU: Int
+    let availableCPU: Int
 
-    @Field(key: "available_memory")
-    var availableMemory: Int64
+    let availableMemory: Int64
 
-    @Field(key: "available_disk")
-    var availableDisk: Int64
+    let availableDisk: Int64
 
-    @Timestamp(key: "last_heartbeat", on: .none)
-    var lastHeartbeat: Date?
+    let lastHeartbeat: Date?
 
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
+    let createdAt: Date?
 
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
+    let updatedAt: Date?
 
     /// Host CPU architecture, nil for agents that registered before it was reported
-    @OptionalField(key: "architecture")
-    var architecture: String?
+    let architecture: String?
 
     /// Host operating system ("linux"/"macos"), nil for agents that registered
     /// before it was reported. The update endpoint needs it to resolve the
     /// per-OS/arch release artifact and refuses to guess when absent.
-    @OptionalField(key: "operating_system")
-    var operatingSystem: String?
+    let operatingSystem: String?
 
     /// Every hypervisor on the host with probed availability and capabilities
-    @Field(key: "hypervisors")
-    var hypervisors: [HypervisorSupport]
+    let hypervisors: [HypervisorSupport]
 
     /// Host networking capability, nil for agents that registered before it was reported
-    @OptionalField(key: "network_capability")
-    var networkCapability: String?
+    let networkCapability: String?
 
     /// Descriptive hardware/platform/OS details (CPU model, kernel version,
     /// distribution, physical core count, boot time, ...) the agent reports at
     /// registration, for operator display. Purely informational — nothing in
     /// scheduling or reconciliation reads it. Nil for agents that registered
     /// before host-info reporting.
-    @OptionalField(key: "host_info")
-    var hostInfo: HostInfo?
+    let hostInfo: HostInfo?
 
     /// The site (availability zone) this agent belongs to. Enrollment assigns
     /// this immutable placement before the row is first persisted.
-    @Parent(key: "site_id")
-    var site: Site
+    let siteID: UUID
 
     /// Wire protocol version the agent last registered with; nil for rows that
     /// predate this column. Sync assembly keys site topology authority on it:
     /// a pre-v4 agent ignores `networksAuthoritative` and would misread a
     /// non-authoritative empty sync as a full L3 teardown, so it must stay on
     /// legacy per-node scoping even when assigned to a site.
-    @OptionalField(key: "wire_protocol_version")
-    var wireProtocolVersion: Int?
+    let wireProtocolVersion: Int?
 
     /// Whether the agent advertised the sandbox runtime at its last
     /// registration (issue #415): Firecracker + KVM usable and the sandbox
@@ -101,8 +82,7 @@ final class Agent: Model, Content, @unchecked Sendable {
     /// placement on this explicit signal (combined with a v5+ wire protocol) —
     /// never on the protocol version alone, which a runtime-less build also
     /// speaks.
-    @Field(key: "sandbox_capable")
-    var sandboxCapable: Bool
+    let sandboxCapable: Bool
 
     /// Whether the agent advertised that it can realize a **sandbox NIC** at
     /// its last registration (STR-103): OVN networking, the jailer barrier, and
@@ -116,16 +96,14 @@ final class Agent: Model, Content, @unchecked Sendable {
     /// `SandboxSpec.network` from such a host — which is what makes a mixed
     /// fleet safe to upgrade, since every sandbox NIC ever allocated has been
     /// waiting control-plane-side for this flag to exist.
-    @Field(key: "sandbox_networking_capable")
-    var sandboxNetworkingCapable: Bool
+    let sandboxNetworkingCapable: Bool
 
     /// Whether the agent advertised a usable `swtpm` at its last registration
     /// (issue #565), which is what lets it give a guest a TPM 2.0. The
     /// scheduler gates vTPM placement on this signal combined with a v17+ wire
     /// protocol — a v17 build on a host without swtpm understands the field but
     /// cannot realize it.
-    @Field(key: "tpm_capable")
-    var tpmCapable: Bool
+    let tpmCapable: Bool
 
     /// Whether the agent advertised a usable CoreDNS at its last registration
     /// (STR-40), which is what lets it answer on a network's resolver address.
@@ -138,50 +116,42 @@ final class Agent: Model, Content, @unchecked Sendable {
     /// one incapable host in a site would give that network DNS that works
     /// until a VM lands somewhere else. Defaults false, so a fleet stays on the
     /// old behavior until every agent has re-registered and proved otherwise.
-    @Field(key: "resolver_capable")
-    var resolverCapable: Bool
+    let resolverCapable: Bool
 
     /// Whether the agent initialized its guest-facing instance metadata
     /// service at its last registration. Independent of overlay networking:
     /// an OVN host may have the service disabled or lack a required host tool.
     /// Defaults false so agents that have not advertised the capability cannot
     /// receive an IMDS-backed VM.
-    @Field(key: "metadata_service_capable")
-    var metadataServiceCapable: Bool
+    let metadataServiceCapable: Bool
 
     /// Latest dependency-health snapshot from registration or heartbeat.
-    @Field(key: "dependency_observations")
-    var dependencyObservations: [NodeDependencyObservation]
+    let dependencyObservations: [NodeDependencyObservation]
 
     /// Control-plane time at which the latest dependency snapshot arrived.
     /// Agent clocks are not authoritative for placement freshness.
-    @OptionalField(key: "dependency_observations_received_at")
-    var dependencyObservationsReceivedAt: Date?
+    let dependencyObservationsReceivedAt: Date?
 
     /// Owning organization (exactly one of organization / organizational unit;
     /// see `organizationScope`). Agents are dedicated capacity: the scheduler
     /// only places a VM on an agent whose root organization matches the VM's.
     /// Assigned via the registration token, durable on the row afterwards.
-    @OptionalParent(key: "organization_id")
-    var organization: Organization?
+    let organizationID: UUID?
 
-    @OptionalParent(key: "organizational_unit_id")
-    var organizationalUnit: OrganizationalUnit?
+    let organizationalUnitID: UUID?
 
     /// Whether this agent is enrolled in declarative auto-update (issue
     /// #434): the fleet rollout may assign it the deployment's target version
     /// and the agent converges on its own. Default off — an update restarts
     /// the agent, so enrollment is an explicit operator decision.
-    @Field(key: "auto_update")
-    var autoUpdate: Bool
+    let autoUpdate: Bool
 
     /// The version this agent has been assigned, carried on its desired-state
     /// syncs as `desiredAgentUpdate` until the agent re-registers at it. Nil
     /// when nobody has an opinion (not enrolled, not reached, or already
     /// converged). Assigned either by the fleet rollout sweep or by an
     /// operator's "update now" — `updateAssignmentSource` says which.
-    @OptionalField(key: "update_desired_version")
-    var updateDesiredVersion: String?
+    let updateDesiredVersion: String?
 
     /// Who assigned `updateDesiredVersion` (STR-145). Nil exactly when there is
     /// no assignment; a row written before this column existed reads as
@@ -189,15 +159,11 @@ final class Agent: Model, Content, @unchecked Sendable {
     /// place: the sweep resets a *rollout* assignment the deployment target has
     /// moved past, and must not do that to an operator's explicitly chosen
     /// version.
-    @OptionalField(key: "update_assignment_source")
-    var updateAssignmentSourceRaw: String?
+    let updateAssignmentSourceRaw: String?
 
     var updateAssignmentSource: AgentUpdateAssignmentSource? {
-        get {
-            guard updateDesiredVersion != nil else { return nil }
-            return updateAssignmentSourceRaw.flatMap(AgentUpdateAssignmentSource.init(rawValue:)) ?? .rollout
-        }
-        set { updateAssignmentSourceRaw = newValue?.rawValue }
+        guard updateDesiredVersion != nil else { return nil }
+        return updateAssignmentSourceRaw.flatMap(AgentUpdateAssignmentSource.init(rawValue:)) ?? .rollout
     }
 
     /// The artifact an operator pinned to a manual assignment (`artifactUrl` +
@@ -213,65 +179,54 @@ final class Agent: Model, Content, @unchecked Sendable {
     /// `clearUpdateAssignment()` drops it on convergence and withdrawal, and a
     /// terminal failure drops it too, rather than leaving a live token on a row
     /// whose update is never going to finish.
-    @OptionalField(key: "update_artifact_override")
-    var updateArtifactOverride: ResolvedAgentArtifact?
+    let updateArtifactOverride: ResolvedAgentArtifact?
 
     /// When `updateDesiredVersion` was assigned — the health-budget clock: an
     /// assigned agent that neither converges nor reports a blocker within the
     /// budget halts the rollout.
-    @Timestamp(key: "update_attempted_at", on: .none)
-    var updateAttemptedAt: Date?
+    let updateAttemptedAt: Date?
 
     /// The agent's most recent self-reported reason for not converging on
     /// its assigned update (running Firecracker VMs, containerized install,
     /// reconcile work in flight). Cleared when the agent reports clean.
-    @OptionalField(key: "update_blocked_reason")
-    var updateBlockedReason: String?
+    let updateBlockedReason: String?
 
     /// A terminal update failure for the assigned version — either reported
     /// by the agent (download/checksum/swap failure) or recorded by the sweep
     /// when the agent went silent past its health budget. Any non-nil value
     /// for the current target halts the fleet rollout until an operator
     /// intervenes (or the target moves on).
-    @OptionalField(key: "update_failure_reason")
-    var updateFailureReason: String?
+    let updateFailureReason: String?
 
     /// Why this agent last refused to converge a sync's workload teardowns
     /// (STR-98 phase 2), as reported. Non-nil means the host is holding
     /// workloads the control plane authorized it to remove, because removing
     /// them all at once looked more like a control-plane failure than an
     /// intention. Cleared by the first report that carries no refusal.
-    @OptionalField(key: "teardown_refusal_reason")
-    var teardownRefusalReason: String?
+    let teardownRefusalReason: String?
 
     /// When that refusal was last reported.
-    @Timestamp(key: "teardown_refused_at", on: .none)
-    var teardownRefusedAt: Date?
+    let teardownRefusedAt: Date?
 
     /// What the agent last said about its durable workload manifest — its only
     /// memory of what it is running (STR-138). Non-nil means either that the
     /// manifest is unreadable (see `manifestInventoryComplete`) or that some
     /// entries in it are unroutable by the running build. Cleared by the first
     /// report that carries no manifest status.
-    @OptionalField(key: "manifest_status_reason")
-    var manifestStatusReason: String?
+    let manifestStatusReason: String?
 
     /// When that status was last reported.
-    @Timestamp(key: "manifest_status_at", on: .none)
-    var manifestStatusAt: Date?
+    let manifestStatusAt: Date?
 
     /// False while the agent cannot enumerate its own workloads, which makes
     /// its observed-state reports carry no inventory at all: nothing may be
     /// concluded from a workload's absence from them. Nil is the steady state
     /// (and every pre-STR-138 agent), meaning reports are complete as they
     /// always were.
-    @OptionalField(key: "manifest_inventory_complete")
-    var manifestInventoryComplete: Bool?
-
-    init() {}
+    let manifestInventoryComplete: Bool?
 
     init(
-        id: UUID? = nil,
+        id: UUID? = UUID(),
         name: String,
         trustDomain: String = PlatformTrustDomain.current,
         hostname: String,
@@ -279,8 +234,14 @@ final class Agent: Model, Content, @unchecked Sendable {
         status: AgentStatus = .offline,
         resources: AgentResources,
         architecture: CPUArchitecture? = nil,
+        architectureRaw: String? = nil,
+        operatingSystem: String? = nil,
         hypervisors: [HypervisorSupport] = [],
         networkCapability: NetworkCapability? = nil,
+        networkCapabilityRaw: String? = nil,
+        hostInfo: HostInfo? = nil,
+        siteID: UUID = UUID(),
+        wireProtocolVersion: Int? = nil,
         sandboxCapable: Bool = false,
         sandboxNetworkingCapable: Bool = false,
         tpmCapable: Bool = false,
@@ -288,7 +249,24 @@ final class Agent: Model, Content, @unchecked Sendable {
         metadataServiceCapable: Bool = false,
         dependencyObservations: [NodeDependencyObservation] = [],
         dependencyObservationsReceivedAt: Date? = nil,
-        lastHeartbeat: Date? = nil
+        organizationID: UUID? = nil,
+        organizationalUnitID: UUID? = nil,
+        autoUpdate: Bool = false,
+        updateDesiredVersion: String? = nil,
+        updateAssignmentSource: AgentUpdateAssignmentSource? = nil,
+        updateAssignmentSourceRaw: String? = nil,
+        updateArtifactOverride: ResolvedAgentArtifact? = nil,
+        updateAttemptedAt: Date? = nil,
+        updateBlockedReason: String? = nil,
+        updateFailureReason: String? = nil,
+        teardownRefusalReason: String? = nil,
+        teardownRefusedAt: Date? = nil,
+        manifestStatusReason: String? = nil,
+        manifestStatusAt: Date? = nil,
+        manifestInventoryComplete: Bool? = nil,
+        lastHeartbeat: Date? = nil,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
@@ -302,9 +280,13 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.availableCPU = resources.availableCPU
         self.availableMemory = resources.availableMemory
         self.availableDisk = resources.availableDisk
-        self.architecture = architecture?.rawValue
+        self.architecture = architecture?.rawValue ?? architectureRaw
+        self.operatingSystem = operatingSystem
         self.hypervisors = hypervisors
-        self.networkCapability = networkCapability?.rawValue
+        self.networkCapability = networkCapability?.rawValue ?? networkCapabilityRaw
+        self.hostInfo = hostInfo
+        self.siteID = siteID
+        self.wireProtocolVersion = wireProtocolVersion
         self.sandboxCapable = sandboxCapable
         self.sandboxNetworkingCapable = sandboxNetworkingCapable
         self.tpmCapable = tpmCapable
@@ -312,25 +294,158 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.metadataServiceCapable = metadataServiceCapable
         self.dependencyObservations = dependencyObservations
         self.dependencyObservationsReceivedAt = dependencyObservationsReceivedAt
-        self.autoUpdate = false
+        self.organizationID = organizationID
+        self.organizationalUnitID = organizationalUnitID
+        self.autoUpdate = autoUpdate
+        self.updateDesiredVersion = updateDesiredVersion
+        self.updateAssignmentSourceRaw = updateAssignmentSource?.rawValue ?? updateAssignmentSourceRaw
+        self.updateArtifactOverride = updateArtifactOverride
+        self.updateAttemptedAt = updateAttemptedAt
+        self.updateBlockedReason = updateBlockedReason
+        self.updateFailureReason = updateFailureReason
+        self.teardownRefusalReason = teardownRefusalReason
+        self.teardownRefusedAt = teardownRefusedAt
+        self.manifestStatusReason = manifestStatusReason
+        self.manifestStatusAt = manifestStatusAt
+        self.manifestInventoryComplete = manifestInventoryComplete
         self.lastHeartbeat = lastHeartbeat
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    func requireID() throws -> UUID {
+        guard let id else { throw Abort(.internalServerError, reason: "Agent has no identifier") }
+        return id
+    }
+
+    @discardableResult
+    func persisted(on db: any Database) async throws -> Self {
+        try await LegacyAgentStore.upsert(self, on: db)
+    }
+
+    func save(on db: any Database) async throws {
+        _ = try await persisted(on: db)
+    }
+
+    func delete(on db: any Database) async throws {
+        guard let id else { return }
+        _ = try await LegacyAgentStore.delete(id: id, on: db)
+    }
+
+    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+        try await LegacyAgentStore.agent(id: id, on: db)
+    }
+
+    static func all(on db: any Database) async throws -> [Self] {
+        try await LegacyAgentStore.agents(on: db)
+    }
+
+    static func count(on db: any Database) async throws -> Int {
+        try await LegacyAgentStore.count(on: db)
+    }
+
+    func replacing(
+        name: String? = nil,
+        trustDomain: String? = nil,
+        hostname: String? = nil,
+        version: String? = nil,
+        status: AgentStatus? = nil,
+        resources: AgentResources? = nil,
+        architecture: String?? = nil,
+        operatingSystem: String?? = nil,
+        hypervisors: [HypervisorSupport]? = nil,
+        networkCapability: String?? = nil,
+        hostInfo: HostInfo?? = nil,
+        siteID: UUID? = nil,
+        wireProtocolVersion: Int?? = nil,
+        sandboxCapable: Bool? = nil,
+        sandboxNetworkingCapable: Bool? = nil,
+        tpmCapable: Bool? = nil,
+        resolverCapable: Bool? = nil,
+        metadataServiceCapable: Bool? = nil,
+        dependencyObservations: [NodeDependencyObservation]? = nil,
+        dependencyObservationsReceivedAt: Date?? = nil,
+        organizationID: UUID?? = nil,
+        organizationalUnitID: UUID?? = nil,
+        autoUpdate: Bool? = nil,
+        updateDesiredVersion: String?? = nil,
+        updateAssignmentSource: AgentUpdateAssignmentSource?? = nil,
+        updateArtifactOverride: ResolvedAgentArtifact?? = nil,
+        updateAttemptedAt: Date?? = nil,
+        updateBlockedReason: String?? = nil,
+        updateFailureReason: String?? = nil,
+        teardownRefusalReason: String?? = nil,
+        teardownRefusedAt: Date?? = nil,
+        manifestStatusReason: String?? = nil,
+        manifestStatusAt: Date?? = nil,
+        manifestInventoryComplete: Bool?? = nil,
+        lastHeartbeat: Date?? = nil
+    ) -> Self {
+        let nextResources = resources ?? self.resources
+        let nextDesiredVersion = updateDesiredVersion ?? self.updateDesiredVersion
+        let nextAssignmentSource = updateAssignmentSource ?? self.updateAssignmentSource
+        return Self(
+            id: id,
+            name: name ?? self.name,
+            trustDomain: trustDomain ?? self.trustDomain,
+            hostname: hostname ?? self.hostname,
+            version: version ?? self.version,
+            status: status ?? self.status,
+            resources: nextResources,
+            architectureRaw: architecture ?? self.architecture,
+            operatingSystem: operatingSystem ?? self.operatingSystem,
+            hypervisors: hypervisors ?? self.hypervisors,
+            networkCapabilityRaw: networkCapability ?? self.networkCapability,
+            hostInfo: hostInfo ?? self.hostInfo,
+            siteID: siteID ?? self.siteID,
+            wireProtocolVersion: wireProtocolVersion ?? self.wireProtocolVersion,
+            sandboxCapable: sandboxCapable ?? self.sandboxCapable,
+            sandboxNetworkingCapable: sandboxNetworkingCapable ?? self.sandboxNetworkingCapable,
+            tpmCapable: tpmCapable ?? self.tpmCapable,
+            resolverCapable: resolverCapable ?? self.resolverCapable,
+            metadataServiceCapable: metadataServiceCapable ?? self.metadataServiceCapable,
+            dependencyObservations: dependencyObservations ?? self.dependencyObservations,
+            dependencyObservationsReceivedAt:
+                dependencyObservationsReceivedAt ?? self.dependencyObservationsReceivedAt,
+            organizationID: organizationID ?? self.organizationID,
+            organizationalUnitID: organizationalUnitID ?? self.organizationalUnitID,
+            autoUpdate: autoUpdate ?? self.autoUpdate,
+            updateDesiredVersion: nextDesiredVersion,
+            updateAssignmentSource: nextAssignmentSource,
+            updateArtifactOverride: updateArtifactOverride ?? self.updateArtifactOverride,
+            updateAttemptedAt: updateAttemptedAt ?? self.updateAttemptedAt,
+            updateBlockedReason: updateBlockedReason ?? self.updateBlockedReason,
+            updateFailureReason: updateFailureReason ?? self.updateFailureReason,
+            teardownRefusalReason: teardownRefusalReason ?? self.teardownRefusalReason,
+            teardownRefusedAt: teardownRefusedAt ?? self.teardownRefusedAt,
+            manifestStatusReason: manifestStatusReason ?? self.manifestStatusReason,
+            manifestStatusAt: manifestStatusAt ?? self.manifestStatusAt,
+            manifestInventoryComplete: manifestInventoryComplete ?? self.manifestInventoryComplete,
+            lastHeartbeat: lastHeartbeat ?? self.lastHeartbeat,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    func replacingOrganizationScope(_ scope: OrganizationScope?) -> Self {
+        replacing(
+            organizationID: .some(scope?.organizationID),
+            organizationalUnitID: .some(scope?.organizationalUnitID))
     }
 
     /// Applies the mutable capacity fields from a periodic report and returns
     /// whether the row actually changed. Liveness timestamp policy belongs to
     /// `AgentService`, which can coalesce the heartbeat and observed-state
     /// messages that arrive on the same cadence.
-    @discardableResult
-    func updateAvailableResources(_ resources: AgentResources) -> Bool {
-        guard
-            availableCPU != resources.availableCPU
-                || availableMemory != resources.availableMemory
-                || availableDisk != resources.availableDisk
-        else { return false }
-        availableCPU = resources.availableCPU
-        availableMemory = resources.availableMemory
-        availableDisk = resources.availableDisk
-        return true
+    func updatingAvailableResources(_ resources: AgentResources) -> Self {
+        replacing(resources: AgentResources(
+            totalCPU: totalCPU,
+            availableCPU: resources.availableCPU,
+            totalMemory: totalMemory,
+            availableMemory: resources.availableMemory,
+            totalDisk: totalDisk,
+            availableDisk: resources.availableDisk
+        ))
     }
 
     var resources: AgentResources {
@@ -372,18 +487,19 @@ extension Agent {
     /// version: written in the other order, a manual assignment would read back
     /// as `.rollout` and be swept away as stale — silently, at the next tick.
     /// Callers save.
-    func assignUpdate(
+    func assigningUpdate(
         version: String,
         source: AgentUpdateAssignmentSource,
         artifact: ResolvedAgentArtifact? = nil,
         at now: Date = Date()
-    ) {
-        updateDesiredVersion = version
-        updateAssignmentSource = source
-        updateArtifactOverride = artifact
-        updateAttemptedAt = now
-        updateBlockedReason = nil
-        updateFailureReason = nil
+    ) -> Self {
+        replacing(
+            updateDesiredVersion: .some(version),
+            updateAssignmentSource: .some(source),
+            updateArtifactOverride: .some(artifact),
+            updateAttemptedAt: .some(now),
+            updateBlockedReason: .some(nil),
+            updateFailureReason: .some(nil))
     }
 
     /// Clears every update-assignment field: the version, who assigned it, any
@@ -391,13 +507,14 @@ extension Agent {
     /// blocker/failure. Used when the assignment converges, when its target
     /// goes stale, when an operator cancels it, and when an operator withdraws
     /// auto-update. Callers save.
-    func clearUpdateAssignment() {
-        updateDesiredVersion = nil
-        updateAssignmentSource = nil
-        updateArtifactOverride = nil
-        updateAttemptedAt = nil
-        updateBlockedReason = nil
-        updateFailureReason = nil
+    func clearingUpdateAssignment() -> Self {
+        replacing(
+            updateDesiredVersion: .some(nil),
+            updateAssignmentSource: .some(nil),
+            updateArtifactOverride: .some(nil),
+            updateAttemptedAt: .some(nil),
+            updateBlockedReason: .some(nil),
+            updateFailureReason: .some(nil))
     }
 
     /// Records a terminal failure for the current assignment. The assignment
@@ -406,10 +523,11 @@ extension Agent {
     /// pinned artifact goes, because it may carry a presigned credential and
     /// this update is not finishing on its own. Re-issuing the update supplies
     /// a fresh one. Callers save.
-    func recordUpdateFailure(_ reason: String) {
-        updateFailureReason = reason
-        updateBlockedReason = nil
-        updateArtifactOverride = nil
+    func recordingUpdateFailure(_ reason: String) -> Self {
+        replacing(
+            updateArtifactOverride: .some(nil),
+            updateBlockedReason: .some(nil),
+            updateFailureReason: .some(reason))
     }
 }
 
@@ -422,7 +540,7 @@ extension Agent {
         name: String,
         trustDomain: String = PlatformTrustDomain.current
     ) -> Agent {
-        let agent = Agent(
+        Agent(
             name: name,
             trustDomain: trustDomain,
             hostname: registration.hostname,
@@ -430,8 +548,10 @@ extension Agent {
             status: .connecting,
             resources: registration.resources,
             architecture: registration.architecture,
+            operatingSystem: registration.operatingSystem?.rawValue,
             hypervisors: registration.effectiveHypervisors,
             networkCapability: registration.networkCapability,
+            hostInfo: registration.hostInfo,
             sandboxCapable: registration.sandboxCapable ?? false,
             sandboxNetworkingCapable: registration.sandboxNetworkingCapable ?? false,
             tpmCapable: registration.tpmCapable ?? false,
@@ -440,9 +560,6 @@ extension Agent {
             dependencyObservations: registration.dependencyObservations,
             lastHeartbeat: Date()
         )
-        agent.operatingSystem = registration.operatingSystem?.rawValue
-        agent.hostInfo = registration.hostInfo
-        return agent
     }
 
     /// The agent's identity — the key its socket, presence and route are stored
@@ -571,15 +688,9 @@ extension Agent {
     /// The agent's org-or-OU owner; nil only for rows that predate mandatory
     /// scoping and were never backfilled (a fresh install has none).
     var organizationScope: OrganizationScope? {
-        get {
-            if let orgID = self.$organization.id { return .organization(orgID) }
-            if let ouID = self.$organizationalUnit.id { return .organizationalUnit(ouID) }
-            return nil
-        }
-        set {
-            self.$organization.id = newValue?.organizationID
-            self.$organizationalUnit.id = newValue?.organizationalUnitID
-        }
+        if let orgID = self.organizationID { return .organization(orgID) }
+        if let ouID = self.organizationalUnitID { return .organizationalUnit(ouID) }
+        return nil
     }
 
     /// The root organization the agent is dedicated to (OU scope resolves to
@@ -607,18 +718,18 @@ extension Agent {
 
         var projectIDs: Set<UUID> = []
         projectIDs.formUnion(
-            try await VM.query(on: db).filter(\.$hypervisorId == agentIDString).all().map { $0.$project.id })
+            try await LegacyVMStore.vms(hypervisorID: agentIDString, on: db).map(\.projectID))
         projectIDs.formUnion(
-            try await Sandbox.query(on: db).filter(\.$hypervisorId == agentIDString).all().map { $0.$project.id })
-        let volumeIDs = try await VolumeReplica.query(on: db)
-            .filter(\.$agentId == agentIDString)
-            .filter(\.$state ~~ VolumeService.authoritativeReplicaStates)
-            .all()
-            .map(\.$volume.id)
+            try await LegacySandboxStore.sandboxes(hypervisorID: agentIDString, on: db).map(\.projectID))
+        let volumeIDs = try await LegacyVolumeReplicaStore.replicas(
+            agentId: agentIDString,
+            states: VolumeService.authoritativeReplicaStates,
+            on: db
+        ).map(\.volumeID)
         if !volumeIDs.isEmpty {
             projectIDs.formUnion(
-                try await Volume.query(on: db).filter(\.$id ~~ Array(Set(volumeIDs))).all()
-                    .map { $0.$project.id })
+                try await LegacyVolumeStore.volumes(ids: Array(Set(volumeIDs)), on: db)
+                    .map(\.projectID))
         }
 
         for projectID in projectIDs {
@@ -726,12 +837,12 @@ struct AgentResponse: Content {
         let placedOnAgentId: String?
         let firstSeenAt: Date?
 
-        init(from claim: AgentWorkloadClaim) throws {
-            self.kind = claim.resourceKind.rawValue
+        init(from claim: HeldWorkloadClaimSnapshot) {
+            self.kind = claim.resourceKind
             self.id = claim.resourceID
             self.status = claim.observedStatus
             self.reason = claim.reason
-            self.placedOnAgentId = claim.placedOnAgentId
+            self.placedOnAgentId = claim.placedOnAgentID
             self.firstSeenAt = claim.firstSeenAt
         }
     }
@@ -763,9 +874,9 @@ struct AgentResponse: Content {
         self.dependencyObservations = agent.dependencyObservations
         self.dependencyObservationsReceivedAt = agent.dependencyObservationsReceivedAt
         self.hostInfo = agent.hostInfo
-        self.siteId = agent.$site.id
-        self.organizationId = agent.$organization.id
-        self.organizationalUnitId = agent.$organizationalUnit.id
+        self.siteId = agent.siteID
+        self.organizationId = agent.organizationID
+        self.organizationalUnitId = agent.organizationalUnitID
         self.lastHeartbeat = agent.lastHeartbeat
         self.createdAt = agent.createdAt
         self.isOnline = agent.isOnline
@@ -777,6 +888,61 @@ struct AgentResponse: Content {
         self.autoUpdate = agent.autoUpdate
         self.updateDesiredVersion = agent.updateDesiredVersion
         self.updateAssignmentSource = agent.updateAssignmentSource?.rawValue
+        self.updateAttemptedAt = agent.updateAttemptedAt
+        self.updateBlockedReason = agent.updateBlockedReason
+        self.updateFailureReason = agent.updateFailureReason
+        self.teardownRefusalReason = agent.teardownRefusalReason
+        self.teardownRefusedAt = agent.teardownRefusedAt
+        self.manifestStatusReason = agent.manifestStatusReason
+        self.manifestStatusAt = agent.manifestStatusAt
+        self.manifestInventoryComplete = agent.manifestInventoryComplete
+        self.heldWorkloads = heldWorkloads
+    }
+
+    init(
+        from agent: AgentSnapshot,
+        targetVersion: String?,
+        heldWorkloads: [HeldWorkloadSummary]? = nil
+    ) throws {
+        guard let status = AgentStatus(rawValue: agent.statusBasedOnHeartbeat) else {
+            throw Abort(.internalServerError, reason: "Agent has invalid status '\(agent.status)'")
+        }
+        self.id = agent.id
+        self.name = agent.name
+        self.hostname = agent.hostname
+        self.version = agent.version
+        self.status = status
+        self.resources = agent.resources
+        self.architecture = agent.architecture.flatMap(CPUArchitecture.init(rawValue:))
+        self.operatingSystem = agent.operatingSystem.flatMap(OperatingSystem.init(rawValue:))
+        self.hypervisors = agent.hypervisors
+        self.networkCapability = agent.networkCapability.flatMap(NetworkCapability.init(rawValue:))
+        self.sandboxCapable = agent.sandboxCapable
+        self.sandboxNetworkingCapable = agent.effectiveSandboxNetworkingCapable
+        self.tpmCapable = agent.tpmCapable
+        self.resolverCapable = agent.effectiveResolverCapable
+        self.metadataServiceCapable = agent.metadataServiceCapable
+        self.dependencyObservations = agent.dependencyObservations
+        self.dependencyObservationsReceivedAt = agent.dependencyObservationsReceivedAt
+        self.hostInfo = agent.hostInfo
+        self.siteId = agent.siteID
+        self.organizationId = agent.organizationID
+        self.organizationalUnitId = agent.organizationalUnitID
+        self.lastHeartbeat = agent.lastHeartbeat
+        self.createdAt = agent.createdAt
+        self.isOnline = agent.isOnline
+        self.targetVersion = targetVersion
+        self.updateAvailable = AgentVersionTarget.updateAvailable(
+            agentVersion: agent.version,
+            target: targetVersion
+        )
+        self.autoUpdate = agent.autoUpdate
+        self.updateDesiredVersion = agent.updateDesiredVersion
+        if agent.updateDesiredVersion == nil {
+            self.updateAssignmentSource = nil
+        } else {
+            self.updateAssignmentSource = agent.updateAssignmentSource ?? "rollout"
+        }
         self.updateAttemptedAt = agent.updateAttemptedAt
         self.updateBlockedReason = agent.updateBlockedReason
         self.updateFailureReason = agent.updateFailureReason

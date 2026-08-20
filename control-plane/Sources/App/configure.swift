@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import FluentPostgresDriver
 import NIOSSL
@@ -38,9 +39,89 @@ public func configure(
     // emitted spans. See `Application.bootstrapObservability` for the details.
     try app.bootstrapObservability()
 
+    // Start the native PostgreSQL runtime before anything can schedule
+    // background work. Fluent coexists only while domain cohorts are being
+    // ported; migrated code receives modules from this persistence root.
+    let nativePostgresConfiguration: ControlPlanePostgres.PostgresDatabase.Configuration
+    if let override = app.nativePostgresConfigurationOverride {
+        nativePostgresConfiguration = override
+    } else {
+        nativePostgresConfiguration = try .init(
+            hostname: app.controlPlaneConfiguration.string(.databaseHost)!,
+            port: app.controlPlaneConfiguration.int(.databasePort)!,
+            username: app.controlPlaneConfiguration.string(.databaseUsername)!,
+            password: app.controlPlaneConfiguration.string(.databasePassword),
+            database: app.controlPlaneConfiguration.string(.databaseName)!,
+            tls: makeNativeDatabaseTLS(
+                configuration: app.controlPlaneConfiguration,
+                logger: app.logger
+            ),
+            maximumConnections: app.controlPlaneConfiguration.int(.databaseMaxConnections)!,
+            connectionAcquireTimeout: .milliseconds(
+                app.controlPlaneConfiguration.int(.databaseConnectionAcquireTimeoutMS)!),
+            statementTimeoutMilliseconds: app.controlPlaneConfiguration.int(
+                .databaseStatementTimeoutMS)!
+        )
+    }
+    let nativePostgres = ControlPlanePostgres.PostgresDatabase(
+        configuration: nativePostgresConfiguration,
+        eventLoopGroup: app.eventLoopGroup,
+        logger: app.logger
+    )
+    app.lifecycle.use(NativePostgresLifecycleHandler(database: nativePostgres))
+    try await nativePostgres.start()
+    let persistence = ControlPlanePersistence(database: nativePostgres)
+    app.observedStateApplier = ObservedStateApplier(app: app, workloads: persistence.workloads)
+    app.desiredStateAssembler = DesiredStateAssembler(
+        app: app,
+        workloads: persistence.workloads,
+        floatingIPAllocations: persistence.floatingIPAllocations
+    )
+    app.policySetVersion = PolicySetVersionCache(logger: app.logger, iam: persistence.iam)
+    app.cedarPolicySet = CedarPolicySetCache(logger: app.logger, iam: persistence.iam)
+    app.decisionLogsPersistence = persistence.decisionLogs
+    app.storagePoolsPersistence = persistence.storagePools
+    app.oauthDeviceSessionsPersistence = persistence.oauthDeviceSessions
+    app.apiKeysPersistence = persistence.apiKeys
+    app.userDirectoryPersistence = persistence.userDirectory
+    app.scimTokensPersistence = persistence.scimTokens
+    app.ssfStreamsPersistence = persistence.ssfStreams
+    app.passkeysPersistence = persistence.passkeys
+    app.accountRecoveryPersistence = persistence.accountRecovery
+    app.agentEnrollmentsPersistence = persistence.agentEnrollments
+    app.oidcProvidersPersistence = persistence.oidcProviders
+    app.scimExternalIDsPersistence = persistence.scimExternalIDs
+    app.groupsPersistence = persistence.groups
+    app.hierarchyPersistence = persistence.hierarchy
+    app.iamPersistence = persistence.iam
+    app.projectsPersistence = persistence.projects
+    app.networksPersistence = persistence.networks
+    app.sitesPersistence = persistence.sites
+    app.floatingIPPoolsPersistence = persistence.floatingIPPools
+    app.resourceQuotasPersistence = persistence.resourceQuotas
+    app.registryPullSecretsPersistence = persistence.registryPullSecrets
+    app.workloadsPersistence = persistence.workloads
+    app.vmCommandExecutionsPersistence = persistence.vmCommandExecutions
+    app.webhookSubscriptionsPersistence = persistence.webhookSubscriptions
+    app.webhookDeliveriesPersistence = persistence.webhookDeliveries
+    app.vmCommandExecutionService = VMCommandExecutionService(
+        app: app,
+        persistence: persistence.vmCommandExecutions)
+    app.ssf = SSFService(
+        app: app,
+        apiKeys: persistence.apiKeys,
+        streams: persistence.ssfStreams,
+        userSecurity: persistence.userSecurity
+    )
+    app.audit = AuditService(
+        app: app,
+        config: .fromConfiguration(app.controlPlaneConfiguration),
+        events: persistence.auditEvents
+    )
+
     // Track fire-and-forget background work (async VM operations) so shutdown
-    // can drain it before Fluent closes its connection pools. Registered
-    // before anything that can spawn work.
+    // can drain it before either database pool closes. Registered after the
+    // native pool lifecycle because Vapor shuts handlers down in reverse.
     app.setUpBackgroundTaskRegistry()
 
     // How far to trust `X-Forwarded-For`, shared by rate limiting, audit
@@ -156,11 +237,11 @@ public func configure(
     // deployment that only ever set `VALKEY_HOST` upgrades untouched, down to
     // opening the same single connection pool.
     //
-    // Tests run without external services and use an in-process coordination
-    // store (and Fluent sessions) instead.
+    // Tests run without external services and use in-process coordination and
+    // session stores instead.
     if app.environment == .testing {
         app.coordination = CoordinationService(store: InMemoryCoordinationStore(), logger: app.logger)
-        app.sessions.use(.fluent)
+        app.sessions.use(.memory)
     } else {
         guard let valkeyConfig = ValkeyStoreConfiguration.fromConfiguration(app.controlPlaneConfiguration) else {
             let error = ValkeyConfigurationError.notConfigured
@@ -237,21 +318,24 @@ public func configure(
     // browser session and therefore depended on the session Valkey even when
     // it arrived without a cookie (STR-206). A bearer credential is already
     // self-contained; it must never be promoted into a browser session.
-    app.middleware.use(BearerAuthorizationHeaderAuthenticator())
+    app.middleware.use(
+        BearerAuthorizationHeaderAuthenticator(
+            apiKeys: persistence.apiKeys,
+            oauthSessions: persistence.oauthDeviceSessions,
+            users: persistence.userDirectory
+        )
+    )
 
     // Configure browser-session authentication after bearer auth. Cookie-only
     // requests still restore and refresh their session exactly as before.
-    app.middleware.use(User.sessionAuthenticator())
+    app.middleware.use(UserSessionAuthenticator(users: persistence.userDirectory))
 
     // Put the task-local `ServiceContext` back after the last future-based
     // middleware in the stack. Vapor's `SessionsMiddleware` and
-    // `User.sessionAuthenticator()` chain downstream from inside an
-    // `EventLoopFuture` callback, which severs the Swift task the middleware
-    // above was running on and with it the context `TracingMiddleware` bound —
-    // so without this every span opened below (`iam.authorize`, the rate
-    // limiter's Valkey command, every controller's `fluent.query`) would start
-    // its own trace. Anything future-based added after this point needs another
-    // one of these behind it; see the middleware's own doc comment.
+    // SessionsMiddleware still chains downstream from an EventLoopFuture
+    // callback, which severs the Swift task the middleware above was running
+    // on and with it the context TracingMiddleware bound. Anything
+    // future-based added after this point needs another restoring middleware.
     app.middleware.use(ServiceContextRestoringMiddleware())
 
     // Rate limiting: throttle per-IP (unauthenticated) and per-user
@@ -320,7 +404,9 @@ public func configure(
     app.configureWebAuthn(
         relyingPartyID: relyingPartyID,
         relyingPartyName: relyingPartyName,
-        relyingPartyOrigin: relyingPartyOrigin
+        relyingPartyOrigin: relyingPartyOrigin,
+        passkeys: persistence.passkeys,
+        users: persistence.userDirectory
     )
 
     // Whether visitors may create their own accounts. Read once at boot: the
@@ -343,7 +429,6 @@ public func configure(
     app.middleware.use(AuthorizationMiddleware())
 
     // Configure database based on environment
-    var databaseStatementTimeouts: SchemaMigrator.StatementTimeouts?
     if app.environment == .testing {
         // Testing environment already configured with a per-test Postgres
         // database clone in test setup — skip database configuration here
@@ -357,10 +442,6 @@ public func configure(
             milliseconds: app.controlPlaneConfiguration.int(.databaseStatementTimeoutMS)!)
         let migrationStatementTimeout = try DatabaseStatementTimeout(
             milliseconds: app.controlPlaneConfiguration.int(.databaseMigrationStatementTimeoutMS)!)
-        databaseStatementTimeouts = .init(
-            normal: statementTimeout,
-            migration: migrationStatementTimeout
-        )
         let databaseConfiguration = SQLPostgresConfiguration(
             hostname: app.controlPlaneConfiguration.string(.databaseHost)!,
             port: app.controlPlaneConfiguration.int(.databasePort)!,
@@ -441,15 +522,29 @@ public func configure(
     // stay on their issued bootstrap commands; no secret can be backfilled.
     app.migrations.add(AddAgentEnrollmentBootstrapTokens())
 
-    // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
-    // wraps no transaction around a migration and the `_fluent_migrations` row
-    // that records it, so concurrent replica boots race the same migration and a
-    // crash mid-migration leaves a half-state no later boot can get past.
-    // `SchemaMigrator` serializes the phase on a Postgres advisory lock and
-    // commits each migration with its log row.
-    var schemaMigrationOptions = SchemaMigrator.Options.fromConfiguration(app.controlPlaneConfiguration)
-    schemaMigrationOptions.statementTimeouts = databaseStatementTimeouts
-    try await SchemaMigrator.run(on: app, options: schemaMigrationOptions)
+    // The native migrator owns one initialized PostgresNIO connection for the
+    // advisory lock and every per-migration transaction. Fluent registrations
+    // remain temporarily as compatibility fixtures while cohort parity tests
+    // are converted, but application boot no longer executes them.
+    let nativeMigrator = try ControlPlanePostgres.SchemaMigrator(
+        database: nativePostgres,
+        migrations: StratoMigrations.current,
+        logger: app.logger
+    )
+    try await nativeMigrator.run(
+        options: .init(
+            runMigrations: app.controlPlaneConfiguration.bool(.runMigrations)!,
+            lockTimeout: .milliseconds(
+                Int64(
+                    app.controlPlaneConfiguration.double(.migrationLockTimeoutSeconds) * 1_000)),
+            lockPollInterval: .milliseconds(
+                Int64(
+                    app.controlPlaneConfiguration.double(.migrationLockPollSeconds) * 1_000)),
+            servingStatementTimeoutMilliseconds: app.controlPlaneConfiguration.int(
+                .databaseStatementTimeoutMS)!,
+            migrationStatementTimeoutMilliseconds: app.controlPlaneConfiguration.int(
+                .databaseMigrationStatementTimeoutMS)!
+        ))
 
     // STR-186 prevents new tenant IPv6 subnets from overlapping the ULA space
     // used by metadata and per-network resolvers. Existing rows cannot be
@@ -460,7 +555,7 @@ public func configure(
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
     // curated registry. Runs every startup so registry changes land with the
     // deploy that carries them.
-    try await RoleRegistrySync.sync(on: app.db, logger: app.logger)
+    try await RoleRegistrySync.sync(using: persistence.iam, logger: app.logger)
 
     // IAM phase 2: track the policy-set version. Runs after the registry sync
     // so this replica starts from the version that sync may have just written,
@@ -486,13 +581,17 @@ public func configure(
     // `.testing`, where the fallback covers any null row and suites that need a
     // dense column write it explicitly.
     if app.environment != .testing {
-        try await GuardrailStore.backfillCedarText(on: app.db, logger: app.logger)
+        try await GuardrailStore.backfillCedarText(
+            using: persistence.iam,
+            hierarchyDB: app.db,
+            logger: app.logger
+        )
     }
     if app.environment != .testing {
         await app.startCedarPolicySetCache()
         await app.startPolicySetVersionWatch()
     } else {
-        let version = try await PolicySetVersionService.current(on: app.db)
+        let version = try await persistence.iam.currentPolicySetVersion()
         await app.cedarPolicySet.rebuild(version: version, on: app.db)
     }
 
@@ -500,11 +599,17 @@ public func configure(
     // tokens) to encrypted form. Runs every startup (not a one-shot migration)
     // so a key added after upgrade still picks up rows written before it
     // existed. No-op without a key.
-    try await secretsEncryption.encryptStoredSecrets(on: app.db, logger: app.logger)
+    try await secretsEncryption.encryptStoredSecrets(
+        oidcProviders: persistence.oidcProviders,
+        ssfStreams: persistence.ssfStreams,
+        registryPullSecrets: persistence.registryPullSecrets,
+        webhookSubscriptions: persistence.webhookSubscriptions,
+        logger: app.logger
+    )
 
     // Initialize the WebAuthn decoy credential key (generates if not exists),
     // so the first login begin doesn't pay the generate-and-store round trip.
-    _ = try await DecoyKeyService.getKey(from: app)
+    _ = try await DecoyKeyService.getKey(from: app, settings: persistence.appSettings)
 
     // Configure the scheduler service from the startup-resolved strategy.
     let schedulingStrategy = SchedulingStrategy(
@@ -536,6 +641,13 @@ public func configure(
 
     // The agent service's heartbeat monitor must not outlive the application:
     // the handler cancels it at shutdown (if the service was ever created).
+    app.agentService = AgentService(
+        app: app,
+        storageDevices: persistence.storageDevices,
+        storagePools: persistence.storagePools,
+        agentEnrollments: persistence.agentEnrollments,
+        startImmediately: false
+    )
     app.lifecycle.use(AgentServiceLifecycleHandler())
 
     // Audit retention (issue #39): when AUDIT_RETENTION_DAYS is set, an
@@ -567,7 +679,7 @@ public func configure(
     // `App bootstrap`: seed a first admin + org + project and print an API key
     // once, for deployments that must be driven without a browser (CI, e2e).
     // Registered unconditionally; the command itself refuses if any user exists.
-    app.asyncCommands.use(BootstrapCommand(), as: "bootstrap")
+    app.asyncCommands.use(BootstrapCommand(persistence: persistence.bootstrap), as: "bootstrap")
 
     // `App grant-platform-admin`: the break-glass path back in when a
     // deployment has no reachable administrator (STR-178). Seeding the first
@@ -582,7 +694,7 @@ public func configure(
     // "ready" has an explicit meaning rather than an implicit one.
     app.readiness.markMigrationsComplete()
 
-    try routes(app)
+    try routes(app, persistence: persistence)
 
     // The structural half of default-deny (#482): every registered route must
     // carry an authorization classification, or the process refuses to start.

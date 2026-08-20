@@ -1,5 +1,5 @@
-import Fluent
 import Foundation
+import ControlPlanePostgres
 import StratoShared
 import Vapor
 
@@ -9,6 +9,9 @@ import Vapor
 /// `OrganizationAccessService`). The secret value is write-only — it is
 /// encrypted at rest and never appears in any response.
 struct RegistryPullSecretController: RouteCollection {
+    let secrets: RegistryPullSecretsPersistence
+    let projects: ProjectsPersistence
+
     func boot(routes: any RoutesBuilder) throws {
         let credentials = routes.grouped("api", "projects", ":projectID", "registry-credentials")
         credentials.get(use: list)
@@ -56,42 +59,37 @@ struct RegistryPullSecretController: RouteCollection {
 
     /// GET — every pull secret in the project (metadata only, no secrets).
     func list(req: Request) async throws -> [RegistryPullSecretResponse] {
-        let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectMember(project: project, on: req)
+        let project = try await requireProject(req)
+        try await OrganizationAccessService.requireProjectMember(projectID: project.id, on: req)
 
-        let secrets = try await RegistryPullSecret.query(on: req.db)
-            .filter(\.$project.$id == project.requireID())
-            .sort(\.$registry)
-            .all()
-        return secrets.map { RegistryPullSecretResponse(from: $0) }
+        return try await secrets.secrets(projectID: project.id)
+            .map(RegistryPullSecretResponse.init(from:))
     }
 
     /// POST — add a credential for a registry the project has none for yet.
     func create(req: Request) async throws -> Response {
-        let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
-        let projectID = try project.requireID()
+        let project = try await requireProject(req)
+        try await OrganizationAccessService.requireProjectPolicyAdmin(projectID: project.id, on: req)
+        let projectID = project.id
 
         let createRequest = try req.content.decodeValidated(CreateRegistryPullSecretRequest.self)
         let registry = try Self.normalizeRegistry(createRequest.registry)
 
-        let existing = try await RegistryPullSecret.query(on: req.db)
-            .filter(\.$project.$id == projectID)
-            .filter(\.$registry == registry)
-            .first()
-        guard existing == nil else {
+        let pullSecret: RegistryPullSecretSnapshot
+        do {
+            pullSecret = try await secrets.create(
+                RegistryPullSecretWrite(
+                    projectID: projectID,
+                    registry: registry,
+                    username: createRequest.username,
+                    encryptedSecret: try req.secretsEncryption.encrypt(createRequest.secret)
+                )
+            )
+        } catch RegistryPullSecretPersistenceError.duplicateRegistry {
             throw Abort(
                 .conflict,
                 reason: "The project already has a credential for '\(registry)'; update or delete it instead")
         }
-
-        let pullSecret = RegistryPullSecret(
-            projectID: projectID,
-            registry: registry,
-            username: createRequest.username,
-            secret: try req.secretsEncryption.encrypt(createRequest.secret)
-        )
-        try await pullSecret.save(on: req.db)
 
         req.logger.info(
             "Registry pull secret created",
@@ -109,35 +107,39 @@ struct RegistryPullSecretController: RouteCollection {
     /// immutable: pointing a credential at a different registry is a
     /// delete-and-create, not an edit.
     func update(req: Request) async throws -> RegistryPullSecretResponse {
-        let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
+        let project = try await requireProject(req)
+        try await OrganizationAccessService.requireProjectPolicyAdmin(projectID: project.id, on: req)
         let pullSecret = try await loadSecret(req, in: project)
 
         let updateRequest = try req.content.decodeValidated(UpdateRegistryPullSecretRequest.self)
-        if let username = updateRequest.username {
-            pullSecret.username = username
+        guard
+            let updated = try await secrets.update(
+                id: pullSecret.id,
+                projectID: project.id,
+                username: updateRequest.username,
+                encryptedSecret: try updateRequest.secret.map(req.secretsEncryption.encrypt)
+            )
+        else {
+            throw Abort(.notFound, reason: "Registry credential not found")
         }
-        if let secret = updateRequest.secret {
-            pullSecret.secret = try req.secretsEncryption.encrypt(secret)
-        }
-
-        try await pullSecret.save(on: req.db)
-        return RegistryPullSecretResponse(from: pullSecret)
+        return RegistryPullSecretResponse(from: updated)
     }
 
     /// DELETE — remove the credential. Sandboxes already pinned to a digest
     /// keep converging on it; their next pull simply becomes anonymous.
     func delete(req: Request) async throws -> HTTPStatus {
-        let project = try await req.requireProject()
-        try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
+        let project = try await requireProject(req)
+        try await OrganizationAccessService.requireProjectPolicyAdmin(projectID: project.id, on: req)
         let pullSecret = try await loadSecret(req, in: project)
 
-        try await pullSecret.delete(on: req.db)
+        guard try await secrets.delete(id: pullSecret.id, projectID: project.id) != nil else {
+            throw Abort(.notFound, reason: "Registry credential not found")
+        }
 
         req.logger.info(
             "Registry pull secret deleted",
             metadata: [
-                "project_id": .string(project.id?.uuidString ?? ""),
+                "project_id": .string(project.id.uuidString),
                 "registry": .string(pullSecret.registry),
             ])
         return .noContent
@@ -167,16 +169,24 @@ struct RegistryPullSecretController: RouteCollection {
         return host
     }
 
-    private func loadSecret(_ req: Request, in project: Project) async throws -> RegistryPullSecret {
+    private func requireProject(_ req: Request) async throws -> ProjectSnapshot {
+        guard let projectID = req.parameters.get("projectID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid project ID")
+        }
+        guard let project = try await projects.project(id: projectID) else {
+            throw Abort(.notFound, reason: "Project not found")
+        }
+        return project
+    }
+
+    private func loadSecret(
+        _ req: Request,
+        in project: ProjectSnapshot
+    ) async throws -> RegistryPullSecretSnapshot {
         guard let credentialID = req.parameters.get("credentialID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid credential ID")
         }
-        guard
-            let pullSecret = try await RegistryPullSecret.query(on: req.db)
-                .filter(\.$id == credentialID)
-                .filter(\.$project.$id == project.requireID())
-                .first()
-        else {
+        guard let pullSecret = try await secrets.secret(id: credentialID, projectID: project.id) else {
             throw Abort(.notFound, reason: "Registry credential not found")
         }
         return pullSecret

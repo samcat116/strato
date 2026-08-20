@@ -51,7 +51,7 @@ final class IAMWhoCanTests {
     @Test("Ancestor walk climbs resource → project → nested OUs → org")
     func ancestorWalk() async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "Walk")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "Walk")
 
             let chain = try await IAMResourceTree.ancestors(of: tree.vmNode, on: app.db)
 
@@ -81,7 +81,7 @@ final class IAMWhoCanTests {
     @Test("A binding above the resource grants through the whole chain")
     func inheritedBindingReachesResource() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Inherit")
             let user = try await builder.createUser(username: "inh", email: "inh@example.com")
 
@@ -104,7 +104,7 @@ final class IAMWhoCanTests {
     @Test("Role nesting: an admin binding answers a viewer-level action")
     func roleNestingGrantsLowerActions() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Nest")
             let user = try await builder.createUser(username: "nest", email: "nest@example.com")
 
@@ -122,7 +122,7 @@ final class IAMWhoCanTests {
     @Test("An action no role carries yields no binding-sourced principals")
     func unrelatedActionYieldsNoBindings() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Unrel")
             let user = try await builder.createUser(username: "unrel", email: "unrel@example.com")
 
@@ -139,7 +139,7 @@ final class IAMWhoCanTests {
     @Test("Expired bindings are excluded")
     func expiredBindingExcluded() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Exp")
             let expired = try await builder.createUser(username: "exp", email: "exp@example.com")
             let live = try await builder.createUser(username: "live", email: "live@example.com")
@@ -163,11 +163,12 @@ final class IAMWhoCanTests {
     @Test("A group binding lists the group and expands to its members with via")
     func groupBindingExpands() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Grp")
             let group = try await builder.createGroup(name: "Grp Team", description: "d", organization: tree.org)
             let member = try await builder.createUser(username: "gmem", email: "gmem@example.com")
-            try await UserGroup(userID: member.id!, groupID: group.id!).save(on: app.db)
+            try await builder.addUserToOrganization(user: member, organization: tree.org)
+            try await builder.addUserToGroup(user: member, group: group)
 
             try await RoleBindingService.grant(
                 principalType: .group, principalID: group.id!, role: .editor,
@@ -191,7 +192,7 @@ final class IAMWhoCanTests {
     @Test("Cross-org principals are reported, not filtered out")
     func crossOrgPrincipalIncluded() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Home")
             let otherOrg = try await builder.createOrganization(name: "Outside Org")
             let outsider = try await builder.createUser(username: "outsider", email: "outsider@example.com")
@@ -211,7 +212,7 @@ final class IAMWhoCanTests {
     @Test("Org members appear for membership-derived actions only")
     func orgMembershipSource() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Mem")
             let member = try await builder.createUser(username: "mem", email: "mem@example.com")
             try await builder.addUserToOrganization(user: member, organization: tree.org, role: "member")
@@ -230,7 +231,7 @@ final class IAMWhoCanTests {
     @Test("System admins are reported as a distinct source")
     func systemAdminSource() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Sys")
             let admin = try await builder.createUser(
                 username: "sysadm", email: "sysadm@example.com", isSystemAdmin: true)
@@ -246,13 +247,14 @@ final class IAMWhoCanTests {
     @Test("Two groups granting the same role produce one entry each, not a merge")
     func multiplePathsEachExplained() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Multi")
             let user = try await builder.createUser(username: "multi", email: "multi@example.com")
             let groupA = try await builder.createGroup(name: "A", description: "d", organization: tree.org)
             let groupB = try await builder.createGroup(name: "B", description: "d", organization: tree.org)
-            try await UserGroup(userID: user.id!, groupID: groupA.id!).save(on: app.db)
-            try await UserGroup(userID: user.id!, groupID: groupB.id!).save(on: app.db)
+            try await builder.addUserToOrganization(user: user, organization: tree.org)
+            try await builder.addUserToGroup(user: user, group: groupA)
+            try await builder.addUserToGroup(user: user, group: groupB)
 
             for group in [groupA, groupB] {
                 try await RoleBindingService.grant(
@@ -276,7 +278,7 @@ final class IAMWhoCanTests {
     @Test("A network is never open to all; reads and updates both need a grant")
     func networkReadIsNeverOpen() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "NetOpen")
             let stranger = try await builder.createUser(username: "stranger", email: "stranger@example.com")
             let network = try await builder.createNetwork(
@@ -303,10 +305,9 @@ final class IAMWhoCanTests {
     @Test("Non-user principals are refused a network read outright")
     func networkReadRequiresRealUser() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let disabled = try await builder.createUser(username: "disabled", email: "disabled@example.com")
-            disabled.disabledAt = Date()
-            try await disabled.save(on: app.db)
+            try await disabled.replacing(disabledAt: .some(Date())).save(on: app.db)
             let org = try await builder.createOrganization(name: "Open Org")
             let group = try await builder.createGroup(name: "Open Team", description: "d", organization: org)
             let project = try await builder.createProject(
@@ -334,12 +335,12 @@ final class IAMWhoCanTests {
     @Test("A disabled account cannot act on any grant it still holds")
     func disabledPrincipalCannotAct() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Disabled")
             let disabled = try await builder.createUser(username: "gone", email: "gone@example.com")
             try await builder.addUserToOrganization(user: disabled, organization: tree.org, role: "member")
             let group = try await builder.createGroup(name: "Gone Team", description: "d", organization: tree.org)
-            try await UserGroup(userID: disabled.id!, groupID: group.id!).save(on: app.db)
+            try await builder.addUserToGroup(user: disabled, group: group)
 
             // Every grant shape at once: direct binding, group binding, org
             // membership, and system admin.
@@ -349,9 +350,10 @@ final class IAMWhoCanTests {
             try await RoleBindingService.grant(
                 principalType: .group, principalID: group.id!, role: .admin,
                 nodeType: .organization, nodeID: tree.org.id!, createdBy: nil, on: app.db)
-            disabled.isSystemAdmin = true
-            disabled.disabledAt = Date()
-            try await disabled.save(on: app.db)
+            try await disabled.replacing(
+                isSystemAdmin: true,
+                disabledAt: .some(Date())
+            ).save(on: app.db)
 
             for action in ["vm:create", "vm:read", "org:read"] {
                 let allowed = try await WhoCanService.can(
@@ -365,7 +367,7 @@ final class IAMWhoCanTests {
     @Test("who-can still lists a disabled holder's grants, marked as unusable")
     func disabledPrincipalStillListed() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "DisabledList")
             let disabled = try await builder.createUser(username: "gone2", email: "gone2@example.com")
             let active = try await builder.createUser(username: "here", email: "here@example.com")
@@ -374,8 +376,7 @@ final class IAMWhoCanTests {
                     principalType: .user, principalID: user.id!, role: .editor,
                     nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
             }
-            disabled.disabledAt = Date()
-            try await disabled.save(on: app.db)
+            try await disabled.replacing(disabledAt: .some(Date())).save(on: app.db)
 
             let entries = try await WhoCanService.whoCan(action: "vm:create", node: tree.vmNode, app: app, on: app.db)
                 .principals
@@ -393,7 +394,7 @@ final class IAMWhoCanTests {
     @Test("Sandbox snapshot owners can read policy on their own snapshot")
     func sandboxSnapshotIsAnAdminNode() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "SnapAdmin")
             let sandbox = try await builder.createSandbox(name: "snap-sb", project: tree.project)
             let owner = try await builder.createUser(username: "snapowner", email: "snapowner@example.com")
@@ -402,7 +403,7 @@ final class IAMWhoCanTests {
                 name: "snap-1", sandboxID: sandbox.id!, projectID: tree.project.id!,
                 environment: "development", agentId: nil, createdByID: owner.id!)
             try await snapshot.save(on: app.db)
-            let token = try await owner.generateAPIKey(on: app.db)
+            let token = try await owner.generateAPIKey(on: app)
 
             // Admin on the snapshot itself, nothing above it.
             try await RoleBindingService.grant(
@@ -427,7 +428,7 @@ final class IAMWhoCanTests {
     @Test("Sites and agents resolve to their org or folder scope")
     func siteAndAgentWalk() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let org = try await builder.createOrganization(name: "Infra Org")
             let ou = try await builder.createOU(name: "Infra OU", description: "d", organization: org)
             let site = Site(name: "site-a", organizationScope: .organizationalUnit(ou.id!))
@@ -447,7 +448,7 @@ final class IAMWhoCanTests {
     @Test("An admin above a site can be found by who-can on the site")
     func whoCanOnSite() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let org = try await builder.createOrganization(name: "Site Org")
             let admin = try await builder.createUser(username: "siteadm", email: "siteadm@example.com")
             let site = Site(name: "site-b", organizationScope: .organization(org.id!))
@@ -469,14 +470,15 @@ final class IAMWhoCanTests {
     @Test("can() agrees with whoCan across binding, group, and expiry")
     func canMatchesWhoCan() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Can")
             let direct = try await builder.createUser(username: "direct", email: "direct@example.com")
             let viaGroup = try await builder.createUser(username: "viagrp", email: "viagrp@example.com")
             let expired = try await builder.createUser(username: "canexp", email: "canexp@example.com")
             let nobody = try await builder.createUser(username: "nobody", email: "nobody@example.com")
             let group = try await builder.createGroup(name: "Can Team", description: "d", organization: tree.org)
-            try await UserGroup(userID: viaGroup.id!, groupID: group.id!).save(on: app.db)
+            try await builder.addUserToOrganization(user: viaGroup, organization: tree.org)
+            try await builder.addUserToGroup(user: viaGroup, group: group)
 
             try await RoleBindingService.grant(
                 principalType: .user, principalID: direct.id!, role: .editor,
@@ -509,7 +511,7 @@ final class IAMWhoCanTests {
     @Test("can() is true for a system admin with no bindings at all")
     func canSystemAdmin() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "CanSys")
             let admin = try await builder.createUser(
                 username: "cansys", email: "cansys@example.com", isSystemAdmin: true)
@@ -526,7 +528,7 @@ final class IAMWhoCanTests {
     @Test("who-can endpoint returns the chain and the principals")
     func whoCanEndpoint() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Endpoint")
             let caller = try await builder.createUser(
                 username: "epadmin", email: "epadmin@example.com", isSystemAdmin: true)
@@ -534,7 +536,7 @@ final class IAMWhoCanTests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: grantee.id!, role: .editor,
                 nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
-            let token = try await caller.generateAPIKey(on: app.db)
+            let token = try await caller.generateAPIKey(on: app)
 
             try await app.test(.POST, "/api/authorization/who-can") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -556,10 +558,10 @@ final class IAMWhoCanTests {
     @Test("who-can rejects an unknown action as a bad request, not a denial")
     func whoCanUnknownAction() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let caller = try await builder.createUser(
                 username: "eptype", email: "eptype@example.com", isSystemAdmin: true)
-            let token = try await caller.generateAPIKey(on: app.db)
+            let token = try await caller.generateAPIKey(on: app)
 
             try await app.test(.POST, "/api/authorization/who-can") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -575,11 +577,11 @@ final class IAMWhoCanTests {
     @Test("A resource-level admin may read policy without holding project admin")
     func whoCanAllowsResourceLevelAdmin() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "ResAdmin")
             let owner = try await builder.createUser(username: "vmowner", email: "vmowner@example.com")
             try await builder.addUserToOrganization(user: owner, organization: tree.org, role: "member")
-            let token = try await owner.generateAPIKey(on: app.db)
+            let token = try await owner.generateAPIKey(on: app)
 
             // Admin on the VM itself, nothing above it — a VM creator's position.
             try await RoleBindingService.grant(
@@ -602,11 +604,11 @@ final class IAMWhoCanTests {
     @Test("who-can is refused to a caller without admin over the resource")
     func whoCanRequiresAdmin() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Gate")
             let caller = try await builder.createUser(username: "epuser", email: "epuser@example.com")
             try await builder.addUserToOrganization(user: caller, organization: tree.org, role: "member")
-            let token = try await caller.generateAPIKey(on: app.db)
+            let token = try await caller.generateAPIKey(on: app)
 
             try await app.test(.POST, "/api/authorization/who-can") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -624,7 +626,7 @@ final class IAMWhoCanTests {
     @Test("check with an explicit principal answers from the bindings table")
     func checkForArbitraryPrincipal() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "CheckP")
             let caller = try await builder.createUser(
                 username: "cpadmin", email: "cpadmin@example.com", isSystemAdmin: true)
@@ -632,7 +634,7 @@ final class IAMWhoCanTests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: subject.id!, role: .viewer,
                 nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
-            let token = try await caller.generateAPIKey(on: app.db)
+            let token = try await caller.generateAPIKey(on: app)
 
             // The caller is a system admin, so an unguarded implementation would
             // answer `true` for everything — the subject's own grants must decide.

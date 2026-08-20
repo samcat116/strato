@@ -34,8 +34,7 @@ final class NetworkControllerTests {
             )
             let org = try await builder.createOrganization(name: "Network Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "Network Project",
@@ -47,7 +46,7 @@ final class NetworkControllerTests {
                 name: "Network Test Site",
                 organizationScope: .organization(try org.requireID()))
             try await site.save(on: app.db)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, project, token)
 
@@ -113,7 +112,7 @@ final class NetworkControllerTests {
             // only, so the project_id filter's view_project check denies.
             let member = try await TestDataBuilder(db: app.db).createUser(
                 username: "net-member", email: "net-member@example.com")
-            let memberToken = try await member.generateAPIKey(on: app.db)
+            let memberToken = try await member.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/networks?project_id=\(project.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
@@ -165,7 +164,7 @@ final class NetworkControllerTests {
                 #expect(res.body.string.contains("Quota 'one-network' exceeded"))
             }
             #expect(
-                try await LogicalNetwork.query(on: app.db).filter(\.$name == "refused").first() == nil,
+                try await LegacyLogicalNetworkStore.networks(name: "refused", on: app.db).first == nil,
                 "a refused create must persist neither a network nor a resolver index")
 
             let otherProject = try await builder.createProject(
@@ -211,8 +210,8 @@ final class NetworkControllerTests {
             }
             let afterDelete = try #require(try await ResourceQuota.find(quota.id, on: app.db))
             #expect(afterDelete.networkCount == 0)
-            try await QuotaEnforcementService.resyncReservations(afterDelete, on: app.db)
-            #expect(afterDelete.networkCount == 0, "the released count survives a canonical resync")
+            let synchronized = try await QuotaEnforcementService.resyncReservations(afterDelete, on: app.db)
+            #expect(synchronized.networkCount == 0, "the released count survives a canonical resync")
         }
     }
 
@@ -234,8 +233,8 @@ final class NetworkControllerTests {
                 #expect(network.attachedInterfaceCount == 0)
             }
 
-            let persisted = try await LogicalNetwork.query(on: app.db)
-                .filter(\.$name == "app-net").first()
+            let persisted = try await LegacyLogicalNetworkStore.networks(
+                name: "app-net", on: app.db).first
             #expect(persisted != nil)
         }
     }
@@ -469,10 +468,11 @@ final class NetworkControllerTests {
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: network.id!, macAddress: VMNetworkInterface.generateMACAddress())
             try await nic.save(on: app.db)
-            let address6 = VMInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: nic.id!, logicalNetworkID: network.id!, family: .ipv6,
-                address: "fd00:29::100", prefixLength: 64, gateway: "fd00:29::1")
-            try await address6.save(on: app.db)
+                address: "fd00:29::100", prefixLength: 64, gateway: "fd00:29::1",
+                on: app.db)
 
             try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -576,13 +576,15 @@ final class NetworkControllerTests {
                     named: "rolled-back-agent")
             }
             // The refusal is total: no half-registered row survives it.
-            let rows = try await Agent.query(on: app.db).filter(\.$name == "rolled-back-agent").count()
+            let rows = try await LegacyAgentStore.agents(
+                name: "rolled-back-agent", on: app.db).count
             #expect(rows == 0)
 
             // A current agent joins the same fleet without complaint.
             _ = try await register(
                 protocolVersion: WireProtocol.currentVersion, named: "current-agent")
-            let current = try await Agent.query(on: app.db).filter(\.$name == "current-agent").count()
+            let current = try await LegacyAgentStore.agents(
+                name: "current-agent", on: app.db).count
             #expect(current == 1)
         }
     }
@@ -627,7 +629,7 @@ final class NetworkControllerTests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: viewer.id!, role: .viewer,
                 nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
-            let viewerToken = try await viewer.generateAPIKey(on: app.db)
+            let viewerToken = try await viewer.generateAPIKey(on: app)
 
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: viewerToken)
@@ -940,12 +942,12 @@ final class NetworkControllerTests {
 
     @Test("The zone-resolution warning names whichever thing is withholding the resolver")
     func zoneResolutionWarningBranches() {
-        let network = LogicalNetwork(
+        var network = LogicalNetwork(
             name: "warn", subnet: "10.90.0.0/24", projectID: UUID(), resolverIndex: 400)
 
         // Nothing attached: nothing to fail to deliver, whatever the resolver
         // is doing.
-        network.resolverEnabled = false
+        network = network.replacing(resolverEnabled: false)
         #expect(
             ResolverCapability.zoneResolutionWarning(
                 network: network, attachedZoneCount: 0, incapableAgentNames: ["old-host"]) == nil)
@@ -956,7 +958,7 @@ final class NetworkControllerTests {
         #expect(off.contains("resolver is off"))
         #expect(off.contains("its attached DNS zone"))
 
-        network.resolverEnabled = true
+        network = network.replacing(resolverEnabled: true)
         #expect(
             ResolverCapability.zoneResolutionWarning(
                 network: network, attachedZoneCount: 2, incapableAgentNames: []) == nil)
@@ -969,7 +971,7 @@ final class NetworkControllerTests {
         #expect(incapable.contains("its 2 attached DNS zones"))
 
         // The pre-STR-40 state the backfill exists to remove.
-        network.resolverIndex = nil
+        network = network.replacing(resolverIndex: .some(nil))
         let unallocated = try! #require(
             ResolverCapability.zoneResolutionWarning(
                 network: network, attachedZoneCount: 1, incapableAgentNames: []))
@@ -981,13 +983,12 @@ final class NetworkControllerTests {
         let siteA = UUID()
         let siteB = UUID()
         func incapableAgent(named name: String, site: UUID) -> Agent {
-            let agent = Agent(
+            Agent(
                 name: name, hostname: name, version: "1.0",
                 resources: AgentResources(
                     totalCPU: 1, availableCPU: 1, totalMemory: 1, availableMemory: 1,
-                    totalDisk: 1, availableDisk: 1))
-            agent.$site.id = site
-            return agent
+                    totalDisk: 1, availableDisk: 1)
+            ).replacing(siteID: site)
         }
         let index = ResolverCapability.Index(incapable: [
             incapableAgent(named: "old-b", site: siteB),
@@ -1074,7 +1075,8 @@ final class NetworkControllerTests {
                 #expect(renamed.name == "renamed-net")
             }
 
-            let reloaded = try await VMNetworkInterface.find(nic.id, on: app.db)
+            let reloaded = try await LegacyVMNetworkInterfaceStore.interface(
+                id: try nic.requireID(), on: app.db)
             #expect(reloaded?.logicalNetworkID == network.id)
         }
     }
@@ -1193,7 +1195,8 @@ final class NetworkControllerTests {
                 #expect(res.status == .badRequest)
             }
 
-            let stored = try await LogicalNetwork.query(on: app.db).filter(\.$name == "smuggle-net").first()
+            let stored = try await LegacyLogicalNetworkStore.networks(
+                name: "smuggle-net", on: app.db).first
             #expect(stored == nil)
         }
     }
@@ -1370,8 +1373,8 @@ private extension CreateNetworkRequest {
 }
 
 private extension LogicalNetwork {
-    convenience init(
-        id: UUID? = nil,
+    init(
+        id: UUID? = UUID(),
         name: String,
         subnet: String,
         gateway: String? = nil,

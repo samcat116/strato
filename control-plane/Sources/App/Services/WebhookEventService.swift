@@ -127,16 +127,14 @@ enum WebhookEvents {
     /// Fan the event out to every matching active subscription. Throws on
     /// database errors so transactional callers stay atomic.
     static func enqueue(_ event: WebhookEvent, on db: Database) async throws {
-        let subscriptions = try await WebhookSubscription.query(on: db)
-            .filter(\.$organization.$id == event.organizationID)
-            .filter(\.$isActive == true)
-            .all()
+        let subscriptions = try await LegacyWebhookStore.activeSubscriptions(
+            organizationID: event.organizationID, on: db)
 
         let matching = subscriptions.filter { subscription in
             guard subscription.subscribes(to: event.type) else { return false }
             // A project-scoped subscription only receives events that carry
             // its project; org-wide events (agent presence) stay org-level.
-            if let scopedProject = subscription.$project.id {
+            if let scopedProject = subscription.projectID {
                 return event.projectID == scopedProject
             }
             return true
@@ -145,12 +143,12 @@ enum WebhookEvents {
 
         let payload = try event.encodedPayload()
         for subscription in matching {
-            let delivery = WebhookDelivery(
-                subscriptionID: try subscription.requireID(),
+            try await LegacyWebhookStore.insertDelivery(
+                subscriptionID: subscription.id,
                 eventID: event.id,
                 eventType: event.type,
-                payload: payload)
-            try await delivery.save(on: db)
+                payload: payload,
+                on: db)
         }
     }
 
@@ -288,14 +286,14 @@ enum WebhookEvents {
         vm: VM, previous: VMStatus, current: VMStatus, on db: Database, logger: Logger
     ) async {
         guard let vmID = vm.id else { return }
-        guard let project = try? await Project.find(vm.$project.id, on: db),
+        guard let project = try? await Project.find(vm.projectID, on: db),
             let organizationID = try? await project.getRootOrganizationId(on: db)
         else { return }
 
         let event = WebhookEvent(
             type: .vmStateChanged,
             organizationID: organizationID,
-            projectID: vm.$project.id,
+            projectID: vm.projectID,
             resource: WebhookEvent.Resource(
                 kind: OperationResourceKind.virtualMachine.rawValue, id: vmID, name: vm.name),
             data: [

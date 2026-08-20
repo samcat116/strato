@@ -34,8 +34,7 @@ final class VolumeAuthorizationTests {
             )
             let org = try await builder.createOrganization(name: "Volume Auth Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "Volume Auth Project",
@@ -48,7 +47,7 @@ final class VolumeAuthorizationTests {
                 status: .ready,
                 uploadedBy: user
             )
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, project, image, token)
 
@@ -100,7 +99,7 @@ final class VolumeAuthorizationTests {
             }
 
             // The unauthorized request must not have left a volume behind.
-            let volumeCount = try await Volume.query(on: app.db).count()
+            let volumeCount = try await Volume.all(on: app.db).count
             #expect(volumeCount == 0)
         }
     }
@@ -125,7 +124,7 @@ final class VolumeAuthorizationTests {
             // application shutdown during test teardown.
             var placed: Volume?
             for _ in 0..<100 {
-                placed = try await Volume.query(on: app.db).first()
+                placed = try await Volume.all(on: app.db).first
                 if placed?.conditions.degraded != nil { break }
                 try await Task.sleep(for: .milliseconds(50))
             }

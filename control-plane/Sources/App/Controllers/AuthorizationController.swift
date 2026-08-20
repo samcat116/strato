@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 /// The authorization query surface: "can I?", "can *they*?", and "who can?".
@@ -8,6 +8,8 @@ import Vapor
 /// (docs/architecture/iam.md); the policy simulator and decision logs land with
 /// later phases.
 struct AuthorizationController: RouteCollection {
+    let iam: IAMPersistence
+
     /// Cap on checks per request — keeps a single call bounded.
     private static let maxChecks = 50
 
@@ -154,6 +156,7 @@ struct AuthorizationController: RouteCollection {
                 nodes: nodes,
                 app: req.application,
                 cache: req.iamCache,
+                using: iam,
                 on: req.db
             )
         }
@@ -214,9 +217,14 @@ struct AuthorizationController: RouteCollection {
         try Self.validate(action: payload.action, on: payload.node)
         try await Self.requirePolicyRead(on: payload.node, req: req)
 
-        let ancestors = try await IAMResourceTree.ancestors(of: payload.node, on: req.db)
+        let ancestors = try await IAMResourceTree.ancestors(of: payload.node, using: iam)
         let result = try await WhoCanService.whoCan(
-            action: payload.action, node: payload.node, app: req.application, on: req.db)
+            action: payload.action,
+            node: payload.node,
+            app: req.application,
+            using: iam,
+            on: req.db
+        )
 
         return WhoCanResponse(
             action: payload.action,

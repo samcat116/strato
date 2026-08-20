@@ -9,11 +9,11 @@ import Fluent
 struct QuotaComplianceService {
     /// Classifies which entity a quota is scoped to.
     static func quotaScope(for quota: ResourceQuota) -> String {
-        if quota.$organization.id != nil {
+        if quota.organizationID != nil {
             return "organization"
-        } else if quota.$organizationalUnit.id != nil {
+        } else if quota.organizationalUnitID != nil {
             return "organizational_unit"
-        } else if quota.$project.id != nil {
+        } else if quota.projectID != nil {
             return "project"
         } else {
             return "unknown"

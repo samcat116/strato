@@ -18,16 +18,15 @@ final class HierarchyIntegrationTests {
             try await configure(app)
             try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
 
             // Create base test data
             let testUser = try await builder.createUser()
             let testOrganization = try await builder.createOrganization()
             try await builder.addUserToOrganization(user: testUser, organization: testOrganization, role: "admin")
-            testUser.currentOrganizationId = testOrganization.id
-            try await testUser.save(on: app.db)
+            try await testUser.replacingCurrentOrganization(testOrganization.id).save(on: app.db)
 
-            let authToken = try await testUser.generateAPIKey(on: app.db)
+            let authToken = try await testUser.generateAPIKey(on: app)
 
             try await test(app, builder, testUser, testOrganization, authToken)
         } catch {
@@ -91,12 +90,12 @@ final class HierarchyIntegrationTests {
                 displayName: "Developer 1"
             )
             try await builder.addUserToOrganization(user: developer1, organization: testOrganization)
-            try await backendGroup.addMember(developer1.id!, on: app.db)
+            try await builder.addUserToGroup(user: developer1, group: backendGroup)
 
             // Verify hierarchy
-            #expect(backend.$parentOU.id == engineering.id)
+            #expect(backend.parentOUID == engineering.id)
             #expect(backend.depth == 1)
-            #expect(apiProject.$organizationalUnit.id == backend.id)
+            #expect(apiProject.organizationalUnitID == backend.id)
 
             // Test hierarchy navigation
             let engineeringProjects = try await engineering.getAllProjects(on: app.db)
@@ -151,9 +150,11 @@ final class HierarchyIntegrationTests {
             )
 
             // Test that quotas were created
-            let savedQuota = try await ResourceQuota.query(on: app.db)
-                .filter(\.$project.$id == project.id)
-                .first()
+            let savedQuota = try await LegacyResourceQuotaStore.hierarchy(
+                organizationID: try testOrganization.requireID(),
+                organizationalUnitIDs: [],
+                projectIDs: [try project.requireID()],
+                on: app.db).first { $0.projectID == project.id }
             #expect(savedQuota != nil)
             #expect(savedQuota?.maxVCPUs == 20)
         }
@@ -192,15 +193,25 @@ final class HierarchyIntegrationTests {
             try await builder.addUserToOrganization(user: nonMember, organization: testOrganization)
 
             // Add developer to group
-            try await developerGroup.addMember(developer.id!, on: app.db)
+            try await builder.addUserToGroup(user: developer, group: developerGroup)
 
             // In a full authorization test against the Cedar evaluator:
             // - Add group to project with member role
             // - Verify developer has access through group membership
             // - Verify non-member doesn't have access
 
-            #expect(try await developer.belongsToGroup(developerGroup.id!, on: app.db))
-            #expect(try await !nonMember.belongsToGroup(developerGroup.id!, on: app.db))
+            #expect(
+                try await app.groupsPersistence.hasMember(
+                    userID: developer.requireID(),
+                    groupID: developerGroup.requireID()
+                )
+            )
+            #expect(
+                try await !app.groupsPersistence.hasMember(
+                    userID: nonMember.requireID(),
+                    groupID: developerGroup.requireID()
+                )
+            )
         }
     }
 
@@ -296,13 +307,13 @@ final class HierarchyIntegrationTests {
                 environment: "dev"
             )
 
-            #expect(vm.$project.id == project.id)
+            #expect(vm.projectID == project.id)
             #expect(vm.environment == "dev")
 
-            // Verify project has the VM
-            try await project.$vms.load(on: app.db)
-            #expect(project.vms.count == 1)
-            #expect(project.vms.first?.name == "Test VM")
+            // Verify the project-owned VM through the explicit foreign key.
+            let projectVMs = try await VM.all(on: app.db).filter { $0.projectID == project.id! }
+            #expect(projectVMs.count == 1)
+            #expect(projectVMs.first?.name == "Test VM")
         }
     }
 

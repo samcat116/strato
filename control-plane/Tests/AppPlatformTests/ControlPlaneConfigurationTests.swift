@@ -33,6 +33,22 @@ struct ControlPlaneConfigurationTests {
         }
     }
 
+    @Test("Native database pool settings have bounded defaults")
+    func nativeDatabasePoolDefaults() async throws {
+        let configuration = try await ControlPlaneConfiguration.load(
+            environmentVariables: [:], for: .testing)
+
+        #expect(configuration.int(.databaseMaxConnections) == 20)
+        #expect(configuration.int(.databaseConnectionAcquireTimeoutMS) == 10_000)
+
+        for key in ["DATABASE_MAX_CONNECTIONS", "DATABASE_CONNECTION_ACQUIRE_TIMEOUT_MS"] {
+            await #expect(throws: ControlPlaneConfigurationError.self) {
+                _ = try await ControlPlaneConfiguration.load(
+                    environmentVariables: [key: "0"], for: .testing)
+            }
+        }
+    }
+
     @Test("Unknown enum values fail instead of selecting a default")
     func invalidEnumIsRejected() async {
         await #expect(throws: ControlPlaneConfigurationError.self) {

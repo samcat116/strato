@@ -1,5 +1,7 @@
+import ControlPlanePostgres
 import Fluent
 import Foundation
+import SQLKit
 import Vapor
 
 /// Allocates and reads policy-set versions (issue #479).
@@ -16,10 +18,13 @@ enum PolicySetVersionService {
     /// yet, which is the correct answer for a fresh database: the policy set
     /// exists, it has simply never changed.
     static func current(on db: any Database) async throws -> Int {
-        let latest = try await PolicySetVersion.query(on: db)
-            .sort(\.$version, .descending)
-            .first()
-        return latest?.version ?? 0
+        struct Row: Decodable { let version: Int }
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Policy-set versions require a SQL database")
+        }
+        return try await sql.raw(
+            "SELECT version FROM iam_policy_set_versions ORDER BY version DESC LIMIT 1"
+        ).first(decoding: Row.self)?.version ?? 0
     }
 
     /// Record a policy-set change and return the new version.
@@ -39,8 +44,48 @@ enum PolicySetVersionService {
     @discardableResult
     static func bump(reason: String, changedBy: UUID? = nil, on db: any Database) async throws -> Int {
         let next = try await current(on: db) + 1
-        try await PolicySetVersion(version: next, reason: reason, changedBy: changedBy).save(on: db)
+        try await record(version: next, reason: reason, changedBy: changedBy, on: db)
         return next
+    }
+
+    /// Append an explicitly allocated version. Kept separate from `bump` so
+    /// collision tests can exercise the transaction-boundary retry without a
+    /// mutable Fluent model.
+    static func record(
+        version: Int,
+        reason: String,
+        changedBy: UUID? = nil,
+        on db: any Database
+    ) async throws {
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Policy-set versions require a SQL database")
+        }
+        try await sql.raw(
+            """
+            INSERT INTO iam_policy_set_versions (id, version, reason, changed_by, created_at)
+            VALUES (\(bind: UUID()), \(bind: version), \(bind: reason), \(bind: changedBy), CURRENT_TIMESTAMP)
+            """
+        ).run()
+    }
+
+    static func reason(for version: Int, on db: any Database) async throws -> String? {
+        struct Row: Decodable { let reason: String }
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Policy-set versions require a SQL database")
+        }
+        return try await sql.raw(
+            "SELECT reason FROM iam_policy_set_versions WHERE version = \(bind: version)"
+        ).first(decoding: Row.self)?.reason
+    }
+
+    static func count(reason: String, on db: any Database) async throws -> Int {
+        struct Row: Decodable { let count: Int }
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Policy-set versions require a SQL database")
+        }
+        return try await sql.raw(
+            "SELECT COUNT(*)::bigint AS count FROM iam_policy_set_versions WHERE reason = \(bind: reason)"
+        ).first(decoding: Row.self)?.count ?? 0
     }
 
     /// Run a policy-set change and its version bump as one transaction,
@@ -101,6 +146,7 @@ actor PolicySetVersionCache {
     static let channel = "policy-set:version"
 
     private let logger: Logger
+    private let iam: IAMPersistence
     private var version: Int = 0
     /// Called after every successful re-read with the latest version, changed
     /// or not. Level-triggered: this is what the compiled-policy-set cache
@@ -111,8 +157,9 @@ actor PolicySetVersionCache {
     /// alongside this; it was rejected for exactly that reason and deleted.)
     private var onRefresh: [@Sendable (Int) async -> Void] = []
 
-    init(logger: Logger) {
+    init(logger: Logger, iam: IAMPersistence) {
         self.logger = logger
+        self.iam = iam
     }
 
     /// The last version this replica observed. Cheap and non-throwing: callers
@@ -127,11 +174,28 @@ actor PolicySetVersionCache {
         onRefresh.append(handler)
     }
 
+    func makeCedarPolicySetCache(
+        engine: any CedarEngine = SwiftCedarEngine(),
+        logger: Logger
+    ) -> CedarPolicySetCache {
+        CedarPolicySetCache(engine: engine, logger: logger, iam: iam)
+    }
+
+    func synchronizeRoleRegistry(logger: Logger) async throws {
+        try await RoleRegistrySync.sync(using: iam, logger: logger)
+    }
+
+    func withIAMPersistence<Result: Sendable>(
+        _ operation: @Sendable (IAMPersistence) async throws -> Result
+    ) async rethrows -> Result {
+        try await operation(iam)
+    }
+
     /// Re-read the version from the database; fire change listeners if it
     /// moved and refresh listeners either way.
-    func refresh(on db: any Database) async {
+    func refresh() async {
         do {
-            let latest = try await PolicySetVersionService.current(on: db)
+            let latest = try await iam.currentPolicySetVersion()
             if latest != version {
                 let previous = version
                 version = latest
@@ -159,7 +223,13 @@ extension Application {
 
     /// This replica's policy-set version cache.
     var policySetVersion: PolicySetVersionCache {
-        lazyService(PolicySetVersionCacheKey.self) { PolicySetVersionCache(logger: logger) }
+        get {
+            guard let cache = storage[PolicySetVersionCacheKey.self] else {
+                preconditionFailure("Policy-set version cache has not been configured")
+            }
+            return cache
+        }
+        set { setStorageValue(PolicySetVersionCacheKey.self, to: newValue) }
     }
 
     /// Announce a policy-set change to every replica, this one included.
@@ -168,7 +238,7 @@ extension Application {
     /// periodic re-read, so a failure is logged rather than thrown. It must not
     /// fail the policy write that already committed.
     func announcePolicySetChange() async {
-        await policySetVersion.refresh(on: db)
+        await policySetVersion.refresh()
         do {
             try await coordination.publish(channel: PolicySetVersionCache.channel, message: "changed")
         } catch {
@@ -181,15 +251,13 @@ extension Application {
     /// Subscribe to policy-set change broadcasts and arm the periodic re-read.
     /// Called once at boot.
     func startPolicySetVersionWatch() async {
-        await policySetVersion.refresh(on: db)
+        await policySetVersion.refresh()
 
         do {
             try await coordination.subscribe(channel: PolicySetVersionCache.channel) { [self] _ in
                 backgroundTasks.spawn {
-                    // Bail if shutdown's drain cancelled us before Fluent's
-                    // teardown (see `Application.liveDB`).
-                    guard let db = self.liveDB else { return }
-                    await self.policySetVersion.refresh(on: db)
+                    guard !Task.isCancelled else { return }
+                    await self.policySetVersion.refresh()
                 }
             }
         } catch {
@@ -205,11 +273,8 @@ extension Application {
                 } catch {
                     return
                 }
-                // The sleep returned without cancelling, but the drain may have
-                // fired since; bail before touching the database (see
-                // `Application.liveDB`).
-                guard let db = liveDB else { return }
-                await policySetVersion.refresh(on: db)
+                guard !Task.isCancelled else { return }
+                await policySetVersion.refresh()
             }
         }
     }

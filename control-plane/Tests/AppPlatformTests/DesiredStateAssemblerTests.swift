@@ -62,7 +62,7 @@ final class DesiredStateAssemblerTests {
             protocolVersion: protocolVersion,
             resolverCapable: resolverCapable
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.db).first?.id
         let uuid = try await app.agentService.registerAgent(
             message, agentName: name, siteID: siteID,
             organizationScope: orgID.map { .organization($0) })
@@ -96,18 +96,20 @@ final class DesiredStateAssemblerTests {
             macAddress: mac, mtu: mtu, deviceName: deviceName, orderIndex: orderIndex)
         try await nic.save(on: app.db)
         if let ipv4 {
-            try await VMInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(),
                 family: .ipv4, address: ipv4.address, prefixLength: ipv4.prefix,
-                gateway: ipv4.gateway
-            ).save(on: app.db)
+                gateway: ipv4.gateway,
+                on: app.db)
         }
         if let ipv6 {
-            try await VMInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(),
                 family: .ipv6, address: ipv6.address, prefixLength: ipv6.prefix,
-                gateway: ipv6.gateway
-            ).save(on: app.db)
+                gateway: ipv6.gateway,
+                on: app.db)
         }
     }
 
@@ -384,15 +386,13 @@ final class DesiredStateAssemblerTests {
 
         let loadedNetwork = LogicalNetwork(
             id: UUID(), name: "loaded", subnet: "10.60.0.0/24", gateway: "10.60.0.1",
-            projectID: vm.$project.id, siteID: UUID())
+            projectID: vm.projectID, siteID: UUID())
         let missingNetworkID = UUID()
 
         func nic(_ device: String, order: Int, network: UUID, mac: String) -> VMNetworkInterface {
-            let interface = VMNetworkInterface(
+            VMNetworkInterface(
                 id: UUID(), vmID: vm.id!, logicalNetworkID: network, macAddress: mac,
-                deviceName: device, orderIndex: order)
-            interface.$addresses.value = []
-            return interface
+                loadedAddresses: [], deviceName: device, orderIndex: order)
         }
         // The middle NIC is the one whose row wasn't loaded, so a drop that
         // shifted the survivors would be visible in the order below.
@@ -407,7 +407,7 @@ final class DesiredStateAssemblerTests {
         #expect(resolved.map(\.interface.deviceName) == ["net0", "net2"])
 
         let boot = Volume(
-            id: UUID(), name: "boot", description: "", projectID: vm.$project.id,
+            id: UUID(), name: "boot", description: "", projectID: vm.projectID,
             environment: vm.environment, size: vm.disk, volumeType: .boot,
             status: .attached, createdByID: UUID())
         boot.$vm.id = vm.id!

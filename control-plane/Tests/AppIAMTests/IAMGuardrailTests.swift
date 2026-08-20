@@ -54,7 +54,7 @@ final class IAMGuardrailTests {
     @Test("A permit-shaped guardrail is rejected at write time")
     func permitRejected() async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "Permit")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "Permit")
 
             await #expect(throws: GuardrailError.permitRejected("permit")) {
                 _ = try await GuardrailStore.create(
@@ -70,7 +70,7 @@ final class IAMGuardrailTests {
                 )
             }
 
-            let stored = try await Guardrail.query(on: app.db).count()
+            let stored = try await LegacyGuardrailStore.count(on: app.db)
             #expect(stored == 0)
         }
     }
@@ -78,7 +78,7 @@ final class IAMGuardrailTests {
     @Test("An omitted effect means forbid, and the stored row says so")
     func omittedEffectIsForbid() async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "Omitted")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "Omitted")
 
             let guardrail = try await GuardrailStore.create(
                 name: "no-vm-delete",
@@ -99,7 +99,7 @@ final class IAMGuardrailTests {
     @Test("Guardrails attach to containers, not to individual resources")
     func leafNodeRejected() async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "Leaf")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "Leaf")
 
             await #expect(throws: GuardrailError.unattachableNode("virtual_machine")) {
                 _ = try await GuardrailStore.create(
@@ -126,7 +126,7 @@ final class IAMGuardrailTests {
         arguments: [["*"], ["iam:*"], ["iam:setPolicy"], ["vm:delete", "iam:setPolicy"]])
     func selfLockingGuardrailRefused(actions: [String]) async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "SelfLock")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "SelfLock")
 
             await #expect(throws: GuardrailError.locksOutPolicyAdministration) {
                 _ = try await GuardrailStore.create(
@@ -147,7 +147,7 @@ final class IAMGuardrailTests {
     @Test("A conditioned ceiling over iam:setPolicy is allowed — someone outside it can still undo it")
     func conditionedPolicyCeilingAllowed() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "CondLock")
             let contractors = try await builder.createGroup(
                 name: "cl-contractors", description: "d", organization: tree.org)
@@ -169,7 +169,7 @@ final class IAMGuardrailTests {
     @Test("An unconditional ceiling that misses iam:setPolicy is allowed")
     func unconditionalNonPolicyCeilingAllowed() async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "NonPolicy")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "NonPolicy")
 
             let guardrail = try await GuardrailStore.create(
                 name: "nobody-deletes-vms", description: nil, effect: nil, node: tree.orgNode,
@@ -183,7 +183,7 @@ final class IAMGuardrailTests {
     @Test("Two guardrails on one node cannot share a name")
     func duplicateNameRejected() async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "Dup")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "Dup")
 
             _ = try await GuardrailStore.create(
                 name: "no-deletes", description: nil, effect: nil, node: tree.orgNode,
@@ -229,7 +229,7 @@ final class IAMGuardrailTests {
     @Test("Ceilings inherit downward and intersect — a nearer one never cancels a farther one")
     func ceilingsIntersect() async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "Intersect")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "Intersect")
 
             _ = try await GuardrailStore.create(
                 name: "org-no-vm-delete", description: nil, effect: nil, node: tree.orgNode,
@@ -249,7 +249,7 @@ final class IAMGuardrailTests {
     @Test("A disabled guardrail stops applying but stays on the record")
     func disabledGuardrailExcluded() async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "Disabled")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "Disabled")
 
             let guardrail = try await GuardrailStore.create(
                 name: "paused-ceiling", description: nil, effect: nil, node: tree.orgNode,
@@ -270,7 +270,7 @@ final class IAMGuardrailTests {
     @Test("A guardrail on a sibling subtree does not reach this one")
     func siblingSubtreeUnaffected() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Sibling")
             let otherProject = try await builder.createProject(
                 name: "Sibling Other Project", description: "d", ou: tree.ou)
@@ -295,7 +295,7 @@ final class IAMGuardrailTests {
     @Test("A group ceiling forbids the group's members, and nobody else")
     func groupCeilingCoversMembers() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "GroupCeiling")
 
             let contractors = try await builder.createGroup(
@@ -303,7 +303,8 @@ final class IAMGuardrailTests {
             let contractor = try await builder.createUser(
                 username: "gc-contractor", email: "gc-contractor@example.com")
             let staff = try await builder.createUser(username: "gc-staff", email: "gc-staff@example.com")
-            try await UserGroup(userID: contractor.id!, groupID: contractors.id!).save(on: app.db)
+            try await builder.addUserToOrganization(user: contractor, organization: tree.org)
+            try await builder.addUserToGroup(user: contractor, group: contractors)
 
             _ = try await GuardrailStore.create(
                 name: "no-prod-for-contractors", description: nil, effect: nil, node: tree.ouNode,
@@ -329,7 +330,7 @@ final class IAMGuardrailTests {
     @Test("A ceiling on an action the guardrail doesn't name leaves it alone")
     func unnamedActionUnaffected() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Unnamed")
             let user = try await builder.createUser(username: "un-user", email: "un-user@example.com")
 
@@ -353,7 +354,7 @@ final class IAMGuardrailTests {
     @Test("The cross-org ceiling matches principals outside the resource's org")
     func externalPrincipalCeiling() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "External")
 
             let insider = try await builder.createUser(username: "ex-insider", email: "ex-insider@example.com")
@@ -381,7 +382,7 @@ final class IAMGuardrailTests {
     @Test("A group from another org is external; a group from this one is not")
     func externalGroupCeiling() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "ExternalGroup")
             let otherOrg = try await builder.createOrganization(name: "ExternalGroup Other Org")
 
@@ -412,7 +413,7 @@ final class IAMGuardrailTests {
     @Test("An environment ceiling matches only resources in that environment")
     func environmentCeiling() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Env", environment: "production")
             let stagingVM = try await builder.createVM(
                 name: "env-staging-vm", project: tree.project, environment: "staging")
@@ -438,7 +439,7 @@ final class IAMGuardrailTests {
     @Test("An environment ceiling reaches a snapshot of a production sandbox")
     func environmentCeilingCoversSandboxSnapshots() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "SnapEnv")
             let user = try await builder.createUser(
                 username: "snapenv-user", email: "snapenv-user@example.com")
@@ -473,7 +474,7 @@ final class IAMGuardrailTests {
     @Test("An environment ceiling does not reach a resource type that has no environment")
     func environmentCeilingSkipsContainers() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "EnvContainer")
             let user = try await builder.createUser(
                 username: "envc-user", email: "envc-user@example.com")
@@ -494,7 +495,7 @@ final class IAMGuardrailTests {
     @Test("Every ceiling in the way is reported, not just the first")
     func allViolationsReported() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "AllViolations")
             let user = try await builder.createUser(username: "av-user", email: "av-user@example.com")
 
@@ -526,7 +527,7 @@ final class IAMGuardrailTests {
     @Test("A matcher-built guardrail stores the Cedar forbid it assembles to")
     func matcherStoresCedarText() async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "MatcherText")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "MatcherText")
             let guardrail = try await GuardrailStore.create(
                 name: "no-vm-delete", description: nil, effect: nil, node: tree.projectNode,
                 actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
@@ -541,7 +542,7 @@ final class IAMGuardrailTests {
     @Test("A hand-authored forbid is stored, flagged authored, and compiles")
     func authoredForbidStored() async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "Authored")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "Authored")
             let text = authoredForbid(on: tree.projectNode)
             let guardrail = try await GuardrailStore.createAuthored(
                 name: "authored-no-delete", description: nil, node: tree.projectNode,
@@ -555,7 +556,7 @@ final class IAMGuardrailTests {
     @Test("An authored permit is rejected — guardrails are forbid-only")
     func authoredMustForbid() async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "AuthoredPermit")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "AuthoredPermit")
             let text =
                 "permit(principal, action in [Action::\"vm:delete\"], resource in \(tree.projectNode.cedarUID.cedarLiteral));"
             await #expect(throws: GuardrailError.authoredMustForbid("permit")) {
@@ -563,7 +564,7 @@ final class IAMGuardrailTests {
                     name: "nope", description: nil, node: tree.projectNode,
                     cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.db)
             }
-            let count = try await Guardrail.query(on: app.db).count()
+            let count = try await LegacyGuardrailStore.count(on: app.db)
             #expect(count == 0)
         }
     }
@@ -571,7 +572,7 @@ final class IAMGuardrailTests {
     @Test("An authored forbid scoped outside the attach node is refused")
     func authoredContainment() async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "AuthoredScope")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "AuthoredScope")
             // Attached to the project, but scoped to the org above it.
             let text = authoredForbid(on: tree.orgNode)
             await #expect(throws: GuardrailError.self) {
@@ -585,7 +586,7 @@ final class IAMGuardrailTests {
     @Test("An authored forbid with an unscoped resource is refused")
     func authoredUnscoped() async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "AuthoredUnscoped")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "AuthoredUnscoped")
             let text = "forbid(principal, action in [Action::\"vm:delete\"], resource);"
             await #expect(throws: GuardrailError.authoredUnscopedResource) {
                 _ = try await GuardrailStore.createAuthored(
@@ -598,7 +599,7 @@ final class IAMGuardrailTests {
     @Test("An unconditional authored forbid over iam:setPolicy is refused as self-locking")
     func authoredSelfLock() async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "AuthoredLock")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "AuthoredLock")
             // Unconstrained principal, no conditions, unconstrained action ⇒ reaches iam:setPolicy.
             let text = "forbid(principal, action, resource in \(tree.orgNode.cedarUID.cedarLiteral));"
             await #expect(throws: GuardrailError.locksOutPolicyAdministration) {
@@ -612,7 +613,7 @@ final class IAMGuardrailTests {
     @Test("Editing a matcher guardrail with cedarText is a mode mismatch")
     func updateModeMismatch() async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "ModeMismatch")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "ModeMismatch")
             let guardrail = try await GuardrailStore.create(
                 name: "matcher", description: nil, effect: nil, node: tree.projectNode,
                 actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
@@ -629,7 +630,7 @@ final class IAMGuardrailTests {
     @Test("The structured evaluation skips authored rows")
     func forbiddingSkipsAuthored() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "SkipAuthored")
             let user = try await builder.createUser(username: "sa-user", email: "sa-user@example.com")
             _ = try await GuardrailStore.createAuthored(
@@ -648,7 +649,7 @@ final class IAMGuardrailTests {
     @Test("An authored guardrail is skipped by the write-time report; the solver is never consulted")
     func authoredSkippedInWriteCheck() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "AuthoredWriteCheck")
             let user = try await builder.createUser(username: "awc-user", email: "awc-user@example.com")
             _ = try await GuardrailStore.createAuthored(
@@ -670,19 +671,22 @@ final class IAMGuardrailTests {
     @Test("The boot backfill fills a null cedar_text from the matchers, idempotently")
     func cedarTextBackfill() async throws {
         try await withApp { app in
-            let tree = try await buildTree(TestDataBuilder(db: app.db), prefix: "Backfill")
+            let tree = try await buildTree(TestDataBuilder(app: app), prefix: "Backfill")
             let guardrail = try await GuardrailStore.create(
                 name: "no-vm-delete", description: nil, effect: nil, node: tree.projectNode,
                 actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
                 createdBy: nil, on: app.db)
             // Simulate a row written before #610: the column existed but was null.
-            guardrail.cedarText = nil
-            try await guardrail.save(on: app.db)
+            try await LegacyGuardrailStore.setCedarText(
+                id: guardrail.id,
+                cedarText: nil,
+                on: app.db
+            )
 
             let filled = try await GuardrailStore.backfillCedarText(
                 on: app.db, logger: app.logger)
             #expect(filled == 1)
-            let reloaded = try await Guardrail.find(guardrail.id!, on: app.db)
+            let reloaded = try await LegacyGuardrailStore.guardrail(id: guardrail.id, on: app.db)
             #expect(reloaded?.cedarText?.contains("forbid") == true)
 
             // Idempotent: a second run finds nothing to fill.

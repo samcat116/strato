@@ -1,4 +1,5 @@
 import AppTestSupport
+import ControlPlanePostgres
 import Fluent
 import FluentPostgresDriver
 import Logging
@@ -40,8 +41,8 @@ struct SchemaMigratorTests {
 
             // Sanity: the schema really was built, not just left empty.
             let applied = try await MigrationLog.query(on: second.db).count()
-            #expect(applied == 1)
-            #expect(try await User.query(on: second.db).count() == 0)
+            #expect(applied == StratoMigrations.current.count)
+            #expect(try await User.count(on: second.db) == 0)
         } catch {
             try? await first.asyncShutdown()
             try? await second.shutdownForTesting()
@@ -66,13 +67,13 @@ struct SchemaMigratorTests {
             thrown = try await holder.db.withConnection { held in
                 let sql = try #require(held as? any SQLDatabase)
                 _ = try await sql.raw(
-                    "SELECT pg_advisory_lock(hashtext(\(bind: SchemaMigrator.lockName)))"
+                    "SELECT pg_advisory_lock(hashtext(\(bind: App.SchemaMigrator.lockName)))"
                 ).all()
 
                 var attempt = LockAttempt(isSchemaMigrationError: false, description: nil)
                 do {
                     try await waiter.db.withConnection { waiting in
-                        _ = try await SchemaMigrator.acquireLock(
+                        _ = try await App.SchemaMigrator.acquireLock(
                             on: waiting,
                             timeout: 1,
                             poll: 0.2,
@@ -81,13 +82,13 @@ struct SchemaMigratorTests {
                     }
                 } catch {
                     attempt = LockAttempt(
-                        isSchemaMigrationError: error is SchemaMigrationError,
-                        description: (error as? SchemaMigrationError)?.description ?? "\(error)"
+                        isSchemaMigrationError: error is App.SchemaMigrationError,
+                        description: (error as? App.SchemaMigrationError)?.description ?? "\(error)"
                     )
                 }
 
                 _ = try await sql.raw(
-                    "SELECT pg_advisory_unlock(hashtext(\(bind: SchemaMigrator.lockName)))"
+                    "SELECT pg_advisory_unlock(hashtext(\(bind: App.SchemaMigrator.lockName)))"
                 ).all()
                 return attempt
             }
@@ -99,7 +100,7 @@ struct SchemaMigratorTests {
 
         #expect(thrown.isSchemaMigrationError)
         let description = try #require(thrown.description)
-        #expect(description.contains(SchemaMigrator.lockName))
+        #expect(description.contains(App.SchemaMigrator.lockName))
         #expect(description.contains("Timed out"))
 
         try await holder.asyncShutdown()
@@ -116,7 +117,7 @@ struct SchemaMigratorTests {
             var thrown: (any Error)?
             do {
                 try await app.db.withConnection { connection in
-                    try await SchemaMigrator.applyBatch(
+                    try await App.SchemaMigrator.applyBatch(
                         [migration],
                         batch: 9999,
                         on: connection,
@@ -127,7 +128,7 @@ struct SchemaMigratorTests {
                 thrown = error
             }
 
-            let error = try #require(thrown as? SchemaMigrationError)
+            let error = try #require(thrown as? App.SchemaMigrationError)
             #expect(error.description.contains(migration.name))
             #expect(error.description.contains("run transactionally"))
 
@@ -150,10 +151,10 @@ struct SchemaMigratorTests {
     func successfulMigrationRecordsItself() async throws {
         try await withTestApp { app in
             let migration = CreatesProbeTable()
-            let batch = try await SchemaMigrator.nextBatchNumber(on: app.db)
+            let batch = try await App.SchemaMigrator.nextBatchNumber(on: app.db)
 
             try await app.db.withConnection { connection in
-                try await SchemaMigrator.applyBatch(
+                try await App.SchemaMigrator.applyBatch(
                     [migration],
                     batch: batch,
                     on: connection,
@@ -185,7 +186,7 @@ struct SchemaMigratorTests {
             var thrown: (any Error)?
             do {
                 try await app.db.withConnection { connection in
-                    try await SchemaMigrator.applyBatch(
+                    try await App.SchemaMigrator.applyBatch(
                         [migration],
                         batch: 9999,
                         on: connection,
@@ -196,7 +197,7 @@ struct SchemaMigratorTests {
                 thrown = error
             }
 
-            let error = try #require(thrown as? SchemaMigrationError)
+            let error = try #require(thrown as? App.SchemaMigrationError)
             #expect(error.description.contains("opted out of transactions"))
             #expect(error.description.contains("may already be present"))
 
@@ -223,7 +224,7 @@ struct SchemaMigratorTests {
             var thrown: (any Error)?
             do {
                 try await app.db.withConnection { connection in
-                    try await SchemaMigrator.applyBatch(
+                    try await App.SchemaMigrator.applyBatch(
                         [migration],
                         batch: 9999,
                         on: connection,
@@ -234,7 +235,7 @@ struct SchemaMigratorTests {
                 thrown = error
             }
 
-            let error = try #require(thrown as? SchemaMigrationError)
+            let error = try #require(thrown as? App.SchemaMigrationError)
             #expect(error.description.contains("42P16"))
             #expect(!error.description.contains("INSERT INTO _fluent_migrations"))
         }
@@ -262,7 +263,7 @@ struct SchemaMigratorTests {
                 thrown = error
             }
 
-            let error = try #require(thrown as? SchemaMigrationError)
+            let error = try #require(thrown as? ControlPlanePostgres.SchemaMigrationError)
             #expect(error.description.contains(lostMigration))
             #expect(error.description.contains("requires a fresh database"))
             #expect(!error.description.contains("INSERT INTO _fluent_migrations"))
@@ -282,7 +283,7 @@ struct SchemaMigratorTests {
     func pendingMigrationsFailWhenMigrationsAreDisabled() async throws {
         try await withTestApp { app in
             // Nothing pending: the fully migrated clone verifies clean.
-            try await SchemaMigrator.run(on: app, options: .init(runMigrations: false))
+            try await App.SchemaMigrator.run(on: app, options: .init(runMigrations: false))
 
             // One migration this database has never seen.
             let pending = CreatesProbeTable()
@@ -297,15 +298,15 @@ struct SchemaMigratorTests {
                         migrations: migrations,
                         on: connection.eventLoop
                     )
-                    try await SchemaMigrator.verifyNothingPending(migrator: migrator, logger: app.logger)
+                    try await App.SchemaMigrator.verifyNothingPending(migrator: migrator, logger: app.logger)
                 }
             } catch {
                 thrown = error
             }
 
-            let error = try #require(thrown as? SchemaMigrationError)
+            let error = try #require(thrown as? App.SchemaMigrationError)
             #expect(error.description.contains(pending.name))
-            #expect(error.description.contains(SchemaMigrator.runMigrationsKey))
+            #expect(error.description.contains(App.SchemaMigrator.runMigrationsKey))
 
             // Verification is read-only: it must not have applied anything.
             let sql = try #require(app.db as? any SQLDatabase)

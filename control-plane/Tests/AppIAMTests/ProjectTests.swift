@@ -40,7 +40,7 @@ final class ProjectTests {
             try await testOrganization.save(on: app.db)
 
             // Create test OU
-            let testOU = OrganizationalUnit(
+            var testOU = OrganizationalUnit(
                 name: "Test OU",
                 description: "Test organizational unit",
                 organizationID: testOrganization.id!,
@@ -48,16 +48,16 @@ final class ProjectTests {
                 depth: 0
             )
             try await testOU.save(on: app.db)
-            testOU.path = try await testOU.buildPath(on: app.db)
+            testOU = testOU.replacingPath(try await testOU.buildPath(on: app.db))
             try await testOU.save(on: app.db)
 
             // Add user to organization as admin
-            let userOrg = UserOrganization(
+            _ = try await OrganizationMembershipStore.insert(
                 userID: testUser.id!,
                 organizationID: testOrganization.id!,
-                roleID: IAMRole.admin.seededID
+                roleID: IAMRole.admin.seededID,
+                on: app.db
             )
-            try await userOrg.save(on: app.db)
 
             // The admin role binding the API/backfill would have written
             // alongside the membership row — the Cedar evaluator (#482)
@@ -66,7 +66,7 @@ final class ProjectTests {
                 principalType: .user, principalID: testUser.id!, role: .admin,
                 nodeType: .organization, nodeID: testOrganization.id!, createdBy: nil, on: app.db)
 
-            let authToken = try await testUser.generateAPIKey(on: app.db)
+            let authToken = try await testUser.generateAPIKey(on: app)
 
             try await test(app, testUser, testOrganization, testOU, authToken)
         } catch {
@@ -153,17 +153,17 @@ final class ProjectTests {
             let projectId = try #require(createdProjectId)
             let savedProject = try await Project.find(projectId, on: app.db)
             let saved = try #require(savedProject)
-            #expect(saved.$organization.id == testOrganization.id)
+            #expect(saved.organizationID == testOrganization.id)
             #expect(saved.path == "/\(testOrganization.id!.uuidString)/\(projectId.uuidString)")
 
             // The creator gets an explicit admin binding on the new project.
-            let bindingCount = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
-                .filter(\.$principalID == testUser.id!)
-                .filter(\.$roleID == IAMRole.admin.seededID)
-                .filter(\.$nodeType == IAMNodeType.project.rawValue)
-                .filter(\.$nodeID == projectId)
-                .count()
+            let bindingCount = try await LegacyRoleBindingStore.bindings(
+                principalType: IAMPrincipalType.user.rawValue,
+                principalID: testUser.id!,
+                roleID: IAMRole.admin.seededID,
+                nodeType: IAMNodeType.project.rawValue,
+                nodeID: projectId,
+                on: app.db).count
             #expect(bindingCount == 1)
         }
     }
@@ -194,8 +194,8 @@ final class ProjectTests {
             // organization — so OU-scoped projects inherit up the OU chain (and
             // OU admins, not just org admins, can manage them). The Cedar
             // hierarchy is built from these columns and the materialized path.
-            #expect(saved.$organizationalUnit.id == testOU.id)
-            #expect(saved.$organization.id == nil)
+            #expect(saved.organizationalUnitID == testOU.id)
+            #expect(saved.organizationID == nil)
             #expect(saved.path == "\(testOU.path)/\(projectId.uuidString)")
         }
     }
@@ -224,14 +224,14 @@ final class ProjectTests {
     @Test("Add environment to project")
     func testAddEnvironment() async throws {
         try await withProjectTestApp { app, _, testOrganization, _, authToken in
-            let project = Project(
+            var project = Project(
                 name: "Environment Test",
                 description: "Test project",
                 organizationID: testOrganization.id,
                 path: ""
             )
             try await project.save(on: app.db)
-            project.path = try await project.buildPath(on: app.db)
+            project = project.replacingPath(try await project.buildPath(on: app.db))
             try await project.save(on: app.db)
 
             try await app.test(.POST, "/api/projects/\(project.id!)/environments") { req in
@@ -252,7 +252,7 @@ final class ProjectTests {
     @Test("Remove environment from project")
     func testRemoveEnvironment() async throws {
         try await withProjectTestApp { app, _, testOrganization, _, authToken in
-            let project = Project(
+            var project = Project(
                 name: "Environment Test",
                 description: "Test project",
                 organizationID: testOrganization.id,
@@ -262,7 +262,7 @@ final class ProjectTests {
                 environments: ["dev", "staging", "prod"]
             )
             try await project.save(on: app.db)
-            project.path = try await project.buildPath(on: app.db)
+            project = project.replacingPath(try await project.buildPath(on: app.db))
             try await project.save(on: app.db)
 
             try await app.test(.DELETE, "/api/projects/\(project.id!)/environments/staging") { req in
@@ -396,14 +396,13 @@ final class ProjectTests {
                 username: "bare-member", email: "member@example.com",
                 displayName: "Bare Member", isSystemAdmin: false)
             try await member.save(on: app.db)
-            try await UserOrganization(
-                userID: member.id!, organizationID: testOrganization.id!, roleID: nil
-            ).save(on: app.db)
+            _ = try await OrganizationMembershipStore.insert(
+                userID: member.id!, organizationID: testOrganization.id!, on: app.db)
             // One explicit project binding — the only project they may read.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: member.id!, role: .viewer,
                 nodeType: .project, nodeID: visibleProject.id!, createdBy: nil, on: app.db)
-            let memberToken = try await member.generateAPIKey(on: app.db)
+            let memberToken = try await member.generateAPIKey(on: app)
 
             // Before STR-113 this handed back every project in the org; now the
             // evaluator decides per row, so the unbound project never appears.
@@ -509,14 +508,14 @@ final class ProjectTests {
                 name: "shared-organization-networks", maxNetworks: 2,
                 organization: testOrganization)
             for quota in [sourceQuota, destinationQuota] {
-                try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
-                try await quota.save(on: app.db)
-                #expect(quota.networkCount == 1)
+                let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
+                try await synchronized.save(on: app.db)
+                #expect(synchronized.networkCount == 1)
             }
-            try await QuotaEnforcementService.resyncReservations(
+            let synchronizedSharedQuota = try await QuotaEnforcementService.resyncReservations(
                 sharedOrganizationQuota, on: app.db)
-            try await sharedOrganizationQuota.save(on: app.db)
-            #expect(sharedOrganizationQuota.networkCount == 2)
+            try await synchronizedSharedQuota.save(on: app.db)
+            #expect(synchronizedSharedQuota.networkCount == 2)
 
             func transfer() async throws -> HTTPResponseStatus {
                 var status = HTTPResponseStatus.internalServerError
@@ -538,19 +537,18 @@ final class ProjectTests {
             #expect(try await transfer() == .forbidden)
             let refusedProject = try #require(
                 try await Project.find(sourceProject.id, on: app.db))
-            #expect(refusedProject.$organizationalUnit.id == sourceOU.id)
+            #expect(refusedProject.organizationalUnitID == sourceOU.id)
             #expect(try await ResourceQuota.find(sourceQuota.id, on: app.db)?.networkCount == 1)
             #expect(try await ResourceQuota.find(destinationQuota.id, on: app.db)?.networkCount == 1)
             #expect(
                 try await ResourceQuota.find(sharedOrganizationQuota.id, on: app.db)?.networkCount == 2)
 
-            destinationQuota.maxNetworks = 2
-            try await destinationQuota.save(on: app.db)
+            try await destinationQuota.withMaxNetworks(2).save(on: app.db)
             #expect(try await transfer() == .ok)
 
             let movedProject = try #require(
                 try await Project.find(sourceProject.id, on: app.db))
-            #expect(movedProject.$organizationalUnit.id == destinationOU.id)
+            #expect(movedProject.organizationalUnitID == destinationOU.id)
             #expect(try await ResourceQuota.find(sourceQuota.id, on: app.db)?.networkCount == 0)
             #expect(try await ResourceQuota.find(destinationQuota.id, on: app.db)?.networkCount == 2)
             #expect(
@@ -564,11 +562,12 @@ final class ProjectTests {
             // A second organization the user also administers.
             let destinationOrg = Organization(name: "Destination Org", description: "Transfer target")
             try await destinationOrg.save(on: app.db)
-            try await UserOrganization(
+            _ = try await OrganizationMembershipStore.insert(
                 userID: testUser.id!,
                 organizationID: destinationOrg.id!,
-                roleID: IAMRole.admin.seededID
-            ).save(on: app.db)
+                roleID: IAMRole.admin.seededID,
+                on: app.db
+            )
             try await RoleBindingService.grant(
                 principalType: .user, principalID: testUser.id!, role: .admin,
                 nodeType: .organization, nodeID: destinationOrg.id!, createdBy: nil, on: app.db)
@@ -599,7 +598,7 @@ final class ProjectTests {
             // permissions through the hierarchy the Cedar evaluator builds.
             let movedProject = try await Project.find(project.id!, on: app.db)
             let moved = try #require(movedProject)
-            #expect(moved.$organization.id == destinationOrg.id)
+            #expect(moved.organizationID == destinationOrg.id)
             #expect(moved.path == "/\(destinationOrg.id!.uuidString)/\(project.id!.uuidString)")
         }
     }
@@ -609,11 +608,11 @@ final class ProjectTests {
         try await withProjectTestApp { app, testUser, testOrganization, _, authToken in
             let destinationOrg = Organization(name: "Member Only Org", description: "User is only a member")
             try await destinationOrg.save(on: app.db)
-            try await UserOrganization(
+            _ = try await OrganizationMembershipStore.insert(
                 userID: testUser.id!,
                 organizationID: destinationOrg.id!,
-                roleID: nil
-            ).save(on: app.db)
+                on: app.db
+            )
 
             // The user holds no admin binding on the destination org (only a
             // bare membership row), so the destination-org admin check fails;
@@ -696,8 +695,9 @@ final class ProjectTests {
                 name: "destination-network", project: destinationProject)
             let destinationQuota = try await builder.createResourceQuota(
                 name: "atomic-destination-networks", maxNetworks: 1, ou: destinationOU)
-            try await QuotaEnforcementService.resyncReservations(destinationQuota, on: app.db)
-            try await destinationQuota.save(on: app.db)
+            let synchronizedDestinationQuota = try await QuotaEnforcementService.resyncReservations(
+                destinationQuota, on: app.db)
+            try await synchronizedDestinationQuota.save(on: app.db)
 
             try await app.test(.PUT, "/api/projects/\(try project.requireID())") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -716,7 +716,7 @@ final class ProjectTests {
                 try await Project.find(project.id, on: app.db))
             #expect(persisted.name == "Original Atomic Project")
             #expect(persisted.description == "Original description")
-            #expect(persisted.$organizationalUnit.id == sourceOU.id)
+            #expect(persisted.organizationalUnitID == sourceOU.id)
         }
     }
 
@@ -758,12 +758,11 @@ final class ProjectTests {
 
             let group = try await SecurityGroupService.ensureDefaultGroup(
                 projectID: projectID, on: app.db)
-            let groupID = try group.requireID()
-            let rules = try await SecurityGroupRule.query(on: app.db)
-                .filter(\.$securityGroup.$id == groupID)
-                .all()
+            let groupID = group.id
+            let rules = try await LegacySecurityGroupRuleStore.rules(
+                securityGroupID: groupID, on: app.db)
             #expect(rules.count == 4)
-            #expect(rules.filter { $0.$remoteGroup.id == groupID }.count == 2)
+            #expect(rules.filter { $0.remoteGroupID == groupID }.count == 2)
 
             try await app.test(.DELETE, "/api/projects/\(projectID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -772,11 +771,9 @@ final class ProjectTests {
             }
 
             #expect(try await Project.find(projectID, on: app.db) == nil)
-            #expect(try await SecurityGroup.find(groupID, on: app.db) == nil)
-            #expect(
-                try await SecurityGroupRule.query(on: app.db)
-                    .filter(\.$securityGroup.$id == groupID)
-                    .count() == 0)
+            #expect(try await LegacySecurityGroupStore.group(id: groupID, on: app.db) == nil)
+            #expect(try await LegacySecurityGroupRuleStore.count(
+                securityGroupID: groupID, on: app.db) == 0)
         }
     }
 
@@ -798,9 +795,9 @@ final class ProjectTests {
                 name: "project-network-count", project: project)
 
             for quota in [organizationQuota, ouQuota, projectQuota] {
-                try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
-                try await quota.save(on: app.db)
-                #expect(quota.networkCount == 1)
+                let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
+                try await synchronized.save(on: app.db)
+                #expect(synchronized.networkCount == 1)
             }
 
             try await app.test(.DELETE, "/api/projects/\(try project.requireID())") { req in
@@ -905,8 +902,7 @@ final class ProjectTests {
             let vm = try await builder.createVM(name: "survivor-vm", project: project)
             // Pointed at the doomed org, so the refusal can be checked to have
             // happened *before* the delete path clears this.
-            user.currentOrganizationId = try org.requireID()
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(try org.requireID()).save(on: app.db)
 
             // `projects.organization_id` cascades, so before STR-98 this
             // deleted the VM row outright — one level further up the same

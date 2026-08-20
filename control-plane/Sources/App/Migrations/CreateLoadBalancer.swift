@@ -33,7 +33,7 @@ struct CreateLoadBalancer: AsyncMigration {
         // A floating IP may target either a VM NIC or a load-balancer VIP.
         // SET NULL preserves the reserved external address when either target
         // is deleted, matching the existing interface attachment semantics.
-        try await database.schema(FloatingIP.schema)
+        try await database.schema("floating_ips")
             .field(
                 "load_balancer_id", .uuid,
                 .references(LoadBalancer.schema, "id", onDelete: .setNull)
@@ -54,7 +54,7 @@ struct CreateLoadBalancer: AsyncMigration {
     }
 
     func revert(on database: Database) async throws {
-        try await database.schema(FloatingIP.schema).deleteField("load_balancer_id").update()
+        try await database.schema("floating_ips").deleteField("load_balancer_id").update()
         try await database.schema(LoadBalancer.schema).delete()
     }
 }

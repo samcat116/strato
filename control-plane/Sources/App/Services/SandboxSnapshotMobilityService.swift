@@ -122,7 +122,7 @@ extension SandboxSnapshot {
     /// complete.
     func exportedArtifactDescriptors() throws -> [SandboxSnapshotArtifactDescriptor]? {
         guard isExported, let exportedArtifacts else { return nil }
-        let sandboxID = self.$sandbox.id
+        let sandboxID = self.sandboxID
         let snapshotID = try requireID()
         return exportedArtifacts.map { artifact in
             SandboxSnapshotArtifactDescriptor(
@@ -143,7 +143,7 @@ extension SandboxSnapshot {
         guard exportedArtifacts?.isEmpty == false || exportedAt != nil else { return }
         guard let snapshotID = id else { return }
         let prefix = SandboxSnapshotObjectKey.snapshotPrefix(
-            projectId: self.$project.id, snapshotId: snapshotID)
+            projectId: self.projectID, snapshotId: snapshotID)
         do {
             try await app.imageObjectStore.deletePrefix(prefix)
         } catch {

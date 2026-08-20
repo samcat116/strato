@@ -199,7 +199,7 @@ struct VMSpecBuilder {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
         let memorySize = vm.memory > 0 ? vm.memory : (image?.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
 
-        let attachedVolumes = volumes.filter { $0.$vm.id != nil }
+        let attachedVolumes = volumes.filter { $0.vmID != nil }
         let bootVolumes = attachedVolumes.filter { $0.volumeType == .boot }
         guard bootVolumes.count == 1 else {
             throw Abort(
@@ -288,7 +288,7 @@ struct VMSpecBuilder {
         // attached while the volume lane called it detached, or the reverse.
         // The volume lane is authoritative for realizing an attachment; this
         // list is the boot-time convenience that rebuilds the same disk set.
-        for volume in sortedVolumes where volume.$vm.id != nil && volume.desiredStatus == .present {
+        for volume in sortedVolumes where volume.vmID != nil && volume.desiredStatus == .present {
             guard let volumeID = volume.id else {
                 throw Abort(.internalServerError, reason: "Attached volume is missing its managed identity")
             }
@@ -338,13 +338,13 @@ struct VMSpecBuilder {
             throw Abort(.badRequest, reason: "Image is not ready for use")
         }
 
-        let projectId = image.$project.id
+        let projectId = image.projectID
         let downloadPath = "/api/projects/\(projectId)/images/\(imageId)/download"
 
         // One download descriptor per typed artifact. Exclude any artifact
         // that isn't fully materialized — a pending/downloading URL fetch has no
         // real checksum or bytes yet and must never reach an agent.
-        let artifacts = (image.$artifacts.value ?? []).filter(\.isUsable).map { artifact in
+        let artifacts = (image.loadedArtifacts ?? []).filter(\.isUsable).map { artifact in
             ArtifactInfo(
                 kind: artifact.kind,
                 filename: artifact.filename,

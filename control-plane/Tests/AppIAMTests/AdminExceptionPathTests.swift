@@ -57,9 +57,9 @@ final class AdminExceptionPathTests {
             ),
             architecture: .x86_64,
             lastHeartbeat: Date()
-        )
-        agent.organizationScope = .organization(try org.requireID())
-        agent.wireProtocolVersion = WireProtocol.currentVersion
+        ).replacing(
+            wireProtocolVersion: .some(WireProtocol.currentVersion)
+        ).replacingOrganizationScope(.organization(try org.requireID()))
         try await agent.save(on: app.db)
         return agent
     }
@@ -76,7 +76,7 @@ final class AdminExceptionPathTests {
             let org = try await builder.createOrganization(name: "Ceiling Org")
             let admin = try await builder.createUser(
                 username: "ceil-admin", email: "ceil-admin@example.com", isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             let site = Site(name: "ceilinged-dc", organizationScope: .organization(try org.requireID()))
             try await site.save(on: app.db)
@@ -133,7 +133,7 @@ final class AdminExceptionPathTests {
         try await withApp { app, builder in
             let user = try await builder.createUser(username: "selfy", email: "selfy@example.com")
             let other = try await builder.createUser(username: "othery", email: "othery@example.com")
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
             try await rebuildPolicySet(app)
 
             try await app.test(.GET, "/api/users/\(try user.requireID().uuidString)") { req in
@@ -163,7 +163,7 @@ final class AdminExceptionPathTests {
             let admin = try await builder.createUser(
                 username: "id-admin", email: "id-admin@example.com", isSystemAdmin: true)
             let victim = try await builder.createUser(username: "victim", email: "victim@example.com")
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             _ = try await GuardrailStore.create(
                 name: "no-user-deletes",
@@ -200,7 +200,7 @@ final class AdminExceptionPathTests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: try orgAdmin.requireID(), role: .admin,
                 nodeType: .organization, nodeID: try org.requireID(), createdBy: nil, on: app.db)
-            let token = try await orgAdmin.generateAPIKey(on: app.db)
+            let token = try await orgAdmin.generateAPIKey(on: app)
 
             let agent = try await makeAgent(app, name: "artifact-agent", org: org)
             try await rebuildPolicySet(app)
@@ -236,7 +236,7 @@ final class AdminExceptionPathTests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: try orgAdmin.requireID(), role: .admin,
                 nodeType: .organization, nodeID: try homeOrg.requireID(), createdBy: nil, on: app.db)
-            let token = try await orgAdmin.generateAPIKey(on: app.db)
+            let token = try await orgAdmin.generateAPIKey(on: app)
 
             let agent = try await makeAgent(app, name: "fw-agent", org: homeOrg)
             let path = "/api/agents/\(try agent.requireID().uuidString)/actions/force-offline"
@@ -252,7 +252,7 @@ final class AdminExceptionPathTests {
             // Park a foreign-org VM on the agent; the forbid now fires.
             let foreignProject = try await builder.createProject(
                 name: "Foreign Project", description: "d", organization: foreignOrg)
-            let vm = try await builder.createVM(name: "foreign-vm", project: foreignProject)
+            var vm = try await builder.createVM(name: "foreign-vm", project: foreignProject)
             vm.hypervisorId = try agent.requireID().uuidString
             try await vm.save(on: app.db)
 
@@ -273,13 +273,13 @@ final class AdminExceptionPathTests {
             let foreignOrg = try await builder.createOrganization(name: "Foreign Org")
             let admin = try await builder.createUser(
                 username: "fw-sysadmin", email: "fw-sysadmin@example.com", isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             let agent = try await makeAgent(app, name: "fw-agent-2", org: homeOrg)
 
             let foreignProject = try await builder.createProject(
                 name: "Foreign Project", description: "d", organization: foreignOrg)
-            let vm = try await builder.createVM(name: "foreign-vm-2", project: foreignProject)
+            var vm = try await builder.createVM(name: "foreign-vm-2", project: foreignProject)
             vm.hypervisorId = try agent.requireID().uuidString
             try await vm.save(on: app.db)
             try await rebuildPolicySet(app)

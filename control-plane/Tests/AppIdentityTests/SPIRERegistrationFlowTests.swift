@@ -20,15 +20,15 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
 
     // MARK: - Helpers
 
-    private func makeAdmin(on db: Database) async throws -> String {
+    private func makeAdmin(on app: Application) async throws -> String {
         let admin = User(
             username: "spire-admin",
             email: "spire-admin@example.com",
             displayName: "SPIRE Admin",
             isSystemAdmin: true
         )
-        try await admin.save(on: db)
-        return try await admin.generateAPIKey(on: db)
+        try await admin.save(on: app.db)
+        return try await admin.generateAPIKey(on: app)
     }
 
     private func makeConfig() -> SPIRERegistrationConfig {
@@ -74,8 +74,8 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     /// An enrollment row as `createEnrollment` would have left it, without
     /// driving the endpoint (which would also call the fake SPIRE API and
     /// pollute the call recordings these tests assert on).
-    private func makeEnrollment(agentName: String = "node-a") -> AgentEnrollment {
-        AgentEnrollment(
+    private func makeEnrollment(agentName: String = "node-a") -> TestAgentEnrollment {
+        TestAgentEnrollment(
             agentName: agentName,
             spiffeID: "spiffe://strato.local/agent/\(agentName)",
             expirationHours: 1)
@@ -108,7 +108,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Creating an enrollment returns one opaque token and redemption derives SPIRE configuration")
     func createEnrollmentProvisionsSPIRE() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let orgId = try await makeOrg(on: app.db)
             let siteId = try await makeSite(on: app.db, org: orgId)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
@@ -185,7 +185,8 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
 
             // The persisted row carries the scope a registering agent inherits.
             let row = try #require(
-                try await AgentEnrollment.query(on: app.db).filter(\.$agentName == "node-a").first())
+                try await findTestAgentEnrollment(agentName: "node-a", on: app.db)
+            )
             #expect(row.organizationID == orgId)
             #expect(row.siteID == siteId)
             #expect(row.isUsed == false)
@@ -197,11 +198,11 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     func bootstrapRedemptionClaimsBeforeMinting() async throws {
         try await withApp { app in
             let token = AgentEnrollment.generateBootstrapToken()
-            let enrollment = AgentEnrollment(
+            let enrollment = TestAgentEnrollment(
                 agentName: "node-a",
                 spiffeID: "spiffe://strato.local/agent/node-a",
                 bootstrapTokenHash: AgentEnrollment.hashBootstrapToken(token))
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
 
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
             await fake.holdNextJoinTokenRequest()
@@ -225,11 +226,11 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     func failedBootstrapMintConsumesBearer() async throws {
         try await withApp { app in
             let token = AgentEnrollment.generateBootstrapToken()
-            let enrollment = AgentEnrollment(
+            let enrollment = TestAgentEnrollment(
                 agentName: "node-a",
                 spiffeID: "spiffe://strato.local/agent/node-a",
                 bootstrapTokenHash: AgentEnrollment.hashBootstrapToken(token))
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
 
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
             await fake.setFailJoinToken(true)
@@ -244,13 +245,13 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Revocation waits for an in-flight bootstrap mint and withdraws its credential")
     func revocationSerializesWithBootstrapMint() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let token = AgentEnrollment.generateBootstrapToken()
-            let enrollment = AgentEnrollment(
+            let enrollment = TestAgentEnrollment(
                 agentName: "node-a",
                 spiffeID: "spiffe://strato.local/agent/node-a",
                 bootstrapTokenHash: AgentEnrollment.hashBootstrapToken(token))
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
             let enrollmentID = try enrollment.requireID()
 
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
@@ -266,12 +267,12 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             // complete after the reported revocation and survive it.
             try await Task.sleep(for: .milliseconds(100))
             #expect(await fake.deletedSPIFFEIDs.isEmpty)
-            #expect(try await AgentEnrollment.find(enrollmentID, on: app.db) != nil)
+            #expect(try await findTestAgentEnrollment(enrollmentID, on: app.db) != nil)
 
             await fake.releaseHeldJoinTokenRequest()
             #expect(try await redemptionStatus == .ok)
             #expect(try await revocationStatus == .noContent)
-            #expect(try await AgentEnrollment.find(enrollmentID, on: app.db) == nil)
+            #expect(try await findTestAgentEnrollment(enrollmentID, on: app.db) == nil)
             #expect(
                 await fake.deletedSPIFFEIDs
                     == [
@@ -285,7 +286,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("An existing identical SPIRE entry is reused, not an error")
     func createEnrollmentReusesExistingEntry() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let orgId = try await makeOrg(on: app.db)
             let siteId = try await makeSite(on: app.db, org: orgId)
             let fake = FakeSPIREServerAPI()
@@ -307,7 +308,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("SPIRE provisioning failure returns 502 and persists nothing")
     func createEnrollmentFailsClosedWhenSPIREUnreachable() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let orgId = try await makeOrg(on: app.db)
             let siteId = try await makeSite(on: app.db, org: orgId)
             let fake = FakeSPIREServerAPI()
@@ -322,7 +323,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(res.status == .badGateway)
             }
 
-            let enrollmentCount = try await AgentEnrollment.query(on: app.db).count()
+            let enrollmentCount = try await testAgentEnrollmentCount(on: app.db)
             #expect(enrollmentCount == 0)
         }
     }
@@ -330,7 +331,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Agent names unusable as SPIFFE path segments are rejected with 400")
     func createEnrollmentRejectsInvalidSPIFFEName() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let orgId = try await makeOrg(on: app.db)
             installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
@@ -341,7 +342,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(res.status == .badRequest)
             }
 
-            let enrollmentCount = try await AgentEnrollment.query(on: app.db).count()
+            let enrollmentCount = try await testAgentEnrollmentCount(on: app.db)
             #expect(enrollmentCount == 0)
         }
     }
@@ -349,7 +350,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Without SPIRE configured, enrolling an agent is refused naming the missing settings")
     func createEnrollmentRequiresSPIRE() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let orgId = try await makeOrg(on: app.db)
 
             // No `spireRegistrationService`: mTLS is the only agent auth path,
@@ -367,7 +368,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(body.contains("SPIRE_SERVER_API_ADDRESS"))
             }
 
-            let enrollmentCount = try await AgentEnrollment.query(on: app.db).count()
+            let enrollmentCount = try await testAgentEnrollmentCount(on: app.db)
             #expect(enrollmentCount == 0)
         }
     }
@@ -375,7 +376,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("A second enrollment for a name that already has one is a 409")
     func createEnrollmentRejectsDuplicateName() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let orgId = try await makeOrg(on: app.db)
             let siteId = try await makeSite(on: app.db, org: orgId)
             installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
@@ -399,7 +400,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(res.status == .conflict)
             }
 
-            let enrollmentCount = try await AgentEnrollment.query(on: app.db).count()
+            let enrollmentCount = try await testAgentEnrollmentCount(on: app.db)
             #expect(enrollmentCount == 1)
         }
     }
@@ -407,7 +408,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Enrolling an agent without a site is rejected with 400 and persists nothing")
     func createEnrollmentRequiresSite() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let orgId = try await makeOrg(on: app.db)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
@@ -420,7 +421,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             }
 
             // Rejected before any SPIRE provisioning, so nothing is persisted.
-            let enrollmentCount = try await AgentEnrollment.query(on: app.db).count()
+            let enrollmentCount = try await testAgentEnrollmentCount(on: app.db)
             #expect(enrollmentCount == 0)
             let joinTokenRequests = await fake.joinTokenRequests
             #expect(joinTokenRequests.isEmpty)
@@ -432,13 +433,13 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Revoking an enrollment for an unregistered node deletes the SPIRE entry")
     func revokeEnrollmentDeprovisions() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            let enrollment = makeEnrollment()
-            try await enrollment.save(on: app.db)
+            var enrollment = makeEnrollment()
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
 
-            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -454,7 +455,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let evicted = await fake.evictedAgentIDs
             #expect(evicted == ["spiffe://strato.local/node/node-a"])
 
-            let remaining = try await AgentEnrollment.query(on: app.db).count()
+            let remaining = try await testAgentEnrollmentCount(on: app.db)
             #expect(remaining == 0)
         }
     }
@@ -464,8 +465,8 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     /// An enrollment naming an org trust domain with no `org_trust_domains`
     /// row: what is left after that org's teardown completes, or after a row is
     /// lost, while the enrollment still records the domain.
-    private func makeOrphanedDomainEnrollment(agentName: String = "node-orphan") -> AgentEnrollment {
-        AgentEnrollment(
+    private func makeOrphanedDomainEnrollment(agentName: String = "node-orphan") -> TestAgentEnrollment {
+        TestAgentEnrollment(
             agentName: agentName,
             spiffeID: "spiffe://org-deadbeefdeadbeef.strato.local/agent/\(agentName)",
             trustDomain: "org-deadbeefdeadbeef.strato.local",
@@ -475,13 +476,13 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Revoking a grant whose trust domain is unknown fails closed by default")
     func revokeUnknownTrustDomainFailsClosed() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
             let enrollment = makeOrphanedDomainEnrollment()
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
 
-            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .serviceUnavailable)
@@ -493,7 +494,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let deleted = await fake.deletedSPIFFEIDs
             #expect(deleted.isEmpty)
 
-            let remaining = try await AgentEnrollment.query(on: app.db).count()
+            let remaining = try await testAgentEnrollmentCount(on: app.db)
             #expect(remaining == 1)
         }
     }
@@ -501,17 +502,17 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("skipSpireDeprovision lets an unknown trust domain be revoked anyway")
     func revokeUnknownTrustDomainWithOverride() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
             let enrollment = makeOrphanedDomainEnrollment()
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
 
             // Without this escape hatch the row is permanently undeletable:
             // no `org_trust_domains` row will ever come back, so there is
             // nothing to retry.
             try await app.test(
-                .DELETE, "/api/agent-enrollments/\(enrollment.id!)?skipSpireDeprovision=true"
+                .DELETE, "/api/agent-enrollments/\(enrollment.id)?skipSpireDeprovision=true"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
@@ -523,7 +524,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let deleted = await fake.deletedSPIFFEIDs
             #expect(deleted.isEmpty)
 
-            let remaining = try await AgentEnrollment.query(on: app.db).count()
+            let remaining = try await testAgentEnrollmentCount(on: app.db)
             #expect(remaining == 0)
         }
     }
@@ -531,26 +532,27 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Deregistering an agent whose trust domain is unknown fails closed, and overrides")
     func deregisterUnknownTrustDomain() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            let agent = makeAgent(named: "node-orphan")
-            agent.trustDomain = "org-deadbeefdeadbeef.strato.local"
-            try await agent.save(on: app.db)
+            let agent = try await makeAgent(named: "node-orphan", on: app.db)
+            try await agent.replacing(
+                trustDomain: "org-deadbeefdeadbeef.strato.local"
+            ).save(on: app.db)
 
             try await app.test(.DELETE, "/api/agents/\(agent.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .serviceUnavailable)
             }
-            #expect(try await Agent.query(on: app.db).count() == 1)
+            #expect(try await Agent.count(on: app.db) == 1)
 
             try await app.test(.DELETE, "/api/agents/\(agent.id!)?skipSpireDeprovision=true") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            #expect(try await Agent.query(on: app.db).count() == 0)
+            #expect(try await Agent.count(on: app.db) == 0)
 
             let deleted = await fake.deletedSPIFFEIDs
             #expect(deleted.isEmpty)
@@ -560,17 +562,17 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Revoking an expired enrollment still deprovisions")
     func revokeExpiredEnrollmentDeprovisions() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
             // Expiry alone does not make the grant inert: the join token may
             // have been redeemed before it expired (spire-agent attests before
             // strato-agent registers), so the grant can still be live.
-            let enrollment = makeEnrollment()
+            var enrollment = makeEnrollment()
             enrollment.expiresAt = Date().addingTimeInterval(-3600)
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
 
-            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -581,7 +583,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let evicted = await fake.evictedAgentIDs
             #expect(evicted == ["spiffe://strato.local/node/node-a"])
 
-            let remaining = try await AgentEnrollment.query(on: app.db).count()
+            let remaining = try await testAgentEnrollmentCount(on: app.db)
             #expect(remaining == 0)
         }
     }
@@ -589,19 +591,19 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Revoking an enrollment whose agent has registered leaves the live agent's entries alone")
     func revokeEnrollmentForRegisteredAgentSkipsSPIRE() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
             // Once an Agent row exists the node has attested and registered, so
             // the entries belong to the live agent: they are withdrawn by
             // deregistering it, not by revoking the enrollment it came from.
-            let enrollment = makeEnrollment()
+            var enrollment = makeEnrollment()
             enrollment.markAsUsed()
-            try await enrollment.save(on: app.db)
-            let agent = makeAgent(named: "node-a")
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            let agent = try await makeAgent(named: "node-a", on: app.db)
             try await agent.save(on: app.db)
 
-            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -612,7 +614,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let evicted = await fake.evictedAgentIDs
             #expect(evicted.isEmpty)
 
-            let remaining = try await AgentEnrollment.query(on: app.db).count()
+            let remaining = try await testAgentEnrollmentCount(on: app.db)
             #expect(remaining == 0)
         }
     }
@@ -620,17 +622,17 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("A used enrollment with no agent row still owns — and revokes — its grant")
     func revokeUsedEnrollmentWithoutAgentDeprovisions() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
             // `isUsed` is informational; grant ownership is decided by whether
             // an Agent row exists. A node that attested and was later
             // deregistered must not keep a live grant behind a "used" flag.
-            let enrollment = makeEnrollment()
+            var enrollment = makeEnrollment()
             enrollment.markAsUsed()
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
 
-            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -644,22 +646,22 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Revocation fails closed when SPIRE is unreachable")
     func revokeFailsClosedWhenSPIREUnreachable() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let fake = FakeSPIREServerAPI()
             await fake.setFailDelete(true)
             installFakeSPIRE(on: app, fake: fake)
 
             let enrollment = makeEnrollment()
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
 
-            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .badGateway)
             }
 
             // The enrollment must remain revocable after SPIRE recovers
-            let remaining = try await AgentEnrollment.query(on: app.db).count()
+            let remaining = try await testAgentEnrollmentCount(on: app.db)
             #expect(remaining == 1)
         }
     }
@@ -667,7 +669,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Revoking an enrollment whose node never attested tolerates SPIRE invalidArgument on evict")
     func revokeToleratesNeverAttestedEvict() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let fake = FakeSPIREServerAPI()
             // A never-redeemed join token means DeleteAgent hits "not an agent"
             // (invalidArgument). Cancelling the grant must still succeed — there
@@ -676,9 +678,9 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             installFakeSPIRE(on: app, fake: fake)
 
             let enrollment = makeEnrollment()
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
 
-            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
@@ -688,7 +690,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             // was a no-op.
             let deleted = await fake.deletedSPIFFEIDs
             #expect(deleted == ["spiffe://strato.local/agent/node-a", "spiffe://strato.local/node/node-a"])
-            let remaining = try await AgentEnrollment.query(on: app.db).count()
+            let remaining = try await testAgentEnrollmentCount(on: app.db)
             #expect(remaining == 0)
         }
     }
@@ -696,7 +698,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Deregistering a legacy agent tolerates SPIRE invalidArgument on entry deletion")
     func deregisterToleratesMalformedIDDelete() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let fake = FakeSPIREServerAPI()
             // Legacy agent names with illegal SPIFFE characters (e.g. spaces)
             // make ListEntries reject the filter with invalidArgument. Deleting
@@ -704,7 +706,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             await fake.setDeleteInvalidArgument(true)
             installFakeSPIRE(on: app, fake: fake)
 
-            let agent = makeAgent(named: "node-a")
+            let agent = try await makeAgent(named: "node-a", on: app.db)
             try await agent.save(on: app.db)
 
             try await app.test(.DELETE, "/api/agents/\(agent.id!)") { req in
@@ -713,7 +715,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(res.status == .noContent)
             }
 
-            let remaining = try await Agent.query(on: app.db).count()
+            let remaining = try await Agent.count(on: app.db)
             #expect(remaining == 0)
         }
     }
@@ -734,10 +736,10 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Deregistration fails closed when SPIRE is enabled without the registration API")
     func deregisterFailsClosedWithoutRegistrationAPI() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             installSPIREAuthWithoutRegistrationAPI(on: app)
 
-            let agent = makeAgent(named: "node-a")
+            let agent = try await makeAgent(named: "node-a", on: app.db)
             try await agent.save(on: app.db)
 
             try await app.test(.DELETE, "/api/agents/\(agent.id!)") { req in
@@ -746,7 +748,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(res.status == .serviceUnavailable)
             }
 
-            let remaining = try await Agent.query(on: app.db).count()
+            let remaining = try await Agent.count(on: app.db)
             #expect(remaining == 1)
 
             // Explicit operator override for out-of-band-managed entries
@@ -756,7 +758,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(res.status == .noContent)
             }
 
-            let afterOverride = try await Agent.query(on: app.db).count()
+            let afterOverride = try await Agent.count(on: app.db)
             #expect(afterOverride == 0)
         }
     }
@@ -764,34 +766,34 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Revoking a live grant fails closed when SPIRE is enabled without the registration API")
     func revokeFailsClosedWithoutRegistrationAPI() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             installSPIREAuthWithoutRegistrationAPI(on: app)
 
-            let enrollment = makeEnrollment()
-            try await enrollment.save(on: app.db)
+            var enrollment = makeEnrollment()
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
 
-            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .serviceUnavailable)
             }
 
-            let remaining = try await AgentEnrollment.query(on: app.db).count()
+            let remaining = try await testAgentEnrollmentCount(on: app.db)
             #expect(remaining == 1)
 
             // Expiry doesn't unblock it — the join token may have been
             // redeemed before expiry. Only the explicit override does.
             enrollment.expiresAt = Date().addingTimeInterval(-3600)
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
 
-            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id!)") { req in
+            try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .serviceUnavailable)
             }
 
             try await app.test(
-                .DELETE, "/api/agent-enrollments/\(enrollment.id!)?skipSpireDeprovision=true"
+                .DELETE, "/api/agent-enrollments/\(enrollment.id)?skipSpireDeprovision=true"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
@@ -805,10 +807,10 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Deregistering an agent deletes its SPIRE entry")
     func deregisterAgentDeprovisions() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            let agent = makeAgent(named: "node-a")
+            let agent = try await makeAgent(named: "node-a", on: app.db)
             try await agent.save(on: app.db)
 
             try await app.test(.DELETE, "/api/agents/\(agent.id!)") { req in
@@ -823,7 +825,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let evicted = await fake.evictedAgentIDs
             #expect(evicted == ["spiffe://strato.local/node/node-a"])
 
-            let remaining = try await Agent.query(on: app.db).count()
+            let remaining = try await Agent.count(on: app.db)
             #expect(remaining == 0)
         }
     }
@@ -831,12 +833,12 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     @Test("Deregistration fails closed when SPIRE is unreachable")
     func deregisterFailsClosedWhenSPIREUnreachable() async throws {
         try await withApp { app in
-            let adminToken = try await makeAdmin(on: app.db)
+            let adminToken = try await makeAdmin(on: app)
             let fake = FakeSPIREServerAPI()
             await fake.setFailDelete(true)
             installFakeSPIRE(on: app, fake: fake)
 
-            let agent = makeAgent(named: "node-a")
+            let agent = try await makeAgent(named: "node-a", on: app.db)
             try await agent.save(on: app.db)
 
             try await app.test(.DELETE, "/api/agents/\(agent.id!)") { req in
@@ -846,13 +848,21 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             }
 
             // The agent (and thus the operator's revocation lever) must survive
-            let remaining = try await Agent.query(on: app.db).count()
+            let remaining = try await Agent.count(on: app.db)
             #expect(remaining == 1)
         }
     }
 
-    private func makeAgent(named name: String) -> Agent {
-        Agent(
+    private func makeAgent(named name: String, on db: Database) async throws -> Agent {
+        let organization = Organization(
+            name: "\(name) agent org",
+            description: "organization fixture for agent deregistration")
+        try await organization.save(on: db)
+        let site = Site(
+            name: "\(name)-dc",
+            organizationScope: .organization(try organization.requireID()))
+        try await site.save(on: db)
+        return Agent(
             name: name,
             hostname: "\(name).example.com",
             version: "1.0.0",
@@ -861,7 +871,8 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 totalMemory: 16_000_000_000, availableMemory: 16_000_000_000,
                 totalDisk: 100_000_000_000, availableDisk: 100_000_000_000
             )
-        )
+        ).replacing(siteID: try site.requireID())
+            .replacingOrganizationScope(.organization(try organization.requireID()))
     }
 
     private static func redeemBootstrap(_ token: String, on app: Application) async throws -> HTTPStatus {
@@ -904,7 +915,7 @@ struct SPIRERegistrationServiceUnitTests {
         #expect(hash.count == 64)
         #expect(hash != first)
 
-        let enrollment = AgentEnrollment(
+        var enrollment = TestAgentEnrollment(
             agentName: "node-a",
             spiffeID: "spiffe://strato.local/agent/node-a",
             bootstrapTokenHash: hash)

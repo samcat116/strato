@@ -1,78 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
-
-/// One external IPv4 address allocated from a `FloatingIPPool` (issue #344).
-/// Project-scoped like a network: a project allocates an address, then
-/// attaches it to one of its VMs' NICs. An attached floating IP is realized
-/// agent-side as an OVN `dnat_and_snat` rule on the NIC's network router —
-/// inbound traffic to the floating address is DNAT'd to the NIC's fixed IP,
-/// and the VM's outbound traffic is SNAT'd to the floating address.
-///
-/// The interface FK is `SET NULL` on delete, so deleting the VM (or NIC)
-/// detaches the address instead of releasing it — the project keeps the
-/// (possibly DNS-published) address to re-attach elsewhere.
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class FloatingIP: Model, @unchecked Sendable {
-    static let schema = "floating_ips"
-
-    @ID(key: .id)
-    var id: UUID?
-
-    @Parent(key: "pool_id")
-    var pool: FloatingIPPool
-
-    /// The external address in canonical dotted-quad form. Unique per pool
-    /// (schema-enforced).
-    @Field(key: "address")
-    var address: String
-
-    /// Project that owns the allocation.
-    @Parent(key: "project_id")
-    var project: Project
-
-    /// The VM NIC this address is attached to; nil while the address is
-    /// reserved but unattached (no NAT anywhere).
-    @OptionalParent(key: "interface_id")
-    var interface: VMNetworkInterface?
-
-    /// Native load balancer whose internal VIP this external address targets
-    /// (STR-28). Mutually exclusive with `interface`; SET NULL on LB deletion
-    /// keeps the project's reserved address available for reattachment.
-    @OptionalParent(key: "load_balancer_id")
-    var loadBalancer: LoadBalancer?
-
-    @OptionalParent(key: "created_by_id")
-    var createdBy: User?
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
-
-    init(
-        id: UUID? = nil,
-        poolID: UUID,
-        address: String,
-        projectID: UUID,
-        interfaceID: UUID? = nil,
-        loadBalancerID: UUID? = nil,
-        createdByID: UUID? = nil
-    ) {
-        self.id = id
-        self.$pool.id = poolID
-        self.address = address
-        self.$project.id = projectID
-        self.$interface.id = interfaceID
-        self.$loadBalancer.id = loadBalancerID
-        self.$createdBy.id = createdByID
-    }
-}
-
-extension FloatingIP: Content {}
 
 // MARK: - DTOs
 
@@ -108,23 +35,17 @@ struct FloatingIPResponse: Content {
     let networkName: String?
     let createdAt: Date?
 
-    init(
-        from floatingIP: FloatingIP,
-        interface: VMNetworkInterface? = nil,
-        loadBalancer: LoadBalancer? = nil
-    ) throws {
-        self.id = try floatingIP.requireID()
+    init(from floatingIP: FloatingIPAllocationSnapshot) throws {
+        self.id = floatingIP.id
         self.address = floatingIP.address
-        self.poolId = floatingIP.$pool.id
-        self.projectId = floatingIP.$project.id
-        self.interfaceId = floatingIP.$interface.id
-        self.vmId = interface?.$vm.id
-        self.fixedIP = interface?.ipv4Address?.address
-        self.loadBalancerId = floatingIP.$loadBalancer.id
-        self.networkId = interface?.$logicalNetwork.id ?? loadBalancer?.$logicalNetwork.id
-        self.networkName =
-            interface?.$logicalNetwork.value?.name
-            ?? loadBalancer?.$logicalNetwork.value?.name
+        self.poolId = floatingIP.poolID
+        self.projectId = floatingIP.projectID
+        self.interfaceId = floatingIP.interfaceID
+        self.vmId = floatingIP.vmID
+        self.fixedIP = floatingIP.fixedIP
+        self.loadBalancerId = floatingIP.loadBalancerID
+        self.networkId = floatingIP.networkID
+        self.networkName = floatingIP.networkName
         self.createdAt = floatingIP.createdAt
     }
 }

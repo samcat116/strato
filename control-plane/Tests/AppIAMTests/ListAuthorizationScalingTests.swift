@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import Testing
 import Vapor
@@ -77,7 +78,7 @@ final class ListAuthorizationScalingTests {
     @Test("GET /api/floating-ip-pools issues the same number of queries however many scopes own pools")
     func poolListQueryCountStaysBounded() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(
                 username: "pooluser", email: "pool@example.com", isSystemAdmin: false)
             let org = try await builder.createOrganization(name: "Pool Org")
@@ -96,18 +97,18 @@ final class ListAuthorizationScalingTests {
             func addPool(_ index: Int, scope: OrganizationScope) async throws {
                 let base = index * 4
                 let prefix = "203.0.\(base / 256)"
-                let pool = FloatingIPPool(
+                let pool = try await builder.createFloatingIPPool(
                     name: "pool-\(String(format: "%03d", index))",
                     cidr: "\(prefix).\(base % 256)/30",
                     siteID: siteID,
-                    organizationScope: scope)
-                try await pool.save(on: app.db)
-                try await FloatingIP(
-                    poolID: pool.id!,
+                    organizationID: scope.organizationID,
+                    organizationalUnitID: scope.organizationalUnitID)
+                try await LegacyFloatingIPStore.insert(
+                    poolID: pool.id,
                     address: "\(prefix).\(base % 256 + 1)",
                     projectID: project.id!,
-                    createdByID: user.id!
-                ).save(on: app.db)
+                    createdByID: user.id!,
+                    on: app.db)
             }
 
             // Pool 0 is org-owned; every later pool gets a folder of its own.
@@ -126,7 +127,14 @@ final class ListAuthorizationScalingTests {
             func queriesToList(expecting expected: Int) async throws -> Int {
                 try await queryCount(
                     as: user, path: "/api/floating-ip-pools", on: app,
-                    running: { try await FloatingIPController().visiblePools(req: $0) },
+                    running: {
+                        try await FloatingIPController(
+                            iam: app.iamPersistence,
+                            projects: app.projectsPersistence,
+                            pools: app.floatingIPPoolsPersistence,
+                            sites: app.sitesPersistence
+                        ).visiblePools(req: $0)
+                    },
                     expecting: { pools in
                         pools.count == expected && pools.allSatisfy { $0.allocatedCount == 1 }
                     })
@@ -151,7 +159,7 @@ final class ListAuthorizationScalingTests {
     @Test("GET /api/agent-enrollments issues the same number of queries however many scopes own rows")
     func enrollmentListQueryCountStaysBounded() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(
                 username: "enrolluser", email: "enroll@example.com", isSystemAdmin: false)
             let org = try await builder.createOrganization(name: "Enroll Org")
@@ -160,11 +168,14 @@ final class ListAuthorizationScalingTests {
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
 
             func addEnrollment(_ index: Int, scope: OrganizationScope) async throws {
-                try await AgentEnrollment(
-                    agentName: "enroll-node-\(index)",
-                    spiffeID: "spiffe://example.org/agent/enroll-node-\(index)",
-                    organizationScope: scope
-                ).save(on: app.db)
+                _ = try await saveTestAgentEnrollment(
+                    TestAgentEnrollment(
+                        agentName: "enroll-node-\(index)",
+                        spiffeID: "spiffe://example.org/agent/enroll-node-\(index)",
+                        organizationScope: scope
+                    ),
+                    on: app.db
+                )
             }
 
             // Enrollment 0 is org-owned; every later one gets its own folder.
@@ -183,7 +194,11 @@ final class ListAuthorizationScalingTests {
             func queriesToList(expecting expected: Int) async throws -> Int {
                 try await queryCount(
                     as: user, path: "/api/agent-enrollments", on: app,
-                    running: { try await AgentController().visibleEnrollments(req: $0) },
+                    running: {
+                        try await AgentController(
+                            enrollments: app.agentEnrollmentsPersistence
+                        ).visibleEnrollments(req: $0)
+                    },
                     expecting: { $0.count == expected })
             }
 
@@ -205,7 +220,7 @@ final class ListAuthorizationScalingTests {
     @Test("GET /api/users issues the same number of queries however many accounts it returns")
     func userListQueryCountStaysBounded() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let admin = try await builder.createUser(
                 username: "diradmin", email: "diradmin@example.com", isSystemAdmin: true)
 
@@ -222,7 +237,13 @@ final class ListAuthorizationScalingTests {
             func queriesToList(expecting expected: Int) async throws -> Int {
                 try await queryCount(
                     as: admin, path: "/api/users", on: app,
-                    running: { try await UserController().visibleUsers(req: $0) },
+                    running: {
+                        try await UserController(
+                            iam: app.iamPersistence,
+                            users: app.userDirectoryPersistence,
+                            hierarchy: app.hierarchyPersistence
+                        ).visibleUsers(req: $0)
+                    },
                     expecting: { $0.count == expected })
             }
 
@@ -246,7 +267,7 @@ final class ListAuthorizationScalingTests {
     @Test("GET /api/users narrows to the caller's own record and does not grow with the directory")
     func userListNarrowsForNonAdmin() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(
                 username: "diruser", email: "diruser@example.com", isSystemAdmin: false)
             let org = try await builder.createOrganization(name: "Dir Org")
@@ -255,7 +276,13 @@ final class ListAuthorizationScalingTests {
             func queriesToList() async throws -> Int {
                 try await queryCount(
                     as: user, path: "/api/users", on: app,
-                    running: { try await UserController().visibleUsers(req: $0) },
+                    running: {
+                        try await UserController(
+                            iam: app.iamPersistence,
+                            users: app.userDirectoryPersistence,
+                            hierarchy: app.hierarchyPersistence
+                        ).visibleUsers(req: $0)
+                    },
                     expecting: { $0.map(\.username) == ["diruser"] })
             }
 
@@ -292,7 +319,7 @@ final class ListAuthorizationScalingTests {
     @Test("A binding on another user's record survives the directory narrowing")
     func narrowingAdmitsBoundRecords() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(
                 username: "boundcaller", email: "boundcaller@example.com", isSystemAdmin: false)
             let subject = try await builder.createUser(
@@ -308,7 +335,8 @@ final class ListAuthorizationScalingTests {
                 application: app, method: .GET, url: URI(path: "/api/users"),
                 on: app.eventLoopGroup.next())
             req.auth.login(user)
-            let visibility = try await UserDirectoryVisibility.resolve(on: req)
+            let visibility = try await UserDirectoryVisibility.resolve(
+                on: req, using: app.iamPersistence)
 
             let candidates = try #require(visibility.candidateUserIDs)
             #expect(Set(candidates) == [user.id!, subject.id!])
@@ -321,7 +349,7 @@ final class ListAuthorizationScalingTests {
     @Test("A group binding on another user's record survives the directory narrowing")
     func narrowingAdmitsGroupBoundRecords() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(
                 username: "groupcaller", email: "groupcaller@example.com", isSystemAdmin: false)
             let subject = try await builder.createUser(
@@ -329,7 +357,8 @@ final class ListAuthorizationScalingTests {
             let org = try await builder.createOrganization(name: "Group Org")
             let group = try await builder.createGroup(
                 name: "Directory Readers", description: "d", organization: org)
-            try await UserGroup(userID: user.id!, groupID: group.id!).save(on: app.db)
+            try await builder.addUserToOrganization(user: user, organization: org)
+            try await builder.addUserToGroup(user: user, group: group)
 
             try await RoleBindingService.grant(
                 principalType: .group, principalID: group.id!, role: .admin,
@@ -339,7 +368,8 @@ final class ListAuthorizationScalingTests {
                 application: app, method: .GET, url: URI(path: "/api/users"),
                 on: app.eventLoopGroup.next())
             req.auth.login(user)
-            let visibility = try await UserDirectoryVisibility.resolve(on: req)
+            let visibility = try await UserDirectoryVisibility.resolve(
+                on: req, using: app.iamPersistence)
 
             #expect(Set(try #require(visibility.candidateUserIDs)) == [user.id!, subject.id!])
         }
@@ -351,7 +381,7 @@ final class ListAuthorizationScalingTests {
     @Test("A system admin's directory is not narrowed")
     func narrowingSkipsSystemAdmins() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let admin = try await builder.createUser(
                 username: "nonarrowadmin", email: "nonarrowadmin@example.com", isSystemAdmin: true)
 
@@ -359,7 +389,8 @@ final class ListAuthorizationScalingTests {
                 application: app, method: .GET, url: URI(path: "/api/users"),
                 on: app.eventLoopGroup.next())
             req.auth.login(admin)
-            let visibility = try await UserDirectoryVisibility.resolve(on: req)
+            let visibility = try await UserDirectoryVisibility.resolve(
+                on: req, using: app.iamPersistence)
 
             #expect(visibility.candidateUserIDs == nil)
         }
@@ -391,14 +422,19 @@ final class ListAuthorizationScalingTests {
     private func writeAuthoredPermit(
         _ app: Application, name: String, ownerID: UUID, cedarText: String
     ) async throws {
-        try await IAMPolicy(
-            name: name,
-            ownerType: .organization,
-            ownerID: ownerID,
-            cedarText: cedarText,
-            effect: .permit,
-            enabled: true
-        ).save(on: app.db)
+        _ = try await app.iamPersistence.withPolicySetChange { transaction in
+            try await transaction.createPolicy(
+                IAMPolicySnapshot(
+                    id: UUID(),
+                    name: name,
+                    description: nil,
+                    ownerType: IAMRoleOwnerType.organization.rawValue,
+                    ownerID: ownerID,
+                    cedarText: cedarText,
+                    effect: IAMPolicyEffect.permit.rawValue,
+                    enabled: true,
+                    createdBy: nil))
+        }
         try await rebuildPolicySet(app)
     }
 
@@ -410,7 +446,7 @@ final class ListAuthorizationScalingTests {
     @Test("An authored permit on another user's record survives the directory narrowing")
     func narrowingAdmitsAuthoredPermitRecords() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let org = try await builder.createOrganization(name: "Authored Directory Org")
             let user = try await builder.createUser(
                 username: "authoredcaller", email: "authoredcaller@example.com", isSystemAdmin: false)
@@ -425,7 +461,11 @@ final class ListAuthorizationScalingTests {
                     application: app, method: .GET, url: URI(path: "/api/users"),
                     on: app.eventLoopGroup.next())
                 req.auth.login(user)
-                return try await UserController().visibleUsers(req: req).map(\.username)
+                return try await UserController(
+                    iam: app.iamPersistence,
+                    users: app.userDirectoryPersistence,
+                    hierarchy: app.hierarchyPersistence
+                ).visibleUsers(req: req).map(\.username)
             }
 
             // No binding and no policy: the caller reaches only themselves.
@@ -445,7 +485,8 @@ final class ListAuthorizationScalingTests {
                 application: app, method: .GET, url: URI(path: "/api/users"),
                 on: app.eventLoopGroup.next())
             req.auth.login(user)
-            let visibility = try await UserDirectoryVisibility.resolve(on: req)
+            let visibility = try await UserDirectoryVisibility.resolve(
+                on: req, using: app.iamPersistence)
 
             let candidates = try #require(visibility.candidateUserIDs)
             #expect(Set(candidates) == [user.id!, subject.id!])
@@ -464,7 +505,7 @@ final class ListAuthorizationScalingTests {
     @Test("An unboundable authored permit widens the directory to no narrowing")
     func unboundableAuthoredPermitWidensNarrowing() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let org = try await builder.createOrganization(name: "Unbounded Directory Org")
             let user = try await builder.createUser(
                 username: "unboundedcaller", email: "unboundedcaller@example.com", isSystemAdmin: false)
@@ -482,14 +523,19 @@ final class ListAuthorizationScalingTests {
                 application: app, method: .GET, url: URI(path: "/api/users"),
                 on: app.eventLoopGroup.next())
             req.auth.login(user)
-            let visibility = try await UserDirectoryVisibility.resolve(on: req)
+            let visibility = try await UserDirectoryVisibility.resolve(
+                on: req, using: app.iamPersistence)
             #expect(visibility.candidateUserIDs == nil)
 
             let listRequest = Request(
                 application: app, method: .GET, url: URI(path: "/api/users"),
                 on: app.eventLoopGroup.next())
             listRequest.auth.login(user)
-            let visible = try await UserController().visibleUsers(req: listRequest).map(\.username)
+            let visible = try await UserController(
+                iam: app.iamPersistence,
+                users: app.userDirectoryPersistence,
+                hierarchy: app.hierarchyPersistence
+            ).visibleUsers(req: listRequest).map(\.username)
             #expect(Set(visible) == [user.username, other.username])
         }
     }

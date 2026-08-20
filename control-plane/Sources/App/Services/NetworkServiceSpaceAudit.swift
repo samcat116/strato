@@ -10,7 +10,7 @@ import StratoShared
 /// leaving their metadata/resolver ACL exposure silent.
 enum NetworkServiceSpaceAudit {
     static func collidingNetworks(on database: Database) async throws -> [LogicalNetwork] {
-        try await LogicalNetwork.query(on: database).all().filter { network in
+        try await LogicalNetwork.all(on: database).filter { network in
             guard let subnet6 = network.subnet6, let cidr = IPv6CIDR(subnet6) else { return false }
             return NetworkResolverEndpoint.v6SpaceCIDR.overlaps(cidr)
         }

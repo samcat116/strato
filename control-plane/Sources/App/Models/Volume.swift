@@ -1,4 +1,5 @@
 import Fluent
+import ControlPlanePostgres
 import Vapor
 import Foundation
 import StratoShared
@@ -29,9 +30,8 @@ public enum VolumeStatus: String, Codable, CaseIterable, Sendable {
     case error = "error"  // An error occurred
 }
 
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class Volume: Model, @unchecked Sendable {
+/// Immutable application snapshot of a durable volume aggregate.
+struct Volume: Sendable {
     static let schema = "volumes"
 
     /// Upper bound on a caller-requested volume size, in whole gibibytes.
@@ -50,19 +50,14 @@ final class Volume: Model, @unchecked Sendable {
     static let maxIOPSTotal: Int64 = 10_000_000
     static let maxBPSTotal: Int64 = 1 << 40  // 1 TiB/s
 
-    @ID(key: .id)
-    var id: UUID?
+    let id: UUID?
 
     // Basic metadata
-    @Field(key: "name")
-    var name: String
-
-    @Field(key: "description")
-    var description: String
+    let name: String
+    let description: String
 
     // Project ownership
-    @Parent(key: "project_id")
-    var project: Project
+    let projectID: UUID
 
     /// The deployment environment this volume's bytes are attributed to
     /// (STR-181), resolved from the creating request against its project the way
@@ -72,43 +67,31 @@ final class Volume: Model, @unchecked Sendable {
     /// environment?)` and `QuotaScope.predicate` filters every workload table on
     /// both columns. Without it a volume could not be measured at all, which is
     /// why its bytes were free. Immutable after create, like a VM's.
-    @Field(key: "environment")
-    var environment: String
+    let environment: String
 
     // Volume specifications. `size` is **desired** — normally what the last
     // accepted create or resize asked for. Attaching source-backed storage can
     // raise it to the larger materialized virtual size the agent reported, so
     // quota is admitted before that image enters a VM. The agent's report of
     // what the image actually is lands in `observedSizeBytes` below.
-    @Field(key: "size")
-    var size: Int64  // Size in bytes
-
-    @Enum(key: "format")
-    var format: VolumeFormat
-
-    @Enum(key: "type")
-    var volumeType: VolumeType
+    let size: Int64  // Size in bytes
+    let format: VolumeFormat
+    let volumeType: VolumeType
 
     // Status tracking. `status` is purely *observed* since STR-148 — the
     // control plane no longer writes a transitional status before dispatching
     // an RPC, because there is no RPC; `ObservedStateApplier` derives it from
     // what the owning agent reports.
-    @Enum(key: "status")
-    var status: VolumeStatus
+    let status: VolumeStatus
 
     // Desired/observed state split (ADR 0001 stage 5, STR-148), mirroring the
     // VM columns exactly: `desiredStatus` is the goal written by API
     // mutations, `generation` bumps on every desired change, and
     // `observedGeneration` records the last generation the owning agent
     // confirmed converging to.
-    @Enum(key: "desired_status")
-    var desiredStatus: DesiredVolumeStatus
-
-    @Field(key: "generation")
-    var generation: Int64
-
-    @Field(key: "observed_generation")
-    var observedGeneration: Int64
+    let desiredStatus: DesiredVolumeStatus
+    let generation: Int64
+    let observedGeneration: Int64
 
     /// The virtual size the owning agent last reported the image actually has
     /// (STR-199), as opposed to the desired `size`.
@@ -117,62 +100,46 @@ final class Volume: Model, @unchecked Sendable {
     /// host yet, one owned by a pre-v38 agent, or one whose size probe failed.
     /// It never means zero, and `ObservedStateApplier` never writes an agent's
     /// silence through as a clear.
-    @OptionalField(key: "observed_size_bytes")
-    var observedSizeBytes: Int64?
+    let observedSizeBytes: Int64?
 
     // Convergence progress mirrored from the agent's observed-state report.
     // `errorMessage` doubles as `lastError` — one column, because a volume has
     // never had a second error to report and two would only invite them to
     // disagree in the API response.
-    @OptionalField(key: "convergence_phase")
-    var convergencePhase: String?
-
-    @OptionalField(key: "error_message")
-    var errorMessage: String?
-
-    @OptionalField(key: "failed_generation")
-    var failedGeneration: Int64?
+    let convergencePhase: String?
+    let errorMessage: String?
+    let failedGeneration: Int64?
 
     /// When the stuck-convergence sweep gives up on this volume's outstanding
     /// mutations and marks it degraded. Written by the mutation path as
     /// `max(existing, now + budget)`; nil means nothing is outstanding.
-    @OptionalField(key: "convergence_deadline")
-    var convergenceDeadline: Date?
+    let convergenceDeadline: Date?
 
     /// Outstanding cleanup participants blocking this volume's removal.
     /// Empty for a live volume; stamped when a `DELETE` marks
     /// `desiredStatus = .absent`, and drained a token at a time until the row
     /// is reaped. See `ResourceFinalizer`.
-    @Field(key: "finalizers")
-    var finalizers: [String]
+    let finalizers: [String]
 
     // Placement: the pool whose agents hold this volume's replicas. Nullable
     // at the schema level only; the backfill migration and the create path
     // guarantee it is always set.
-    @OptionalParent(key: "pool_id")
-    var pool: StoragePool?
+    let poolID: UUID?
 
     // Where the attachment currently runs (set while attached to a VM).
     // Replaces hypervisor_id's "single owner" role.
-    @OptionalField(key: "attached_agent_id")
-    var attachedAgentId: String?
+    let attachedAgentId: String?
 
     // VM attachment (null when detached)
-    @OptionalParent(key: "vm_id")
-    var vm: VM?
-
-    @OptionalField(key: "device_name")
-    var deviceName: String?  // disk0, disk1, etc.
-
-    @OptionalField(key: "boot_order")
-    var bootOrder: Int?
+    let vmID: UUID?
+    let deviceName: String?  // disk0, disk1, etc.
+    let bootOrder: Int?
 
     /// Whether the attachment presents the volume read-only. Persisted since
     /// STR-148: it used to be passed straight to the attach RPC and forgotten,
     /// so nothing could re-derive the attachment after the fact — which a
     /// level-triggered desired entry has to do on every sync.
-    @Field(key: "readonly")
-    var readonly: Bool
+    let readonly: Bool
 
     // Absolute per-volume I/O ceilings (STR-19). The requested pair is desired
     // state and travels on the sync; the applied pair is the agent's echo of
@@ -185,40 +152,26 @@ final class Volume: Model, @unchecked Sendable {
     // means *the agent said nothing* — never that the caps were cleared. It
     // will read NULL for every row until the agent-side work lands.
 
-    @OptionalField(key: "iops_total")
-    var iopsTotal: Int64?
-
-    @OptionalField(key: "bps_total")
-    var bpsTotal: Int64?
-
-    @OptionalField(key: "applied_iops_total")
-    var appliedIOPSTotal: Int64?
-
-    @OptionalField(key: "applied_bps_total")
-    var appliedBPSTotal: Int64?
+    let iopsTotal: Int64?
+    let bpsTotal: Int64?
+    let appliedIOPSTotal: Int64?
+    let appliedBPSTotal: Int64?
 
     // Source tracking (for clones/volumes created from images)
-    @OptionalParent(key: "source_image_id")
-    var sourceImage: Image?
-
-    @OptionalParent(key: "source_volume_id")
-    var sourceVolume: Volume?
+    let sourceImageID: UUID?
+    let loadedSourceImage: Image?
+    var sourceImage: Image? { loadedSourceImage }
+    let sourceVolumeID: UUID?
 
     // Owner tracking
-    @Parent(key: "created_by_id")
-    var createdBy: User
+    let createdByID: UUID
 
     // Timestamps
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
+    let createdAt: Date?
+    let updatedAt: Date?
 
     init(
-        id: UUID? = nil,
+        id: UUID? = UUID(),
         name: String,
         description: String,
         projectID: UUID,
@@ -227,37 +180,134 @@ final class Volume: Model, @unchecked Sendable {
         format: VolumeFormat = .qcow2,
         volumeType: VolumeType = .data,
         status: VolumeStatus = .creating,
+        desiredStatus: DesiredVolumeStatus = .present,
+        generation: Int64 = 0,
+        observedGeneration: Int64 = 0,
+        observedSizeBytes: Int64? = nil,
+        convergencePhase: String? = nil,
+        errorMessage: String? = nil,
+        failedGeneration: Int64? = nil,
+        convergenceDeadline: Date? = nil,
+        finalizers: [String] = [],
         createdByID: UUID,
         poolID: UUID? = nil,
+        attachedAgentId: String? = nil,
+        vmID: UUID? = nil,
+        deviceName: String? = nil,
+        bootOrder: Int? = nil,
+        readonly: Bool = false,
+        iopsTotal: Int64? = nil,
+        bpsTotal: Int64? = nil,
+        appliedIOPSTotal: Int64? = nil,
+        appliedBPSTotal: Int64? = nil,
         sourceImageID: UUID? = nil,
-        sourceVolumeID: UUID? = nil
+        loadedSourceImage: Image? = nil,
+        sourceVolumeID: UUID? = nil,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
         self.description = description
-        self.$project.id = projectID
+        self.projectID = projectID
         self.environment = environment
         self.size = size
         self.format = format
         self.volumeType = volumeType
         self.status = status
-        self.desiredStatus = .present
-        self.generation = 0
-        self.observedGeneration = 0
-        self.readonly = false
-        self.finalizers = []
-        self.$createdBy.id = createdByID
-        self.$pool.id = poolID
-        if let sourceImageID = sourceImageID {
-            self.$sourceImage.id = sourceImageID
-        }
-        if let sourceVolumeID = sourceVolumeID {
-            self.$sourceVolume.id = sourceVolumeID
-        }
+        self.desiredStatus = desiredStatus
+        self.generation = generation
+        self.observedGeneration = observedGeneration
+        self.observedSizeBytes = observedSizeBytes
+        self.convergencePhase = convergencePhase
+        self.errorMessage = errorMessage
+        self.failedGeneration = failedGeneration
+        self.convergenceDeadline = convergenceDeadline
+        self.finalizers = finalizers
+        self.createdByID = createdByID
+        self.poolID = poolID
+        self.attachedAgentId = attachedAgentId
+        self.vmID = vmID
+        self.deviceName = deviceName
+        self.bootOrder = bootOrder
+        self.readonly = readonly
+        self.iopsTotal = iopsTotal
+        self.bpsTotal = bpsTotal
+        self.appliedIOPSTotal = appliedIOPSTotal
+        self.appliedBPSTotal = appliedBPSTotal
+        self.sourceImageID = sourceImageID
+        self.loadedSourceImage = loadedSourceImage
+        self.sourceVolumeID = sourceVolumeID
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    func requireID() throws -> UUID {
+        guard let id else { throw Abort(.internalServerError, reason: "Volume has no identifier") }
+        return id
+    }
+
+    func persisted(on db: any Database) async throws -> Self {
+        try await LegacyVolumeStore.upsert(self, on: db)
+    }
+    func persist(on db: any Database) async throws { _ = try await persisted(on: db) }
+    func save(on db: any Database) async throws { try await persist(on: db) }
+    func remove(on db: any Database) async throws {
+        guard let id else { return }
+        _ = try await LegacyVolumeStore.delete(id: id, on: db)
+    }
+    func delete(on db: any Database) async throws { try await remove(on: db) }
+    static func load(_ id: UUID?, on db: any Database) async throws -> Self? {
+        try await LegacyVolumeStore.volume(id: id, on: db)
+    }
+    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+        try await load(id, on: db)
+    }
+    static func all(on db: any Database) async throws -> [Self] {
+        try await LegacyVolumeStore.volumes(on: db)
+    }
+
+    func replacing(
+        name: String? = nil, description: String? = nil, size: Int64? = nil,
+        volumeType: VolumeType? = nil,
+        status: VolumeStatus? = nil, desiredStatus: DesiredVolumeStatus? = nil,
+        generation: Int64? = nil, observedGeneration: Int64? = nil,
+        observedSizeBytes: Int64?? = nil, convergencePhase: String?? = nil,
+        errorMessage: String?? = nil, failedGeneration: Int64?? = nil,
+        convergenceDeadline: Date?? = nil, finalizers: [String]? = nil,
+        poolID: UUID?? = nil, attachedAgentId: String?? = nil, vmID: UUID?? = nil,
+        deviceName: String?? = nil, bootOrder: Int?? = nil, readonly: Bool? = nil,
+        iopsTotal: Int64?? = nil, bpsTotal: Int64?? = nil,
+        appliedIOPSTotal: Int64?? = nil, appliedBPSTotal: Int64?? = nil,
+        sourceImageID: UUID?? = nil, loadedSourceImage: Image?? = nil,
+        sourceVolumeID: UUID?? = nil
+    ) -> Self {
+        Self(
+            id: id, name: name ?? self.name, description: description ?? self.description,
+            projectID: projectID, environment: environment, size: size ?? self.size,
+            format: format, volumeType: volumeType ?? self.volumeType, status: status ?? self.status,
+            desiredStatus: desiredStatus ?? self.desiredStatus,
+            generation: generation ?? self.generation,
+            observedGeneration: observedGeneration ?? self.observedGeneration,
+            observedSizeBytes: observedSizeBytes ?? self.observedSizeBytes,
+            convergencePhase: convergencePhase ?? self.convergencePhase,
+            errorMessage: errorMessage ?? self.errorMessage,
+            failedGeneration: failedGeneration ?? self.failedGeneration,
+            convergenceDeadline: convergenceDeadline ?? self.convergenceDeadline,
+            finalizers: finalizers ?? self.finalizers, createdByID: createdByID,
+            poolID: poolID ?? self.poolID,
+            attachedAgentId: attachedAgentId ?? self.attachedAgentId,
+            vmID: vmID ?? self.vmID, deviceName: deviceName ?? self.deviceName,
+            bootOrder: bootOrder ?? self.bootOrder, readonly: readonly ?? self.readonly,
+            iopsTotal: iopsTotal ?? self.iopsTotal, bpsTotal: bpsTotal ?? self.bpsTotal,
+            appliedIOPSTotal: appliedIOPSTotal ?? self.appliedIOPSTotal,
+            appliedBPSTotal: appliedBPSTotal ?? self.appliedBPSTotal,
+            sourceImageID: sourceImageID ?? self.sourceImageID,
+            loadedSourceImage: loadedSourceImage ?? self.loadedSourceImage,
+            sourceVolumeID: sourceVolumeID ?? self.sourceVolumeID,
+            createdAt: createdAt, updatedAt: updatedAt)
     }
 }
-
-extension Volume: Content {}
 
 // MARK: - Computed Properties
 
@@ -268,8 +318,8 @@ extension Volume {
 
     /// Records a new desired state in memory. The owning mutation service
     /// advances the generation in SQL before saving it.
-    func setDesiredStatus(_ newDesired: DesiredVolumeStatus) {
-        desiredStatus = newDesired
+    func replacingDesiredStatus(_ newDesired: DesiredVolumeStatus) -> Self {
+        replacing(desiredStatus: newDesired)
     }
 
     /// The agent has confirmed the current generation and the volume is sitting
@@ -307,11 +357,11 @@ extension Volume {
     // gone with the transitional statuses that made them necessary.
 
     var canAttach: Bool {
-        return $vm.id == nil && desiredStatus == .present
+        return vmID == nil && desiredStatus == .present
     }
 
     var canDetach: Bool {
-        return $vm.id != nil
+        return vmID != nil
     }
 
     /// Resize is grow-only, and no longer detach-only (STR-19).
@@ -351,7 +401,7 @@ extension Volume {
     /// the VM to a new active layer or makes the snapshot independent of the
     /// mutable base.
     var canSnapshot: Bool {
-        return $vm.id == nil && desiredStatus == .present && bytesAtRest
+        return vmID == nil && desiredStatus == .present && bytesAtRest
     }
 
     /// Cloning is `qemu-img convert` of the volume's file, so it has the same
@@ -385,7 +435,7 @@ extension Volume {
     /// issue #644's explicit escape hatches for each transitional status; with
     /// desired state there are no transitional statuses to be stranded in.
     var canDelete: Bool {
-        return $vm.id == nil
+        return vmID == nil
     }
 
     /// The ceilings asked for, as the sync carries them. Normalized, so an
@@ -543,11 +593,11 @@ struct VolumeResponse: Content {
     let createdAt: Date?
     let updatedAt: Date?
 
-    init(from volume: Volume, replicas: [VolumeReplica] = []) {
+    init(from volume: Volume, replicas: [VolumeReplicaSnapshot] = []) {
         self.id = volume.id
         self.name = volume.name
         self.description = volume.description
-        self.projectId = volume.$project.id
+        self.projectId = volume.projectID
         self.environment = volume.environment
         self.size = volume.size
         self.sizeFormatted = volume.size.formattedByteSize
@@ -557,19 +607,19 @@ struct VolumeResponse: Content {
         self.volumeType = volume.volumeType
         self.status = volume.status
         self.errorMessage = volume.errorMessage
-        self.poolId = volume.$pool.id
+        self.poolId = volume.poolID
         self.attachedAgentId = volume.attachedAgentId
         self.replicas = replicas.map(VolumeReplicaResponse.init(from:))
-        self.vmId = volume.$vm.id
+        self.vmId = volume.vmID
         self.deviceName = volume.deviceName
         self.bootOrder = volume.bootOrder
         self.readonly = volume.readonly
         self.conditions = volume.conditions
         self.ioLimits = volume.ioLimits
         self.appliedIOLimits = volume.appliedIOLimits
-        self.sourceImageId = volume.$sourceImage.id
-        self.sourceVolumeId = volume.$sourceVolume.id
-        self.createdById = volume.$createdBy.id
+        self.sourceImageId = volume.sourceImageID
+        self.sourceVolumeId = volume.sourceVolumeID
+        self.createdById = volume.createdByID
         self.createdAt = volume.createdAt
         self.updatedAt = volume.updatedAt
     }
@@ -582,7 +632,7 @@ struct VolumeReplicaResponse: Content {
     let state: VolumeReplicaState
     let generation: Int64
 
-    init(from replica: VolumeReplica) {
+    init(from replica: VolumeReplicaSnapshot) {
         id = replica.id
         agentId = replica.agentId
         diskAttachment = replica.diskAttachment

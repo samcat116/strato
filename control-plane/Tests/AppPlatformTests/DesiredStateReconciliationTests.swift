@@ -37,11 +37,10 @@ final class DesiredStateReconciliationTests {
     private func network(app: Application, vm: VM, named name: String = "default") async throws
         -> LogicalNetwork
     {
-        let projectID = vm.$project.id
-        if let existing = try await LogicalNetwork.query(on: app.db)
-            .filter(\.$project.$id == projectID)
-            .filter(\.$name == name)
-            .first()
+        let projectID = vm.projectID
+        if let existing = try await LegacyLogicalNetworkStore.networks(
+            projectID: projectID, name: name, on: app.db
+        ).first
         {
             return existing
         }
@@ -57,7 +56,7 @@ final class DesiredStateReconciliationTests {
     /// Same harness as `VMOperationTests`: full middleware stack, API-key
     /// auth, one VM.
     private func withVMTestApp(
-        _ test: (Application, User, VM, String) async throws -> Void
+        _ test: (Application, User, inout VM, String) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
 
@@ -74,18 +73,17 @@ final class DesiredStateReconciliationTests {
             )
             let org = try await builder.createOrganization(name: "Recon Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "Recon Project",
                 description: "Project for reconciliation tests",
                 organization: org
             )
-            let vm = try await builder.createVM(name: "recon-vm", project: project)
-            let token = try await user.generateAPIKey(on: app.db)
+            var vm = try await builder.createVM(name: "recon-vm", project: project)
+            let token = try await user.generateAPIKey(on: app)
 
-            try await test(app, user, vm, token)
+            try await test(app, user, &vm, token)
 
         } catch {
             try await app.shutdownForTesting()
@@ -117,16 +115,16 @@ final class DesiredStateReconciliationTests {
             protocolVersion: protocolVersion,
             dependencyObservations: [Self.healthyOverlayObservation()]
         )
-        let project = try #require(try await Project.find(vm.$project.id, on: app.db))
+        let project = try #require(try await Project.find(vm.projectID, on: app.db))
         let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.db).first?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: agentName, siteID: siteID,
             organizationScope: orgID.map { .organization($0) })
-        let site = try #require(try await Site.find(siteID, on: app.db))
-        if site.$networkControllerAgent.id == nil {
-            site.$networkControllerAgent.id = agentUUID
-            try await site.save(on: app.db)
+        let site = try #require(try await LegacySiteStore.site(id: siteID, on: app.db))
+        if site.networkControllerAgentID == nil {
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: siteID, agentID: agentUUID, condition: .unset, on: app.db)
         }
         if placeVM {
             vm.hypervisorId = agentUUID.uuidString
@@ -136,9 +134,9 @@ final class DesiredStateReconciliationTests {
     }
 
     private func attachBootVolume(app: Application, vm: VM, agentID: String) async throws {
-        let owner = try #require(try await User.query(on: app.db).sort(\.$createdAt).first())
+        let owner = try #require(try await User.all(on: app.db).first)
         let boot = Volume(
-            name: "\(vm.name)-boot", description: "", projectID: vm.$project.id,
+            name: "\(vm.name)-boot", description: "", projectID: vm.projectID,
             environment: vm.environment, size: vm.disk, format: .qcow2,
             volumeType: .boot, status: .attached, createdByID: try owner.requireID())
         boot.$vm.id = try vm.requireID()
@@ -211,8 +209,7 @@ final class DesiredStateReconciliationTests {
 
             // The agent went dark: its row is offline cluster-wide.
             let agent = try #require(await app.agentService.getAgentInfo(agentId))
-            agent.status = .offline
-            try await agent.save(on: app.db)
+            try await agent.replacing(status: .offline).save(on: app.db)
 
             var targetGeneration: Int64?
             try await app.test(.POST, "/api/vms/\(vm.id!)/start") { req in
@@ -284,7 +281,7 @@ final class DesiredStateReconciliationTests {
             }
 
             // Refused agents leave no registry row behind.
-            let rows = try await Agent.query(on: app.db).all()
+            let rows = try await Agent.all(on: app.db)
             #expect(rows.isEmpty)
 
             // An exactly matching agent registers fine.
@@ -331,7 +328,7 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             try await self.attachBootVolume(app: app, vm: vm, agentID: agentId)
-            let project = try #require(try await Project.find(vm.$project.id, on: app.db))
+            let project = try #require(try await Project.find(vm.projectID, on: app.db))
             let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
 
             // A project-scoped network the VM references via a NIC.
@@ -339,7 +336,7 @@ final class DesiredStateReconciliationTests {
                 name: "app-net",
                 subnet: "10.20.0.0/24",
                 gateway: "10.20.0.1",
-                projectID: vm.$project.id,
+                projectID: vm.projectID,
                 externalAccess: true,
                 generation: 3,
                 siteID: siteID
@@ -362,7 +359,7 @@ final class DesiredStateReconciliationTests {
             // edits bump no generation and converged VMs never re-realize).
             #expect(net.dhcpEnabled == true)
             // Per-project router: the key is derived from the owning project.
-            #expect(net.routerKey == "project-\(vm.$project.id.uuidString)")
+            #expect(net.routerKey == "project-\(vm.projectID.uuidString)")
 
             // A network no VM on this agent references is not synced to it.
             #expect(!message.networks.contains { $0.name == "unreferenced" })
@@ -375,12 +372,12 @@ final class DesiredStateReconciliationTests {
             let agentId = try await self.registerAgent(
                 app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             try await self.attachBootVolume(app: app, vm: vm, agentID: agentId)
-            let project = try #require(try await Project.find(vm.$project.id, on: app.db))
+            let project = try #require(try await Project.find(vm.projectID, on: app.db))
             let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
 
             let network = LogicalNetwork(
                 name: "fip-net", subnet: "10.30.0.0/24", gateway: "10.30.0.1",
-                projectID: vm.$project.id, externalAccess: true, siteID: siteID)
+                projectID: vm.projectID, externalAccess: true, siteID: siteID)
             try await network.save(on: app.db)
             let networkID = try network.requireID()
             let net0 = VMNetworkInterface(
@@ -391,31 +388,30 @@ final class DesiredStateReconciliationTests {
             let net1 = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: networkID,
                 macAddress: VMNetworkInterface.generateMACAddress(),
-                deviceName: "net1", orderIndex: 1)
-            net1.detachGeneration = vm.generation
+                deviceName: "net1", orderIndex: 1,
+                detachGeneration: vm.generation)
             try await net1.save(on: app.db)
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: networkID,
                 macAddress: VMNetworkInterface.generateMACAddress(),
                 deviceName: "net2", orderIndex: 2)
             try await nic.save(on: app.db)
-            try await VMInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: nic.id!, logicalNetworkID: networkID, family: .ipv4,
-                address: "10.30.0.5", prefixLength: 24, gateway: "10.30.0.1"
-            ).save(on: app.db)
+                address: "10.30.0.5", prefixLength: 24, gateway: "10.30.0.1",
+                on: app.db)
 
-            let pool = FloatingIPPool(
-                name: "edge", cidr: "203.0.113.0/24", gateway: "203.0.113.1", siteID: siteID)
-            try await pool.save(on: app.db)
-            let attached = FloatingIP(
-                poolID: pool.id!, address: "203.0.113.10", projectID: vm.$project.id,
-                interfaceID: nic.id!, createdByID: user.id!)
-            try await attached.save(on: app.db)
+            let pool = try await TestDataBuilder(app: app).createFloatingIPPool(
+                name: "edge", cidr: "203.0.113.0/24", gateway: "203.0.113.1", siteID: siteID,
+                organizationID: project.organizationID)
+            try await LegacyFloatingIPStore.insert(
+                poolID: pool.id, address: "203.0.113.10", projectID: vm.projectID,
+                interfaceID: nic.id!, createdByID: user.id!, on: app.db)
             // A reserved-but-unattached address must not produce a NAT rule.
-            try await FloatingIP(
-                poolID: pool.id!, address: "203.0.113.11", projectID: vm.$project.id,
-                createdByID: user.id!
-            ).save(on: app.db)
+            try await LegacyFloatingIPStore.insert(
+                poolID: pool.id, address: "203.0.113.11", projectID: vm.projectID,
+                createdByID: user.id!, on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let net = try #require(message.networks.first { $0.name == "fip-net" })
@@ -452,29 +448,31 @@ final class DesiredStateReconciliationTests {
                     == .applied(initialGeneration + 1))
             let nic = VMNetworkInterface(
                 vmID: try vm.requireID(), logicalNetworkID: networkID,
-                macAddress: "52:54:00:de:7a:01", deviceName: "net0", orderIndex: 0)
-            nic.attachGeneration = 0
-            nic.detachGeneration = vm.generation
+                macAddress: "52:54:00:de:7a:01", deviceName: "net0", orderIndex: 0,
+                attachGeneration: 0, detachGeneration: vm.generation)
             try await nic.save(on: app.db)
             let nicID = try nic.requireID()
-            let address = VMInterfaceAddress(
+            let address = try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: nicID, logicalNetworkID: networkID, family: .ipv4,
-                address: "192.168.1.50", prefixLength: 24, gateway: "192.168.1.1")
-            try await address.save(on: app.db)
+                address: "192.168.1.50", prefixLength: 24, gateway: "192.168.1.1",
+                on: app.db)
             let group = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: vm.$project.id, on: app.db)
-            let membership = VMInterfaceSecurityGroup(
-                interfaceID: nicID, securityGroupID: try group.requireID())
-            try await membership.save(on: app.db)
-            let pool = FloatingIPPool(
+                projectID: vm.projectID, on: app.db)
+            let membership = try await LegacyInterfaceSecurityGroupStore.insert(
+                kind: .vm,
+                interfaceID: nicID,
+                securityGroupID: group.id,
+                on: app.db)
+            let project = try #require(try await Project.find(vm.projectID, on: app.db))
+            let pool = try await TestDataBuilder(app: app).createFloatingIPPool(
                 name: "detach-pool", cidr: "203.0.113.0/24", gateway: "203.0.113.1",
-                siteID: network.$site.id)
-            try await pool.save(on: app.db)
-            let floatingIP = FloatingIP(
-                poolID: try pool.requireID(), address: "203.0.113.50",
-                projectID: vm.$project.id, interfaceID: nicID,
-                createdByID: try user.requireID())
-            try await floatingIP.save(on: app.db)
+                siteID: network.siteID,
+                organizationID: project.organizationID)
+            let floatingIP = try await LegacyFloatingIPStore.insert(
+                poolID: pool.id, address: "203.0.113.50",
+                projectID: vm.projectID, interfaceID: nicID,
+                createdByID: try user.requireID(), on: app.db)
 
             func apply(appliedIDs: [UUID]) async throws {
                 let envelope = try self.report(
@@ -493,19 +491,27 @@ final class DesiredStateReconciliationTests {
             // manifest still says this NIC is applied, so every related row is
             // retained for a safe retry.
             try await apply(appliedIDs: [nicID])
-            #expect(try await VMNetworkInterface.find(nicID, on: app.db) != nil)
-            #expect(try await VMInterfaceAddress.find(address.id, on: app.db) != nil)
-            #expect(try await VMInterfaceSecurityGroup.find(membership.id, on: app.db) != nil)
-            #expect(try await FloatingIP.find(floatingIP.id, on: app.db)?.$interface.id == nicID)
+            #expect(try await LegacyVMNetworkInterfaceStore.interface(id: nicID, on: app.db) != nil)
+            #expect(try await LegacyInterfaceAddressStore.address(
+                kind: .vm, id: address.id, on: app.db) != nil)
+            #expect(try await LegacyInterfaceSecurityGroupStore.membership(
+                kind: .vm, id: membership.id, on: app.db) != nil)
+            #expect(
+                try await LegacyFloatingIPStore.find(id: floatingIP.id, on: app.db)?.interfaceID
+                    == nicID)
 
             // Only an explicit, authoritative absence releases the retained
             // NIC. Its FK cascades release leases and memberships; the
             // floating IP allocation remains reserved but becomes unattached.
             try await apply(appliedIDs: [])
-            #expect(try await VMNetworkInterface.find(nicID, on: app.db) == nil)
-            #expect(try await VMInterfaceAddress.find(address.id, on: app.db) == nil)
-            #expect(try await VMInterfaceSecurityGroup.find(membership.id, on: app.db) == nil)
-            #expect(try await FloatingIP.find(floatingIP.id, on: app.db)?.$interface.id == nil)
+            #expect(try await LegacyVMNetworkInterfaceStore.interface(id: nicID, on: app.db) == nil)
+            #expect(try await LegacyInterfaceAddressStore.address(
+                kind: .vm, id: address.id, on: app.db) == nil)
+            #expect(try await LegacyInterfaceSecurityGroupStore.membership(
+                kind: .vm, id: membership.id, on: app.db) == nil)
+            #expect(
+                try await LegacyFloatingIPStore.find(id: floatingIP.id, on: app.db)?.interfaceID
+                    == nil)
         }
     }
 
@@ -515,7 +521,7 @@ final class DesiredStateReconciliationTests {
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             vm.setFixtureDesiredStatus(.running)
-            vm.extendConvergenceDeadline(by: 600)
+            vm = vm.extendingConvergenceDeadline(by: 600)
             try await vm.save(on: app.db)
 
             let envelope = try self.report(
@@ -570,7 +576,7 @@ final class DesiredStateReconciliationTests {
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             vm.setFixtureDesiredStatus(.running)
-            vm.extendConvergenceDeadline(by: 600)
+            vm = vm.extendingConvergenceDeadline(by: 600)
             try await vm.save(on: app.db)
             _ = try await ResourceEvent.record(
                 .boot, resourceKind: .virtualMachine, resourceID: vm.id!,
@@ -608,7 +614,7 @@ final class DesiredStateReconciliationTests {
             let agentId = try await self.registerAgent(
                 app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             vm.setFixtureDesiredStatus(.running)
-            vm.extendConvergenceDeadline(by: 600)
+            vm = vm.extendingConvergenceDeadline(by: 600)
             try await vm.save(on: app.db)
             let reason = "agent `hv-03` has 12 GiB available; this operation requires 64 GiB additional memory"
 
@@ -713,7 +719,7 @@ final class DesiredStateReconciliationTests {
                 principalType: .user, principalID: user.id!, role: .admin,
                 nodeType: .virtualMachine, nodeID: vm.id!, createdBy: user.id!, on: app.db)
             let snapshot = VMSnapshot(
-                name: "checkpoint", vmID: vm.id!, projectID: vm.$project.id,
+                name: "checkpoint", vmID: vm.id!, projectID: vm.projectID,
                 environment: vm.environment, agentId: agentId, createdByID: user.id!)
             try await snapshot.save(on: app.db)
             let snapshotID = try snapshot.requireID()
@@ -734,15 +740,15 @@ final class DesiredStateReconciliationTests {
                 .completed, resourceKind: .virtualMachine, resourceID: vm.id!, on: app.db)
             #expect(terminal?.mutation == .delete)
 
-            let bindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$nodeType == IAMNodeType.virtualMachine.rawValue)
-                .filter(\.$nodeID == vm.id!)
-                .count()
+            let bindings = try await LegacyRoleBindingStore.bindings(
+                nodeType: IAMNodeType.virtualMachine.rawValue,
+                nodeID: vm.id!,
+                on: app.db).count
             #expect(bindings == 0)
-            let snapshotBindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$nodeType == IAMNodeType.vmSnapshot.rawValue)
-                .filter(\.$nodeID == snapshotID)
-                .count()
+            let snapshotBindings = try await LegacyRoleBindingStore.bindings(
+                nodeType: IAMNodeType.vmSnapshot.rawValue,
+                nodeID: snapshotID,
+                on: app.db).count
             #expect(snapshotBindings == 0)
         }
     }
@@ -964,9 +970,8 @@ final class DesiredStateReconciliationTests {
             #expect(refreshed.qgaAvailable == true)
             #expect(refreshed.observedHostname == "web-01")
 
-            let observed = try await VMInterfaceObservedAddress.query(on: app.db)
-                .filter(\.$interface.$id == nic.id!)
-                .all()
+            let observed = try await app.workloadsPersistence.observedInterfaceAddresses(
+                interfaceIDs: [nic.id!])
             #expect(observed.count == 2)
             #expect(
                 observed.contains {
@@ -1005,7 +1010,8 @@ final class DesiredStateReconciliationTests {
                             name: "eth0", hardwareAddress: "52:54:00:ab:cd:ef",
                             addresses: [GuestIPAddress(family: .ipv4, address: "10.0.0.5", prefixLength: 24)])
                     ]))
-            var rows = try await VMInterfaceObservedAddress.query(on: app.db).filter(\.$interface.$id == nic.id!).all()
+            var rows = try await app.workloadsPersistence.observedInterfaceAddresses(
+                interfaceIDs: [nic.id!])
             #expect(rows.map(\.address) == ["10.0.0.5"])
 
             // The lease changed: the set is reconciled wholesale to the new address.
@@ -1017,13 +1023,15 @@ final class DesiredStateReconciliationTests {
                             name: "eth0", hardwareAddress: "52:54:00:ab:cd:ef",
                             addresses: [GuestIPAddress(family: .ipv4, address: "10.0.0.9", prefixLength: 24)])
                     ]))
-            rows = try await VMInterfaceObservedAddress.query(on: app.db).filter(\.$interface.$id == nic.id!).all()
+            rows = try await app.workloadsPersistence.observedInterfaceAddresses(
+                interfaceIDs: [nic.id!])
             #expect(rows.map(\.address) == ["10.0.0.9"])
 
             // A report without guestInfo (e.g. a transient probe miss) must NOT
             // wipe the last-known observed addresses.
             try await send(nil)
-            rows = try await VMInterfaceObservedAddress.query(on: app.db).filter(\.$interface.$id == nic.id!).all()
+            rows = try await app.workloadsPersistence.observedInterfaceAddresses(
+                interfaceIDs: [nic.id!])
             #expect(rows.map(\.address) == ["10.0.0.9"])
         }
     }
@@ -1063,8 +1071,8 @@ final class DesiredStateReconciliationTests {
             let refreshed = try #require(try await VM.find(vm.id, on: app.db))
             #expect(refreshed.qgaAvailable == nil)
             #expect(refreshed.observedHostname == nil)
-            let rows = try await VMInterfaceObservedAddress.query(on: app.db)
-                .filter(\.$interface.$id == nic.id!).all()
+            let rows = try await app.workloadsPersistence.observedInterfaceAddresses(
+                interfaceIDs: [nic.id!])
             #expect(rows.isEmpty)
         }
     }

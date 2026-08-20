@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import Vapor
 
@@ -121,12 +122,20 @@ enum IAMDecisionEngine {
         built: CedarPolicySetCache.Built,
         cache: IAMRequestCache? = nil,
         restriction: CredentialRestriction? = nil,
+        using iam: IAMPersistence? = nil,
         on db: any Database
     ) async throws -> Decision {
         let target = IAMCheckTarget(principal: principal, node: node)
         guard
             let decision = try await decide(
-                [target], action: action, built: built, cache: cache, restriction: restriction, on: db)[target]
+                [target],
+                action: action,
+                built: built,
+                cache: cache,
+                restriction: restriction,
+                using: iam,
+                on: db
+            )[target]
         else {
             // Unreachable: the batch is total over its inputs.
             throw Abort(.internalServerError, reason: "Authorization decision unavailable")
@@ -157,9 +166,16 @@ enum IAMDecisionEngine {
         built: CedarPolicySetCache.Built,
         cache: IAMRequestCache? = nil,
         restriction: CredentialRestriction? = nil,
+        using iam: IAMPersistence? = nil,
         on db: any Database
     ) async throws -> [IAMCheckTarget: Decision] {
-        let slices = try await EntitySliceLoader.load(targets, action: action, cache: cache, on: db)
+        let slices = try await EntitySliceLoader.load(
+            targets,
+            action: action,
+            cache: cache,
+            using: iam,
+            on: db
+        )
         var decisions: [IAMCheckTarget: Decision] = [:]
         decisions.reserveCapacity(slices.count)
         for (target, slice) in slices {

@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import Foundation
 import Vapor
@@ -90,10 +91,9 @@ enum GuestIdentity {
         }
 
         guard
-            let row = try await OrgTrustDomain.query(on: db)
-                .filter(\.$organizationID == organizationID)
-                .filter(\.$phase == .active)
-                .first(),
+            let row = try await OrgTrustDomainStore.find(
+                organizationID: organizationID, on: db),
+            row.phase == .active,
             row.acceptsIdentities
         else { return platform }
 
@@ -121,18 +121,17 @@ enum GuestIdentity {
         createdBy: UUID?,
         configuration: ControlPlaneConfiguration,
         on db: any Database
-    ) async throws -> WorkloadRegistration {
+    ) async throws -> LegacyWorkloadRegistrationRecord {
         let trustDomain = try await trustDomain(
             forOrganization: organizationID, configuration: configuration, on: db)
-        let registration = WorkloadRegistration(
-            spiffeID: spiffeID(forVM: vmID, trustDomain: trustDomain),
-            kind: .workload,
-            organizationID: organizationID,
-            createdBy: createdBy,
-            vmID: vmID
-        )
-        try await registration.save(on: db)
-        return registration
+        return try await LegacyWorkloadRegistrationStore.insert(
+            WorkloadRegistrationWrite(
+                spiffeID: spiffeID(forVM: vmID, trustDomain: trustDomain),
+                kind: WorkloadRegistrationKind.workload.rawValue,
+                organizationID: organizationID,
+                createdBy: createdBy,
+                vmID: vmID),
+            on: db)
     }
 
     /// Convenience for focused tests whose subject is registration rather than
@@ -144,16 +143,15 @@ enum GuestIdentity {
         organizationID: UUID?,
         createdBy: UUID?,
         on db: any Database
-    ) async throws -> WorkloadRegistration {
-        let registration = WorkloadRegistration(
-            spiffeID: spiffeID(forVM: vmID, trustDomain: PlatformTrustDomain.current),
-            kind: .workload,
-            organizationID: organizationID,
-            createdBy: createdBy,
-            vmID: vmID
-        )
-        try await registration.save(on: db)
-        return registration
+    ) async throws -> LegacyWorkloadRegistrationRecord {
+        try await LegacyWorkloadRegistrationStore.insert(
+            WorkloadRegistrationWrite(
+                spiffeID: spiffeID(forVM: vmID, trustDomain: PlatformTrustDomain.current),
+                kind: WorkloadRegistrationKind.workload.rawValue,
+                organizationID: organizationID,
+                createdBy: createdBy,
+                vmID: vmID),
+            on: db)
     }
 
     /// The current names of a set of VMs, for hydrating registry labels.
@@ -164,7 +162,7 @@ enum GuestIdentity {
         var result: [UUID: String] = [:]
         for start in stride(from: 0, to: vmIDs.count, by: lookupChunkSize) {
             let chunk = Array(vmIDs[start..<min(start + lookupChunkSize, vmIDs.count)])
-            let rows = try await VM.query(on: db).filter(\.$id ~~ chunk).all()
+            let rows = try await LegacyVMStore.vms(ids: chunk, on: db)
             for row in rows {
                 guard let vmID = row.id else { continue }
                 result[vmID] = row.name
@@ -196,13 +194,12 @@ enum GuestIdentity {
         var result: [UUID: RegistrationReference] = [:]
         for start in stride(from: 0, to: vmIDs.count, by: lookupChunkSize) {
             let chunk = Array(vmIDs[start..<min(start + lookupChunkSize, vmIDs.count)])
-            let rows = try await WorkloadRegistration.query(on: db)
-                .filter(\.$vm.$id ~~ chunk)
-                .all()
+            let rows = try await LegacyWorkloadRegistrationStore.registrations(
+                vmIDs: chunk, on: db)
             for row in rows {
-                guard let vmID = row.$vm.id, let principalID = row.id else { continue }
+                guard let vmID = row.vmID else { continue }
                 result[vmID] = RegistrationReference(
-                    principalID: principalID, spiffeID: row.spiffeID)
+                    principalID: row.id, spiffeID: row.spiffeID)
             }
         }
         return result
@@ -228,3 +225,4 @@ enum GuestIdentity {
         try await registration(forVM: vmID, on: db)?.spiffeID
     }
 }
+import ControlPlanePostgres

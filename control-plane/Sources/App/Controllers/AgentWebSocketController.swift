@@ -3,7 +3,6 @@ import Vapor
 import StratoShared
 import NIOCore
 import NIOWebSocket
-import Fluent
 
 struct AgentWebSocketController: RouteCollection {
     /// Message types whose bodies are base64 payload rather than anything worth

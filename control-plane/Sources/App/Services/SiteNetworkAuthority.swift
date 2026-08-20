@@ -93,8 +93,8 @@ enum SiteNetworkAuthority {
         offlineGrace: TimeInterval = controllerOfflineGrace,
         on db: any Database
     ) async throws -> Authority {
-        let siteID = agent.$site.id
-        guard let site = try await Site.find(siteID, on: db) else {
+        let siteID = agent.siteID
+        guard let site = try await LegacySiteStore.site(id: siteID, on: db) else {
             throw Abort(.internalServerError, reason: "Agent references missing site \(siteID)")
         }
         return try await resolve(forSite: site, offlineGrace: offlineGrace, on: db)
@@ -107,7 +107,7 @@ enum SiteNetworkAuthority {
         offlineGrace: TimeInterval = controllerOfflineGrace,
         on db: any Database
     ) async throws -> Authority {
-        guard let controllerID = site.$networkControllerAgent.id,
+        guard let controllerID = site.networkControllerAgentID,
             let controller = try await Agent.find(controllerID, on: db)
         else {
             // Includes a designation left dangling at a deleted agent row: the
@@ -287,20 +287,17 @@ enum SiteNetworkAuthority {
             // A conditional update rather than read-modify-write: replicas can
             // be admitting members of the same controller-less site
             // concurrently, and the first one must win rather than the last.
-            try await Site.query(on: db)
-                .filter(\.$id == siteID)
-                .filter(
-                    .path(Site.path(for: \.$networkControllerAgent.$id), schema: Site.schema),
-                    .equal, .null
-                )
-                .set(\.$networkControllerAgent.$id, to: agentID)
-                .update()
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: siteID,
+                agentID: agentID,
+                condition: .unset,
+                on: db)
 
             // Read back: the update is silent about whether it matched, and
             // only the agent that actually won should be announced as the new
             // topology author.
-            guard let site = try await Site.find(siteID, on: db),
-                site.$networkControllerAgent.id == agentID
+            guard let site = try await LegacySiteStore.site(id: siteID, on: db),
+                site.networkControllerAgentID == agentID
             else {
                 return false
             }
@@ -349,8 +346,8 @@ enum SiteNetworkAuthority {
     ) async -> Bool {
         guard let agentID = agent.id else { return false }
         do {
-            guard let site = try await Site.find(siteID, on: db),
-                site.$networkControllerAgent.id == agentID
+            guard let site = try await LegacySiteStore.site(id: siteID, on: db),
+                site.networkControllerAgentID == agentID
             else {
                 return false
             }
@@ -361,10 +358,8 @@ enum SiteNetworkAuthority {
                 return false
             }
 
-            let eligiblePeers = try await Agent.query(on: db)
-                .filter(\.$site.$id == siteID)
-                .filter(\.$id != agentID)
-                .all()
+            let eligiblePeers = try await LegacyAgentStore.agents(
+                siteID: siteID, excludingID: agentID, on: db)
                 .filter(canAuthorTopology)
 
             Telemetry.recordSiteNetworkControllerUp(site: site.name, up: false)
@@ -381,11 +376,11 @@ enum SiteNetworkAuthority {
 
             // Conditional on still being the designated controller, so a
             // replacement another replica designated concurrently survives.
-            try await Site.query(on: db)
-                .filter(\.$id == siteID)
-                .filter(\.$networkControllerAgent.$id == agentID)
-                .set(\.$networkControllerAgent.$id, to: nil)
-                .update()
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: siteID,
+                agentID: nil,
+                condition: .equals(agentID),
+                on: db)
             logger.warning(
                 "Cleared the site's network controller designation; an eligible member takes it on its next registration",
                 metadata: [

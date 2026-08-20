@@ -1,4 +1,5 @@
 import Fluent
+import ControlPlanePostgres
 import StratoShared
 import Testing
 import Vapor
@@ -34,12 +35,11 @@ final class VolumeQuotaTests {
                 username: "volquotauser", email: "volquota@example.com")
             let org = try await builder.createOrganization(name: "Volume Quota Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "Volume Quota Project", description: "p", organization: org)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, builder, user, project, token)
         } catch {
@@ -73,7 +73,7 @@ final class VolumeQuotaTests {
                     type: .qemu, available: true, accelerated: true, capabilities: .qemu)
             ],
             protocolVersion: WireProtocol.currentVersion)
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.db).first?.id
         let uuid = try await app.agentService.registerAgent(
             message, agentName: name, organizationScope: orgID.map { .organization($0) })
         return uuid.uuidString
@@ -87,7 +87,7 @@ final class VolumeQuotaTests {
         app: Application, user: User, project: Project, name: String, sizeGB: Int,
         environment: String = "development", agentId: String? = nil
     ) async throws -> Volume {
-        let pool = try await StoragePool.defaultPool(on: app.db)
+        let pool = try await app.storagePoolsPersistence.defaultPool()
         let volume = Volume(
             name: name, description: "seeded", projectID: try project.requireID(),
             environment: environment, size: gb(sizeGB), status: .available,
@@ -125,7 +125,7 @@ final class VolumeQuotaTests {
             #expect(try await measure(quota, on: app.db).storageBytes == gb(100))
             #expect(try await measure(quota, on: app.db).volumeCount == 1)
 
-            let snapshot = VolumeSnapshot(
+            var snapshot = VolumeSnapshot(
                 name: "snap", description: "", volumeID: try volume.requireID(),
                 projectID: try project.requireID(), environment: "development",
                 size: volume.size, createdByID: try user.requireID())
@@ -150,7 +150,7 @@ final class VolumeQuotaTests {
             let volume = try await seedVolume(
                 app: app, user: user, project: project, name: "parent", sizeGB: 100)
 
-            let snapshot = VolumeSnapshot(
+            var snapshot = VolumeSnapshot(
                 name: "snap", description: "", volumeID: try volume.requireID(),
                 projectID: try project.requireID(), environment: "development",
                 size: volume.size, createdByID: try user.requireID())
@@ -160,7 +160,7 @@ final class VolumeQuotaTests {
             // What a v39 agent reports for an overlay that has barely diverged
             // remains visible on the row, but the no-later-admission bound must
             // stay reserved.
-            snapshot.observedSizeBytes = 4 * 1024 * 1024
+            snapshot = snapshot.replacing(observedSizeBytes: .some(4 * 1024 * 1024))
             try await snapshot.save(on: app.db)
             #expect(try await measure(quota, on: app.db).storageBytes == gb(200))
         }
@@ -168,39 +168,43 @@ final class VolumeQuotaTests {
 
     @Test("applyCapturedFacts records the live footprint, never the capture-time one")
     func applyCapturedFactsRecordsCurrentSize() async throws {
-        let snapshot = VolumeSnapshot(
+        var snapshot = VolumeSnapshot(
             name: "snap", description: "", volumeID: UUID(), projectID: UUID(),
             environment: "development", size: 1 << 30, createdByID: UUID())
 
         // A pre-v39 agent: `sizeBytes` only, and it is the empty overlay's
         // header. Recording it would make the snapshot free.
-        #expect(
-            snapshot.applyCapturedFacts(
-                ObservedSnapshotFacts(sizeBytes: 197_120, storagePath: "/v/s.qcow2")))
+        var update = snapshot.recordingCapturedFacts(
+            ObservedSnapshotFacts(sizeBytes: 197_120, storagePath: "/v/s.qcow2"))
+        #expect(update.changed)
+        snapshot = update.resource
         #expect(snapshot.storagePath == "/v/s.qcow2")
         #expect(snapshot.observedSizeBytes == nil)
         #expect(snapshot.size == 1 << 30)
 
         // A v39 agent's live measurement lands.
-        #expect(
-            snapshot.applyCapturedFacts(
-                ObservedSnapshotFacts(
-                    sizeBytes: 197_120, currentSizeBytes: 512 << 20, storagePath: "/v/s.qcow2")))
+        update = snapshot.recordingCapturedFacts(
+            ObservedSnapshotFacts(
+                sizeBytes: 197_120, currentSizeBytes: 512 << 20, storagePath: "/v/s.qcow2"))
+        #expect(update.changed)
+        snapshot = update.resource
         #expect(snapshot.observedSizeBytes == 512 << 20)
         #expect(snapshot.size == 1 << 30, "the restore-sizing figure must not move")
 
         // Sub-megabyte drift is not worth a row write: a report goes out every
         // 20 seconds and coalesces at 500 ms.
-        #expect(
-            !snapshot.applyCapturedFacts(
-                ObservedSnapshotFacts(
-                    currentSizeBytes: (512 << 20) + 4096, storagePath: "/v/s.qcow2")))
+        update = snapshot.recordingCapturedFacts(
+            ObservedSnapshotFacts(
+                currentSizeBytes: (512 << 20) + 4096, storagePath: "/v/s.qcow2"))
+        #expect(!update.changed)
+        snapshot = update.resource
         #expect(snapshot.observedSizeBytes == 512 << 20)
 
-        #expect(
-            snapshot.applyCapturedFacts(
-                ObservedSnapshotFacts(
-                    currentSizeBytes: (512 << 20) + (2 << 20), storagePath: "/v/s.qcow2")))
+        update = snapshot.recordingCapturedFacts(
+            ObservedSnapshotFacts(
+                currentSizeBytes: (512 << 20) + (2 << 20), storagePath: "/v/s.qcow2"))
+        #expect(update.changed)
+        snapshot = update.resource
         #expect(snapshot.observedSizeBytes == (512 << 20) + (2 << 20))
     }
 
@@ -210,12 +214,14 @@ final class VolumeQuotaTests {
             let quota = try await builder.createResourceQuota(name: "q", project: project)
             let vm = try await builder.createVM(name: "managed", project: project)
 
-            let bootVolume = try await seedVolume(
+            var bootVolume = try await seedVolume(
                 app: app, user: user, project: project, name: "managed-boot", sizeGB: 10)
-            bootVolume.volumeType = .boot
-            bootVolume.$vm.id = try vm.requireID()
-            bootVolume.deviceName = "disk0"
-            bootVolume.bootOrder = 0
+            bootVolume = bootVolume.replacing(
+                volumeType: .boot,
+                vmID: try vm.requireID(),
+                deviceName: "disk0",
+                bootOrder: 0
+            )
             try await bootVolume.save(on: app.db)
 
             let attached = try await measure(quota, on: app.db)
@@ -223,13 +229,13 @@ final class VolumeQuotaTests {
             #expect(attached.volumeCount == 1)
 
             // Attachment is lifecycle state, not accounting identity.
-            bootVolume.$vm.id = nil
+            bootVolume = bootVolume.replacing(vmID: .some(nil))
             try await bootVolume.save(on: app.db)
             let detached = try await measure(quota, on: app.db)
             #expect(detached.storageBytes == gb(10))
             #expect(detached.volumeCount == 1)
 
-            bootVolume.size = gb(15)
+            bootVolume = bootVolume.replacing(size: gb(15))
             try await bootVolume.save(on: app.db)
             let grown = try await measure(quota, on: app.db)
             #expect(grown.storageBytes == gb(15))
@@ -273,7 +279,7 @@ final class VolumeQuotaTests {
             }
 
             // Nothing was written and nothing was reserved.
-            #expect(try await Volume.query(on: app.db).count() == 0)
+            #expect(try await Volume.all(on: app.db).count == 0)
             let refreshed = try #require(try await ResourceQuota.find(quota.id, on: app.db))
             #expect(refreshed.reservedStorage == 0)
             #expect(refreshed.volumeCount == 0)
@@ -293,13 +299,13 @@ final class VolumeQuotaTests {
                 #expect(res.status == .accepted)
             }
 
-            let volume = try #require(try await Volume.query(on: app.db).first())
+            let volume = try #require(try await Volume.all(on: app.db).first)
             #expect(volume.environment == "development")
             // Placement runs in the background and has no agent to land on, so
             // the row's own convergence may degrade — the accounting does not.
-            try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
-            #expect(quota.reservedStorage == gb(30))
-            #expect(quota.volumeCount == 1)
+            let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
+            #expect(synchronized.reservedStorage == gb(30))
+            #expect(synchronized.volumeCount == 1)
         }
     }
 
@@ -314,7 +320,7 @@ final class VolumeQuotaTests {
             } afterResponse: { res in
                 #expect(res.status == .accepted)
             }
-            let volume = try #require(try await Volume.query(on: app.db).first())
+            let volume = try #require(try await Volume.all(on: app.db).first)
             #expect(volume.environment == "production")
 
             try await app.test(.POST, "/api/volumes") { req in
@@ -347,8 +353,8 @@ final class VolumeQuotaTests {
             } afterResponse: { res in
                 #expect(res.status == .accepted)
             }
-            try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
-            #expect(quota.reservedStorage == gb(20))
+            let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
+            #expect(synchronized.reservedStorage == gb(20))
 
             // 20 → 30 needs 10 more than the 25 ceiling allows.
             try await app.test(.POST, "/api/volumes/\(volumeID)/resize") { req in
@@ -371,15 +377,17 @@ final class VolumeQuotaTests {
             let quota = try await builder.createResourceQuota(
                 name: "materialized", maxStorageGB: 40, project: project)
             let agentId = try await registerAgent(app: app, named: "image-volume-host")
-            let vm = try await builder.createVM(name: "image-volume-vm", project: project)
+            var vm = try await builder.createVM(name: "image-volume-vm", project: project)
             vm.hypervisorId = agentId
             try await vm.save(on: app.db)
             let image = try await builder.createImage(project: project, uploadedBy: user)
             let volume = try await seedVolume(
                 app: app, user: user, project: project, name: "image-volume", sizeGB: 10,
-                agentId: agentId)
-            volume.$sourceImage.id = try image.requireID()
-            volume.observedSizeBytes = gb(30)
+                agentId: agentId
+            ).replacing(
+                observedSizeBytes: gb(30),
+                sourceImageID: try image.requireID()
+            )
             try await volume.save(on: app.db)
 
             try await app.test(.POST, "/api/volumes/\(try volume.requireID())/attach") { req in
@@ -404,14 +412,14 @@ final class VolumeQuotaTests {
             _ = try await builder.createResourceQuota(
                 name: "too-small", maxStorageGB: 30, project: project)
             let agentId = try await registerAgent(app: app, named: "guarded-image-volume-host")
-            let vm = try await builder.createVM(name: "guarded-image-volume-vm", project: project)
+            var vm = try await builder.createVM(name: "guarded-image-volume-vm", project: project)
             vm.hypervisorId = agentId
             try await vm.save(on: app.db)
             let image = try await builder.createImage(project: project, uploadedBy: user)
-            let volume = try await seedVolume(
+            var volume = try await seedVolume(
                 app: app, user: user, project: project, name: "guarded-image-volume", sizeGB: 10,
-                agentId: agentId)
-            volume.$sourceImage.id = try image.requireID()
+                agentId: agentId
+            ).replacing(sourceImageID: try image.requireID())
             try await volume.save(on: app.db)
 
             func attach(expecting expected: HTTPStatus) async throws {
@@ -432,13 +440,13 @@ final class VolumeQuotaTests {
 
             // Once reported, the 30 GiB materialization plus the VM's 10 GiB
             // boot disk exceeds the 30 GiB quota and is refused atomically.
-            volume.observedSizeBytes = gb(30)
+            volume = volume.replacing(observedSizeBytes: gb(30))
             try await volume.save(on: app.db)
             try await attach(expecting: .forbidden)
 
             let unchanged = try #require(try await Volume.find(volume.id, on: app.db))
             #expect(unchanged.size == gb(10))
-            #expect(unchanged.$vm.id == nil)
+            #expect(unchanged.vmID == nil)
         }
     }
 
@@ -457,8 +465,8 @@ final class VolumeQuotaTests {
             let first = VolumeSnapshot(
                 name: "first", description: "", volumeID: volumeID,
                 projectID: try project.requireID(), environment: "development",
-                size: volume.size, createdByID: try user.requireID())
-            first.observedSizeBytes = 4 * 1024 * 1024
+                size: volume.size, observedSizeBytes: 4 * 1024 * 1024,
+                createdByID: try user.requireID())
             try await first.save(on: app.db)
 
             // 50 GiB volume + 50 GiB first-snapshot bound leaves only 10 GiB,
@@ -472,7 +480,7 @@ final class VolumeQuotaTests {
                 #expect(res.status == .forbidden)
                 #expect(res.body.string.range(of: "quota", options: .caseInsensitive) != nil)
             }
-            #expect(try await VolumeSnapshot.query(on: app.db).count() == 1)
+            #expect(try await VolumeSnapshot.all(on: app.db).count == 1)
         }
     }
 
@@ -494,7 +502,7 @@ final class VolumeQuotaTests {
                 #expect(res.status == .forbidden)
                 #expect(res.body.string.range(of: "quota", options: .caseInsensitive) != nil)
             }
-            #expect(try await Volume.query(on: app.db).count() == 1)
+            #expect(try await Volume.all(on: app.db).count == 1)
         }
     }
 
@@ -515,8 +523,8 @@ final class VolumeQuotaTests {
                 }
             }
 
-            quota.maxVolumes = 3
-            try await quota.save(on: app.db)
+            let limitedQuota = quota.withMaxVolumes(3)
+            try await limitedQuota.save(on: app.db)
 
             try await app.test(.POST, "/api/volumes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -528,7 +536,7 @@ final class VolumeQuotaTests {
 
             // Room reappears when one goes away.
             let victim = try #require(
-                try await Volume.query(on: app.db).filter(\.$name == "unlimited-0").first())
+                try await Volume.all(on: app.db).first { $0.name == "unlimited-0" })
             try await victim.delete(on: app.db)
 
             try await app.test(.POST, "/api/volumes") { req in
@@ -551,13 +559,13 @@ final class VolumeQuotaTests {
                 app: app, user: user, project: project, name: "keeper", sizeGB: 30)
             let doomed = try await seedVolume(
                 app: app, user: user, project: project, name: "doomed", sizeGB: 20)
-            try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
-            try await quota.save(on: app.db)
-            #expect(quota.reservedStorage == gb(50))
+            let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
+            try await synchronized.save(on: app.db)
+            #expect(synchronized.reservedStorage == gb(50))
 
-            doomed.setDesiredStatus(.absent)
-            try await doomed.save(on: app.db)
-            #expect(try await Volume.reap(doomed, on: app.db, app: app))
+            let terminating = doomed.replacingDesiredStatus(.absent)
+            try await terminating.save(on: app.db)
+            #expect(try await Volume.reap(terminating, on: app.db, app: app))
 
             let refreshed = try #require(try await ResourceQuota.find(quota.id, on: app.db))
             #expect(refreshed.reservedStorage == gb(30), "recount, not decrement")
@@ -578,13 +586,13 @@ final class VolumeQuotaTests {
                 projectID: try project.requireID(), environment: "development",
                 size: volume.size, createdByID: try user.requireID())
             try await snapshot.save(on: app.db)
-            try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
-            try await quota.save(on: app.db)
-            #expect(quota.reservedStorage == gb(200))
+            let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
+            try await synchronized.save(on: app.db)
+            #expect(synchronized.reservedStorage == gb(200))
 
-            volume.setDesiredStatus(.absent)
-            try await volume.save(on: app.db)
-            #expect(try await Volume.reap(volume, on: app.db, app: app))
+            let terminating = volume.replacingDesiredStatus(.absent)
+            try await terminating.save(on: app.db)
+            #expect(try await Volume.reap(terminating, on: app.db, app: app))
 
             let refreshed = try #require(try await ResourceQuota.find(quota.id, on: app.db))
             #expect(refreshed.reservedStorage == 0)
@@ -621,7 +629,7 @@ final class VolumeQuotaTests {
 
             #expect(statuses.filter { $0 == .accepted }.count == 1)
             #expect(statuses.filter { $0 == .forbidden }.count == 1)
-            #expect(try await Volume.query(on: app.db).count() == 1)
+            #expect(try await Volume.all(on: app.db).count == 1)
         }
     }
 }

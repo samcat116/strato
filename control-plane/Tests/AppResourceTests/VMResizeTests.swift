@@ -25,7 +25,7 @@ final class VMResizeTests {
         quotaMemoryGB: Double = 64,
         agentAvailableCPU: Int = 32,
         agentAvailableMemory: Int64 = 64_000_000_000,
-        _ test: (Application, User, VM, Project, String) async throws -> Void
+        _ test: (Application, User, inout VM, Project, String) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
 
@@ -42,8 +42,7 @@ final class VMResizeTests {
             )
             let org = try await builder.createOrganization(name: "Resize Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "Resize Project",
@@ -69,19 +68,19 @@ final class VMResizeTests {
                 ),
                 architecture: agentArchitecture,
                 lastHeartbeat: Date()
-            )
-            agent.wireProtocolVersion = agentWireVersion
-            agent.$site.id = try await builder.placementSite(for: project).requireID()
+            ).replacing(
+                siteID: try await builder.placementSite(for: project).requireID(),
+                wireProtocolVersion: .some(agentWireVersion))
             try await agent.save(on: app.db)
 
-            let vm = try await builder.createVM(name: "resize-vm", project: project)
+            var vm = try await builder.createVM(name: "resize-vm", project: project)
             vm.maxCpu = 8
             vm.maxMemory = 8 * 1024 * 1024 * 1024
             vm.hypervisorId = agent.id?.uuidString
             try await vm.save(on: app.db)
 
-            let token = try await user.generateAPIKey(on: app.db)
-            try await test(app, user, vm, project, token)
+            let token = try await user.generateAPIKey(on: app)
+            try await test(app, user, &vm, project, token)
         } catch {
             try await app.shutdownForTesting()
             throw error
@@ -90,7 +89,7 @@ final class VMResizeTests {
         try await app.shutdownForTesting()
     }
 
-    private func running(_ vm: VM, on db: any Database) async throws {
+    private func running(_ vm: inout VM, on db: any Database) async throws {
         vm.setStatus(.running)
         vm.setFixtureDesiredStatus(.running)
         try await vm.save(on: db)
@@ -163,7 +162,7 @@ final class VMResizeTests {
     @Test("Placed resize accepts an exact fit")
     func placedExactFit() async throws {
         try await withResizeTestApp(agentAvailableCPU: 4) { app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.db)
             try await put(app, vm, token: token, body: ["cpu": 6]) { res in
                 #expect(res.status == .accepted)
             }
@@ -173,7 +172,7 @@ final class VMResizeTests {
     @Test("Placed resize rejects CPU shortage without changing sizing, generation, or quota")
     func placedCPUShortage() async throws {
         try await withResizeTestApp(agentAvailableCPU: 3) { app, _, vm, project, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.db)
             let generation = vm.generation
             let quotasBefore = try await QuotaEnforcementService.applicableQuotas(
                 for: project, environment: vm.environment, on: app.db)
@@ -197,7 +196,7 @@ final class VMResizeTests {
     @Test("Placed resize subtracts active placement reservations")
     func activePlacementReservation() async throws {
         try await withResizeTestApp(agentAvailableCPU: 4) { app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.db)
             let agentID = try #require(vm.hypervisorId)
             #expect(
                 await app.coordination.reserveCapacity(
@@ -296,7 +295,7 @@ final class VMResizeTests {
     func memoryShrinkOnFullHost() async throws {
         try await withResizeTestApp(agentAvailableCPU: 0, agentAvailableMemory: 0) {
             app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.db)
             try await put(
                 app, vm, token: token,
                 body: ["memory": Int64(1024 * 1024 * 1024)]
@@ -309,7 +308,7 @@ final class VMResizeTests {
     @Test("A running vCPU shrink is rejected without changing convergence, sizing, or quota")
     func runningVCPUShrinkRejected() async throws {
         try await withResizeTestApp { app, _, vm, project, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.db)
             // Model a live count the agent has confirmed, so the control plane
             // can distinguish this from a smaller replacement for a pending
             // growth request.
@@ -356,7 +355,7 @@ final class VMResizeTests {
     @Test("Resizing a running VM returns 202 with the VM and bumps the generation")
     func runningResizeAccepted() async throws {
         try await withResizeTestApp { app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.db)
             let generationBefore = vm.generation
 
             try await put(app, vm, token: token, body: ["cpu": 6]) { res in
@@ -378,7 +377,7 @@ final class VMResizeTests {
     @Test("Growing a running VM past its vCPU ceiling is a 422 naming the restart")
     func beyondMaxCPURejected() async throws {
         try await withResizeTestApp { app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.db)
 
             try await put(app, vm, token: token, body: ["cpu": 12]) { res in
                 #expect(res.status == .unprocessableEntity)
@@ -393,7 +392,7 @@ final class VMResizeTests {
     @Test("Growing a running VM past its memory ceiling is a 422")
     func beyondMaxMemoryRejected() async throws {
         try await withResizeTestApp { app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.db)
 
             try await put(app, vm, token: token, body: ["memory": Int64(32 * 1024 * 1024 * 1024)]) { res in
                 #expect(res.status == .unprocessableEntity)
@@ -408,7 +407,7 @@ final class VMResizeTests {
     @Test("A resize that would exceed the project's quota is refused")
     func quotaEnforcedOnGrowth() async throws {
         try await withResizeTestApp(quotaVCPUs: 4) { app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.db)
 
             try await put(app, vm, token: token, body: ["cpu": 6]) { res in
                 #expect(res.status == .forbidden)
@@ -437,7 +436,7 @@ final class VMResizeTests {
     @Test("Two overlapping resizes charge quota once each, against the committed sizing")
     func overlappingResizesChargeQuotaCorrectly() async throws {
         try await withResizeTestApp { app, _, vm, project, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.db)
 
             // The "operation already pending" mutex is gone (STR-147), so
             // nothing refuses the second resize. What replaces it is the row
@@ -475,7 +474,7 @@ final class VMResizeTests {
     @Test("A smaller pending growth supersedes a larger one instead of becoming a shrink")
     func pendingGrowthRemainsLastWriterWins() async throws {
         try await withResizeTestApp { app, _, vm, project, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.db)
             vm.observedGeneration = vm.generation
             try await vm.save(on: app.db)
 
@@ -506,7 +505,7 @@ final class VMResizeTests {
     @Test("Setting a balloon target on a running VM returns 202 and leaves the grant alone")
     func balloonTargetOnRunningVM() async throws {
         try await withResizeTestApp { app, _, vm, project, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.db)
             let generationBefore = vm.generation
             let oneGB = Int64(1024 * 1024 * 1024)
 
@@ -535,7 +534,7 @@ final class VMResizeTests {
         try await withResizeTestApp { app, _, vm, _, token in
             vm.balloonTarget = 1024 * 1024 * 1024
             try await vm.save(on: app.db)
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.db)
 
             try await put(app, vm, token: token, body: ["balloonTarget": NSNull()]) { res in
                 #expect(res.status == .accepted)
@@ -554,7 +553,7 @@ final class VMResizeTests {
             let oneGB = Int64(1024 * 1024 * 1024)
             vm.balloonTarget = oneGB
             try await vm.save(on: app.db)
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.db)
 
             try await put(app, vm, token: token, body: ["name": "renamed"]) { res in
                 #expect(res.status == .ok)
@@ -585,7 +584,7 @@ final class VMResizeTests {
     @Test("A balloon target above the VM's memory is a 400")
     func balloonTargetAboveMemoryRejected() async throws {
         try await withResizeTestApp { app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.db)
             let tenGB = Int64(10 * 1024 * 1024 * 1024)
 
             try await put(app, vm, token: token, body: ["balloonTarget": tenGB]) { res in
@@ -601,7 +600,7 @@ final class VMResizeTests {
     @Test("A balloon target below the survivable floor is a 400")
     func balloonTargetBelowFloorRejected() async throws {
         try await withResizeTestApp { app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.db)
 
             try await put(app, vm, token: token, body: ["balloonTarget": 1024]) { res in
                 #expect(res.status == .badRequest)

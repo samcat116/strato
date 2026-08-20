@@ -1,5 +1,5 @@
-import Fluent
 import Foundation
+import Fluent
 import StratoShared
 import Vapor
 

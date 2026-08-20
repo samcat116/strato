@@ -9,7 +9,7 @@ import AppTestSupport
 /// Pins the issue #482 audit decision for org member management:
 /// `addMember` / `removeMember` / `updateMemberRole` / `getMembers` authorize
 /// through the Cedar evaluator (`org:update` / `org:read`), not through inline
-/// `UserOrganization.role` reads, and system admins bypass like everywhere
+/// organization-role membership reads, and system admins bypass like everywhere
 /// else in the API.
 @Suite("Organization Member Authorization Tests", .serialized)
 final class OrganizationMemberAuthzTests {
@@ -41,7 +41,7 @@ final class OrganizationMemberAuthzTests {
                 isSystemAdmin: false
             )
             try await builder.addUserToOrganization(user: caller, organization: org, role: "member")
-            let callerToken = try await caller.generateAPIKey(on: app.db)
+            let callerToken = try await caller.generateAPIKey(on: app)
 
             let target = try await builder.createUser(
                 username: "authztarget",
@@ -93,7 +93,7 @@ final class OrganizationMemberAuthzTests {
             // binding — the evaluator denies the member list.
             let outsider = try await TestDataBuilder(db: app.db).createUser(
                 username: "authz-outsider", email: "authz-outsider@example.com")
-            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
+            let outsiderToken = try await outsider.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/organizations/\(org.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
@@ -115,7 +115,7 @@ final class OrganizationMemberAuthzTests {
                 displayName: "Authz Sysadmin",
                 isSystemAdmin: true
             )
-            let sysAdminToken = try await sysAdmin.generateAPIKey(on: app.db)
+            let sysAdminToken = try await sysAdmin.generateAPIKey(on: app)
 
             try await app.test(.POST, "/api/organizations/\(org.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: sysAdminToken)

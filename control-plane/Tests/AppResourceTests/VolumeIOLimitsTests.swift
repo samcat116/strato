@@ -1,4 +1,5 @@
 import Testing
+import ControlPlanePostgres
 import Vapor
 import Fluent
 import VaporTesting
@@ -38,15 +39,14 @@ final class VolumeIOLimitsTests {
             )
             let org = try await builder.createOrganization(name: "IO Limit Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "IO Limit Project",
                 description: "Project for volume I/O limit tests",
                 organization: org
             )
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, project, token)
         } catch {
@@ -70,7 +70,7 @@ final class VolumeIOLimitsTests {
             ),
             protocolVersion: protocolVersion
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.db).first?.id
         let uuid = try await app.agentService.registerAgent(
             message, agentName: name, organizationScope: orgID.map { .organization($0) })
         return uuid.uuidString
@@ -91,7 +91,7 @@ final class VolumeIOLimitsTests {
         generation: Int64 = 1,
         observedGeneration: Int64 = 1
     ) async throws -> Volume {
-        let pool = try await StoragePool.defaultPool(on: app.db)
+        let pool = try await app.storagePoolsPersistence.defaultPool()
         let volume = Volume(
             name: "io-limit-target",
             description: "",
@@ -100,15 +100,15 @@ final class VolumeIOLimitsTests {
             format: .qcow2,
             volumeType: .data,
             status: .available,
+            generation: generation,
+            observedGeneration: observedGeneration,
             createdByID: user.id!,
-            poolID: pool.id
+            poolID: pool.id,
+            iopsTotal: iopsTotal,
+            bpsTotal: bpsTotal,
+            appliedIOPSTotal: appliedIOPSTotal,
+            appliedBPSTotal: appliedBPSTotal
         )
-        volume.generation = generation
-        volume.observedGeneration = observedGeneration
-        volume.iopsTotal = iopsTotal
-        volume.bpsTotal = bpsTotal
-        volume.appliedIOPSTotal = appliedIOPSTotal
-        volume.appliedBPSTotal = appliedBPSTotal
         try await app.db.transaction { db in
             try await volume.save(on: db)
             try await placeVolume(volume, on: agentId, using: db)
@@ -174,7 +174,7 @@ final class VolumeIOLimitsTests {
             // application shutdown during teardown.
             var placed: Volume?
             for _ in 0..<100 {
-                placed = try await Volume.query(on: app.db).first()
+                placed = try await Volume.all(on: app.db).first
                 if placed?.conditions.degraded != nil { break }
                 try await Task.sleep(for: .milliseconds(50))
             }
@@ -207,7 +207,7 @@ final class VolumeIOLimitsTests {
             }
 
             // Rejected before the insert: no row, not a row with the caps dropped.
-            let count = try await Volume.query(on: app.db).count()
+            let count = try await Volume.all(on: app.db).count
             #expect(count == 0)
         }
     }
@@ -320,8 +320,7 @@ final class VolumeIOLimitsTests {
             let agentId = try await self.registerAgent(app: app, named: "io-terminating-agent")
             let volume = try await self.makeVolume(
                 app: app, user: user, project: project, agentId: agentId)
-            volume.desiredStatus = .absent
-            try await volume.save(on: app.db)
+            try await volume.replacing(desiredStatus: .absent).save(on: app.db)
 
             try await app.test(.POST, "/api/volumes/\(volume.id!)/io-limits") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -350,9 +349,8 @@ final class VolumeIOLimitsTests {
             // An all-null pair leaves as an *absent* field, not as a
             // present-but-empty object. Two spellings of "uncapped" is what
             // would make a planner re-plan a throttle that is already applied.
-            let volume = try #require(try await Volume.query(on: app.db).first())
-            volume.iopsTotal = nil
-            try await volume.save(on: app.db)
+            let volume = try #require(try await Volume.all(on: app.db).first)
+            try await volume.replacing(iopsTotal: nil).save(on: app.db)
 
             message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             entry = try #require(message.volumes.first)

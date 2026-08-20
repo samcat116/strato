@@ -95,15 +95,17 @@ enum SnapshotArtifactMutation {
                 return outcome.isRemoved
             }
 
-        return try await app.resourceMutation.accept(
+        let result = try await app.resourceMutation.acceptValue(
             .delete, on: artifact, actor: actor, dispatch: strategy, on: db, app: app
-        ) { @Sendable transaction in
+        ) { @Sendable current, transaction in
             // Stamp before the mark: `stampForDeletion` reads whether the
             // artifact is already terminating, and re-stamping a second DELETE
             // would resurrect tokens their participants have already cleared.
-            try await ResourceFinalizerService.stampForDeletion(artifact, on: transaction)
-            artifact.setDesiredStatus(.absent)
+            let stamped = try await ResourceFinalizerService.stampForDeletion(
+                current, on: transaction)
+            return stamped.replacingDesiredStatus(.absent)
         }
+        return result.accepted
     }
 
     /// Accepts an export request: the placement fact "this snapshot should also
@@ -130,11 +132,12 @@ enum SnapshotArtifactMutation {
         on db: any Database,
         app: Application
     ) async throws -> ResourceMutation.Accepted {
-        try await app.resourceMutation.accept(
+        let result = try await app.resourceMutation.acceptValue(
             .snapshotExport, on: snapshot, actor: actor, dispatch: .stateSync, on: db, app: app
-        ) { @Sendable _ in
-            snapshot.exportDesired = true
+        ) { @Sendable current, _ in
+            current.replacing(exportDesired: true)
         }
+        return result.accepted
     }
 
     /// Whether `agentId` names an agent that can converge snapshot artifacts:

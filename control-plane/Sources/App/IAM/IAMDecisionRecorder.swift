@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import NIOConcurrencyHelpers
 import Tracing
@@ -123,13 +123,9 @@ actor IAMDecisionQueue {
 
     /// Ceiling on how many decisions one batch may carry.
     ///
-    /// A batch becomes a single multi-row INSERT — Fluent's collection
-    /// `create` builds one query and does not chunk — and Postgres refuses a
-    /// statement with more than 65535 bind parameters. `IAMDecisionLog`
-    /// persists 21 columns, so the hard limit is ~3100 rows; 1024 keeps a wide
-    /// margin while being far more than any drain needs. Without it an
-    /// operator who set `IAM_DECISION_LOG_MAX_BATCH_SIZE` into the thousands
-    /// would lose *every* batch to a failing insert.
+    /// A batch becomes one native Postgres insert. Capping it bounds the JSON
+    /// transport payload and one drain turn while remaining far above the
+    /// expected authorization burst size.
     static let maxSupportedBatchSize = 1024
 
     private let maxQueueDepth: Int
@@ -229,6 +225,7 @@ struct IAMDecisionRecord: Sendable {
 /// Writes the decision log.
 final class IAMDecisionRecorder: Sendable {
     private let app: Application
+    private let decisionLogs: DecisionLogsPersistence
     let config: IAMDecisionLogConfig
     private let logger: Logger
     private let retentionTask = NIOLockedValueBox<Task<Void, Never>?>(nil)
@@ -241,9 +238,14 @@ final class IAMDecisionRecorder: Sendable {
     /// number rather than as a slow endpoint nobody profiled.
     let writeCount = NIOLockedValueBox<Int>(0)
 
-    init(app: Application, config: IAMDecisionLogConfig) {
+    init(
+        app: Application,
+        config: IAMDecisionLogConfig,
+        decisionLogs: DecisionLogsPersistence
+    ) {
         self.app = app
         self.config = config
+        self.decisionLogs = decisionLogs
         self.logger = app.logger
         self.queue = IAMDecisionQueue(
             maxQueueDepth: config.maxQueueDepth, maxBatchSize: config.maxBatchSize)
@@ -306,7 +308,7 @@ final class IAMDecisionRecorder: Sendable {
         }
         guard outcome.startDrain else { return }
         // Tracked by the background-task registry so shutdown drains the
-        // buffer before Fluent tears its pools down. The drain runs with no
+        // buffer before the native pool shuts down. The drain runs with no
         // service context: it outlives the request that happened to start it
         // and writes other requests' decisions too, so its inserts belong in a
         // trace of their own rather than nested under one arbitrary
@@ -370,70 +372,52 @@ final class IAMDecisionRecorder: Sendable {
         }
     }
 
-    private func entry(for decision: PendingIAMDecision) -> IAMDecisionLog {
+    private func entry(for decision: PendingIAMDecision) -> DecisionLogWrite {
         switch decision {
         case .evaluated(let record):
             return entry(for: record)
         case .credentialRestricted(let subject, let credential, let context):
-            let entry = IAMDecisionLog()
-            entry.requestID = context.requestID
-            entry.path = context.path
-            entry.method = context.method
-            entry.subject = subject
-            entry.decision = "credential_restricted"
-            entry.tier = CedarCheckDecision.credentialTier
-            entry.credentialType = credential?.kind.rawValue
-            entry.credentialID = credential?.id
-            return entry
+            return DecisionLogWrite(
+                requestID: context.requestID,
+                path: context.path,
+                method: context.method,
+                subject: subject,
+                decision: "credential_restricted",
+                tier: CedarCheckDecision.credentialTier,
+                credentialType: credential?.kind.rawValue,
+                credentialID: credential?.id
+            )
         }
     }
 
-    private func entry(for record: IAMDecisionRecord) -> IAMDecisionLog {
-        let entry = IAMDecisionLog()
-        entry.requestID = record.context.requestID
-        entry.path = record.context.path
-        entry.method = record.context.method
-        entry.subject = record.subject
-        entry.action = record.action
-        entry.nodeType = record.node.type.rawValue
-        entry.nodeID = record.node.id
-        entry.organizationID = record.organizationID
-        entry.skippedConditionedBindings = record.skippedConditionedBindings
-        entry.policyVersion = record.policyVersion
-        entry.decision = record.decision.allowed ? "allow" : "deny"
-        entry.tier = record.decision.tier
-        do {
-            entry.determiningPoliciesJSON = try CedarText.json(record.decision.determiningPolicyIDs)
-        } catch {
-            // Naming what decided is the point of the row; losing it silently
-            // would leave an unexplainable verdict behind.
-            logger.error(
-                "Failed to encode determining policy ids",
-                metadata: [
-                    "policies": .string(record.decision.determiningPolicyIDs.joined(separator: ",")),
-                    "error": .string("\(error)"),
-                ])
-        }
-        if !record.decision.evaluationErrors.isEmpty {
-            entry.cedarErrors = record.decision.evaluationErrors.joined(separator: "; ")
-        }
-
-        entry.credentialType = record.credential?.kind.rawValue
-        entry.credentialID = record.credential?.id
-
-        return entry
+    private func entry(for record: IAMDecisionRecord) -> DecisionLogWrite {
+        DecisionLogWrite(
+            requestID: record.context.requestID,
+            path: record.context.path,
+            method: record.context.method,
+            subject: record.subject,
+            action: record.action,
+            nodeType: record.node.type.rawValue,
+            nodeID: record.node.id,
+            organizationID: record.organizationID,
+            decision: record.decision.allowed ? "allow" : "deny",
+            determiningPolicies: record.decision.determiningPolicyIDs,
+            tier: record.decision.tier,
+            cedarErrors: record.decision.evaluationErrors.isEmpty
+                ? nil
+                : record.decision.evaluationErrors.joined(separator: "; "),
+            policyVersion: record.policyVersion,
+            skippedConditionedBindings: record.skippedConditionedBindings,
+            credentialType: record.credential?.kind.rawValue,
+            credentialID: record.credential?.id
+        )
     }
 
-    private func save(_ entries: [IAMDecisionLog]) async {
-        // `liveDB`, not `app.db`: a recording cancelled by shutdown's drain
-        // must bail rather than force-unwrap cleared storage (the
-        // FluentProvider teardown crash, see `Application.liveDB`).
-        guard let db = app.liveDB, !entries.isEmpty else { return }
+    private func save(_ entries: [DecisionLogWrite]) async {
+        guard !entries.isEmpty else { return }
         writeCount.withLockedValue { $0 += 1 }
         do {
-            // One statement for the whole batch — Fluent's array `create`
-            // is a multi-row INSERT.
-            try await entries.create(on: db)
+            _ = try await decisionLogs.append(entries)
         } catch {
             logger.error(
                 "Failed to write IAM decision log entries",
@@ -491,11 +475,8 @@ final class IAMDecisionRecorder: Sendable {
         else { return }
 
         let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
-        guard let db = app.liveDB else { return }
         do {
-            try await IAMDecisionLog.query(on: db)
-                .filter(\.$createdAt < cutoff)
-                .delete()
+            _ = try await decisionLogs.delete(createdBefore: cutoff)
         } catch {
             logger.error("IAM decision-log retention sweep failed: \(error)")
         }
@@ -505,6 +486,20 @@ final class IAMDecisionRecorder: Sendable {
 // MARK: - Application accessors
 
 extension Application {
+    private struct DecisionLogsPersistenceKey: StorageKey {
+        typealias Value = DecisionLogsPersistence
+    }
+
+    var decisionLogsPersistence: DecisionLogsPersistence {
+        get {
+            guard let persistence = storage[DecisionLogsPersistenceKey.self] else {
+                preconditionFailure("Decision-log persistence has not been configured")
+            }
+            return persistence
+        }
+        set { setStorageValue(DecisionLogsPersistenceKey.self, to: newValue) }
+    }
+
     private struct IAMDecisionLogConfigKey: StorageKey {
         typealias Value = IAMDecisionLogConfig
     }
@@ -523,7 +518,11 @@ extension Application {
     /// The decision recorder, created on first use with the current config.
     var iamDecisionRecorder: IAMDecisionRecorder {
         lazyService(IAMDecisionRecorderKey.self) {
-            IAMDecisionRecorder(app: self, config: iamDecisionLogConfig)
+            IAMDecisionRecorder(
+                app: self,
+                config: iamDecisionLogConfig,
+                decisionLogs: decisionLogsPersistence
+            )
         }
     }
 
@@ -546,7 +545,7 @@ struct IAMDecisionLogLifecycleHandler: LifecycleHandler {
 
     func shutdownAsync(_ application: Application) async {
         guard let recorder = application.iamDecisionRecorderIfCreated else { return }
-        // Write out whatever is still queued before Fluent's pools close. The
+        // Write out whatever is still queued before the native pool closes. The
         // drain task is tracked by the background-task registry, but that
         // registry's own drain is bounded and runs from a different lifecycle
         // handler, so an explicit flush here leaves nothing behind either way.

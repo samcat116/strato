@@ -59,7 +59,7 @@ final class DesiredStateDNSZoneTests {
             protocolVersion: protocolVersion,
             resolverCapable: resolverCapable
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.db).first?.id
         let uuid = try await app.agentService.registerAgent(
             message, agentName: name, siteID: siteID,
             organizationScope: orgID.map { .organization($0) })
@@ -88,29 +88,36 @@ final class DesiredStateDNSZoneTests {
             vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),
             macAddress: "00:0c:29:00:00:01", deviceName: "net0", orderIndex: 0)
         try await nic.save(on: app.db)
-        try await VMInterfaceAddress(
+        try await LegacyInterfaceAddressStore.insert(
+            kind: .vm,
             interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(),
-            family: .ipv4, address: ipv4, prefixLength: 24, gateway: network.gateway
-        ).save(on: app.db)
+            family: .ipv4, address: ipv4, prefixLength: 24, gateway: network.gateway,
+            on: app.db)
         if let ipv6 {
-            try await VMInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(),
-                family: .ipv6, address: ipv6, prefixLength: 64, gateway: network.gateway6
-            ).save(on: app.db)
+                family: .ipv6, address: ipv6, prefixLength: 64, gateway: network.gateway6,
+                on: app.db)
         }
         return vm
     }
 
     private func attachZone(
-        app: Application, zone: DNSZone, to network: LogicalNetwork, primary: Bool
+        app: Application, zone: DNSZoneSnapshot, to network: LogicalNetwork, primary: Bool
     ) async throws {
-        try await DNSZoneNetwork(
-            zoneID: try zone.requireID(), logicalNetworkID: try network.requireID()
-        ).save(on: app.db)
+        try await DNSZoneNetworkStore.attach(
+            zoneID: zone.id, networkID: try network.requireID(), on: app.db)
         if primary {
-            network.$primaryDNSZone.id = try zone.requireID()
-            try await network.save(on: app.db)
+            try await network.replacing(primaryDNSZoneID: .some(zone.id)).save(on: app.db)
         }
+    }
+
+    private func createZone(
+        app: Application, name: String, project: Project
+    ) async throws -> DNSZoneSnapshot {
+        try await LegacyDNSZoneStore.insert(
+            name: name, projectID: project.requireID(), on: app.db)
     }
 
     // MARK: - Scope
@@ -124,14 +131,13 @@ final class DesiredStateDNSZoneTests {
 
             let controller = try await self.registerAgent(app: app, named: "controller", siteID: siteID)
             let peer = try await self.registerAgent(app: app, named: "peer", siteID: siteID)
-            site.$networkControllerAgent.id = UUID(uuidString: controller)
-            try await site.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: siteID, agentID: UUID(uuidString: controller), on: app.db)
 
             let network = try await TestDataBuilder(db: app.db).createNetwork(
                 name: "dns-net", project: project, subnet: "10.60.0.0/24", gateway: "10.60.0.1",
                 site: site)
-            let zone = DNSZone(name: "acme.internal", projectID: try project.requireID())
-            try await zone.save(on: app.db)
+            let zone = try await self.createZone(app: app, name: "acme.internal", project: project)
             try await self.attachZone(app: app, zone: zone, to: network, primary: true)
 
             // One VM on each host. The controller hosts neither of the other's
@@ -173,14 +179,13 @@ final class DesiredStateDNSZoneTests {
             let siteID = try site.requireID()
             let controller = try await self.registerAgent(app: app, named: "controller", siteID: siteID)
             let peer = try await self.registerAgent(app: app, named: "peer", siteID: siteID)
-            site.$networkControllerAgent.id = UUID(uuidString: controller)
-            try await site.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: siteID, agentID: UUID(uuidString: controller), on: app.db)
 
             let network = try await TestDataBuilder(db: app.db).createNetwork(
                 name: "dns-net", project: project, subnet: "10.61.0.0/24", gateway: "10.61.0.1",
                 site: site)
-            let zone = DNSZone(name: "acme.internal", projectID: try project.requireID())
-            try await zone.save(on: app.db)
+            let zone = try await self.createZone(app: app, name: "acme.internal", project: project)
             try await self.attachZone(app: app, zone: zone, to: network, primary: true)
             try await self.placeVM(
                 app: app, project: project, named: "vm-peer", hostname: "peer-vm",
@@ -200,8 +205,7 @@ final class DesiredStateDNSZoneTests {
             let agentId = try await self.registerAgent(app: app, named: "solo")
             let network = try await TestDataBuilder(db: app.db).createNetwork(
                 name: "solo-net", project: project, subnet: "10.62.0.0/24", gateway: "10.62.0.1")
-            let zone = DNSZone(name: "solo.internal", projectID: try project.requireID())
-            try await zone.save(on: app.db)
+            let zone = try await self.createZone(app: app, name: "solo.internal", project: project)
             try await self.attachZone(app: app, zone: zone, to: network, primary: true)
             try await self.placeVM(
                 app: app, project: project, named: "vm-solo", hostname: "solo-vm",
@@ -237,9 +241,8 @@ final class DesiredStateDNSZoneTests {
             let agentId = try await self.registerAgent(app: app, named: "hash-agent")
             let network = try await TestDataBuilder(db: app.db).createNetwork(
                 name: "hash-net", project: project, subnet: "10.65.0.0/24", gateway: "10.65.0.1")
-            let zone = DNSZone(name: "hash.internal", projectID: try project.requireID())
-            try await zone.save(on: app.db)
-            let zoneID = try zone.requireID()
+            let zone = try await self.createZone(app: app, name: "hash.internal", project: project)
+            let zoneID = zone.id
             try await self.attachZone(app: app, zone: zone, to: network, primary: true)
             try await self.placeVM(
                 app: app, project: project, named: "vm", hostname: "web", onAgent: agentId,
@@ -259,8 +262,9 @@ final class DesiredStateDNSZoneTests {
 
             // An authored record the OVN driver can't express still moves the
             // hash: the stamp means "written from this version of the zone".
-            try await DNSRecord(zoneID: zoneID, name: "www", type: .cname, value: "web.hash.internal")
-                .save(on: app.db)
+            _ = try await LegacyDNSRecordStore.insert(
+                zoneID: zoneID, name: "www", type: .cname,
+                value: "web.hash.internal", on: app.db)
             let third = try #require(
                 try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones?.first)
             #expect(third.recordsHash != first.recordsHash)
@@ -281,10 +285,10 @@ final class DesiredStateDNSZoneTests {
                 name: "front", project: project, subnet: "10.68.0.0/24", gateway: "10.68.0.1")
             let back = try await builder.createNetwork(
                 name: "back", project: project, subnet: "10.69.0.0/24", gateway: "10.69.0.1")
-            let frontZone = DNSZone(name: "front.internal", projectID: try project.requireID())
-            try await frontZone.save(on: app.db)
-            let backZone = DNSZone(name: "back.internal", projectID: try project.requireID())
-            try await backZone.save(on: app.db)
+            let frontZone = try await self.createZone(
+                app: app, name: "front.internal", project: project)
+            let backZone = try await self.createZone(
+                app: app, name: "back.internal", project: project)
             try await self.attachZone(app: app, zone: frontZone, to: front, primary: true)
             try await self.attachZone(app: app, zone: backZone, to: back, primary: true)
 
@@ -296,10 +300,11 @@ final class DesiredStateDNSZoneTests {
                 vmID: try vm.requireID(), logicalNetworkID: try back.requireID(),
                 macAddress: "00:0c:29:00:00:02", deviceName: "net1", orderIndex: 1)
             try await nic.save(on: app.db)
-            try await VMInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: try nic.requireID(), logicalNetworkID: try back.requireID(),
-                family: .ipv4, address: "10.69.0.9", prefixLength: 24, gateway: back.gateway
-            ).save(on: app.db)
+                family: .ipv4, address: "10.69.0.9", prefixLength: 24, gateway: back.gateway,
+                on: app.db)
 
             let zones = try #require(try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones)
             #expect(zones.count == 2)
@@ -324,20 +329,19 @@ final class DesiredStateDNSZoneTests {
             let agentId = try await self.registerAgent(app: app, named: "view-agent")
             let network = try await TestDataBuilder(db: app.db).createNetwork(
                 name: "view-net", project: project, subnet: "10.66.0.0/24", gateway: "10.66.0.1")
-            let zone = DNSZone(name: "view.internal", projectID: try project.requireID())
-            try await zone.save(on: app.db)
-            let zoneID = try zone.requireID()
+            let zone = try await self.createZone(app: app, name: "view.internal", project: project)
+            let zoneID = zone.id
             try await self.attachZone(app: app, zone: zone, to: network, primary: true)
             try await self.placeVM(
                 app: app, project: project, named: "vm", hostname: "vm", onAgent: agentId,
                 network: network, ipv4: "10.66.0.5")
 
-            try await DNSRecord(
-                zoneID: zoneID, name: "public", type: .a, value: "203.0.113.7", view: .external
-            ).save(on: app.db)
-            try await DNSRecord(
-                zoneID: zoneID, name: "shared", type: .a, value: "10.66.0.9", view: .both
-            ).save(on: app.db)
+            _ = try await LegacyDNSRecordStore.insert(
+                zoneID: zoneID, name: "public", type: .a, value: "203.0.113.7",
+                view: .external, on: app.db)
+            _ = try await LegacyDNSRecordStore.insert(
+                zoneID: zoneID, name: "shared", type: .a, value: "10.66.0.9",
+                view: .both, on: app.db)
 
             let assembled = try #require(
                 try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones?.first)
@@ -352,12 +356,12 @@ final class DesiredStateDNSZoneTests {
             let agentId = try await self.registerAgent(app: app, named: "shared-agent")
             let network = try await TestDataBuilder(db: app.db).createNetwork(
                 name: "shared-net", project: project, subnet: "10.67.0.0/24", gateway: "10.67.0.1")
-            let shared = DNSZone(name: "services.internal", projectID: try project.requireID())
-            try await shared.save(on: app.db)
+            let shared = try await self.createZone(
+                app: app, name: "services.internal", project: project)
             try await self.attachZone(app: app, zone: shared, to: network, primary: false)
-            try await DNSRecord(
-                zoneID: try shared.requireID(), name: "db", type: .a, value: "10.67.0.20"
-            ).save(on: app.db)
+            _ = try await LegacyDNSRecordStore.insert(
+                zoneID: shared.id, name: "db", type: .a,
+                value: "10.67.0.20", on: app.db)
             try await self.placeVM(
                 app: app, project: project, named: "vm", hostname: "client", onAgent: agentId,
                 network: network, ipv4: "10.67.0.5")
@@ -385,16 +389,14 @@ final class DesiredStateDNSZoneTests {
                 app: app, named: "res-controller", siteID: siteID, resolverCapable: true)
             let peer = try await self.registerAgent(
                 app: app, named: "res-peer", siteID: siteID, resolverCapable: true)
-            site.$networkControllerAgent.id = UUID(uuidString: controller)
-            try await site.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: siteID, agentID: UUID(uuidString: controller), on: app.db)
 
             let network = try await TestDataBuilder(db: app.db).createNetwork(
                 name: "res-net", project: project, subnet: "10.70.0.0/24", gateway: "10.70.0.1",
                 site: site)
-            network.resolverEnabled = true
-            try await network.save(on: app.db)
-            let zone = DNSZone(name: "res.internal", projectID: try project.requireID())
-            try await zone.save(on: app.db)
+            try await network.replacing(resolverEnabled: true).save(on: app.db)
+            let zone = try await self.createZone(app: app, name: "res.internal", project: project)
             try await self.attachZone(app: app, zone: zone, to: network, primary: true)
             try await self.placeVM(
                 app: app, project: project, named: "vm-res", hostname: "res-vm",
@@ -424,16 +426,14 @@ final class DesiredStateDNSZoneTests {
                 app: app, named: "idle-controller", siteID: siteID, resolverCapable: true)
             let peer = try await self.registerAgent(
                 app: app, named: "idle-peer", siteID: siteID, resolverCapable: true)
-            site.$networkControllerAgent.id = UUID(uuidString: controller)
-            try await site.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: siteID, agentID: UUID(uuidString: controller), on: app.db)
 
             let network = try await TestDataBuilder(db: app.db).createNetwork(
                 name: "idle-net", project: project, subnet: "10.71.0.0/24", gateway: "10.71.0.1",
                 site: site)
-            network.resolverEnabled = true
-            try await network.save(on: app.db)
-            let zone = DNSZone(name: "idle.internal", projectID: try project.requireID())
-            try await zone.save(on: app.db)
+            try await network.replacing(resolverEnabled: true).save(on: app.db)
+            let zone = try await self.createZone(app: app, name: "idle.internal", project: project)
             try await self.attachZone(app: app, zone: zone, to: network, primary: true)
             try await self.placeVM(
                 app: app, project: project, named: "vm-idle", hostname: "idle-vm",
@@ -450,8 +450,7 @@ final class DesiredStateDNSZoneTests {
                 app: app, named: "res-solo", resolverCapable: true)
             let network = try await TestDataBuilder(db: app.db).createNetwork(
                 name: "res-solo-net", project: project, subnet: "10.72.0.0/24", gateway: "10.72.0.1")
-            network.resolverEnabled = true
-            try await network.save(on: app.db)
+            try await network.replacing(resolverEnabled: true).save(on: app.db)
             try await self.placeVM(
                 app: app, project: project, named: "vm", hostname: "vm", onAgent: agentId,
                 network: network, ipv4: "10.72.0.5")
@@ -478,14 +477,13 @@ final class DesiredStateDNSZoneTests {
                 app: app, named: "mixed-controller", siteID: siteID, resolverCapable: true)
             _ = try await self.registerAgent(
                 app: app, named: "mixed-laggard", siteID: siteID, resolverCapable: false)
-            site.$networkControllerAgent.id = UUID(uuidString: controller)
-            try await site.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: siteID, agentID: UUID(uuidString: controller), on: app.db)
 
             let network = try await TestDataBuilder(db: app.db).createNetwork(
                 name: "mixed-net", project: project, subnet: "10.73.0.0/24", gateway: "10.73.0.1",
                 site: site)
-            network.resolverEnabled = true
-            try await network.save(on: app.db)
+            try await network.replacing(resolverEnabled: true).save(on: app.db)
             try await self.placeVM(
                 app: app, project: project, named: "vm", hostname: "vm", onAgent: controller,
                 network: network, ipv4: "10.73.0.5")
@@ -505,8 +503,7 @@ final class DesiredStateDNSZoneTests {
                 app: app, named: "res-off", resolverCapable: true)
             let network = try await TestDataBuilder(db: app.db).createNetwork(
                 name: "res-off-net", project: project, subnet: "10.75.0.0/24", gateway: "10.75.0.1")
-            network.resolverEnabled = false
-            try await network.save(on: app.db)
+            try await network.replacing(resolverEnabled: false).save(on: app.db)
             try await self.placeVM(
                 app: app, project: project, named: "vm", hostname: "vm", onAgent: agentId,
                 network: network, ipv4: "10.75.0.5")
@@ -526,25 +523,23 @@ final class DesiredStateDNSZoneTests {
             let agentId = try await self.registerAgent(app: app, named: "ttl-agent")
             let network = try await TestDataBuilder(db: app.db).createNetwork(
                 name: "ttl-net", project: project, subnet: "10.76.0.0/24", gateway: "10.76.0.1")
-            let zone = DNSZone(name: "ttl.internal", projectID: try project.requireID())
-            try await zone.save(on: app.db)
+            let zone = try await self.createZone(app: app, name: "ttl.internal", project: project)
             try await self.attachZone(app: app, zone: zone, to: network, primary: true)
             try await self.placeVM(
                 app: app, project: project, named: "vm", hostname: "vm", onAgent: agentId,
                 network: network, ipv4: "10.76.0.5")
 
-            let record = DNSRecord(
-                zoneID: try zone.requireID(), name: "www", type: .cname, value: "vm.ttl.internal",
-                ttl: 60)
-            try await record.save(on: app.db)
+            let record = try await LegacyDNSRecordStore.insert(
+                zoneID: zone.id, name: "www", type: .cname, value: "vm.ttl.internal",
+                ttl: 60, on: app.db)
 
             let before = try #require(
                 try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones?.first)
             let cname = try #require(before.records.first { $0.type == "CNAME" })
             #expect(cname.ttl == 60)
 
-            record.ttl = 120
-            try await record.save(on: app.db)
+            _ = try await LegacyDNSRecordStore.update(
+                id: record.id, value: record.value, ttl: 120, view: record.view, on: app.db)
             let after = try #require(
                 try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones?.first)
             #expect(after.recordsHash != before.recordsHash)
@@ -561,8 +556,7 @@ final class DesiredStateDNSZoneTests {
         try await withDNSSyncApp { app, _, project in
             let network = try await TestDataBuilder(db: app.db).createNetwork(
                 name: "ghost-net", project: project, subnet: "10.77.0.0/24", gateway: "10.77.0.1")
-            network.resolverEnabled = true
-            try await network.save(on: app.db)
+            try await network.replacing(resolverEnabled: true).save(on: app.db)
 
             // An agent id no row matches — the synthetic and backstop syncs.
             let sync = try await app.desiredStateAssembler.assemble(agentId: UUID().uuidString)

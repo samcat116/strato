@@ -1,5 +1,5 @@
 import AsyncHTTPClient
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import NIOConcurrencyHelpers
 import NIOCore
@@ -42,8 +42,8 @@ enum AuditEventType: String, Sendable {
 
 // MARK: - Record
 
-/// The value handed to audit backends. Decoupled from the `AuditEvent` Fluent
-/// model so non-database backends (Loki, webhook, log) can encode it directly.
+/// The value handed to audit backends. Decoupled from database persistence so
+/// non-database backends (Loki, webhook, log) can encode it directly.
 struct AuditRecord: Content, Sendable {
     var eventType: String
     var timestamp: Date = Date()
@@ -60,6 +60,27 @@ struct AuditRecord: Content, Sendable {
     var sourceIP: String?
     var adminBypass: Bool = false
     var metadata: [String: String]?
+}
+
+private extension AuditEventWrite {
+    init(_ record: AuditRecord) {
+        self.init(
+            eventType: record.eventType,
+            userID: record.userID,
+            username: record.username,
+            apiKeyID: record.apiKeyID,
+            organizationID: record.organizationID,
+            method: record.method,
+            path: record.path,
+            status: record.status,
+            resourceType: record.resourceType,
+            resourceID: record.resourceID,
+            action: record.action,
+            sourceIP: record.sourceIP,
+            adminBypass: record.adminBypass,
+            metadata: record.metadata
+        )
+    }
 }
 
 // MARK: - Configuration
@@ -152,16 +173,16 @@ private let auditJSONEncoder: JSONEncoder = {
 
 // MARK: - Database backend
 
-/// Persists events as `AuditEvent` rows — the default backend, and the one the
+/// Persists audit-event rows — the default backend, and the one the
 /// query API (`/api/audit-events`) reads from.
-/// Safety: `app` is immutable, and each write creates fresh Fluent models that
-/// remain within that write operation; no mutable model crosses a child task.
 final class DatabaseAuditBackend: AuditBackend, Sendable {
     let name = "database"
     private let app: Application
+    private let events: AuditEventsPersistence
 
-    init(app: Application) {
+    init(app: Application, events: AuditEventsPersistence) {
         self.app = app
+        self.events = events
     }
 
     func write(_ record: AuditRecord) async {
@@ -173,17 +194,8 @@ final class DatabaseAuditBackend: AuditBackend, Sendable {
     /// rather than one per event.
     func write(_ records: [AuditRecord]) async {
         guard !records.isEmpty else { return }
-        // `liveDB`, not `app.db`: the drain runs in a background task that
-        // shutdown may have cancelled, and reading `app.db` after storage is
-        // cleared force-unwraps nil (see `Application.liveDB`).
-        guard let db = app.liveDB else {
-            app.logger.debug(
-                "Dropping audit events; application is shutting down",
-                metadata: ["count": .stringConvertible(records.count)])
-            return
-        }
         do {
-            try await records.map(AuditEvent.init(from:)).create(on: db)
+            _ = try await events.append(records.map(AuditEventWrite.init))
         } catch {
             app.logger.error(
                 "Failed to persist audit events",
@@ -351,15 +363,9 @@ actor AuditEventQueue {
 
     /// Ceiling on how many events one batch may carry.
     ///
-    /// A batch becomes a single multi-row INSERT — Fluent's collection
-    /// `create` builds one query and does not chunk — and Postgres refuses a
-    /// statement with more than 65535 bind parameters. `AuditEvent` persists
-    /// 16 columns, so the hard limit is ~4000 rows; 1024 keeps a wide margin
-    /// (16k parameters today, still safe if the table grows to twice the
-    /// columns) while being far more than any real drain needs. Without it an
-    /// operator who set `AUDIT_MAX_BATCH_SIZE` into the thousands would lose
-    /// *every* batch to a failing insert — an audit outage that reads like a
-    /// database problem.
+    /// Each batch becomes one native Postgres insert. Capping the batch bounds
+    /// the JSON payload and the amount of work performed by one drain turn,
+    /// while remaining far above the expected request-time burst size.
     static let maxSupportedBatchSize = 1024
 
     init(maxQueueDepth: Int, maxBatchSize: Int) {
@@ -434,6 +440,7 @@ actor AuditEventQueue {
 /// `NIOLockedValueBox`.
 final class AuditService: Sendable {
     let config: AuditConfig
+    let events: AuditEventsPersistence
     private let backends: [any AuditBackend]
     private let logger: Logger
     private let app: Application
@@ -450,8 +457,14 @@ final class AuditService: Sendable {
 
     /// - Parameter backends: overrides the destinations named by `config`;
     ///   the seam tests use to observe delivery without a live Loki or SIEM.
-    init(app: Application, config: AuditConfig, backends backendOverride: [any AuditBackend]? = nil) {
+    init(
+        app: Application,
+        config: AuditConfig,
+        events: AuditEventsPersistence,
+        backends backendOverride: [any AuditBackend]? = nil
+    ) {
         self.config = config
+        self.events = events
         self.logger = app.logger
         self.app = app
         self.queue = AuditEventQueue(
@@ -475,7 +488,7 @@ final class AuditService: Sendable {
             for backendName in config.backendNames {
                 switch backendName {
                 case "database":
-                    backends.append(DatabaseAuditBackend(app: app))
+                    backends.append(DatabaseAuditBackend(app: app, events: events))
                 case "log":
                     backends.append(LogAuditBackend(logger: app.logger))
                 case "loki":
@@ -679,17 +692,8 @@ final class AuditService: Sendable {
 
         let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
         do {
-            // Count first so the deletion is observable; the extra query is
-            // cheap against the created_at index and a row slipping between
-            // the two only misstates the log line, not the data.
-            let expired = try await AuditEvent.query(on: app.db)
-                .filter(\.$createdAt < cutoff)
-                .count()
+            let expired = try await events.delete(createdBefore: cutoff)
             guard expired > 0 else { return }
-
-            try await AuditEvent.query(on: app.db)
-                .filter(\.$createdAt < cutoff)
-                .delete()
 
             logger.info(
                 "Audit retention sweep pruned expired events",
@@ -712,9 +716,10 @@ extension Application {
 
     var audit: AuditService {
         get {
-            lazyService(AuditServiceKey.self) {
-                AuditService(app: self, config: .fromConfiguration(controlPlaneConfiguration))
+            guard let service = storage[AuditServiceKey.self] else {
+                preconditionFailure("AuditService must be configured before use")
             }
+            return service
         }
         set {
             setStorageValue(AuditServiceKey.self, to: newValue)

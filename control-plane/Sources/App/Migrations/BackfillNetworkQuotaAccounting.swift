@@ -9,9 +9,9 @@ import Fluent
 /// the row internally consistent after the upgrade.
 struct BackfillNetworkQuotaAccounting: AsyncMigration {
     func backfillQuotaCounters(on database: Database) async throws {
-        for quota in try await ResourceQuota.query(on: database).all() {
-            try await QuotaEnforcementService.resyncReservations(quota, on: database)
-            try await quota.save(on: database)
+        for quota in try await LegacyResourceQuotaStore.all(on: database) {
+            let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: database)
+            try await synchronized.save(on: database)
         }
     }
 

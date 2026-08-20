@@ -31,129 +31,166 @@ enum VMSnapshotStatus: String, Codable, CaseIterable, Sendable {
 /// machine shape, so the row records the version and architecture it was taken
 /// with alongside placement — all of it reported by the agent on the observed
 /// state report rather than in a one-shot RPC reply (STR-150).
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class VMSnapshot: Model, @unchecked Sendable {
+struct VMSnapshot: Content, Sendable {
     static let schema = "vm_snapshots"
 
-    @ID(key: .id)
-    var id: UUID?
-
-    /// Optional operator label; defaults to a timestamp-derived name.
-    @Field(key: "name")
-    var name: String
-
-    @Field(key: "description")
-    var description: String
-
-    @Parent(key: "vm_id")
-    var vm: VM
+    let id: UUID?
+    let name: String
+    let description: String
+    let vmID: UUID
 
     /// Project ownership, denormalized from the VM for querying and quota
     /// scoping (the volume/sandbox-snapshot pattern).
-    @Parent(key: "project_id")
-    var project: Project
+    let projectID: UUID
 
     /// The VM's environment at checkpoint time, denormalized so quota resync
     /// can scope snapshot storage without joining vms.
-    @Field(key: "environment")
-    var environment: String
-
-    @Enum(key: "status")
-    var status: VMSnapshotStatus
+    let environment: String
+    let status: VMSnapshotStatus
 
     /// Bytes of guest RAM + device state the checkpoint added. Written at
     /// admission with the quota estimate (the VM's memory grant bounds it),
     /// then overwritten with what the agent actually reports. Deliberately
     /// *not* the disks' size: those are already charged as volume storage, and
     /// an internal snapshot does not copy them.
-    @OptionalField(key: "size")
-    var size: Int64?
+    let size: Int64?
 
     /// The agent holding the checkpoint. Restore placement is pinned here in
     /// v1. Recorded at creation from the VM's placement.
-    @OptionalField(key: "agent_id")
-    var agentId: String?
+    let agentId: String?
 
     /// The QEMU build that captured the checkpoint; a restore needs a
     /// compatible one.
-    @OptionalField(key: "qemu_version")
-    var qemuVersion: String?
-
-    @OptionalField(key: "architecture")
-    var architecture: String?
-
-    @OptionalField(key: "error_message")
-    var errorMessage: String?
+    let qemuVersion: String?
+    let architecture: String?
+    let errorMessage: String?
 
     // Desired/observed state split (ADR 0001 stage 8, STR-150), mirroring the
     // volume columns exactly.
-    @Enum(key: "desired_status")
-    var desiredStatus: DesiredSnapshotStatus
-
-    @Field(key: "generation")
-    var generation: Int64
-
-    @Field(key: "observed_generation")
-    var observedGeneration: Int64
-
-    @OptionalField(key: "convergence_phase")
-    var convergencePhase: String?
-
-    @OptionalField(key: "failed_generation")
-    var failedGeneration: Int64?
-
-    @OptionalField(key: "convergence_deadline")
-    var convergenceDeadline: Date?
-
-    @Field(key: "finalizers")
-    var finalizers: [String]
+    let desiredStatus: DesiredSnapshotStatus
+    let generation: Int64
+    let observedGeneration: Int64
+    let convergencePhase: String?
+    let failedGeneration: Int64?
+    let convergenceDeadline: Date?
+    let finalizers: [String]
 
     /// When the retention sweep marks this checkpoint `.absent`, or nil to keep
     /// it until someone deletes it (`SnapshotRetention`).
-    @OptionalField(key: "expires_at")
-    var expiresAt: Date?
-
-    @Parent(key: "created_by_id")
-    var createdBy: User
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
+    let expiresAt: Date?
+    let createdByID: UUID
+    let createdAt: Date?
+    let updatedAt: Date?
 
     init(
-        id: UUID? = nil,
+        id: UUID? = UUID(),
         name: String,
         description: String = "",
         vmID: UUID,
         projectID: UUID,
         environment: String,
+        status: VMSnapshotStatus = .creating,
+        size: Int64? = nil,
         agentId: String?,
+        qemuVersion: String? = nil,
+        architecture: String? = nil,
+        errorMessage: String? = nil,
+        desiredStatus: DesiredSnapshotStatus = .present,
+        generation: Int64 = 1,
+        observedGeneration: Int64 = 0,
+        convergencePhase: String? = nil,
+        failedGeneration: Int64? = nil,
+        convergenceDeadline: Date? = nil,
+        finalizers: [String] = [],
         expiresAt: Date? = nil,
-        createdByID: UUID
+        createdByID: UUID,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
         self.description = description
-        self.$vm.id = vmID
-        self.$project.id = projectID
+        self.vmID = vmID
+        self.projectID = projectID
         self.environment = environment
-        self.status = .creating
+        self.status = status
+        self.size = size
         self.agentId = agentId
-        self.desiredStatus = .present
-        self.generation = 1
-        self.observedGeneration = 0
-        self.finalizers = []
+        self.qemuVersion = qemuVersion
+        self.architecture = architecture
+        self.errorMessage = errorMessage
+        self.desiredStatus = desiredStatus
+        self.generation = generation
+        self.observedGeneration = observedGeneration
+        self.convergencePhase = convergencePhase
+        self.failedGeneration = failedGeneration
+        self.convergenceDeadline = convergenceDeadline
+        self.finalizers = finalizers
         self.expiresAt = expiresAt
-        self.$createdBy.id = createdByID
+        self.createdByID = createdByID
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    func requireID() throws -> UUID {
+        guard let id else { throw Abort(.internalServerError, reason: "VM snapshot has no identifier") }
+        return id
+    }
+
+    func persisted(on db: any Database) async throws -> Self {
+        try await LegacyVMSnapshotStore.upsert(self, on: db)
+    }
+    func persist(on db: any Database) async throws { _ = try await persisted(on: db) }
+    func save(on db: any Database) async throws { try await persist(on: db) }
+    func remove(on db: any Database) async throws {
+        guard let id else { return }
+        _ = try await LegacyVMSnapshotStore.delete(id: id, on: db)
+    }
+    func delete(on db: any Database) async throws { try await remove(on: db) }
+    static func load(_ id: UUID?, on db: any Database) async throws -> Self? {
+        try await LegacyVMSnapshotStore.snapshot(id: id, on: db)
+    }
+    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+        try await load(id, on: db)
+    }
+
+    static func all(on db: any Database) async throws -> [Self] {
+        try await LegacyVMSnapshotStore.snapshots(on: db)
+    }
+
+    func replacing(
+        status: VMSnapshotStatus? = nil,
+        size: Int64?? = nil,
+        agentId: String?? = nil,
+        qemuVersion: String?? = nil,
+        architecture: String?? = nil,
+        errorMessage: String?? = nil,
+        desiredStatus: DesiredSnapshotStatus? = nil,
+        generation: Int64? = nil,
+        observedGeneration: Int64? = nil,
+        convergencePhase: String?? = nil,
+        failedGeneration: Int64?? = nil,
+        convergenceDeadline: Date?? = nil,
+        finalizers: [String]? = nil,
+        expiresAt: Date?? = nil
+    ) -> Self {
+        Self(
+            id: id, name: name, description: description, vmID: vmID,
+            projectID: projectID, environment: environment, status: status ?? self.status,
+            size: size ?? self.size, agentId: agentId ?? self.agentId,
+            qemuVersion: qemuVersion ?? self.qemuVersion,
+            architecture: architecture ?? self.architecture,
+            errorMessage: errorMessage ?? self.errorMessage,
+            desiredStatus: desiredStatus ?? self.desiredStatus,
+            generation: generation ?? self.generation,
+            observedGeneration: observedGeneration ?? self.observedGeneration,
+            convergencePhase: convergencePhase ?? self.convergencePhase,
+            failedGeneration: failedGeneration ?? self.failedGeneration,
+            convergenceDeadline: convergenceDeadline ?? self.convergenceDeadline,
+            finalizers: finalizers ?? self.finalizers, expiresAt: expiresAt ?? self.expiresAt,
+            createdByID: createdByID, createdAt: createdAt, updatedAt: updatedAt)
     }
 }
-
-extension VMSnapshot: Content {}
 
 extension VMSnapshot {
     var canRestore: Bool { status == .ready && desiredStatus == .present }
@@ -173,9 +210,14 @@ extension VMSnapshot: ConvergenceObservable {
     /// column, `Volume`'s arrangement and for its reason: there has never been
     /// a second error to report, and two columns would only invite them to
     /// disagree in the API response.
-    var lastError: String? {
-        get { errorMessage }
-        set { errorMessage = newValue }
+    var lastError: String? { errorMessage }
+
+    func replacingConvergence(
+        phase: String?, lastError: String?, failedGeneration: Int64?
+    ) -> Self {
+        replacing(
+            errorMessage: .some(lastError), convergencePhase: .some(phase),
+            failedGeneration: .some(failedGeneration))
     }
 }
 
@@ -184,8 +226,7 @@ extension VMSnapshot: SnapshotArtifactResource {
     static var iamNodeType: IAMNodeType { .vmSnapshot }
     static var operationResourceKind: OperationResourceKind { .vmCheckpoint }
 
-    var projectID: UUID { $project.id }
-    var parentID: UUID { $vm.id }
+    var parentID: UUID { vmID }
     var isPresentOnAgent: Bool { status == .ready }
 
     /// A checkpoint lives inside the VM's own disks: there is nowhere to export
@@ -196,78 +237,81 @@ extension VMSnapshot: SnapshotArtifactResource {
     /// The machine state is charged to the project's storage pool; the disks it
     /// lives inside are already charged under the VM.
     var storageQuotaScope: (projectID: UUID, environment: String)? {
-        ($project.id, environment)
+        (projectID, environment)
     }
 
     static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [VMSnapshot] {
-        try await VMSnapshot.query(on: db).filter(\.$convergenceDeadline <= now).all()
+        try await LegacyVMSnapshotStore.snapshots(overdueAt: now, on: db)
     }
 
     static func placed(onAgent agentId: String, on db: any Database) async throws -> [VMSnapshot] {
-        try await VMSnapshot.query(on: db).filter(\.$agentId == agentId).all()
+        try await LegacyVMSnapshotStore.snapshots(agentID: agentId, on: db)
+    }
+
+    static func matching(ids: [UUID], on db: any Database) async throws -> [VMSnapshot] {
+        try await LegacyVMSnapshotStore.snapshots(ids: ids, on: db)
     }
 
     static func expired(at now: Date, on db: any Database) async throws -> [VMSnapshot] {
-        try await VMSnapshot.query(on: db)
-            .filter(\.$expiresAt <= now)
-            .filter(\.$desiredStatus != DesiredSnapshotStatus.absent)
-            .all()
+        try await LegacyVMSnapshotStore.snapshots(expiredAt: now, on: db)
     }
 
     static func terminating(on db: any Database) async throws -> [VMSnapshot] {
-        try await VMSnapshot.query(on: db)
-            .filter(\.$desiredStatus == DesiredSnapshotStatus.absent)
-            .all()
+        try await LegacyVMSnapshotStore.snapshots(terminating: true, on: db)
     }
 
-    func adoptReconciliationState(from committed: VMSnapshot) {
-        status = committed.status
-        desiredStatus = committed.desiredStatus
-        generation = committed.generation
-        observedGeneration = committed.observedGeneration
-        convergencePhase = committed.convergencePhase
-        errorMessage = committed.errorMessage
-        failedGeneration = committed.failedGeneration
-        convergenceDeadline = committed.convergenceDeadline
-        agentId = committed.agentId
-        size = committed.size
-        qemuVersion = committed.qemuVersion
-        architecture = committed.architecture
-        finalizers = committed.finalizers
-        expiresAt = committed.expiresAt
+    func adoptingReconciliationState(from committed: VMSnapshot) -> Self { committed }
+    func replacingGeneration(_ generation: Int64) -> Self { replacing(generation: generation) }
+    func replacingConvergenceDeadline(_ deadline: Date?) -> Self {
+        replacing(convergenceDeadline: .some(deadline))
+    }
+    func replacingFinalizers(_ finalizers: [String]) -> Self { replacing(finalizers: finalizers) }
+    func replacingAgentID(_ agentID: String?) -> Self { replacing(agentId: .some(agentID)) }
+    func replacingDesiredStatus(_ status: DesiredSnapshotStatus) -> Self {
+        replacing(desiredStatus: status)
+    }
+    func replacingObservedGeneration(_ generation: Int64) -> Self {
+        replacing(observedGeneration: generation)
+    }
+    func replacingExpiration(_ expiresAt: Date?) -> Self { replacing(expiresAt: .some(expiresAt)) }
+    func resolvingForStuckOperation(
+        mutation: VMOperationKind, telemetryReason: String
+    ) -> (resource: Self, desiredStateChanged: Bool) {
+        (self, false)
     }
 
-    @discardableResult
-    func applyCapturedFacts(_ facts: ObservedSnapshotFacts) -> Bool {
+    func recordingCapturedFacts(
+        _ facts: ObservedSnapshotFacts
+    ) -> (resource: Self, changed: Bool) {
+        var next = self
         var changed = false
         // A QEMU build that reported no size for the tag it just wrote leaves
         // the admission estimate standing: an unknown footprint must not
         // silently become a free one in quota accounting.
         if let sizeBytes = facts.sizeBytes, size != sizeBytes {
-            size = sizeBytes
+            next = next.replacing(size: .some(sizeBytes))
             changed = true
         }
         if let version = facts.qemuVersion, qemuVersion != version {
-            qemuVersion = version
+            next = next.replacing(qemuVersion: .some(version))
             changed = true
         }
         if let architecture = facts.architecture?.rawValue, self.architecture != architecture {
-            self.architecture = architecture
+            next = next.replacing(architecture: .some(architecture))
             changed = true
         }
-        return changed
+        return (next, changed)
     }
 
-    @discardableResult
-    func applyExported(_ exported: Bool) -> Bool { false }
+    func recordingExported(_ exported: Bool) -> (resource: Self, changed: Bool) { (self, false) }
 
-    @discardableResult
-    func applyObservedPresence(present: Bool, failed: Bool) -> Bool {
+    func recordingObservedPresence(
+        present: Bool, failed: Bool
+    ) -> (resource: Self, changed: Bool) {
         let derived: VMSnapshotStatus =
             present ? .ready : (failed ? .error : (desiredStatus == .absent ? .deleting : .creating))
-        guard status != derived else { return false }
-        status = derived
-        return true
+        guard status != derived else { return (self, false) }
+        return (replacing(status: derived), true)
     }
 }
 
@@ -315,8 +359,8 @@ struct VMSnapshotResponse: Content {
         self.id = snapshot.id
         self.name = snapshot.name
         self.description = snapshot.description
-        self.vmId = snapshot.$vm.id
-        self.projectId = snapshot.$project.id
+        self.vmId = snapshot.vmID
+        self.projectId = snapshot.projectID
         self.status = snapshot.status
         self.size = snapshot.size
         self.agentId = snapshot.agentId
@@ -325,7 +369,7 @@ struct VMSnapshotResponse: Content {
         self.errorMessage = snapshot.errorMessage
         self.expiresAt = snapshot.expiresAt
         self.conditions = snapshot.conditions
-        self.createdById = snapshot.$createdBy.id
+        self.createdById = snapshot.createdByID
         self.createdAt = snapshot.createdAt
     }
 }

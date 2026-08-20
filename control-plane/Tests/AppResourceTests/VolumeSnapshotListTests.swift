@@ -16,7 +16,7 @@ struct VolumeSnapshotListTests {
                 username: "snapshot-list-admin",
                 email: "snapshot-list-admin@example.com",
                 isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
             let organization = try await builder.createOrganization(name: "Snapshot List Org")
             try await builder.addUserToOrganization(
                 user: admin, organization: organization, role: "admin")
@@ -65,7 +65,7 @@ struct VolumeSnapshotListTests {
                 username: "snapshot-list-required",
                 email: "snapshot-list-required@example.com",
                 isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/volume-snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -87,7 +87,7 @@ struct VolumeSnapshotListTests {
             let projectOnly = try CredentialRestriction.validated(
                 actions: ["project:read"], nodeType: nil, nodeID: nil)
             let token = try await admin.generateAPIKey(
-                on: app.db, restriction: projectOnly)
+                on: app, restriction: projectOnly)
             let organization = try await builder.createOrganization(
                 name: "Restricted Snapshot List Org")
             let project = try await builder.createProject(

@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -52,167 +52,71 @@ struct ProjectVisibility: Sendable {
 
     // MARK: - Narrowing
 
-    /// Resolve the caller's candidate projects.
-    static func resolve(on req: Request) async throws -> ProjectVisibility {
+    static func resolve(
+        on req: Request,
+        using iam: IAMPersistence,
+        projects: ProjectsPersistence
+    ) async throws -> ProjectVisibility {
         guard let user = req.auth.get(User.self), let userID = user.id else {
             throw Abort(.unauthorized)
         }
-
-        // Cached for the request (#686): every check this endpoint goes on to
-        // make reads the same facts.
-        let facts = try await IAMUserFacts.load(userID: userID, cache: req.iamCache, on: req.db)
-        // The one `isSystemAdmin` read outside the evaluator that is not a
-        // widening (docs/architecture/iam.md): an admin's reach is the tier-1
-        // policy, not a binding, so a bindings-derived candidate set would be
-        // *empty* and would hide rows the evaluator allows. Skipping the
-        // narrowing can only put more projects in front of `req.can`, and
-        // every one of them is still decided there — which is what keeps a
-        // tier-2 guardrail able to narrow an admin's list.
+        guard let facts = try await iam.userAuthorizationFacts(ids: [userID]).first else {
+            throw Abort(.unauthorized)
+        }
         guard !facts.isSystemAdmin else { return ProjectVisibility(candidateProjectIDs: nil) }
 
-        var containers = try await bindingContainers(
-            userID: userID, groupIDs: facts.groupIDs, on: req.db)
-        guard let authored = try await authoredPermitContainers(on: req) else {
-            // An authored permit whose reach cannot be bounded. Widening to
-            // "no narrowing" is the only safe answer; the evaluator still
-            // decides every project the rows land in.
+        let subjects = [IAMOwnerReference(type: IAMPrincipalType.user.rawValue, id: userID)]
+            + facts.groupIDs.map {
+                IAMOwnerReference(type: IAMPrincipalType.group.rawValue, id: $0)
+            }
+        let bindings = try await iam.activeBindings(forSubjects: subjects)
+        var containers = Set(
+            bindings.compactMap { binding -> IAMNode? in
+                guard let type = IAMNodeType(rawValue: binding.nodeType),
+                    [.organization, .organizationalUnit, .project].contains(type)
+                else { return nil }
+                return IAMNode(type: type, id: binding.nodeID)
+            }
+        )
+        guard let authored = try await authoredPermitContainers(on: req, using: iam) else {
             return ProjectVisibility(candidateProjectIDs: nil)
         }
         containers.formUnion(authored)
-
-        return ProjectVisibility(candidateProjectIDs: try await projects(under: containers, on: req.db))
+        return ProjectVisibility(
+            candidateProjectIDs: try await projects.candidateProjectIDs(
+                organizationIDs: containers.filter { $0.type == .organization }.map(\.id),
+                organizationalUnitIDs: containers.filter { $0.type == .organizationalUnit }.map(\.id),
+                projectIDs: containers.filter { $0.type == .project }.map(\.id)
+            )
+        )
     }
 
-    /// The org, folder, and project nodes the caller's active role bindings
-    /// hang on — theirs and their groups'.
-    ///
-    /// Deliberately unfiltered by role: which actions a role carries is the
-    /// compiled set's business, and narrowing here on a second reading of the
-    /// role rows would be exactly the parallel model this type avoids. A
-    /// binding whose role does not grant `project:read` costs one candidate
-    /// that the evaluator then denies. Conditioned bindings are kept for the
-    /// same reason — the slice loader skips them (under-granting), and a
-    /// superset must not anticipate that.
-    ///
-    /// Bindings on individual resources (a VM, a volume) are not containers:
-    /// they grant on that resource, and nothing above it, so they make no
-    /// project visible.
-    private static func bindingContainers(
-        userID: UUID, groupIDs: [UUID], on db: any Database
-    ) async throws -> Set<IAMNode> {
-        var principals: [(IAMPrincipalType, UUID)] = [(.user, userID)]
-        principals += groupIDs.map { (IAMPrincipalType.group, $0) }
-
-        let containerTypes: [IAMNodeType] = [.organization, .organizationalUnit, .project]
-        let bindings = try await RoleBinding.query(on: db)
-            .group(.or) { anyPrincipal in
-                for (type, id) in principals {
-                    anyPrincipal.group(.and) { thisPrincipal in
-                        thisPrincipal.filter(\.$principalType == type.rawValue)
-                        thisPrincipal.filter(\.$principalID == id)
-                    }
-                }
-            }
-            .filter(\.$nodeType ~~ containerTypes.map(\.rawValue))
-            .active()
-            .all()
-
-        return Set(
-            bindings.compactMap { binding in
-                IAMNodeType(rawValue: binding.nodeType).map { IAMNode(type: $0, id: binding.nodeID) }
-            })
-    }
-
-    /// The containers authored permit policies (issue #606) could grant
-    /// `project:read` inside, or nil when one of them cannot be bounded.
-    ///
-    /// A reverse lookup cannot enumerate an authored policy's principals (the
-    /// caveat `WhoCanService` reports for the same reason), so every enabled
-    /// permit that could cover the action is assumed to reach this caller and
-    /// its resource scope is added as a candidate container. The scope is
-    /// always a concrete node — `PolicyStore` refuses an unscoped `resource` on
-    /// write — so this widens by a bounded amount rather than to the fleet.
-    ///
-    /// Gated on the compiled set's own authored-policy count, which is also
-    /// what makes the gate exact rather than an optimisation: a policy this
-    /// replica has not compiled yet cannot allow anything either, so skipping
-    /// the query when the set has none can never drop a grant Cedar would make.
-    private static func authoredPermitContainers(on req: Request) async throws -> Set<IAMNode>? {
+    private static func authoredPermitContainers(
+        on req: Request,
+        using iam: IAMPersistence
+    ) async throws -> Set<IAMNode>? {
         let built = try await IAMDecisionEngine.compiledSet(req.application)
         guard built.authoredPolicyCount > 0 else { return [] }
 
-        let policies = try await IAMPolicy.query(on: req.db)
-            .filter(\.$enabled == true)
-            .filter(\.$effect == IAMPolicyEffect.permit.rawValue)
-            .all()
-
         var containers: Set<IAMNode> = []
-        for policy in policies {
-            guard let id = policy.id,
+        for policy in try await iam.allEnabledPolicies()
+        where policy.effect == IAMPolicyEffect.permit.rawValue {
+            guard
                 let shape = try? CedarAuthoredPolicyInspector.describe(
-                    cedarText: policy.cedarText, policyID: PolicyDescriptor.policyID(id))
-            else {
-                // Unparseable text is not in the compiled set either, so it
-                // grants nothing and needs no candidate.
-                continue
-            }
+                    cedarText: policy.cedarText,
+                    policyID: PolicyDescriptor.policyID(policy.id)
+                )
+            else { continue }
             guard shape.actionScope.couldMatch("project:read") else { continue }
-            guard let scope = shape.resourceScope, let nodeType = scope.type.nodeType else { return nil }
+            guard let scope = shape.resourceScope, let nodeType = scope.type.nodeType else {
+                return nil
+            }
             guard [.organization, .organizationalUnit, .project].contains(nodeType) else {
-                // A scope pinned to a resource below a project cannot permit
-                // reading the project itself.
                 continue
             }
             containers.insert(IAMNode(type: nodeType, id: scope.id))
         }
         return containers
-    }
-
-    /// Every project inside the given containers: the projects named directly,
-    /// plus those hanging off the organizations and folders (folder subtrees
-    /// included, via the materialized `path`).
-    private static func projects(under containers: Set<IAMNode>, on db: any Database) async throws -> [UUID] {
-        let organizationIDs = containers.filter { $0.type == .organization }.map(\.id)
-        let folderIDs = containers.filter { $0.type == .organizationalUnit }.map(\.id)
-        let projectIDs = containers.filter { $0.type == .project }.map(\.id)
-        guard !organizationIDs.isEmpty || !folderIDs.isEmpty || !projectIDs.isEmpty else { return [] }
-
-        // A project belongs to exactly one of an organization or a folder
-        // (`Project.validate`), so reaching an org's projects means reaching
-        // its folders' too. One query collects both: every folder in a
-        // candidate org, and every folder at or beneath a candidate folder —
-        // the `path` (`/orgId/ouId/…/selfId`) contains a folder's own id, so
-        // the prefix match covers the folder itself.
-        var descendantFolderIDs: [UUID] = []
-        if !organizationIDs.isEmpty || !folderIDs.isEmpty {
-            descendantFolderIDs = try await OrganizationalUnit.query(on: db)
-                .group(.or) { anyFolder in
-                    if !organizationIDs.isEmpty {
-                        anyFolder.filter(\.$organization.$id ~~ organizationIDs)
-                    }
-                    for folderID in folderIDs {
-                        anyFolder.filter(\.$path ~~ folderID.uuidString)
-                    }
-                }
-                .all()
-                .compactMap(\.id)
-        }
-        let allFolderIDs = Array(Set(folderIDs).union(descendantFolderIDs))
-
-        return try await Project.query(on: db)
-            .group(.or) { anyProject in
-                if !organizationIDs.isEmpty {
-                    anyProject.filter(\.$organization.$id ~~ organizationIDs)
-                }
-                if !allFolderIDs.isEmpty {
-                    anyProject.filter(\.$organizationalUnit.$id ~~ allFolderIDs)
-                }
-                if !projectIDs.isEmpty {
-                    anyProject.filter(\.$id ~~ projectIDs)
-                }
-            }
-            .all()
-            .compactMap(\.id)
     }
 
     // MARK: - Deciding

@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Foundation
 import Testing
 
@@ -16,16 +17,26 @@ struct GuardrailRenderingTests {
         node: IAMNode = IAMNode(type: .organization, id: UUID()),
         actions: [String] = ["*"],
         principalMatch: GuardrailPrincipalMatch = .any,
-        resourceMatch: GuardrailResourceMatch = .any
-    ) -> Guardrail {
-        Guardrail(
+        resourceMatch: GuardrailResourceMatch = .any,
+        storedNodeType: String? = nil,
+        storedPrincipalMatchKind: String? = nil
+    ) -> IAMGuardrailSnapshot {
+        IAMGuardrailSnapshot(
             id: id,
             name: name,
-            nodeType: node.type,
+            description: nil,
+            nodeType: storedNodeType ?? node.type.rawValue,
             nodeID: node.id,
+            effect: GuardrailEffect.forbid.rawValue,
             actions: actions,
-            principalMatch: principalMatch,
-            resourceMatch: resourceMatch
+            principalMatchKind: storedPrincipalMatchKind ?? principalMatch.kind.rawValue,
+            principalMatchID: principalMatch.subjectID,
+            resourceMatchKind: resourceMatch.kind.rawValue,
+            resourceMatchValue: resourceMatch.value,
+            enabled: true,
+            createdBy: nil,
+            cedarText: nil,
+            authored: false
         )
     }
 
@@ -115,16 +126,17 @@ struct GuardrailRenderingTests {
 
     @Test("Unparseable rows are skipped with the reason, not rendered")
     func unparseableRowsSkipped() {
-        let noID = makeGuardrail()
-        noID.id = nil
-        let badMatch = makeGuardrail(name: "corrupt")
-        badMatch.principalMatchKind = "bogus"
+        let badNode = makeGuardrail(name: "bad-node", storedNodeType: "bogus")
+        let badMatch = makeGuardrail(name: "corrupt", storedPrincipalMatchKind: "bogus")
 
-        let result = GuardrailRendering.forbids(for: [noID, badMatch], organizationIDsByGuardrail: [:])
+        let result = GuardrailRendering.forbids(
+            for: [badNode, badMatch],
+            organizationIDsByGuardrail: [:]
+        )
 
         #expect(result.policies.isEmpty)
         #expect(result.skipped.count == 2)
-        #expect(result.skipped.contains { $0.reason == "row has no id" })
+        #expect(result.skipped.contains { $0.name == "bad-node" && $0.reason.hasPrefix("unknown node type") })
         #expect(result.skipped.contains { $0.name == "corrupt" && $0.reason.hasPrefix("unreadable match") })
     }
 

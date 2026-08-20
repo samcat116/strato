@@ -87,13 +87,16 @@ struct OrgSPIREClientRegistryTests {
         on db: Database,
         organizationID: UUID,
         trustDomain: String = OrgSPIREClientRegistryTests.orgTrustDomain
-    ) async throws -> OrgTrustDomain {
-        let row = OrgTrustDomain(organizationID: organizationID, trustDomain: trustDomain, phase: .active)
-        row.nodeAddress = "spire-org.example.com:8081"
-        row.serverAddress = "spire-org.example.com:8085"
-        row.orgBundlePEM = Self.samplePEM
-        try await row.save(on: db)
-        return row
+    ) async throws -> OrgTrustDomainRecord {
+        try await OrgTrustDomainStore.insert(
+            OrgTrustDomainWrite(
+                organizationID: organizationID,
+                trustDomain: trustDomain,
+                phase: .active,
+                serverAddress: "spire-org.example.com:8085",
+                nodeAddress: "spire-org.example.com:8081",
+                orgBundlePEM: Self.samplePEM),
+            on: db)
     }
 
     // MARK: - Platform fallback
@@ -139,8 +142,10 @@ struct OrgSPIREClientRegistryTests {
             installPlatformSPIRE(on: app)
             let org = try await makeOrg(on: app.db)
             // Claimed by org creation, not yet converged by the reconciler.
-            let row = OrgTrustDomain(organizationID: org, trustDomain: Self.orgTrustDomain)
-            try await row.save(on: app.db)
+            try await OrgTrustDomainStore.insert(
+                OrgTrustDomainWrite(
+                    organizationID: org, trustDomain: Self.orgTrustDomain),
+                on: app.db)
 
             let registry = try makeRegistry(on: app, legacyEnrollmentsAllowed: true)
             let selection = try await registry.resolve(scope: .organization(org), on: app.db)
@@ -157,8 +162,10 @@ struct OrgSPIREClientRegistryTests {
         try await withApp { app in
             installPlatformSPIRE(on: app)
             let org = try await makeOrg(on: app.db)
-            let row = OrgTrustDomain(organizationID: org, trustDomain: Self.orgTrustDomain)
-            try await row.save(on: app.db)
+            try await OrgTrustDomainStore.insert(
+                OrgTrustDomainWrite(
+                    organizationID: org, trustDomain: Self.orgTrustDomain),
+                on: app.db)
 
             let registry = try makeRegistry(on: app, legacyEnrollmentsAllowed: false)
             await #expect(throws: (any Error).self) {
@@ -175,10 +182,14 @@ struct OrgSPIREClientRegistryTests {
             // Provisioning got as far as `active` but the bundle never landed.
             // Minting an identity here would produce an agent the control plane
             // holds no roots for and refuses on the WebSocket.
-            let row = OrgTrustDomain(organizationID: org, trustDomain: Self.orgTrustDomain, phase: .active)
-            row.nodeAddress = "spire-org.example.com:8081"
-            row.serverAddress = "spire-org.example.com:8085"
-            try await row.save(on: app.db)
+            try await OrgTrustDomainStore.insert(
+                OrgTrustDomainWrite(
+                    organizationID: org,
+                    trustDomain: Self.orgTrustDomain,
+                    phase: .active,
+                    serverAddress: "spire-org.example.com:8085",
+                    nodeAddress: "spire-org.example.com:8081"),
+                on: app.db)
 
             let registry = try makeRegistry(on: app, legacyEnrollmentsAllowed: false)
             await #expect(throws: (any Error).self) {
@@ -261,8 +272,18 @@ struct OrgSPIREClientRegistryTests {
             installPlatformSPIRE(on: app)
             let org = try await makeOrg(on: app.db)
             let row = try await makeReadyTrustDomain(on: app.db, organizationID: org)
-            row.serverAddress = nil
-            try await row.save(on: app.db)
+            _ = try await OrgTrustDomainStore.updateState(
+                id: row.id,
+                phase: row.phase,
+                generation: row.generation,
+                observedGeneration: row.observedGeneration,
+                serverAddress: nil,
+                bundleEndpointURL: row.bundleEndpointURL,
+                nodeAddress: row.nodeAddress,
+                orgBundlePEM: row.orgBundlePEM,
+                lastError: row.lastError,
+                deletedAt: row.deletedAt,
+                on: app.db)
 
             let registry = try makeRegistry(on: app)
             // Handing back a bootstrap command with no address for the node to
@@ -318,8 +339,18 @@ struct OrgSPIREClientRegistryTests {
             installPlatformSPIRE(on: app)
             let org = try await makeOrg(on: app.db)
             let row = try await makeReadyTrustDomain(on: app.db, organizationID: org)
-            row.phase = .deleting
-            try await row.save(on: app.db)
+            _ = try await OrgTrustDomainStore.updateState(
+                id: row.id,
+                phase: .deleting,
+                generation: row.generation,
+                observedGeneration: row.observedGeneration,
+                serverAddress: row.serverAddress,
+                bundleEndpointURL: row.bundleEndpointURL,
+                nodeAddress: row.nodeAddress,
+                orgBundlePEM: row.orgBundlePEM,
+                lastError: row.lastError,
+                deletedAt: row.deletedAt,
+                on: app.db)
 
             let registry = try makeRegistry(on: app)
             // Teardown is exactly when entries most need removing, so the
@@ -339,9 +370,18 @@ struct OrgSPIREClientRegistryTests {
             // or has already cleared, the address agents dial. That address only
             // ever feeds bootstrap commands, so demanding it here would fail
             // revocation for exactly the rows that most need it.
-            row.serverAddress = nil
-            row.phase = .deleting
-            try await row.save(on: app.db)
+            _ = try await OrgTrustDomainStore.updateState(
+                id: row.id,
+                phase: .deleting,
+                generation: row.generation,
+                observedGeneration: row.observedGeneration,
+                serverAddress: nil,
+                bundleEndpointURL: row.bundleEndpointURL,
+                nodeAddress: row.nodeAddress,
+                orgBundlePEM: row.orgBundlePEM,
+                lastError: row.lastError,
+                deletedAt: row.deletedAt,
+                on: app.db)
 
             let registry = try makeRegistry(on: app)
             let service = try await registry.service(forTrustDomain: row.trustDomain, on: app.db)

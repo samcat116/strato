@@ -14,14 +14,14 @@ struct AddLoadBalancerCountToResourceQuota: AsyncMigration {
             "ALTER TABLE resource_quotas ADD COLUMN load_balancer_count integer NOT NULL DEFAULT 0"
         ).run()
 
-        for quota in try await ResourceQuota.query(on: database).all() {
-            try await QuotaEnforcementService.resyncReservations(quota, on: database)
-            try await quota.save(on: database)
+        for quota in try await LegacyResourceQuotaStore.all(on: database) {
+            let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: database)
+            try await synchronized.save(on: database)
         }
     }
 
     func revert(on database: Database) async throws {
-        try await database.schema(ResourceQuota.schema)
+        try await database.schema("resource_quotas")
             .deleteField("load_balancer_count")
             .deleteField("max_load_balancers")
             .update()

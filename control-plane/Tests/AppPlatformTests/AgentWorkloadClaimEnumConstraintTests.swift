@@ -28,7 +28,7 @@ struct AgentWorkloadClaimEnumConstraintTests {
             // `WorkloadKind.allCases` rather than a literal list, so a kind
             // added later fails here instead of in production.
             for kind in WorkloadKind.allCases {
-                let claim = AgentWorkloadClaim(
+                let claim = AgentWorkloadClaimWrite(
                     agentId: "claim-agent",
                     resourceKind: kind.resourceKind,
                     resourceID: UUID(),
@@ -38,12 +38,10 @@ struct AgentWorkloadClaimEnumConstraintTests {
                     observedGeneration: 6,
                     observedStatus: "present"
                 )
-                try await claim.save(on: app.db)
+                try await app.workloadsPersistence.insertClaims([claim.native])
             }
 
-            let recorded = try await AgentWorkloadClaim.query(on: app.db)
-                .filter(\.$agentId == "claim-agent")
-                .count()
+            let recorded = try await app.workloadsPersistence.countClaims(agentID: "claim-agent")
             #expect(recorded == WorkloadKind.allCases.count)
         }
     }

@@ -17,7 +17,7 @@ enum SandboxSpecBuilder {
     /// half-configured NIC.
     ///
     /// `securityGroupIds` is the NIC's membership, from
-    /// `SandboxInterfaceSecurityGroup` (STR-102) — same contract as the VM
+    /// sandbox NIC security-group memberships (STR-102) — same contract as the VM
     /// path, already gated on the receiving agent's protocol version by the
     /// assembly.
     ///

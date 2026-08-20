@@ -1,4 +1,5 @@
 import Fluent
+import ControlPlanePostgres
 import Foundation
 import Testing
 import Vapor
@@ -72,9 +73,9 @@ final class IAMAuthorizerTests {
     }
 
     /// The decision row is written by the batching drain; flush it out first.
-    private func onlyEntry(_ app: Application) async throws -> IAMDecisionLog {
+    private func onlyEntry(_ app: Application) async throws -> DecisionLogSnapshot {
         await app.iamDecisionRecorder.flush()
-        let entries = try await IAMDecisionLog.query(on: app.db).all()
+        let entries = try await app.decisionLogsPersistence.entries(limit: 500).entries
         #expect(entries.count == 1)
         return try #require(entries.first)
     }
@@ -152,7 +153,7 @@ final class IAMAuthorizerTests {
             let entry = try await onlyEntry(app)
             #expect(entry.decision == "deny")
             #expect(entry.tier == "guardrail")
-            #expect(entry.determiningPolicies == ["guardrail-\(guardrail.id!.uuidString.lowercased())"])
+            #expect(entry.determiningPolicies == ["guardrail-\(guardrail.id.uuidString.lowercased())"])
         }
     }
 
@@ -185,7 +186,7 @@ final class IAMAuthorizerTests {
             #expect(entry.action == "vm:read")
             // The row count is the point: one question, one decision, one row.
             try await Task.sleep(for: .milliseconds(250))
-            let rows = try await IAMDecisionLog.query(on: app.db).count()
+            let rows = try await app.decisionLogsPersistence.entries(limit: 500).total
             #expect(rows == 1)
         }
     }
@@ -353,7 +354,7 @@ final class IAMAuthorizerTests {
             }
             await app.iamDecisionRecorder.flush()
 
-            let actions = try await IAMDecisionLog.query(on: app.db).all().compactMap(\.action)
+            let actions = try await app.decisionLogsPersistence.entries(limit: 500).entries.compactMap(\.action)
             #expect(Set(actions) == ["vm:read", "vm:update", "vm:delete"])
         }
     }
@@ -386,11 +387,13 @@ final class IAMAuthorizerTests {
 
             // Age the row past the window, then sweep.
             let old = Date().addingTimeInterval(-Double(app.iamDecisionLogConfig.retentionDays + 1) * 86_400)
-            entry.createdAt = old
-            try await entry.save(on: app.db)
+            _ = try await app.decisionLogsPersistence.delete(createdBefore: .distantFuture)
+            _ = try await app.decisionLogsPersistence.append([
+                DecisionLogWrite(copying: entry, createdAt: old)
+            ])
 
             await app.iamDecisionRecorder.sweepExpiredEntries()
-            let remaining = try await IAMDecisionLog.query(on: app.db).count()
+            let remaining = try await app.decisionLogsPersistence.entries(limit: 500).total
             #expect(remaining == 0)
         }
     }

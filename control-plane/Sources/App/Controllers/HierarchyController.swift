@@ -1,6 +1,6 @@
 import Foundation
-import Vapor
 import Fluent
+import Vapor
 
 struct HierarchyController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
@@ -92,7 +92,7 @@ struct HierarchyController: RouteCollection {
             vmsByEnvironment[vm.environment, default: 0] += 1
             vmsByStatus[vm.status.rawValue, default: 0] += 1
 
-            if let projectName = projectNames[vm.$project.id] {
+            if let projectName = projectNames[vm.projectID] {
                 vmsByProject[projectName, default: 0] += 1
             }
         }
@@ -204,8 +204,9 @@ struct HierarchyController: RouteCollection {
         let entityType = req.query[String.self, at: "type"]  // Optional filter by entity type
 
         // Get all organizations the user belongs to
-        try await user.$organizations.load(on: req.db)
-        let organizationIDs = user.organizations.compactMap { $0.id }
+        let organizationIDs = try await OrganizationMembershipStore.memberships(
+            userIDs: [user.requireID()], on: req.db
+        ).map(\.organizationID)
 
         if organizationIDs.isEmpty {
             return HierarchySearchResponse(

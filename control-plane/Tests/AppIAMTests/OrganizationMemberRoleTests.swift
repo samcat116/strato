@@ -1,4 +1,5 @@
 import AppTestSupport
+import ControlPlanePostgres
 import Fluent
 import Testing
 import Vapor
@@ -37,7 +38,7 @@ final class OrganizationMemberRoleTests {
             let admin = try await builder.createUser(
                 username: "roleadmin", email: "roleadmin@example.com", displayName: "Role Admin")
             try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
             let target = try await builder.createUser(
                 username: "roletarget", email: "roletarget@example.com", displayName: "Role Target")
             try await test(app, org, admin, token, target)
@@ -50,32 +51,29 @@ final class OrganizationMemberRoleTests {
 
     private func makeRole(
         name: String, organizationID: UUID, actions: [String] = ["vm:read"], on db: Database
-    ) async throws -> IAMRoleDefinition {
+    ) async throws -> LegacyIAMRoleRecord {
         let id = UUID()
-        let role = IAMRoleDefinition(
-            id: id, name: name, ownerType: .organization, ownerID: organizationID,
+        return try await RoleStore.insertLegacy(IAMRoleSnapshot(
+            id: id, name: name, description: nil,
+            ownerType: IAMRoleOwnerType.organization.rawValue, ownerID: organizationID,
             cedarText: RoleDescriptor.canonicalPermitText(id: id, actions: actions),
-            actions: actions, managed: false)
-        try await role.save(on: db)
-        return role
+            actions: actions, managed: false, createdBy: nil), on: db)
     }
 
     private func membership(_ userID: UUID, _ orgID: UUID, on db: Database) async throws
-        -> UserOrganization?
+        -> LegacyOrganizationMembershipRecord?
     {
-        try await UserOrganization.query(on: db)
-            .filter(\.$user.$id == userID)
-            .filter(\.$organization.$id == orgID)
-            .first()
+        try await OrganizationMembershipStore.membership(
+            userID: userID, organizationID: orgID, on: db)
     }
 
     private func orgBindings(_ userID: UUID, _ orgID: UUID, on db: Database) async throws -> [UUID] {
-        try await RoleBinding.query(on: db)
-            .filter(\.$principalType == IAMPrincipalType.user.rawValue)
-            .filter(\.$principalID == userID)
-            .filter(\.$nodeType == IAMNodeType.organization.rawValue)
-            .filter(\.$nodeID == orgID)
-            .all()
+        try await LegacyRoleBindingStore.bindings(
+            principalType: IAMPrincipalType.user.rawValue,
+            principalID: userID,
+            nodeType: IAMNodeType.organization.rawValue,
+            nodeID: orgID,
+            on: db)
             .map(\.roleID)
     }
 
@@ -126,12 +124,12 @@ final class OrganizationMemberRoleTests {
             let role = try await makeRole(name: "auditor", organizationID: org.id!, on: app.db)
             try await app.test(.POST, "/api/organizations/\(org.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(AddRequest(userEmail: target.email, role: role.id!))
+                try req.content.encode(AddRequest(userEmail: target.email, role: role.id))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
-            #expect(try await membership(target.id!, org.id!, on: app.db)?.roleID == role.id!)
-            #expect(try await orgBindings(target.id!, org.id!, on: app.db) == [role.id!])
+            #expect(try await membership(target.id!, org.id!, on: app.db)?.roleID == role.id)
+            #expect(try await orgBindings(target.id!, org.id!, on: app.db) == [role.id])
         }
     }
 
@@ -142,7 +140,7 @@ final class OrganizationMemberRoleTests {
             let role = try await makeRole(name: "foreign", organizationID: otherOrg.id!, on: app.db)
             try await app.test(.POST, "/api/organizations/\(org.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(AddRequest(userEmail: target.email, role: role.id!))
+                try req.content.encode(AddRequest(userEmail: target.email, role: role.id))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
@@ -233,19 +231,18 @@ final class OrganizationMemberRoleTests {
             #expect(statuses.filter { $0 == .ok }.count == 1)
             #expect(statuses.filter { $0 == .badRequest }.count == 1)
 
-            let adminBindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
-                .filter(\.$roleID == IAMRole.admin.seededID)
-                .filter(\.$nodeType == IAMNodeType.organization.rawValue)
-                .filter(\.$nodeID == organizationID)
-                .active()
-                .count()
+            let adminBindings = try await LegacyRoleBindingStore.bindings(
+                principalType: IAMPrincipalType.user.rawValue,
+                roleID: IAMRole.admin.seededID,
+                nodeType: IAMNodeType.organization.rawValue,
+                nodeID: organizationID,
+                activeAt: Date(),
+                on: app.db).count
             #expect(adminBindings == 1)
 
-            let adminMemberships = try await UserOrganization.query(on: app.db)
-                .filter(\.$organization.$id == organizationID)
-                .filter(\.$roleID == IAMRole.admin.seededID)
-                .count()
+            let adminMemberships = try await OrganizationMembershipStore.memberships(
+                organizationID: organizationID, on: app.db
+            ).filter { $0.roleID == IAMRole.admin.seededID }.count
             #expect(adminMemberships == 1)
         }
     }

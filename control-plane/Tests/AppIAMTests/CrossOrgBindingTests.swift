@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import Testing
 import Vapor
@@ -28,7 +29,7 @@ final class CrossOrgBindingTests {
         /// Member of `homeOrg`.
         let internalUser: User
         /// Owned by `otherOrg`.
-        let externalGroup: Group
+        let externalGroup: TestGroup
     }
 
     private func withApp(_ test: (Application, Fixture) async throws -> Void) async throws {
@@ -37,15 +38,14 @@ final class CrossOrgBindingTests {
             try await configure(app)
             try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let homeOrg = try await builder.createOrganization(name: "XOrg Home")
             let otherOrg = try await builder.createOrganization(name: "XOrg Other")
 
             let actor = try await builder.createUser(
                 username: "xorg-actor", email: "xorg-actor@example.com", displayName: "XOrg Actor")
             try await builder.addUserToOrganization(user: actor, organization: homeOrg, role: "admin")
-            actor.currentOrganizationId = homeOrg.id
-            try await actor.save(on: app.db)
+            try await actor.replacingCurrentOrganization(homeOrg.id).save(on: app.db)
 
             let externalUser = try await builder.createUser(
                 username: "xorg-external", email: "xorg-external@example.com", displayName: "XOrg External")
@@ -61,7 +61,7 @@ final class CrossOrgBindingTests {
             let externalGroup = try await builder.createGroup(
                 name: "XOrg External Group", description: "d", organization: otherOrg)
 
-            let token = try await actor.generateAPIKey(on: app.db)
+            let token = try await actor.generateAPIKey(on: app)
             let fixture = Fixture(
                 homeOrg: homeOrg, otherOrg: otherOrg, project: project,
                 actor: actor, actorToken: token,
@@ -76,10 +76,13 @@ final class CrossOrgBindingTests {
         try await app.shutdownForTesting()
     }
 
-    private func crossOrgAuditEvents(_ app: Application, type: AuditEventType) async throws -> [AuditEvent] {
-        try await AuditEvent.query(on: app.db)
-            .filter(\.$eventType == type.rawValue)
-            .all()
+    private func crossOrgAuditEvents(
+        _ app: Application, type: AuditEventType
+    ) async throws -> [AuditEventSnapshot] {
+        try await app.audit.events.events(
+            matching: AuditEventFilter(eventType: type.rawValue),
+            limit: 500
+        ).events
     }
 
     @Test("The admin role carries iam:grantExternal; lower roles do not")
@@ -101,10 +104,11 @@ final class CrossOrgBindingTests {
                 #expect(res.status == .created)
             }
 
-            let bindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalID == fx.externalUser.id!)
-                .filter(\.$nodeID == fx.project.id!)
-                .count()
+            let bindings = try await LegacyRoleBindingStore.bindings(
+                principalID: fx.externalUser.id!,
+                nodeID: fx.project.id!,
+                on: app.db
+            ).count
             #expect(bindings == 1)
 
             // The distinct, filterable audit event is the loudness contract.
@@ -176,10 +180,11 @@ final class CrossOrgBindingTests {
                 #expect(res.status == .forbidden)
             }
 
-            let bindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalID == fx.externalUser.id!)
-                .filter(\.$nodeID == fx.project.id!)
-                .count()
+            let bindings = try await LegacyRoleBindingStore.bindings(
+                principalID: fx.externalUser.id!,
+                nodeID: fx.project.id!,
+                on: app.db
+            ).count
             #expect(bindings == 0)
             // The internal grant is untouched by the ceiling.
             try await app.test(.POST, "/api/projects/\(fx.project.id!)/members") { req in
@@ -205,11 +210,12 @@ final class CrossOrgBindingTests {
                 #expect(res.status == .created)
             }
 
-            let bindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalType == IAMPrincipalType.group.rawValue)
-                .filter(\.$principalID == fx.externalGroup.id!)
-                .filter(\.$nodeID == fx.project.id!)
-                .count()
+            let bindings = try await LegacyRoleBindingStore.bindings(
+                principalType: IAMPrincipalType.group.rawValue,
+                principalID: fx.externalGroup.id!,
+                nodeID: fx.project.id!,
+                on: app.db
+            ).count
             #expect(bindings == 1)
 
             let events = try await crossOrgAuditEvents(app, type: .crossOrgGrant)
@@ -280,7 +286,7 @@ final class CrossOrgBindingTests {
     @Test("Removing an org member sweeps the org's subtree and nothing beyond it")
     func removeMemberSweepsSubtree() async throws {
         try await withApp { app, fx in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = fx.internalUser
 
             // Inside the home org: an authoritative project binding and a
@@ -295,7 +301,7 @@ final class CrossOrgBindingTests {
             }
             let homeGroup = try await builder.createGroup(
                 name: "XOrg Home Group", description: "d", organization: fx.homeOrg)
-            try await UserGroup(userID: user.id!, groupID: homeGroup.id!).save(on: app.db)
+            try await builder.addUserToGroup(user: user, group: homeGroup)
 
             // Outside it: a cross-org binding on the other org's project —
             // that org's explicit grant, which this offboarding must not touch.
@@ -313,20 +319,22 @@ final class CrossOrgBindingTests {
                 #expect(res.status == .noContent)
             }
 
-            let homeBindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalID == user.id!)
-                .filter(\.$nodeID == fx.project.id!)
-                .count()
+            let homeBindings = try await LegacyRoleBindingStore.bindings(
+                principalID: user.id!,
+                nodeID: fx.project.id!,
+                on: app.db
+            ).count
             #expect(homeBindings == 0)
-            let groupMemberships = try await UserGroup.query(on: app.db)
-                .filter(\.$user.$id == user.id!)
-                .count()
+            let groupMemberships = try await app.groupsPersistence.memberships(
+                userIDs: [user.id!]
+            ).count
             #expect(groupMemberships == 0)
 
-            let otherBindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalID == user.id!)
-                .filter(\.$nodeID == otherProject.id!)
-                .count()
+            let otherBindings = try await LegacyRoleBindingStore.bindings(
+                principalID: user.id!,
+                nodeID: otherProject.id!,
+                on: app.db
+            ).count
             #expect(otherBindings == 1)
         }
     }
@@ -334,10 +342,10 @@ final class CrossOrgBindingTests {
     @Test("Deleting a user sweeps their bindings across every org")
     func userDeleteSweepsAllBindings() async throws {
         try await withApp { app, fx in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let sysadmin = try await builder.createUser(
                 username: "xorg-sysadmin", email: "xorg-sysadmin@example.com", isSystemAdmin: true)
-            let sysadminToken = try await sysadmin.generateAPIKey(on: app.db)
+            let sysadminToken = try await sysadmin.generateAPIKey(on: app)
 
             let user = fx.externalUser
             let otherProject = try await builder.createProject(
@@ -355,10 +363,11 @@ final class CrossOrgBindingTests {
                 #expect(res.status == .noContent)
             }
 
-            let remaining = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
-                .filter(\.$principalID == user.id!)
-                .count()
+            let remaining = try await LegacyRoleBindingStore.bindings(
+                principalType: IAMPrincipalType.user.rawValue,
+                principalID: user.id!,
+                on: app.db
+            ).count
             #expect(remaining == 0)
         }
     }
@@ -366,7 +375,7 @@ final class CrossOrgBindingTests {
     @Test("Deleting a group sweeps its bindings across every org")
     func groupDeleteSweepsBindings() async throws {
         try await withApp { app, fx in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             // A group in the home org holding a binding at home and one on the
             // other org's project (a cross-org grant).
             let group = try await builder.createGroup(
@@ -388,10 +397,11 @@ final class CrossOrgBindingTests {
                 #expect(res.status == .noContent)
             }
 
-            let remaining = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalType == IAMPrincipalType.group.rawValue)
-                .filter(\.$principalID == group.id!)
-                .count()
+            let remaining = try await LegacyRoleBindingStore.bindings(
+                principalType: IAMPrincipalType.group.rawValue,
+                principalID: group.id!,
+                on: app.db
+            ).count
             #expect(remaining == 0)
         }
     }

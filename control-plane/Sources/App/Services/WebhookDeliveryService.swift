@@ -1,9 +1,8 @@
 import Crypto
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import NIOConcurrencyHelpers
 import NIOCore
-import SQLKit
 import Vapor
 
 /// Drains the `webhook_deliveries` outbox (issue #559).
@@ -18,12 +17,14 @@ import Vapor
 /// at-least-once by construction; consumers dedupe on the event id.
 ///
 /// Safety: all service fields are immutable except `sweepTask`, whose complete
-/// lifecycle is protected by `NIOLockedValueBox`. Fluent models are loaded and
-/// consumed within one attempt task; child tasks receive only immutable IDs.
+/// lifecycle is protected by `NIOLockedValueBox`. Child tasks receive only
+/// immutable IDs and snapshots.
 final class WebhookDeliveryService: Sendable {
     let app: Application
     let logger: Logger
     private let sweepTask: NIOLockedValueBox<Task<Void, Never>?> = .init(nil)
+    private let subscriptions: WebhookSubscriptionsPersistence
+    private let deliveries: WebhookDeliveriesPersistence
 
     /// How often each replica polls the outbox. Worst-case added latency for
     /// a fresh event is one interval.
@@ -66,6 +67,8 @@ final class WebhookDeliveryService: Sendable {
     init(app: Application) {
         self.app = app
         self.logger = app.logger
+        self.subscriptions = app.webhookSubscriptionsPersistence
+        self.deliveries = app.webhookDeliveriesPersistence
         self.sweepIntervalSeconds = app.controlPlaneConfiguration.int(.webhookDeliveryIntervalSeconds)!
         self.autoDisableDays = app.controlPlaneConfiguration.int(.webhookAutoDisableDays)!
     }
@@ -137,24 +140,25 @@ final class WebhookDeliveryService: Sendable {
             }
         }
 
-        guard let db = app.liveDB else { return }
         do {
-            let due = try await claimDueDeliveries(on: db)
+            let due = try await deliveries.claimDue(
+                limit: Self.maxConcurrentDeliveries,
+                leaseSeconds: Self.claimLeaseSeconds)
 
             // `claimDueDeliveries` returns at most the number of attempts this
             // pass can start immediately. Only immutable IDs cross into child
-            // tasks; each attempt reloads its own Fluent models. Subscription
+            // tasks; each attempt reloads immutable database snapshots. Subscription
             // streak updates are atomic SQL operations, so sibling attempts
             // need not queue behind one another in process memory.
             await withTaskGroup(of: Void.self) { group in
                 for delivery in due {
                     group.addTask {
-                        await self.attempt(deliveryID: delivery.id, on: db)
+                        await self.attempt(deliveryID: delivery)
                     }
                 }
             }
 
-            try await pruneHistory(on: db)
+            try await pruneHistory()
         } catch {
             logger.error("Webhook delivery sweep failed: \(error)")
         }
@@ -168,44 +172,12 @@ final class WebhookDeliveryService: Sendable {
     /// WHERE clause. `FOR UPDATE SKIP LOCKED` keeps the losers from queueing
     /// on rows the winner is still claiming. The attempt's own verdict then
     /// overwrites the lease (backoff, dead, or succeeded).
-    private struct ClaimedDelivery: Decodable, Sendable {
-        let id: UUID
-    }
-
-    private func claimDueDeliveries(on db: Database) async throws -> [ClaimedDelivery] {
-        guard let sql = db as? SQLDatabase else { return [] }
-        return try await sql.raw(
-            """
-            WITH due AS MATERIALIZED (
-                SELECT id
-                FROM webhook_deliveries
-                WHERE status = \(bind: WebhookDeliveryStatus.pending.rawValue)
-                  AND next_attempt_at <= now()
-                ORDER BY next_attempt_at
-                LIMIT \(bind: Self.maxConcurrentDeliveries)
-                FOR UPDATE SKIP LOCKED
-            )
-            UPDATE webhook_deliveries AS delivery
-            SET next_attempt_at = now() + (\(bind: Self.claimLeaseSeconds) * interval '1 second'),
-                updated_at = now()
-            FROM due
-            WHERE delivery.id = due.id
-            RETURNING delivery.id
-            """
-        ).all(decoding: ClaimedDelivery.self)
-    }
-
     /// One delivery attempt, recording the verdict on the row (and the
     /// failure streak on the subscription).
-    private func attempt(deliveryID: UUID, on db: Database) async {
-        let delivery: WebhookDelivery
+    private func attempt(deliveryID: UUID) async {
+        let delivery: WebhookDeliverySnapshot
         do {
-            guard
-                let loaded = try await WebhookDelivery.query(on: db)
-                    .filter(\.$id == deliveryID)
-                    .with(\.$subscription)
-                    .first()
-            else { return }
+            guard let loaded = try await deliveries.delivery(id: deliveryID) else { return }
             delivery = loaded
         } catch {
             logger.error(
@@ -216,38 +188,45 @@ final class WebhookDeliveryService: Sendable {
                 ])
             return
         }
-        let subscription = delivery.subscription
+        let subscription: WebhookSubscriptionSnapshot
+        do {
+            guard let loaded = try await subscriptions.subscription(id: delivery.subscriptionID)
+            else { return }
+            subscription = loaded
+        } catch {
+            logger.error(
+                "Could not load claimed webhook subscription",
+                metadata: [
+                    "deliveryId": .string(deliveryID.uuidString),
+                    "error": .string("\(error)"),
+                ])
+            return
+        }
 
         // The subscription was deactivated (by a user or the auto-disable)
         // after this row was enqueued: park the delivery instead of posting
         // to an endpoint its owner turned off.
         guard subscription.isActive else {
-            delivery.status = WebhookDeliveryStatus.dead.rawValue
-            delivery.lastError = "Subscription is disabled"
-            try? await delivery.save(on: db)
+            _ = try? await deliveries.parkDisabled(id: delivery.id)
             return
         }
 
         let now = Date()
-        delivery.attempts += 1
-        delivery.lastAttemptAt = now
 
         do {
             let statusCode = try await post(delivery, subscription: subscription)
-            delivery.responseStatus = statusCode
             if (200..<300).contains(statusCode) {
-                delivery.status = WebhookDeliveryStatus.succeeded.rawValue
-                delivery.deliveredAt = now
-                delivery.lastError = nil
-                try? await delivery.save(on: db)
-                await recordSuccess(subscriptionID: delivery.$subscription.id, on: db)
+                _ = try? await deliveries.recordSuccess(
+                    id: delivery.id, responseStatus: statusCode, at: now)
+                await recordSuccess(subscriptionID: delivery.subscriptionID)
                 return
             }
             try? await recordFailure(
-                delivery, subscriptionID: delivery.$subscription.id,
-                error: "Endpoint answered HTTP \(statusCode)", at: now, on: db)
+                delivery,
+                responseStatus: statusCode,
+                error: "Endpoint answered HTTP \(statusCode)",
+                at: now)
         } catch {
-            delivery.responseStatus = nil
             // A guard refusal is a property of the *subscription*, not of this
             // attempt: retrying eight times and auto-disabling days later
             // wouldn't tell the owner why. Rows predating the create-time
@@ -257,19 +236,24 @@ final class WebhookDeliveryService: Sendable {
                 logger.warning(
                     "Webhook target refused by the outbound guard",
                     metadata: [
-                        "subscriptionId": .string(delivery.$subscription.id.uuidString),
+                        "subscriptionId": .string(delivery.subscriptionID.uuidString),
                         "reason": .string(blocked.reason),
                     ])
             }
             try? await recordFailure(
-                delivery, subscriptionID: delivery.$subscription.id,
-                error: String("\(error)".prefix(500)), at: now, on: db)
+                delivery,
+                responseStatus: nil,
+                error: String("\(error)".prefix(500)),
+                at: now)
         }
     }
 
     /// POST the frozen payload, returning the endpoint's HTTP status.
-    private func post(_ delivery: WebhookDelivery, subscription: WebhookSubscription) async throws -> Int {
-        let secret = try app.secretsEncryption.decrypt(subscription.signingSecret)
+    private func post(
+        _ delivery: WebhookDeliverySnapshot,
+        subscription: WebhookSubscriptionSnapshot
+    ) async throws -> Int {
+        let secret = try app.secretsEncryption.decrypt(subscription.encryptedSigningSecret)
         let timestamp = Int(Date().timeIntervalSince1970)
         let signature = Self.signature(
             payload: delivery.payload, timestamp: timestamp, secret: secret)
@@ -280,7 +264,7 @@ final class WebhookDeliveryService: Sendable {
         headers.add(name: "X-Strato-Signature", value: "t=\(timestamp),v1=\(signature)")
         headers.add(name: "X-Strato-Event-Id", value: delivery.eventID.uuidString)
         headers.add(name: "X-Strato-Event-Type", value: delivery.eventType)
-        headers.add(name: "X-Strato-Delivery-Id", value: delivery.id?.uuidString ?? "")
+        headers.add(name: "X-Strato-Delivery-Id", value: delivery.id.uuidString)
 
         // The guarded client re-validates at delivery time (DNS may have changed
         // since the URL was registered, and create-time validation alone would
@@ -307,83 +291,53 @@ final class WebhookDeliveryService: Sendable {
         return mac.map { String(format: "%02x", $0) }.joined()
     }
 
-    private func recordSuccess(subscriptionID: UUID, on db: Database) async {
-        guard let sql = db as? SQLDatabase else { return }
+    private func recordSuccess(subscriptionID: UUID) async {
         let automaticReason =
             "Automatically disabled after \(autoDisableDays) day(s) of failed deliveries"
-        try? await sql.raw(
-            """
-            UPDATE webhook_subscriptions
-            SET failing_since = NULL,
-                is_active = CASE
-                    WHEN NOT is_active AND disabled_reason = \(bind: automaticReason)
-                    THEN TRUE ELSE is_active
-                END,
-                disabled_reason = CASE
-                    WHEN NOT is_active AND disabled_reason = \(bind: automaticReason)
-                    THEN NULL ELSE disabled_reason
-                END,
-                updated_at = now()
-            WHERE id = \(bind: subscriptionID)
-              AND (failing_since IS NOT NULL OR disabled_reason = \(bind: automaticReason))
-            """
-        ).run()
+        _ = try? await subscriptions.recordDeliverySuccess(
+            id: subscriptionID, automaticDisabledReason: automaticReason)
     }
 
     private func recordFailure(
-        _ delivery: WebhookDelivery,
-        subscriptionID: UUID,
+        _ delivery: WebhookDeliverySnapshot,
+        responseStatus: Int?,
         error: String,
-        at now: Date,
-        on db: Database
+        at now: Date
     ) async throws {
-        delivery.lastError = error
-        if delivery.attempts >= Self.maxAttempts {
-            delivery.status = WebhookDeliveryStatus.dead.rawValue
+        let attemptCount = delivery.attempts + 1
+        let nextAttemptAt = now.addingTimeInterval(
+            Self.backoffSeconds(afterAttempts: attemptCount))
+        let updated = try await deliveries.recordFailure(
+            id: delivery.id,
+            responseStatus: responseStatus,
+            error: error,
+            at: now,
+            maximumAttempts: Self.maxAttempts,
+            nextAttemptAt: nextAttemptAt)
+        if updated?.status == .dead {
             logger.warning(
                 "Webhook delivery exhausted its attempts",
                 metadata: [
-                    "deliveryId": .string(delivery.id?.uuidString ?? ""),
-                    "subscriptionId": .string(delivery.$subscription.id.uuidString),
+                    "deliveryId": .string(delivery.id.uuidString),
+                    "subscriptionId": .string(delivery.subscriptionID.uuidString),
                     "eventType": .string(delivery.eventType),
                     "error": .string(error),
                 ])
-        } else {
-            delivery.nextAttemptAt = now.addingTimeInterval(
-                Self.backoffSeconds(afterAttempts: delivery.attempts))
         }
-        try await delivery.save(on: db)
 
-        guard let sql = db as? SQLDatabase else { return }
         let cutoff = now.addingTimeInterval(-Double(autoDisableDays) * 86_400)
         let disabledReason =
             "Automatically disabled after \(autoDisableDays) day(s) of failed deliveries"
-        struct SubscriptionFailureState: Decodable {
-            let isActive: Bool
-            let failingSince: Date?
-        }
-        let state = try await sql.raw(
-            """
-            UPDATE webhook_subscriptions
-            SET failing_since = COALESCE(failing_since, \(bind: now)),
-                is_active = CASE
-                    WHEN is_active AND failing_since IS NOT NULL AND failing_since < \(bind: cutoff)
-                    THEN FALSE ELSE is_active
-                END,
-                disabled_reason = CASE
-                    WHEN is_active AND failing_since IS NOT NULL AND failing_since < \(bind: cutoff)
-                    THEN \(bind: disabledReason) ELSE disabled_reason
-                END,
-                updated_at = now()
-            WHERE id = \(bind: subscriptionID)
-            RETURNING is_active AS "isActive", failing_since AS "failingSince"
-            """
-        ).first(decoding: SubscriptionFailureState.self)
+        let state = try await subscriptions.recordDeliveryFailure(
+            id: delivery.subscriptionID,
+            at: now,
+            disableBefore: cutoff,
+            disabledReason: disabledReason)
         if let state, !state.isActive, let failingSince = state.failingSince {
             logger.warning(
                 "Webhook subscription auto-disabled after continuous delivery failure",
                 metadata: [
-                    "subscriptionId": .string(subscriptionID.uuidString),
+                    "subscriptionId": .string(delivery.subscriptionID.uuidString),
                     "failingSince": .string(failingSince.description),
                 ])
         }
@@ -391,12 +345,9 @@ final class WebhookDeliveryService: Sendable {
 
     /// Delete terminal deliveries past the history retention window so the
     /// outbox stays bounded by throughput, not by lifetime.
-    private func pruneHistory(on db: Database) async throws {
+    private func pruneHistory() async throws {
         let cutoff = Date().addingTimeInterval(-Double(Self.historyRetentionDays) * 86_400)
-        try await WebhookDelivery.query(on: db)
-            .filter(\.$status != WebhookDeliveryStatus.pending.rawValue)
-            .filter(\.$createdAt < cutoff)
-            .delete()
+        try await deliveries.pruneTerminal(createdBefore: cutoff)
     }
 }
 

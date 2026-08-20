@@ -1,10 +1,35 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
-import Fluent
-import SQLKit
 import WebAuthn
 
 struct UserController: RouteCollection {
+    private let iam: IAMPersistence
+    private let users: UserDirectoryPersistence
+    private let hierarchy: HierarchyPersistence
+    private let appSettings: AppSettingsPersistence?
+    private let passkeys: PasskeysPersistence?
+    private let accountClaims: AccountClaimsPersistence?
+    private let oidcProviders: OIDCProvidersPersistence?
+
+    init(
+        iam: IAMPersistence,
+        users: UserDirectoryPersistence,
+        hierarchy: HierarchyPersistence,
+        appSettings: AppSettingsPersistence? = nil,
+        passkeys: PasskeysPersistence? = nil,
+        accountClaims: AccountClaimsPersistence? = nil,
+        oidcProviders: OIDCProvidersPersistence? = nil
+    ) {
+        self.iam = iam
+        self.users = users
+        self.hierarchy = hierarchy
+        self.appSettings = appSettings
+        self.passkeys = passkeys
+        self.accountClaims = accountClaims
+        self.oidcProviders = oidcProviders
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let users = routes.grouped("api", "users")
         users.post("register", use: register)
@@ -63,15 +88,17 @@ struct UserController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        let visibility = try await UserDirectoryVisibility.resolve(on: req)
-        var query = User.query(on: req.db)
-            .sort(\.$username)
-            .sort(\.$id)
+        let visibility = try await UserDirectoryVisibility.resolve(on: req, using: iam)
+        let candidateIDs: [UUID]?
         if let candidates = visibility.candidateUserIDs {
             guard !candidates.isEmpty else { return [] }
-            query = query.filter(\.$id ~~ candidates)
+            candidateIDs = candidates
+        } else {
+            candidateIDs = nil
         }
-        let users = try await query.all()
+        let users = try await users.users(
+            filter: UserDirectoryFilter(ids: candidateIDs, orderByUsername: true)
+        ).map(User.init(snapshot:))
 
         let readable = try await visibility.readableUsers(among: users.compactMap(\.id), on: req)
         return users.filter { $0.id.map(readable.contains) ?? false }.map { $0.asPublic() }
@@ -88,32 +115,18 @@ struct UserController: RouteCollection {
 
         try await req.authorize("user:read", on: IAMNode(type: .user, id: userID))
 
-        guard let user = try await User.find(userID, on: req.db) else {
+        guard let snapshot = try await users.user(id: userID) else {
             throw Abort(.notFound)
         }
 
-        return user.asPublic()
-    }
-
-    /// Takes a transaction-scoped advisory lock covering the "does this
-    /// installation have any users?" question, so everything that decides
-    /// whether an account is the bootstrap account serializes: this endpoint
-    /// and `App bootstrap`, across replicas.
-    ///
-    /// Postgres only: `pg_advisory_xact_lock` is held until the enclosing
-    /// transaction ends (see `IPAMService.lockAllocations` for the same
-    /// pattern). Registration is rare and rate-limited, so the contention this
-    /// adds is nil.
-    static func lockRegistration(on db: Database) async throws {
-        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
-        try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: "user-registration")))").run()
+        return User(snapshot: snapshot).asPublic()
     }
 
     /// Whether the login page should offer account creation, and whether doing
     /// so would bootstrap the installation. Public and unauthenticated — this
     /// is asked before any session exists.
     func registrationPolicy(req: Request) async throws -> RegistrationPolicyResponse {
-        let bootstrapRequired = try await User.isFirstUser(on: req.db)
+        let bootstrapRequired = try await users.isEmpty()
         return RegistrationPolicyResponse(
             selfRegistrationEnabled: req.registrationPolicy.allowsRegistration(
                 bootstrapRequired: bootstrapRequired
@@ -131,45 +144,25 @@ struct UserController: RouteCollection {
         // could each read an empty table, each pass a *disabled* gate on the
         // bootstrap exemption, and each be saved as a system admin. Inside the
         // lock the loser re-reads a table that now contains the winner.
-        let user = try await req.db.transaction { db -> User in
-            try await Self.lockRegistration(on: db)
-
-            // Check if this is the first user (should be system admin)
-            let isFirstUser = try await User.isFirstUser(on: db)
-
-            // Refuse before touching the account table when the operator has
-            // closed self-registration: the conflict check below distinguishes
-            // taken names from free ones, and an install that isn't accepting
-            // sign-ups should not answer that question for an anonymous caller.
-            // Bootstrap is exempt — see `RegistrationPolicy`.
-            guard req.registrationPolicy.allowsRegistration(bootstrapRequired: isFirstUser) else {
-                throw Abort(
-                    .forbidden,
-                    reason: "Self-registration is disabled. Ask an administrator to create your account."
-                )
-            }
-
-            // Check if username or email already exists
-            let existingUser = try await User.query(on: db)
-                .group(.or) { group in
-                    group.filter(\.$username == createUser.username)
-                    group.filter(\.$email == createUser.email)
-                }
-                .first()
-
-            if existingUser != nil {
-                throw Abort(.conflict, reason: "Username or email already exists")
-            }
-
-            let user = User(
+        let result = try await users.register(
+            UserDirectoryWrite(
                 username: createUser.username,
                 email: createUser.email,
-                displayName: createUser.displayName,
-                isSystemAdmin: isFirstUser
+                displayName: createUser.displayName
+            ),
+            selfRegistrationEnabled: req.registrationPolicy.selfRegistrationEnabled
+        )
+        let user: User
+        switch result {
+        case .created(let snapshot):
+            user = User(snapshot: snapshot)
+        case .registrationDisabled:
+            throw Abort(
+                .forbidden,
+                reason: "Self-registration is disabled. Ask an administrator to create your account."
             )
-
-            try await user.save(on: db)
-            return user
+        case .identifierConflict:
+            throw Abort(.conflict, reason: "Username or email already exists")
         }
 
         // Bind the account's first passkey enrollment to the browser session
@@ -204,90 +197,68 @@ struct UserController: RouteCollection {
 
         let isSystemAdmin = body.isSystemAdmin ?? false
         let createdByID = currentUser.id
-        let rawToken = AccountClaimToken.generateToken()
+        let rawToken = AccountClaimSecret.generateToken()
 
-        // Optional org assignment: a nil role is bare membership; otherwise the
-        // request carries a canonical role id.
-        let assignedOrgID = body.organizationId
-        let assignedRoleID = body.role
-
-        // Create the user, its claim token, and any org membership in one
-        // transaction so the token row is visible the instant the user row is.
-        // Otherwise a concurrent /auth/register/begin — which blocks invited
-        // accounts by counting claim tokens — could slip through the gap
-        // between commits and let someone attach their own passkey.
-        let (user, claim) = try await req.db.transaction { db -> (User, AccountClaimToken) in
-            let existingUser = try await User.query(on: db)
-                .group(.or) { group in
-                    group.filter(\.$username == username)
-                    group.filter(\.$email == email)
-                }
-                .first()
-            if existingUser != nil {
-                throw Abort(.conflict, reason: "Username or email already exists")
-            }
-
-            if let orgID = assignedOrgID {
-                guard try await Organization.find(orgID, on: db) != nil else {
-                    throw Abort(.badRequest, reason: "Assigned organization not found")
-                }
-                if let assignedRoleID {
-                    _ = try await MemberRoleResolver.resolve(
-                        assignedRoleID,
-                        scopeNode: IAMNode(type: .organization, id: orgID),
-                        on: db)
-                }
-            }
-
-            let user = User(
-                username: username,
-                email: email,
-                displayName: displayName,
-                isSystemAdmin: isSystemAdmin,
-                source: .local
-            )
-            // Seed the current org so the invitee lands in it on claim rather
-            // than on the self-onboarding path.
-            user.currentOrganizationId = assignedOrgID
-            try await user.save(on: db)
-
-            let claim = AccountClaimToken(
-                userID: try user.requireID(),
-                tokenHash: AccountClaimToken.hashToken(rawToken),
-                tokenPrefix: AccountClaimToken.extractPrefix(rawToken),
-                expiresAt: Date().addingTimeInterval(Self.claimTokenTTL),
-                createdByID: createdByID
-            )
-            try await claim.save(on: db)
-
-            if let orgID = assignedOrgID {
-                let membership = UserOrganization(
-                    userID: try user.requireID(),
-                    organizationID: orgID,
-                    roleID: assignedRoleID
+        guard let accountClaims else {
+            throw Abort(.internalServerError, reason: "Account-claim persistence is unavailable")
+        }
+        let claim = AccountClaimIssue(
+            tokenHash: AccountClaimSecret.hashToken(rawToken),
+            tokenPrefix: AccountClaimSecret.extractPrefix(rawToken),
+            expiresAt: Date().addingTimeInterval(Self.claimTokenTTL),
+            createdByID: createdByID
+        )
+        let invited: InvitedAccountSnapshot
+        do {
+            invited = try await accountClaims.inviteUser(
+                AccountInvitationWrite(
+                    username: username,
+                    email: email,
+                    displayName: displayName,
+                    isSystemAdmin: isSystemAdmin,
+                    organizationID: body.organizationId,
+                    roleID: body.role,
+                    claim: claim
                 )
-                try await membership.save(on: db)
-
-                if let assignedRoleID {
-                    try await RoleBindingService.grant(
-                        principalType: .user,
-                        principalID: try user.requireID(),
-                        roleID: assignedRoleID,
-                        nodeType: .organization,
-                        nodeID: orgID,
-                        createdBy: createdByID,
-                        on: db
-                    )
-                }
-            }
-            return (user, claim)
+            )
+        } catch AccountClaimsPersistenceError.usernameOrEmailExists {
+            throw Abort(.conflict, reason: "Username or email already exists")
+        } catch AccountClaimsPersistenceError.organizationNotFound {
+            throw Abort(.badRequest, reason: "Assigned organization not found")
+        } catch AccountClaimsPersistenceError.roleNotFound(let roleID) {
+            throw Abort(.badRequest, reason: "No role with id \(roleID) exists.")
+        } catch AccountClaimsPersistenceError.roleOutOfScope(
+            let roleName,
+            let ownerType,
+            let ownerID,
+            let organizationID
+        ) {
+            throw Abort(
+                .badRequest,
+                reason:
+                    "Role '\(roleName)' is owned by \(ownerType) \(ownerID), which is not in the hierarchy of organization \(organizationID); a role can only be bound at or below its owner."
+            )
+        } catch AccountClaimsPersistenceError.unknownRoleOwnerType(let ownerType) {
+            throw Abort(
+                .internalServerError,
+                reason: "Role row names an unknown owner type '\(ownerType)'."
+            )
         }
 
         return AdminCreateUserResponse(
-            user: user.asPublic(),
+            user: User.Public(
+                id: invited.id,
+                username: invited.username,
+                email: invited.email,
+                displayName: invited.displayName,
+                createdAt: invited.createdAt,
+                currentOrganizationId: invited.currentOrganizationID,
+                isSystemAdmin: invited.isSystemAdmin,
+                source: UserSource(rawValue: invited.source) ?? .local
+            ),
             claimToken: rawToken,
             claimUrl: Self.claimURL(for: rawToken, configuration: req.controlPlaneConfiguration),
-            claimExpiresAt: claim.expiresAt
+            claimExpiresAt: invited.claimExpiresAt
         )
     }
 
@@ -302,9 +273,10 @@ struct UserController: RouteCollection {
 
         try await req.authorize("user:update", on: IAMNode(type: .user, id: userID))
 
-        guard let user = try await User.find(userID, on: req.db) else {
+        guard let userSnapshot = try await users.user(id: userID) else {
             throw Abort(.notFound)
         }
+        var user = User(snapshot: userSnapshot)
 
         let updateUser = try req.content.decode(UpdateUserRequest.self)
 
@@ -324,25 +296,25 @@ struct UserController: RouteCollection {
             let normalized = try Self.validateUsername(username)
             if normalized != user.username {
                 try await requireUnusedIdentifier(
-                    normalized, field: "username", excluding: userID, on: req.db)
-                user.username = normalized
+                    normalized, field: "username", excluding: userID)
+                user = user.replacing(username: normalized)
             }
         }
 
         if let displayName = updateUser.displayName {
-            user.displayName = try Self.validateDisplayName(displayName)
+            user = user.replacing(displayName: try Self.validateDisplayName(displayName))
         }
 
         if let email = updateUser.email {
             let normalized = try Self.validateEmail(email)
             if normalized != user.email {
                 try await requireUnusedIdentifier(
-                    normalized, field: "email", excluding: userID, on: req.db)
-                user.email = normalized
+                    normalized, field: "email", excluding: userID)
+                user = user.replacing(email: normalized)
             }
         }
 
-        try await user.save(on: req.db)
+        user = User(snapshot: try await users.save(user.directoryWrite))
         return user.asPublic()
     }
 
@@ -352,15 +324,20 @@ struct UserController: RouteCollection {
     private func requireUnusedIdentifier(
         _ value: String,
         field: String,
-        excluding userID: UUID,
-        on db: Database
+        excluding userID: UUID
     ) async throws {
-        let query = User.query(on: db).filter(\.$id != userID)
+        let existing: User?
         switch field {
-        case "username": query.filter(\.$username == value)
-        default: query.filter(\.$email == value)
+        case "username":
+            existing = try await users.users(
+                filter: UserDirectoryFilter(username: value, excludingID: userID)
+            ).first.map(User.init(snapshot:))
+        default:
+            existing = try await users.users(
+                filter: UserDirectoryFilter(email: value, excludingID: userID)
+            ).first.map(User.init(snapshot:))
         }
-        if try await query.first() != nil {
+        if existing != nil {
             throw Abort(.conflict, reason: "That \(field) is already taken")
         }
     }
@@ -376,19 +353,10 @@ struct UserController: RouteCollection {
 
         try await req.authorize("user:delete", on: IAMNode(type: .user, id: userID))
 
-        guard let user = try await User.find(userID, on: req.db) else {
+        guard try await users.user(id: userID) != nil else {
             throw Abort(.notFound)
         }
-
-        try await req.db.transaction { db in
-            // Mirror rows (memberships, group memberships, project members)
-            // cascade with the user row; role bindings have no FK by design
-            // and must be swept by principal — across every org, because a
-            // departing user's bindings do not live only in their own org
-            // (cross-org bindings, issue #485).
-            try await RoleBindingService.revokeAll(principalType: .user, principalID: userID, on: db)
-            try await user.delete(on: db)
-        }
+        _ = try await users.deleteAccount(id: userID)
         return .noContent
     }
 
@@ -397,9 +365,7 @@ struct UserController: RouteCollection {
     func beginRegistration(req: Request) async throws -> RegistrationBeginResponse {
         let beginRequest = try req.content.decode(RegistrationBeginRequest.self)
 
-        let user = try await User.query(on: req.db)
-            .filter(\.$username == beginRequest.username)
-            .first()
+        let user = try await users.user(username: beginRequest.username).map(User.init(snapshot:))
 
         // This endpoint is public and finishRegistration logs in whoever the
         // challenge belongs to, so issuing a challenge here IS authorizing an
@@ -429,17 +395,20 @@ struct UserController: RouteCollection {
         // permanently, since this is the only enrollment endpoint. Once the
         // invite is spent the account has a credential, and the owner-session
         // gate below is what protects it.
-        let hasUnclaimedInvite =
-            try await AccountClaimToken.query(on: req.db)
-            .filter(\.$user.$id == user.requireID())
-            .filter(\.$claimedAt == nil)
-            .count() > 0
+        guard let accountClaims else {
+            throw Abort(.internalServerError, reason: "Account-claim persistence is not configured")
+        }
+        let hasUnclaimedInvite = try await accountClaims.hasUnclaimedClaim(
+            userID: user.requireID()
+        )
         if hasUnclaimedInvite {
             throw Abort(.forbidden, reason: "This account must be activated using its invitation link")
         }
 
-        // Get existing credentials to exclude
-        try await user.$credentials.load(on: req.db)
+        guard let passkeys else {
+            throw Abort(.internalServerError, reason: "Passkey persistence is not configured")
+        }
+        let credentials = try await passkeys.credentials(userID: user.requireID())
 
         // This endpoint is public: finishRegistration logs in whoever the
         // challenge belongs to, so it may only ever perform the *first*
@@ -448,13 +417,13 @@ struct UserController: RouteCollection {
         // operation that must be authenticated as the account owner — otherwise
         // anyone who knows the username (including a system admin's) could
         // enroll their own authenticator and take the account over.
-        if !user.credentials.isEmpty {
+        if !credentials.isEmpty {
             guard req.auth.get(User.self)?.id == user.id else {
                 throw Abort(.forbidden, reason: "This account already has a passkey; sign in to add another")
             }
         }
 
-        let excludeCredentials = user.credentials.map { credential in
+        let excludeCredentials = credentials.map { credential in
             PublicKeyCredentialDescriptor(
                 type: .publicKey,
                 id: Array(credential.credentialID),
@@ -470,8 +439,7 @@ struct UserController: RouteCollection {
         try await req.webAuthn.storeChallenge(
             options.challenge.base64URLEncodedString().asString(),
             for: user.id,
-            operation: "registration",
-            on: req.db
+            operation: "registration"
         )
 
         return RegistrationBeginResponse(options: options, excludeCredentials: excludeCredentials)
@@ -483,11 +451,15 @@ struct UserController: RouteCollection {
         // Reject disabled accounts before finishRegistration persists the new
         // credential (and consumes the challenge) — a user disabled by an SSF
         // signal must not be able to add passkeys.
-        if let challengeRecord = try await AuthenticationChallenge.query(on: req.db)
-            .filter(\.$challenge == finishRequest.challenge)
-            .first(),
+        guard let passkeys else {
+            throw Abort(.internalServerError, reason: "Passkey persistence is not configured")
+        }
+        if let challengeRecord = try await passkeys.challenge(
+            finishRequest.challenge,
+            operation: "registration"
+        ),
             let challengeUserID = challengeRecord.userID,
-            let challengeUser = try await User.find(challengeUserID, on: req.db)
+            let challengeUser = try await users.user(id: challengeUserID).map(User.init(snapshot:))
         {
             try rejectDisabledAccount(challengeUser)
         }
@@ -496,12 +468,12 @@ struct UserController: RouteCollection {
             challenge: finishRequest.challenge,
             credentialCreationData: finishRequest.response,
             transports: finishRequest.transports,
-            on: req.db
+            rejectPendingAccountClaim: true
         )
 
-        // Load the user for this credential
-        try await credential.$user.load(on: req.db)
-        let user = credential.user
+        guard let user = try await users.user(id: credential.userID).map(User.init(snapshot:)) else {
+            throw WebAuthnError.userNotFound
+        }
 
         // Accounts disabled by an SSF signal must not get a session; the
         // middleware only sees authenticated requests, so check here too.
@@ -538,16 +510,23 @@ struct UserController: RouteCollection {
         guard let token = req.parameters.get("token") else {
             throw Abort(.badRequest, reason: "Missing token")
         }
-        guard let claim = try await AccountClaimToken.findByToken(token, on: req.db) else {
+        guard let accountClaims else {
+            throw Abort(.internalServerError, reason: "Account-claim persistence is not configured")
+        }
+        guard
+            let claim = try await accountClaims.claim(
+                tokenHash: AccountClaimSecret.hashToken(token)
+            )
+        else {
             throw Abort(.notFound, reason: "Invalid claim token")
         }
 
         return ClaimInfoResponse(
-            username: claim.user.username,
-            displayName: claim.user.displayName,
-            valid: claim.isValid,
+            username: claim.username,
+            displayName: claim.displayName,
+            valid: claim.isValid(),
             alreadyClaimed: claim.claimedAt != nil,
-            expired: claim.isExpired
+            expired: claim.isExpired()
         )
     }
 
@@ -556,18 +535,30 @@ struct UserController: RouteCollection {
     func claimBegin(req: Request) async throws -> RegistrationBeginResponse {
         let beginRequest = try req.content.decode(ClaimBeginRequest.self)
 
-        guard let claim = try await AccountClaimToken.findByToken(beginRequest.token, on: req.db) else {
+        guard let accountClaims else {
+            throw Abort(.internalServerError, reason: "Account-claim persistence is not configured")
+        }
+        guard
+            let claim = try await accountClaims.claim(
+                tokenHash: AccountClaimSecret.hashToken(beginRequest.token)
+            )
+        else {
             throw Abort(.notFound, reason: "Invalid claim token")
         }
-        guard claim.isValid else {
+        guard claim.isValid() else {
             throw Abort(.gone, reason: "This invitation link has expired or was already used")
         }
 
-        let user = claim.user
+        guard let user = try await users.user(id: claim.userID).map(User.init(snapshot:)) else {
+            throw Abort(.notFound, reason: "Invited account no longer exists")
+        }
         try rejectDisabledAccount(user)
 
-        try await user.$credentials.load(on: req.db)
-        let excludeCredentials = user.credentials.map { credential in
+        guard let passkeys else {
+            throw Abort(.internalServerError, reason: "Passkey persistence is not configured")
+        }
+        let credentials = try await passkeys.credentials(userID: user.requireID())
+        let excludeCredentials = credentials.map { credential in
             PublicKeyCredentialDescriptor(
                 type: .publicKey,
                 id: Array(credential.credentialID),
@@ -585,8 +576,7 @@ struct UserController: RouteCollection {
         try await req.webAuthn.storeChallenge(
             options.challenge.base64URLEncodedString().asString(),
             for: user.id,
-            operation: Self.claimChallengeOperation,
-            on: req.db
+            operation: Self.claimChallengeOperation
         )
 
         return RegistrationBeginResponse(options: options, excludeCredentials: excludeCredentials)
@@ -597,29 +587,39 @@ struct UserController: RouteCollection {
     func claimFinish(req: Request) async throws -> RegistrationFinishResponse {
         let finishRequest = try req.content.decode(ClaimFinishRequest.self)
 
-        guard let claim = try await AccountClaimToken.findByToken(finishRequest.token, on: req.db) else {
+        guard let accountClaims else {
+            throw Abort(.internalServerError, reason: "Account-claim persistence is not configured")
+        }
+        guard
+            let claim = try await accountClaims.claim(
+                tokenHash: AccountClaimSecret.hashToken(finishRequest.token)
+            )
+        else {
             throw Abort(.notFound, reason: "Invalid claim token")
         }
-        guard claim.isValid else {
+        guard claim.isValid() else {
             throw Abort(.gone, reason: "This invitation link has expired or was already used")
         }
 
         // Block accounts disabled by an SSF signal before the challenge is
         // consumed and a credential persisted.
-        try rejectDisabledAccount(claim.user)
+        guard let claimUser = try await users.user(id: claim.userID).map(User.init(snapshot:)) else {
+            throw Abort(.notFound, reason: "Invited account no longer exists")
+        }
+        try rejectDisabledAccount(claimUser)
 
-        let tokenUserID = claim.$user.id
-        let claimID = try claim.requireID()
+        let tokenUserID = claim.userID
+        let claimID = claim.id
 
         // The WebAuthn challenge carries its own target user, independent of the
         // token. Confirm they match BEFORE finishRegistration persists a
         // credential — otherwise a valid token for one account could attach a
         // passkey to a different account whose challenge was captured earlier.
         guard
-            let challengeRecord = try await AuthenticationChallenge.query(on: req.db)
-                .filter(\.$challenge == finishRequest.challenge)
-                .filter(\.$operation == Self.claimChallengeOperation)
-                .first(),
+            let challengeRecord = try await passkeys?.challenge(
+                finishRequest.challenge,
+                operation: Self.claimChallengeOperation
+            ),
             challengeRecord.userID == tokenUserID
         else {
             throw Abort(.badRequest, reason: "Claim token does not match this registration")
@@ -633,53 +633,18 @@ struct UserController: RouteCollection {
             throw Abort(.gone, reason: "This passkey request has expired — please restart setup")
         }
 
-        // Consume the one-time token and enroll the credential in a single
-        // transaction. The conditional update matches only while `claimed_at`
-        // is still null, so two holders of the same invite finishing
-        // concurrently can't both enroll — exactly one wins; the loser gets
-        // 410. Wrapping both in a transaction means a failed enrollment (bad
-        // response, challenge expired in the race window, credential
-        // insert/delete error) rolls the consume back, leaving the invite
-        // usable for a retry instead of stranding the account.
-        let webAuthn = try req.webAuthn
-        let challenge = finishRequest.challenge
-        let response = finishRequest.response
-        let transports = finishRequest.transports
-        let operation = Self.claimChallengeOperation
-        let credential = try await req.db.transaction { db -> UserCredential in
-            guard let sql = db as? SQLDatabase else {
-                throw Abort(.internalServerError, reason: "Unsupported database")
-            }
-            let consumed = try await sql.raw(
-                """
-                UPDATE account_claim_tokens SET claimed_at = \(bind: Date())
-                WHERE id = \(bind: claimID) AND claimed_at IS NULL
-                RETURNING id
-                """
-            ).all()
-            guard !consumed.isEmpty else {
-                throw Abort(.gone, reason: "This invitation link has expired or was already used")
-            }
+        let credential = try await req.webAuthn.finishClaimRegistration(
+            claimID: claimID,
+            expectedUserID: tokenUserID,
+            challenge: finishRequest.challenge,
+            credentialCreationData: finishRequest.response,
+            transports: finishRequest.transports,
+            operation: Self.claimChallengeOperation
+        )
 
-            let credential = try await webAuthn.finishRegistration(
-                challenge: challenge,
-                credentialCreationData: response,
-                transports: transports,
-                operation: operation,
-                on: db
-            )
-
-            // Defense in depth: finishRegistration derives the user from the
-            // challenge; a mismatch rolls the whole transaction back (no
-            // credential, token un-consumed).
-            guard credential.$user.id == tokenUserID else {
-                throw Abort(.badRequest, reason: "Claim token does not match this registration")
-            }
-            return credential
+        guard var user = try await users.user(id: credential.userID).map(User.init(snapshot:)) else {
+            throw WebAuthnError.userNotFound
         }
-
-        try await credential.$user.load(on: req.db)
-        let user = credential.user
         try rejectDisabledAccount(user)
 
         req.auth.login(user)
@@ -691,12 +656,10 @@ struct UserController: RouteCollection {
         // org. If the admin already placed them in an org, make one current so
         // they land somewhere usable; never grant new membership here.
         if user.currentOrganizationId == nil,
-            let membership = try await UserOrganization.query(on: req.db)
-                .filter(\.$user.$id == user.requireID())
-                .first()
+            let membership = try await hierarchy.organizations(forUser: user.requireID()).first
         {
-            user.currentOrganizationId = membership.$organization.id
-            try await user.save(on: req.db)
+            user = user.replacingCurrentOrganization(membership.organization.id)
+            _ = try await users.save(user.directoryWrite)
         }
 
         return RegistrationFinishResponse(
@@ -714,19 +677,23 @@ struct UserController: RouteCollection {
         // Keyed with the deployment decoy key so an unknown username yields a
         // stable, unguessable decoy credential instead of a 404, closing the
         // username-enumeration oracle (see WebAuthnService.beginAuthentication).
-        let decoyKey = try await DecoyKeyService.getKey(from: req.application)
+        guard let appSettings else {
+            throw Abort(.internalServerError, reason: "Application-settings persistence is not configured")
+        }
+        let decoyKey = try await DecoyKeyService.getKey(
+            from: req.application,
+            settings: appSettings
+        )
 
         let options = try await req.webAuthn.beginAuthentication(
             for: beginRequest.username,
-            decoyKey: decoyKey,
-            on: req.db
+            decoyKey: decoyKey
         )
 
         // Store challenge
         try await req.webAuthn.storeChallenge(
             options.challenge.base64URLEncodedString().asString(),
-            operation: "authentication",
-            on: req.db
+            operation: "authentication"
         )
 
         return AuthenticationBeginResponse(options: options)
@@ -739,8 +706,7 @@ struct UserController: RouteCollection {
         do {
             user = try await req.webAuthn.finishAuthentication(
                 challenge: finishRequest.challenge,
-                authenticationCredential: finishRequest.response,
-                on: req.db
+                authenticationCredential: finishRequest.response
             )
         } catch {
             await req.recordAuthEvent(.loginFailed, metadata: ["error": "\(error)"])
@@ -788,7 +754,8 @@ struct UserController: RouteCollection {
         var sloUrl: String?
         if let providerIDString = req.session.data["oidc_login_provider_id"],
             let providerID = UUID(uuidString: providerIDString),
-            let provider = try? await OIDCProvider.find(providerID, on: req.db)
+            let oidcProviders,
+            let provider = try? await oidcProviders.provider(id: providerID)
         {
             // post_logout_redirect_uri only works if registered at the IdP;
             // in production an unset BASE_URL means OIDC login never worked,
@@ -1128,44 +1095,47 @@ extension UserController {
         let defaultOrg = try await findOrCreateDefaultOrganization(req: req)
 
         // Check if user is already in the organization
-        let existingMembership = try await UserOrganization.query(on: req.db)
-            .filter(\.$user.$id == user.id!)
-            .filter(\.$organization.$id == defaultOrg.id!)
-            .first()
+        let existingMembership = try await hierarchy.membership(
+            userID: user.id!, organizationID: defaultOrg.id)
 
         if existingMembership == nil {
             // Add user to default organization as member
-            let membership = UserOrganization(
+            _ = try await hierarchy.addMember(
                 userID: user.id!,
-                organizationID: defaultOrg.id!
+                organizationID: defaultOrg.id,
+                roleID: nil,
+                createdBy: nil
             )
-            try await membership.save(on: req.db)
         }
 
         // Set as current organization if user doesn't have one
         if user.currentOrganizationId == nil {
-            user.currentOrganizationId = defaultOrg.id
-            try await user.save(on: req.db)
+            _ = try await hierarchy.setCurrentOrganization(
+                userID: user.id!, organizationID: defaultOrg.id)
         }
     }
 
-    private func findOrCreateDefaultOrganization(req: Request) async throws -> Organization {
+    private func findOrCreateDefaultOrganization(req: Request) async throws -> OrganizationSnapshot {
         // Try to find existing default organization
-        if let existingOrg = try await Organization.query(on: req.db)
-            .filter(\.$name == "Default Organization")
-            .first()
-        {
+        if let existingOrg = try await hierarchy.allOrganizations().first(where: {
+            $0.name == "Default Organization"
+        }) {
             return existingOrg
         }
 
         // Create default organization if it doesn't exist
-        let defaultOrg = Organization(
-            name: "Default Organization",
-            description: "Default organization for all users"
-        )
-        try await defaultOrg.save(on: req.db)
-
-        return defaultOrg
+        do {
+            return try await hierarchy.createOrganization(
+                OrganizationWrite(
+                    name: "Default Organization",
+                    description: "Default organization for all users"
+                ))
+        } catch HierarchyPersistenceError.duplicateOrganizationName {
+            guard let existing = try await hierarchy.allOrganizations().first(where: {
+                $0.name == "Default Organization"
+            }) else { throw Abort(.internalServerError, reason: "Default organization disappeared") }
+            return existing
+        }
     }
 }
 

@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 /// OAuth 2.0 Device Authorization Grant (RFC 8628) provider endpoints for the
@@ -13,6 +12,12 @@ import Vapor
 /// The `/api/oauth/*` routes require a browser session like every other API
 /// route.
 struct OAuthController: RouteCollection {
+    private let oauth: OAuthDeviceSessionsPersistence
+
+    init(oauth: OAuthDeviceSessionsPersistence) {
+        self.oauth = oauth
+    }
+
     /// Device authorization requests expire after 15 minutes.
     static let deviceCodeLifetime: TimeInterval = 15 * 60
     /// Minimum seconds between polls of `/oauth/token` for one device code.
@@ -115,33 +120,29 @@ struct OAuthController: RouteCollection {
 
         // Opportunistic cleanup instead of a background sweep: pending rows
         // are only useful for 15 minutes, and this endpoint is rate-limited.
-        try await DeviceAuthorization.query(on: req.db)
-            .filter(\.$expiresAt < Date())
-            .delete()
+        try await oauth.purgeExpiredAuthorizations(before: Date())
 
         let deviceCode = DeviceAuthorization.generateDeviceCode()
         var userCode = DeviceAuthorization.generateUserCode()
         // The user-code space is small (20^8); retry on the unlikely collision
         // with a live code.
         for _ in 0..<3 {
-            let taken =
-                try await DeviceAuthorization.query(on: req.db)
-                .filter(\.$userCode == userCode)
-                .count() > 0
+            let taken = try await oauth.userCodeIsTaken(userCode)
             if !taken { break }
             userCode = DeviceAuthorization.generateUserCode()
         }
 
-        let authorization = DeviceAuthorization(
-            deviceCodeHash: DeviceAuthorization.hashCode(deviceCode),
-            userCode: userCode,
-            clientName: request.clientName ?? "Strato CLI",
-            restriction: restriction,
-            requestIP: req.trustedClientIP,
-            expiresAt: Date().addingTimeInterval(Self.deviceCodeLifetime),
-            interval: Self.pollInterval
+        _ = try await oauth.createAuthorization(
+            OAuthDeviceAuthorizationWrite(
+                deviceCodeHash: DeviceAuthorization.hashCode(deviceCode),
+                userCode: userCode,
+                clientName: request.clientName ?? "Strato CLI",
+                restriction: restriction.stored,
+                requestIP: req.trustedClientIP,
+                expiresAt: Date().addingTimeInterval(Self.deviceCodeLifetime),
+                pollInterval: Self.pollInterval
+            )
         )
-        try await authorization.save(on: req.db)
 
         let origin = Self.publicOrigin(configuration: req.controlPlaneConfiguration)
         return DeviceAuthorizationResponse(
@@ -200,47 +201,46 @@ struct OAuthController: RouteCollection {
     }
 
     private func redeemDeviceCode(_ deviceCode: String, req: Request) async throws -> TokenResponse {
-        guard let authorization = try await DeviceAuthorization.findByDeviceCode(deviceCode, on: req.db) else {
+        guard
+            let authorization = try await oauth.authorization(
+                deviceCodeHash: DeviceAuthorization.hashCode(deviceCode)
+            )
+        else {
             throw OAuthError.invalidGrant("Unknown device code")
         }
 
-        if authorization.isExpired {
+        if authorization.isExpired() {
             throw OAuthError.expiredToken
         }
 
         // RFC 8628 §3.5: clients polling faster than `interval` get slow_down.
         let now = Date()
         if let lastPolled = authorization.lastPolledAt,
-            now.timeIntervalSince(lastPolled) < Double(authorization.interval)
+            now.timeIntervalSince(lastPolled) < Double(authorization.pollInterval)
         {
-            authorization.lastPolledAt = now
-            try await authorization.save(on: req.db)
+            _ = try await oauth.recordPoll(authorizationID: authorization.id, at: now)
             throw OAuthError.slowDown
         }
-        authorization.lastPolledAt = now
+        _ = try await oauth.recordPoll(authorizationID: authorization.id, at: now)
 
-        switch DeviceAuthorization.Status(rawValue: authorization.status) {
+        switch authorization.status {
         case .pending:
-            try await authorization.save(on: req.db)
             throw OAuthError.authorizationPending
         case .denied:
-            try await authorization.save(on: req.db)
             throw OAuthError.accessDenied
-        case .redeemed, .none:
-            try await authorization.save(on: req.db)
+        case .redeemed:
             throw OAuthError.invalidGrant("Device code already used")
         case .approved:
             break
         }
 
-        guard let userID = authorization.$user.id else {
+        guard let userID = authorization.userID else {
             throw OAuthError.invalidGrant("Approval is missing a user")
         }
-        let authorizationID = try authorization.requireID()
 
         let accessToken = CLISession.generateAccessToken()
         let refreshToken = CLISession.generateRefreshToken()
-        let session = CLISession(
+        let session = CLISessionWrite(
             userID: userID,
             clientName: authorization.clientName,
             restriction: authorization.restriction,
@@ -255,22 +255,13 @@ struct OAuthController: RouteCollection {
         // status check above was unguarded, so re-verify with a conditional
         // UPDATE (same consume pattern as the account-claim flow). 0 rows
         // means the other poll won and this one must not mint a session.
-        try await req.db.transaction { db in
-            guard let sql = db as? SQLDatabase else {
-                throw Abort(.internalServerError, reason: "Unsupported database")
-            }
-            let consumed = try await sql.raw(
-                """
-                UPDATE oauth_device_authorizations
-                SET status = \(bind: DeviceAuthorization.Status.redeemed.rawValue)
-                WHERE id = \(bind: authorizationID) AND status = \(bind: DeviceAuthorization.Status.approved.rawValue)
-                RETURNING id
-                """
-            ).all()
-            guard !consumed.isEmpty else {
-                throw OAuthError.invalidGrant("Device code already used")
-            }
-            try await session.save(on: db)
+        do {
+            _ = try await oauth.redeemAndCreateSession(
+                authorizationID: authorization.id,
+                session: session
+            )
+        } catch OAuthDeviceSessionsPersistenceError.deviceCodeAlreadyRedeemed {
+            throw OAuthError.invalidGrant("Device code already used")
         }
 
         return TokenResponse(
@@ -284,16 +275,32 @@ struct OAuthController: RouteCollection {
     private func refreshSession(_ refreshToken: String, req: Request) async throws -> TokenResponse {
         let hash = CLISession.hashToken(refreshToken)
 
-        if let session = try await CLISession.query(on: req.db)
-            .filter(\.$refreshTokenHash == hash)
-            .first()
-        {
-            guard !session.isRevoked, !session.isRefreshTokenExpired else {
+        if let session = try await oauth.session(refreshTokenHash: hash) {
+            guard !session.isRevoked, !session.isRefreshTokenExpired() else {
                 throw OAuthError.invalidGrant("Session revoked or expired")
             }
 
-            let (newAccessToken, newRefreshToken) = session.rotate()
-            try await session.save(on: req.db)
+            let newAccessToken = CLISession.generateAccessToken()
+            let newRefreshToken = CLISession.generateRefreshToken()
+            do {
+                _ = try await oauth.rotateSession(
+                    sessionID: session.id,
+                    presentedRefreshTokenHash: hash,
+                    rotation: CLISessionRotation(
+                        accessTokenHash: CLISession.hashToken(newAccessToken),
+                        accessTokenPrefix: String(newAccessToken.prefix(12)) + "...",
+                        accessTokenExpiresAt: Date().addingTimeInterval(
+                            CLISession.accessTokenLifetime
+                        ),
+                        refreshTokenHash: CLISession.hashToken(newRefreshToken),
+                        refreshTokenExpiresAt: Date().addingTimeInterval(
+                            CLISession.refreshTokenLifetime
+                        )
+                    )
+                )
+            } catch OAuthDeviceSessionsPersistenceError.refreshTokenChanged {
+                throw OAuthError.invalidGrant("Invalid refresh token")
+            }
 
             return TokenResponse(
                 accessToken: newAccessToken,
@@ -306,16 +313,14 @@ struct OAuthController: RouteCollection {
         // Replay of an already-rotated refresh token means the credential
         // leaked (or the client lost the rotation response); either way the
         // session can no longer be trusted.
-        if let replayed = try await CLISession.query(on: req.db)
-            .filter(\.$previousRefreshTokenHash == hash)
-            .first(), !replayed.isRevoked
+        if let replayed = try await oauth.session(previousRefreshTokenHash: hash),
+            !replayed.isRevoked
         {
             req.logger.warning(
                 "Refresh token replay detected; revoking CLI session",
-                metadata: ["session_id": .string(replayed.id?.uuidString ?? "unknown")]
+                metadata: ["session_id": .string(replayed.id.uuidString)]
             )
-            replayed.revokedAt = Date()
-            try await replayed.save(on: req.db)
+            _ = try await oauth.revokeSession(id: replayed.id, at: Date())
         }
 
         throw OAuthError.invalidGrant("Invalid refresh token")
@@ -333,24 +338,16 @@ struct OAuthController: RouteCollection {
         }
 
         let hash = CLISession.hashToken(request.token)
-        let session = try await CLISession.query(on: req.db)
-            .group(.or) { group in
-                group.filter(\.$accessTokenHash == hash)
-                group.filter(\.$refreshTokenHash == hash)
-            }
-            .first()
-
-        if let session, !session.isRevoked {
-            session.revokedAt = Date()
-            try await session.save(on: req.db)
-        }
+        _ = try await oauth.revokeSession(matchingTokenHash: hash, at: Date())
 
         return .ok
     }
 
     // MARK: - Session-authenticated approval endpoints
 
-    private func pendingAuthorization(req: Request) async throws -> DeviceAuthorization {
+    private func pendingAuthorization(
+        req: Request
+    ) async throws -> OAuthDeviceAuthorizationSnapshot {
         guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
@@ -360,11 +357,10 @@ struct OAuthController: RouteCollection {
 
         let userCode = DeviceAuthorization.normalizeUserCode(rawCode)
         guard
-            let authorization = try await DeviceAuthorization.query(on: req.db)
-                .filter(\.$userCode == userCode)
-                .filter(\.$status == DeviceAuthorization.Status.pending.rawValue)
-                .first(),
-            !authorization.isExpired
+            let authorization = try await oauth.pendingAuthorization(
+                userCode: userCode,
+                now: Date()
+            )
         else {
             throw Abort(.notFound, reason: "Unknown or expired code")
         }
@@ -377,7 +373,9 @@ struct OAuthController: RouteCollection {
         return PendingDeviceAuthorizationResponse(
             userCode: authorization.userCode,
             clientName: authorization.clientName,
-            restriction: CredentialRestrictionPayload(authorization.restriction),
+            restriction: CredentialRestrictionPayload(
+                CredentialRestriction(authorization.restriction)
+            ),
             requestIP: authorization.requestIP,
             createdAt: authorization.createdAt,
             expiresAt: authorization.expiresAt
@@ -404,21 +402,33 @@ struct OAuthController: RouteCollection {
             // asked for, never more. An approval that tried to widen a
             // requested restriction would let a hostile client's phrasing —
             // "just read access, honestly" — end up meaning something else.
-            authorization.store(
-                restriction: try await CredentialRestriction.resolve(
-                    payload, issuedUnder: authorization.restriction, on: req.db))
+            let requested = CredentialRestriction(authorization.restriction)
+            let narrowed = try await CredentialRestriction.resolve(
+                payload,
+                issuedUnder: requested,
+                on: req.db
+            )
+            _ = try await oauth.approve(
+                authorizationID: authorization.id,
+                userID: try user.requireID(),
+                restriction: narrowed.stored,
+                now: Date()
+            )
+            return .ok
         }
 
-        authorization.status = DeviceAuthorization.Status.approved.rawValue
-        authorization.$user.id = try user.requireID()
-        try await authorization.save(on: req.db)
+        _ = try await oauth.approve(
+            authorizationID: authorization.id,
+            userID: try user.requireID(),
+            restriction: authorization.restriction,
+            now: Date()
+        )
         return .ok
     }
 
     func denyDevice(req: Request) async throws -> HTTPStatus {
         let authorization = try await pendingAuthorization(req: req)
-        authorization.status = DeviceAuthorization.Status.denied.rawValue
-        try await authorization.save(on: req.db)
+        _ = try await oauth.deny(authorizationID: authorization.id, now: Date())
         return .ok
     }
 
@@ -429,12 +439,10 @@ struct OAuthController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        let sessions = try await CLISession.query(on: req.db)
-            .filter(\.$user.$id == user.requireID())
-            .filter(\.$revokedAt == nil)
-            .filter(\.$refreshTokenExpiresAt > Date())
-            .sort(\.$createdAt, .descending)
-            .all()
+        let sessions = try await oauth.activeSessions(
+            userID: try user.requireID(),
+            now: Date()
+        )
 
         return sessions.map { CLISessionResponse(from: $0) }
     }
@@ -448,16 +456,14 @@ struct OAuthController: RouteCollection {
         }
 
         guard
-            let session = try await CLISession.query(on: req.db)
-                .filter(\.$id == sessionID)
-                .filter(\.$user.$id == user.requireID())
-                .first()
+            try await oauth.revokeOwnedSession(
+                id: sessionID,
+                userID: try user.requireID(),
+                at: Date()
+            )
         else {
             throw Abort(.notFound)
         }
-
-        session.revokedAt = Date()
-        try await session.save(on: req.db)
         return .noContent
     }
 }

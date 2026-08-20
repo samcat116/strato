@@ -87,3 +87,26 @@ func makeDatabaseTLS(configuration: ControlPlaneConfiguration, logger: Logger) t
         return mode == .prefer ? .prefer(sslContext) : .require(sslContext)
     }
 }
+
+/// Native PostgresNIO client TLS uses `TLSConfiguration` directly rather than
+/// the legacy driver's `NIOSSLContext`. Keep both builders during the cohort
+/// migration so the pools negotiate from the same operator settings.
+func makeNativeDatabaseTLS(configuration: ControlPlaneConfiguration, logger: Logger) throws
+    -> PostgresClient.Configuration.TLS
+{
+    let mode = try DatabaseTLSMode.fromConfiguration(configuration)
+    switch mode {
+    case .disable:
+        return .disable
+    case .prefer, .require:
+        var tlsConfiguration = TLSConfiguration.makeClientConfiguration()
+        if let caPath = configuration.string(.databaseTLSCACertPath), !caPath.isEmpty {
+            do {
+                tlsConfiguration.trustRoots = .certificates(try NIOSSLCertificate.fromPEMFile(caPath))
+            } catch {
+                throw DatabaseTLSConfigurationError.caCertificateLoadFailed(path: caPath, underlying: error)
+            }
+        }
+        return mode == .prefer ? .prefer(tlsConfiguration) : .require(tlsConfiguration)
+    }
+}

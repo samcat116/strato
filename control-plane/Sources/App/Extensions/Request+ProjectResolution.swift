@@ -1,5 +1,5 @@
-import Fluent
 import Vapor
+import Fluent
 
 extension Request {
     /// The refusal both create-side resolvers give a request that names no

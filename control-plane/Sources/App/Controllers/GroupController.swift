@@ -1,18 +1,22 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
-import Fluent
 
 struct GroupController: RouteCollection {
+    private let groups: GroupsPersistence
+
+    init(groups: GroupsPersistence) {
+        self.groups = groups
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let organizations = routes.grouped("api", "organizations")
+        organizations.group(":organizationID") { organization in
+            let groupRoutes = organization.grouped("groups")
+            groupRoutes.get(use: index)
+            groupRoutes.post(use: create)
 
-        // Group routes under organization context
-        organizations.group(":organizationID") { org in
-            let groups = org.grouped("groups")
-            groups.get(use: index)
-            groups.post(use: create)
-
-            groups.group(":groupID") { group in
+            groupRoutes.group(":groupID") { group in
                 group.get(use: show)
                 group.put(use: update)
                 group.delete(use: delete)
@@ -24,318 +28,177 @@ struct GroupController: RouteCollection {
         }
     }
 
-    // MARK: - Group CRUD Operations
-
     func index(req: Request) async throws -> [GroupResponse] {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
-
-        // Verify user has access to organization
+        guard req.auth.get(User.self) != nil else { throw Abort(.unauthorized) }
+        let organizationID = try organizationID(req)
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
-
-        // Get all groups in the organization
-        let groups = try await Group.query(on: req.db)
-            .filter(\.$organization.$id, .equal, organizationID)
-            .sort(\.$name)
-            .all()
-
-        // One membership aggregate for the page instead of a COUNT per group.
-        let memberCounts = try await UserGroup.counts(
-            groupedBy: \.$group, in: groups.compactMap { $0.id }, on: req.db)
-
-        return groups.map { group in
-            GroupResponse(from: group, memberCount: group.id.flatMap { memberCounts[$0] } ?? 0)
+        return try await groups.groups(organizationID: organizationID).map {
+            GroupResponse(from: $0.group, memberCount: $0.memberCount)
         }
     }
 
     func show(req: Request) async throws -> GroupResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let groupID = req.parameters.get("groupID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or group ID")
-        }
-
-        // Verify user has access to organization
+        guard req.auth.get(User.self) != nil else { throw Abort(.unauthorized) }
+        let organizationID = try organizationID(req)
+        let groupID = try groupID(req)
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
-
-        guard let group = try await Group.find(groupID, on: req.db) else {
-            throw Abort(.notFound, reason: "Group not found")
-        }
-
-        // Verify group belongs to the organization
-        if group.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "Group does not belong to the specified organization")
-        }
-
-        let memberCount = try await group.getMemberCount(on: req.db)
-        return GroupResponse(from: group, memberCount: memberCount)
+        let group = try await requireGroup(id: groupID, organizationID: organizationID)
+        return GroupResponse(
+            from: group,
+            memberCount: try await groups.memberCount(groupID: groupID)
+        )
     }
 
     func create(req: Request) async throws -> GroupResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
-
-        let createRequest = try req.content.decodeValidated(CreateGroupRequest.self)
-
-        // Verify user has admin access to organization
+        guard req.auth.get(User.self) != nil else { throw Abort(.unauthorized) }
+        let organizationID = try organizationID(req)
+        let body = try req.content.decodeValidated(CreateGroupRequest.self)
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
-
-        // Check for name uniqueness within organization
-        let existingGroup = try await Group.query(on: req.db)
-            .filter(\.$organization.$id, .equal, organizationID)
-            .filter(\.$name, .equal, createRequest.name)
-            .first()
-
-        if existingGroup != nil {
+        do {
+            let group = try await groups.create(
+                GroupWrite(
+                    organizationID: organizationID,
+                    name: body.name,
+                    description: body.description
+                )
+            )
+            return GroupResponse(from: group, memberCount: 0)
+        } catch GroupPersistenceError.duplicateName {
             throw Abort(.conflict, reason: "Group name already exists in this organization")
         }
-
-        // Create group
-        let group = Group(
-            name: createRequest.name,
-            description: createRequest.description,
-            organizationID: organizationID
-        )
-
-        try await group.save(on: req.db)
-
-        return GroupResponse(from: group, memberCount: 0)
     }
 
     func update(req: Request) async throws -> GroupResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let groupID = req.parameters.get("groupID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or group ID")
-        }
-
-        let updateRequest = try req.content.decodeValidated(UpdateGroupRequest.self)
-
-        // Verify user has admin access
+        guard req.auth.get(User.self) != nil else { throw Abort(.unauthorized) }
+        let organizationID = try organizationID(req)
+        let groupID = try groupID(req)
+        let body = try req.content.decodeValidated(UpdateGroupRequest.self)
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
-
-        guard let group = try await Group.find(groupID, on: req.db) else {
-            throw Abort(.notFound, reason: "Group not found")
+        let current = try await requireGroup(id: groupID, organizationID: organizationID)
+        do {
+            guard
+                let updated = try await groups.replace(
+                    GroupWrite(
+                        id: current.id,
+                        organizationID: current.organizationID,
+                        name: body.name ?? current.name,
+                        description: body.description ?? current.description,
+                        scimProvisioned: current.scimProvisioned
+                    )
+                )
+            else { throw Abort(.notFound, reason: "Group not found") }
+            return GroupResponse(
+                from: updated,
+                memberCount: try await groups.memberCount(groupID: groupID)
+            )
+        } catch GroupPersistenceError.duplicateName {
+            throw Abort(.conflict, reason: "Group name already exists in this organization")
         }
-
-        // Verify group belongs to organization
-        if group.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "Group does not belong to the specified organization")
-        }
-
-        // Update fields
-        if let name = updateRequest.name {
-            // Check name uniqueness
-            let existingGroup = try await Group.query(on: req.db)
-                .filter(\.$organization.$id, .equal, organizationID)
-                .filter(\.$name, .equal, name)
-                .filter(\.$id, .notEqual, groupID)
-                .first()
-
-            if existingGroup != nil {
-                throw Abort(.conflict, reason: "Group name already exists in this organization")
-            }
-
-            group.name = name
-        }
-
-        if let description = updateRequest.description {
-            group.description = description
-        }
-
-        try await group.save(on: req.db)
-
-        let memberCount = try await group.getMemberCount(on: req.db)
-        return GroupResponse(from: group, memberCount: memberCount)
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let groupID = req.parameters.get("groupID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or group ID")
-        }
-
-        // Verify user has admin access
+        guard req.auth.get(User.self) != nil else { throw Abort(.unauthorized) }
+        let organizationID = try organizationID(req)
+        let groupID = try groupID(req)
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
-
-        guard let group = try await Group.find(groupID, on: req.db) else {
+        _ = try await requireGroup(id: groupID, organizationID: organizationID)
+        guard try await groups.delete(id: groupID, organizationID: organizationID) else {
             throw Abort(.notFound, reason: "Group not found")
-        }
-
-        // Verify group belongs to organization
-        if group.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "Group does not belong to the specified organization")
-        }
-
-        // `user_groups` cascades with the group row; role bindings have no FK
-        // by design and must be swept by
-        // principal — across every org, since a group may hold cross-org
-        // bindings (issue #485).
-        try await req.db.transaction { db in
-            try await RoleBindingService.revokeAll(principalType: .group, principalID: groupID, on: db)
-            try await group.delete(on: db)
         }
         return .noContent
     }
 
-    // MARK: - Group Membership Operations
-
     func getMembers(req: Request) async throws -> [GroupMemberResponse] {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let groupID = req.parameters.get("groupID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or group ID")
-        }
-
-        // Verify user has access to organization
+        guard req.auth.get(User.self) != nil else { throw Abort(.unauthorized) }
+        let organizationID = try organizationID(req)
+        let groupID = try groupID(req)
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
-
-        guard let group = try await Group.find(groupID, on: req.db) else {
-            throw Abort(.notFound, reason: "Group not found")
-        }
-
-        // Verify group belongs to organization
-        if group.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "Group does not belong to the specified organization")
-        }
-
-        return try await group.getMembersWithJoinDates(on: req.db)
+        _ = try await requireGroup(id: groupID, organizationID: organizationID)
+        return try await groups.members(groupID: groupID).map(GroupMemberResponse.init(from:))
     }
 
     func addMembers(req: Request) async throws -> HTTPStatus {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let groupID = req.parameters.get("groupID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or group ID")
-        }
-
-        let addRequest = try req.content.decode(AddGroupMemberRequest.self)
-
-        // Verify user has admin access
+        guard req.auth.get(User.self) != nil else { throw Abort(.unauthorized) }
+        let organizationID = try organizationID(req)
+        let groupID = try groupID(req)
+        let body = try req.content.decode(AddGroupMemberRequest.self)
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
-
-        guard let group = try await Group.find(groupID, on: req.db) else {
-            throw Abort(.notFound, reason: "Group not found")
+        _ = try await requireGroup(id: groupID, organizationID: organizationID)
+        let result = try await groups.addMembers(
+            body.userIds,
+            to: groupID,
+            organizationID: organizationID
+        )
+        guard result.groupFound else { throw Abort(.notFound, reason: "Group not found") }
+        for userID in result.ineligibleUserIDs {
+            req.logger.warning(
+                "Attempted to add a user who is not a member of the organization",
+                metadata: [
+                    "user_id": .string(userID.uuidString),
+                    "organization_id": .string(organizationID.uuidString),
+                ]
+            )
         }
-
-        // Verify group belongs to organization
-        if group.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "Group does not belong to the specified organization")
-        }
-
-        // Add each user to the group
-        for userID in addRequest.userIds {
-            // Verify user exists and belongs to organization
-            let userOrg = try await UserOrganization.query(on: req.db)
-                .filter(\.$user.$id, .equal, userID)
-                .filter(\.$organization.$id, .equal, organizationID)
-                .first()
-
-            guard userOrg != nil else {
-                req.logger.warning(
-                    "Attempted to add user \(userID) who is not a member of organization \(organizationID)")
-                continue  // Skip invalid users instead of failing the entire request
-            }
-
-            try await group.addMember(userID, on: req.db)
-        }
-
         return .ok
     }
 
     func removeMembers(req: Request) async throws -> HTTPStatus {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let groupID = req.parameters.get("groupID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or group ID")
-        }
-
-        let removeRequest = try req.content.decode(RemoveGroupMemberRequest.self)
-
-        // Verify user has admin access
+        guard req.auth.get(User.self) != nil else { throw Abort(.unauthorized) }
+        let organizationID = try organizationID(req)
+        let groupID = try groupID(req)
+        let body = try req.content.decode(RemoveGroupMemberRequest.self)
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
-
-        guard let group = try await Group.find(groupID, on: req.db) else {
-            throw Abort(.notFound, reason: "Group not found")
-        }
-
-        // Verify group belongs to organization
-        if group.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "Group does not belong to the specified organization")
-        }
-
-        // Remove each user from the group
-        for userID in removeRequest.userIds {
-            try await group.removeMember(userID, on: req.db)
-        }
-
+        _ = try await requireGroup(id: groupID, organizationID: organizationID)
+        let result = try await groups.removeMembers(
+            body.userIds,
+            from: groupID,
+            organizationID: organizationID
+        )
+        guard result.groupFound else { throw Abort(.notFound, reason: "Group not found") }
         return .ok
     }
 
     func removeMember(req: Request) async throws -> HTTPStatus {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let groupID = req.parameters.get("groupID", as: UUID.self),
-            let userID = req.parameters.get("userID", as: UUID.self)
-        else {
+        guard req.auth.get(User.self) != nil else { throw Abort(.unauthorized) }
+        let organizationID = try organizationID(req)
+        let groupID = try groupID(req)
+        guard let userID = req.parameters.get("userID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid organization, group, or user ID")
         }
-
-        // Verify user has admin access
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
-
-        guard let group = try await Group.find(groupID, on: req.db) else {
-            throw Abort(.notFound, reason: "Group not found")
-        }
-
-        // Verify group belongs to organization
-        if group.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "Group does not belong to the specified organization")
-        }
-
-        try await group.removeMember(userID, on: req.db)
-
+        _ = try await requireGroup(id: groupID, organizationID: organizationID)
+        let result = try await groups.removeMembers(
+            [userID],
+            from: groupID,
+            organizationID: organizationID
+        )
+        guard result.groupFound else { throw Abort(.notFound, reason: "Group not found") }
         return .ok
     }
 
-    // MARK: - Helper Methods
+    private func organizationID(_ req: Request) throws -> UUID {
+        guard let id = req.parameters.get("organizationID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid organization ID")
+        }
+        return id
+    }
 
+    private func groupID(_ req: Request) throws -> UUID {
+        guard let id = req.parameters.get("groupID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid group ID")
+        }
+        return id
+    }
+
+    /// Keep the established HTTP distinction between a missing group and a
+    /// real group addressed through the wrong organization route.
+    private func requireGroup(id: UUID, organizationID: UUID) async throws -> GroupSnapshot {
+        guard let group = try await groups.group(id: id) else {
+            throw Abort(.notFound, reason: "Group not found")
+        }
+        guard group.organizationID == organizationID else {
+            throw Abort(.badRequest, reason: "Group does not belong to the specified organization")
+        }
+        return group
+    }
 }

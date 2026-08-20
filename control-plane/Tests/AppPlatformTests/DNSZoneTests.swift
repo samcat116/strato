@@ -31,12 +31,11 @@ final class DNSZoneTests {
             )
             let org = try await builder.createOrganization(name: "DNS Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "DNS Project", description: "DNS tests", organization: org)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, org, project, token)
         } catch {
@@ -80,10 +79,11 @@ final class DNSZoneTests {
             macAddress: VMNetworkInterface.generateMACAddress())
         try await nic.save(on: app.db)
         for (address, family, prefix) in addresses {
-            try await VMInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: try nic.requireID(), logicalNetworkID: networkID,
-                family: family, address: address, prefixLength: prefix
-            ).save(on: app.db)
+                family: family, address: address, prefixLength: prefix,
+                on: app.db)
         }
         return vm
     }
@@ -198,7 +198,7 @@ final class DNSZoneTests {
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            let deleted = try await DNSZone.find(zone.id, on: app.db)
+            let deleted = try await LegacyDNSZoneStore.find(id: zone.id, on: app.db)
             #expect(deleted == nil)
         }
     }
@@ -222,7 +222,7 @@ final class DNSZoneTests {
                 #expect(updated.networks[0].isPrimary == false)
             }
             var reloaded = try #require(try await LogicalNetwork.find(networkID, on: app.db))
-            #expect(reloaded.$primaryDNSZone.id == nil)
+            #expect(reloaded.primaryDNSZoneID == nil)
 
             // Re-attaching is idempotent and can promote to primary.
             try await app.test(.POST, "/api/dns-zones/\(zone.id)/networks") { req in
@@ -233,10 +233,10 @@ final class DNSZoneTests {
                 let promoted = try res.content.decode(DNSZoneResponse.self)
                 #expect(promoted.networks[0].isPrimary == true)
             }
-            let attachmentCount = try await DNSZoneNetwork.query(on: app.db).count()
+            let attachmentCount = try await DNSZoneNetworkStore.count(on: app.db)
             #expect(attachmentCount == 1)
             reloaded = try #require(try await LogicalNetwork.find(networkID, on: app.db))
-            #expect(reloaded.$primaryDNSZone.id == zone.id)
+            #expect(reloaded.primaryDNSZoneID == zone.id)
 
             // Detaching the primary would strand its VMs' records.
             try await app.test(.DELETE, "/api/dns-zones/\(zone.id)/networks/\(networkID)") { req in
@@ -283,7 +283,7 @@ final class DNSZoneTests {
                 #expect(res.status == .conflict)
             }
 
-            try await DNSZoneNetwork(zoneID: zone.id, logicalNetworkID: networkID).save(on: app.db)
+            try await DNSZoneNetworkStore.attach(zoneID: zone.id, networkID: networkID, on: app.db)
             try await app.test(.PUT, "/api/networks/\(networkID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(UpdateNetworkRequest(primaryDnsZoneId: zone.id))
@@ -444,8 +444,8 @@ final class DNSZoneTests {
             }
             // Re-point through the network's own endpoint, the other of the two
             // writers of `primary_dns_zone_id`.
-            try await DNSZoneNetwork(zoneID: second.id, logicalNetworkID: networkID)
-                .save(on: app.db)
+            try await DNSZoneNetworkStore.attach(
+                zoneID: second.id, networkID: networkID, on: app.db)
             try await app.test(.PUT, "/api/networks/\(networkID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(UpdateNetworkRequest(primaryDnsZoneId: second.id))
@@ -472,8 +472,9 @@ final class DNSZoneTests {
             let builder = TestDataBuilder(db: app.db)
             let following = try await builder.createNetwork(name: "net-rename-follow", project: project)
             let chosen = try await builder.createNetwork(name: "net-rename-chosen", project: project)
-            chosen.domainName = "chosen.example"
-            try await chosen.save(on: app.db)
+            try await chosen.replacing(
+                domainName: .some("chosen.example")
+            ).save(on: app.db)
             let zone = try await createZone(app: app, token: token, project: project)
 
             for networkID in [try following.requireID(), try chosen.requireID()] {
@@ -520,7 +521,7 @@ final class DNSZoneTests {
             let network = try await builder.createNetwork(name: "net-both", project: project)
             let networkID = try network.requireID()
             let zone = try await createZone(app: app, token: token, project: project)
-            try await DNSZoneNetwork(zoneID: zone.id, logicalNetworkID: networkID).save(on: app.db)
+            try await DNSZoneNetworkStore.attach(zoneID: zone.id, networkID: networkID, on: app.db)
 
             try await app.test(.PUT, "/api/networks/\(networkID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -543,8 +544,7 @@ final class DNSZoneTests {
             let networkID = try network.requireID()
             // A network created through the API always has an address; this one
             // is built directly, so give it the one the resolver would have.
-            network.resolverIndex = 300
-            try await network.save(on: app.db)
+            try await network.replacing(resolverIndex: .some(300)).save(on: app.db)
             let zone = try await createZone(app: app, token: token, project: project)
 
             try await app.test(.POST, "/api/dns-zones/\(zone.id)/networks") { req in
@@ -678,9 +678,9 @@ final class DNSZoneTests {
     func rrsetSettingsAreUniform() async throws {
         try await withDNSTestApp { app, _, _, project, token in
             let zoneResponse = try await createZone(app: app, token: token, project: project)
-            let zone = try #require(try await DNSZone.find(zoneResponse.id, on: app.db))
+            let zone = try #require(try await LegacyDNSZoneStore.find(id: zoneResponse.id, on: app.db))
 
-            try await app.test(.POST, "/api/dns-zones/\(zone.id!)/records") { req in
+            try await app.test(.POST, "/api/dns-zones/\(zone.id)/records") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     CreateDNSRecordRequest(name: "www", type: .a, value: "192.0.2.10", ttl: 120))
@@ -691,7 +691,7 @@ final class DNSZoneTests {
             // A second value at the same name and type joins the RRset, so a
             // disagreeing TTL is refused rather than stored — RFC 2181 §5.2,
             // and neither planned driver could express two TTLs at one name.
-            try await app.test(.POST, "/api/dns-zones/\(zone.id!)/records") { req in
+            try await app.test(.POST, "/api/dns-zones/\(zone.id)/records") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     CreateDNSRecordRequest(name: "www", type: .a, value: "192.0.2.11", ttl: 900))
@@ -699,7 +699,7 @@ final class DNSZoneTests {
                 #expect(res.status == .conflict)
             }
             // A disagreeing view is refused for the same reason.
-            try await app.test(.POST, "/api/dns-zones/\(zone.id!)/records") { req in
+            try await app.test(.POST, "/api/dns-zones/\(zone.id)/records") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     CreateDNSRecordRequest(
@@ -709,7 +709,7 @@ final class DNSZoneTests {
             }
 
             var secondID: UUID?
-            try await app.test(.POST, "/api/dns-zones/\(zone.id!)/records") { req in
+            try await app.test(.POST, "/api/dns-zones/\(zone.id)/records") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     CreateDNSRecordRequest(name: "www", type: .a, value: "192.0.2.11", ttl: 120))
@@ -728,18 +728,15 @@ final class DNSZoneTests {
 
             // Editing the TTL of one member moves the whole set — the
             // alternative would leave a multi-value RRset's TTL uneditable.
-            try await app.test(.PUT, "/api/dns-zones/\(zone.id!)/records/\(try #require(secondID))") { req in
+            try await app.test(.PUT, "/api/dns-zones/\(zone.id)/records/\(try #require(secondID))") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(UpdateDNSRecordRequest(ttl: 60))
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
 
-            let ttls = try await DNSRecord.query(on: app.db)
-                .filter(\.$zone.$id == zone.id!)
-                .filter(\.$name == "www")
-                .all()
-                .map(\.ttl)
+            let ttls = try await LegacyDNSRecordStore.records(
+                zoneID: zone.id, name: "www", on: app.db).map(\.ttl)
             #expect(ttls == [60, 60])
             assembled = try await DNSZoneAssembler.assemble(zone: zone, on: app.db)
             #expect(assembled.records.first { $0.name == "www.acme.internal" }?.ttl == 60)
@@ -752,18 +749,16 @@ final class DNSZoneTests {
             let builder = TestDataBuilder(db: app.db)
             let network = try await builder.createNetwork(name: "net-order", project: project)
             let zoneResponse = try await createZone(app: app, token: token, project: project)
-            let zone = try #require(try await DNSZone.find(zoneResponse.id, on: app.db))
-            try await DNSZoneNetwork(
-                zoneID: zone.id!, logicalNetworkID: try network.requireID()
-            ).save(on: app.db)
-            network.$primaryDNSZone.id = zone.id
-            try await network.save(on: app.db)
+            let zone = try #require(try await LegacyDNSZoneStore.find(id: zoneResponse.id, on: app.db))
+            try await DNSZoneNetworkStore.attach(
+                zoneID: zone.id, networkID: try network.requireID(), on: app.db)
+            try await network.replacing(primaryDNSZoneID: .some(zone.id)).save(on: app.db)
 
             for index in 0..<6 {
                 try await createVM(
                     app: app, project: project, network: network, hostname: "host-\(index)",
                     addresses: [("192.168.1.\(100 + index)", .ipv4, 24)])
-                try await app.test(.POST, "/api/dns-zones/\(zone.id!)/records") { req in
+                try await app.test(.POST, "/api/dns-zones/\(zone.id)/records") { req in
                     req.headers.bearerAuthorization = BearerAuthorization(token: token)
                     try req.content.encode(
                         CreateDNSRecordRequest(
@@ -828,9 +823,8 @@ final class DNSZoneTests {
             let network = try await builder.createNetwork(name: "net-c", project: project)
             let zone = try await createZone(app: app, token: token, project: project)
             let networkID = try network.requireID()
-            try await DNSZoneNetwork(zoneID: zone.id, logicalNetworkID: networkID).save(on: app.db)
-            network.$primaryDNSZone.id = zone.id
-            try await network.save(on: app.db)
+            try await DNSZoneNetworkStore.attach(zoneID: zone.id, networkID: networkID, on: app.db)
+            try await network.replacing(primaryDNSZoneID: .some(zone.id)).save(on: app.db)
 
             try await createVM(
                 app: app, project: project, network: network, hostname: "web",
@@ -870,11 +864,10 @@ final class DNSZoneTests {
             let network = try await builder.createNetwork(
                 name: "net-d", project: project, subnet6: "fd00:1::/64", gateway6: "fd00:1::1")
             let zoneResponse = try await createZone(app: app, token: token, project: project)
-            let zone = try #require(try await DNSZone.find(zoneResponse.id, on: app.db))
+            let zone = try #require(try await LegacyDNSZoneStore.find(id: zoneResponse.id, on: app.db))
             let networkID = try network.requireID()
-            try await DNSZoneNetwork(zoneID: zone.id!, logicalNetworkID: networkID).save(on: app.db)
-            network.$primaryDNSZone.id = zone.id
-            try await network.save(on: app.db)
+            try await DNSZoneNetworkStore.attach(zoneID: zone.id, networkID: networkID, on: app.db)
+            try await network.replacing(primaryDNSZoneID: .some(zone.id)).save(on: app.db)
 
             try await createVM(
                 app: app, project: project, network: network, hostname: "web",
@@ -885,7 +878,7 @@ final class DNSZoneTests {
                 app: app, project: project, network: otherNetwork, hostname: "hidden",
                 addresses: [("192.168.1.30", .ipv4, 24)])
 
-            try await app.test(.POST, "/api/dns-zones/\(zone.id!)/records") { req in
+            try await app.test(.POST, "/api/dns-zones/\(zone.id)/records") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     CreateDNSRecordRequest(name: "mail", type: .cname, value: "web.acme.internal", ttl: 60))
@@ -926,19 +919,18 @@ final class DNSZoneTests {
         try await withDNSTestApp { app, _, _, project, token in
             let builder = TestDataBuilder(db: app.db)
             let zoneResponse = try await createZone(app: app, token: token, project: project)
-            let zone = try #require(try await DNSZone.find(zoneResponse.id, on: app.db))
+            let zone = try #require(try await LegacyDNSZoneStore.find(id: zoneResponse.id, on: app.db))
 
             var networks: [LogicalNetwork] = []
             for (index, subnet) in ["10.10.0.0/24", "10.20.0.0/24"].enumerated() {
                 let network = try await builder.createNetwork(
                     name: "multi-\(index)", project: project, subnet: subnet,
                     gateway: subnet.replacingOccurrences(of: ".0/24", with: ".1"))
-                try await DNSZoneNetwork(
-                    zoneID: zone.id!, logicalNetworkID: try network.requireID()
-                ).save(on: app.db)
-                network.$primaryDNSZone.id = zone.id
-                try await network.save(on: app.db)
-                networks.append(network)
+                try await DNSZoneNetworkStore.attach(
+                    zoneID: zone.id, networkID: try network.requireID(), on: app.db)
+                let primaryNetwork = network.replacing(primaryDNSZoneID: .some(zone.id))
+                try await primaryNetwork.save(on: app.db)
+                networks.append(primaryNetwork)
             }
 
             let vm = try await createVM(
@@ -949,11 +941,12 @@ final class DNSZoneTests {
                 macAddress: VMNetworkInterface.generateMACAddress(),
                 deviceName: "net1", orderIndex: 1)
             try await secondNIC.save(on: app.db)
-            try await VMInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: try secondNIC.requireID(),
                 logicalNetworkID: try networks[1].requireID(),
-                family: .ipv4, address: "10.20.0.5", prefixLength: 24
-            ).save(on: app.db)
+                family: .ipv4, address: "10.20.0.5", prefixLength: 24,
+                on: app.db)
 
             let assembled = try await DNSZoneAssembler.assemble(zone: zone, on: app.db)
             let forward = assembled.records.first { $0.name == "multi.acme.internal" && $0.type == .a }
@@ -967,12 +960,10 @@ final class DNSZoneTests {
             let builder = TestDataBuilder(db: app.db)
             let network = try await builder.createNetwork(name: "net-f", project: project)
             let zoneResponse = try await createZone(app: app, token: token, project: project)
-            let zone = try #require(try await DNSZone.find(zoneResponse.id, on: app.db))
-            try await DNSZoneNetwork(
-                zoneID: zone.id!, logicalNetworkID: try network.requireID()
-            ).save(on: app.db)
-            network.$primaryDNSZone.id = zone.id
-            try await network.save(on: app.db)
+            let zone = try #require(try await LegacyDNSZoneStore.find(id: zoneResponse.id, on: app.db))
+            try await DNSZoneNetworkStore.attach(
+                zoneID: zone.id, networkID: try network.requireID(), on: app.db)
+            try await network.replacing(primaryDNSZoneID: .some(zone.id)).save(on: app.db)
 
             let vm = try await createVM(
                 app: app, project: project, network: network, hostname: "nameless",
@@ -991,11 +982,9 @@ final class DNSZoneTests {
             let builder = TestDataBuilder(db: app.db)
             let network = try await builder.createNetwork(name: "net-g", project: project)
             let zone = try await createZone(app: app, token: token, project: project)
-            try await DNSZoneNetwork(
-                zoneID: zone.id, logicalNetworkID: try network.requireID()
-            ).save(on: app.db)
-            network.$primaryDNSZone.id = zone.id
-            try await network.save(on: app.db)
+            try await DNSZoneNetworkStore.attach(
+                zoneID: zone.id, networkID: try network.requireID(), on: app.db)
+            try await network.replacing(primaryDNSZoneID: .some(zone.id)).save(on: app.db)
             try await createVM(
                 app: app, project: project, network: network, hostname: "api",
                 addresses: [("192.168.1.50", .ipv4, 24)])
@@ -1021,12 +1010,10 @@ final class DNSZoneTests {
             let builder = TestDataBuilder(db: app.db)
             let network = try await builder.createNetwork(name: "net-h", project: project)
             let zoneResponse = try await createZone(app: app, token: token, project: project)
-            let zone = try #require(try await DNSZone.find(zoneResponse.id, on: app.db))
-            try await DNSZoneNetwork(
-                zoneID: zone.id!, logicalNetworkID: try network.requireID()
-            ).save(on: app.db)
-            network.$primaryDNSZone.id = zone.id
-            try await network.save(on: app.db)
+            let zone = try #require(try await LegacyDNSZoneStore.find(id: zoneResponse.id, on: app.db))
+            try await DNSZoneNetworkStore.attach(
+                zoneID: zone.id, networkID: try network.requireID(), on: app.db)
+            try await network.replacing(primaryDNSZoneID: .some(zone.id)).save(on: app.db)
 
             let image = try await builder.createImage(name: "dns-image", project: project, uploadedBy: user)
             func createVMOverAPI(named name: String) async throws -> UUID {
@@ -1064,12 +1051,10 @@ final class DNSZoneTests {
             let builder = TestDataBuilder(db: app.db)
             let network = try await builder.createNetwork(name: "net-i", project: project)
             let zoneResponse = try await createZone(app: app, token: token, project: project)
-            let zone = try #require(try await DNSZone.find(zoneResponse.id, on: app.db))
-            try await DNSZoneNetwork(
-                zoneID: zone.id!, logicalNetworkID: try network.requireID()
-            ).save(on: app.db)
-            network.$primaryDNSZone.id = zone.id
-            try await network.save(on: app.db)
+            let zone = try #require(try await LegacyDNSZoneStore.find(id: zoneResponse.id, on: app.db))
+            try await DNSZoneNetworkStore.attach(
+                zoneID: zone.id, networkID: try network.requireID(), on: app.db)
+            try await network.replacing(primaryDNSZoneID: .some(zone.id)).save(on: app.db)
 
             let existing = try await createVM(
                 app: app, project: project, network: network, hostname: "taken",
@@ -1123,8 +1108,8 @@ final class DNSZoneTests {
             // Nothing was written: a request that asks for `primary` and can't
             // have it leaves no half-applied attachment behind.
             let reloaded = try #require(try await LogicalNetwork.find(networkID, on: app.db))
-            #expect(reloaded.$primaryDNSZone.id == nil)
-            let attachments = try await DNSZoneNetwork.query(on: app.db).count()
+            #expect(reloaded.primaryDNSZoneID == nil)
+            let attachments = try await DNSZoneNetworkStore.count(on: app.db)
             #expect(attachments == 0)
         }
     }
@@ -1142,9 +1127,8 @@ final class DNSZoneTests {
             let outsiderOrg = try await builder.createOrganization(name: "Outsider Org")
             try await builder.addUserToOrganization(
                 user: outsider, organization: outsiderOrg, role: "member")
-            outsider.currentOrganizationId = outsiderOrg.id
-            try await outsider.save(on: app.db)
-            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
+            try await outsider.replacingCurrentOrganization(outsiderOrg.id).save(on: app.db)
+            let outsiderToken = try await outsider.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/dns-zones/\(zone.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)

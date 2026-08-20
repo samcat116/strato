@@ -1,4 +1,5 @@
 import Fluent
+import ControlPlanePostgres
 import Foundation
 import Testing
 import Vapor
@@ -90,8 +91,7 @@ final class RestrictedCredentialListTests {
             nodeType: .organization, nodeID: try org.requireID(), createdBy: nil, on: app.db)
         // `actingOrganizationID()` reads this, and the collection gate 403s
         // without it — membership alone does not set it.
-        user.currentOrganizationId = try org.requireID()
-        try await user.save(on: app.db)
+        try await user.replacingCurrentOrganization(try org.requireID()).save(on: app.db)
 
         return Fixture(
             org: org,
@@ -105,15 +105,15 @@ final class RestrictedCredentialListTests {
             image: image,
             user: user,
             scopedAllA: try await user.generateAPIKey(
-                on: app.db, name: "all-a", restriction: try restriction(["*"], node: projectA)),
+                on: app, name: "all-a", restriction: try restriction(["*"], node: projectA)),
             vmReadA: try await user.generateAPIKey(
-                on: app.db, name: "vmread-a", restriction: try restriction(["vm:read"], node: projectA)),
+                on: app, name: "vmread-a", restriction: try restriction(["vm:read"], node: projectA)),
             actionOnly: try await user.generateAPIKey(
-                on: app.db, name: "vmread", restriction: try restriction(["vm:read"])),
+                on: app, name: "vmread", restriction: try restriction(["vm:read"])),
             scopedAllB: try await user.generateAPIKey(
-                on: app.db, name: "all-b", restriction: try restriction(["*"], node: projectB)),
+                on: app, name: "all-b", restriction: try restriction(["*"], node: projectB)),
             scopedEmpty: try await user.generateAPIKey(
-                on: app.db, name: "all-empty", restriction: try restriction(["*"], node: emptyProject))
+                on: app, name: "all-empty", restriction: try restriction(["*"], node: emptyProject))
         )
     }
 
@@ -247,9 +247,8 @@ final class RestrictedCredentialListTests {
             // Pointed at the organization but holding nothing in it, so the gate
             // is reached and answered rather than short-circuited by "no current
             // organization set".
-            outsider.currentOrganizationId = try f.org.requireID()
-            try await outsider.save(on: app.db)
-            let key = try await outsider.generateAPIKey(on: app.db, name: "outsider")
+            try await outsider.replacingCurrentOrganization(try f.org.requireID()).save(on: app.db)
+            let key = try await outsider.generateAPIKey(on: app, name: "outsider")
 
             try await app.test(.GET, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: key)
@@ -291,9 +290,10 @@ final class RestrictedCredentialListTests {
             }
 
             await app.iamDecisionRecorder.flush()
-            let creates = try await IAMDecisionLog.query(on: app.db)
-                .filter(\.$action == "vm:create")
-                .all()
+            let creates = try await app.decisionLogsPersistence.entries(
+                matching: DecisionLogFilter(action: "vm:create"),
+                limit: 500
+            ).entries
             #expect(
                 creates.contains { $0.nodeID == f.projectA.id && $0.decision == "allow" },
                 "the create in the credential's own project was allowed on the project node")

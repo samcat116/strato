@@ -38,7 +38,7 @@ enum OrganizationScope: Equatable, Sendable {
         case .organization(let id):
             return id
         case .organizationalUnit(let id):
-            return try await OrganizationalUnit.find(id, on: db)?.$organization.id
+            return try await OrganizationalUnit.find(id, on: db)?.organizationID
         }
     }
 
@@ -81,7 +81,7 @@ enum OrganizationScope: Equatable, Sendable {
             var current: UUID? = otherOUID
             while let currentID = current {
                 if currentID == ouID { return true }
-                current = try await OrganizationalUnit.find(currentID, on: db)?.$parentOU.id
+                current = try await OrganizationalUnit.find(currentID, on: db)?.parentOUID
             }
             return false
         }

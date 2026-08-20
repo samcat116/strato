@@ -1,8 +1,7 @@
 import Foundation
 import StratoShared
 
-/// One allocated address row on a NIC, as `VMInterfaceAddress` and
-/// `SandboxInterfaceAddress` both model it. Abstracted so the address lookups
+/// One allocated address row on a NIC. Abstracted so the address lookups
 /// and wire-spec construction shared by VMs and sandboxes are written once
 /// (issue #597).
 protocol InterfaceAddressRow {
@@ -12,6 +11,17 @@ protocol InterfaceAddressRow {
     var address: String { get }
     var prefixLength: Int { get }
     var gateway: String? { get }
+}
+
+extension VMNetworkInterface: NetworkAddressable {
+    var allocatedAddresses: [InterfaceAddressSnapshot] { loadedAddresses ?? [] }
+    var networkInterfaceID: UUID? { id }
+    var networkDeviceName: String? { deviceName }
+    var networkOrderIndex: Int? { orderIndex }
+}
+
+extension SandboxNetworkInterface: NetworkAddressable {
+    var allocatedAddresses: [InterfaceAddressSnapshot] { loadedAddresses ?? [] }
 }
 
 /// A NIC whose addressing comes from per-family address rows: `VMNetworkInterface`

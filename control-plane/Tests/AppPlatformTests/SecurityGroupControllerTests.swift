@@ -50,15 +50,14 @@ final class SecurityGroupControllerTests {
             )
             let org = try await builder.createOrganization(name: "SG Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "SG Project",
                 description: "Project for security group tests",
                 organization: org
             )
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, org, project, token)
 
@@ -112,7 +111,7 @@ final class SecurityGroupControllerTests {
                 dependencyObservations: [Self.healthyOverlayObservation()]
             )
             let agentUUID = try await app.agentService.registerAgent(
-                message, agentName: message.agentId, siteID: network.$site.id,
+                message, agentName: message.agentId, siteID: network.siteID,
                 organizationScope: .organization(org.id!))
             vm.hypervisorId = agentUUID.uuidString
             try await vm.save(on: app.db)
@@ -155,7 +154,7 @@ final class SecurityGroupControllerTests {
                     ? [Self.healthyOverlayObservation()] : []
             )
             let agentUUID = try await app.agentService.registerAgent(
-                message, agentName: message.agentId, siteID: network.$site.id,
+                message, agentName: message.agentId, siteID: network.siteID,
                 organizationScope: .organization(org.id!))
             sandbox.hypervisorId = agentUUID.uuidString
             try await sandbox.save(on: app.db)
@@ -164,9 +163,9 @@ final class SecurityGroupControllerTests {
     }
 
     private func attachBootVolume(app: Application, vm: VM, agentID: String) async throws {
-        let owner = try #require(try await User.query(on: app.db).sort(\.$createdAt).first())
+        let owner = try #require(try await User.all(on: app.db).first)
         let boot = Volume(
-            name: "\(vm.name)-boot", description: "", projectID: vm.$project.id,
+            name: "\(vm.name)-boot", description: "", projectID: vm.projectID,
             environment: vm.environment, size: vm.disk, format: .qcow2,
             volumeType: .boot, status: .attached, createdByID: try owner.requireID())
         boot.$vm.id = try vm.requireID()
@@ -190,25 +189,23 @@ final class SecurityGroupControllerTests {
             #expect(group.isDefault)
             #expect(group.name == SecurityGroup.defaultGroupName)
 
-            let rules = try await SecurityGroupRule.query(on: app.db)
-                .filter(\.$securityGroup.$id == group.id!)
-                .all()
+            let rules = try await LegacySecurityGroupRuleStore.rules(
+                securityGroupID: group.id, on: app.db)
             // Two families × (ingress-from-self + egress-any), no blanket
             // ingress: fresh projects get the pure AWS posture.
             #expect(rules.count == 4)
             let ingress = rules.filter { $0.direction == .ingress }
             #expect(ingress.count == 2)
-            #expect(ingress.allSatisfy { $0.$remoteGroup.id == group.id })
+            #expect(ingress.allSatisfy { $0.remoteGroupID == group.id })
             let egress = rules.filter { $0.direction == .egress }
             #expect(egress.count == 2)
-            #expect(egress.allSatisfy { $0.$remoteGroup.id == nil && $0.remoteCIDR == nil })
+            #expect(egress.allSatisfy { $0.remoteGroupID == nil && $0.remoteCIDR == nil })
 
             let again = try await SecurityGroupService.ensureDefaultGroup(
                 projectID: project.id!, on: app.db)
             #expect(again.id == group.id)
-            let count = try await SecurityGroup.query(on: app.db)
-                .filter(\.$project.$id == project.id!)
-                .count()
+            let count = try await LegacySecurityGroupStore.count(
+                projectID: project.id!, on: app.db)
             #expect(count == 1)
         }
     }
@@ -219,28 +216,27 @@ final class SecurityGroupControllerTests {
             let group = try await SecurityGroupService.ensureDefaultGroup(
                 projectID: project.id!, on: app.db)
 
-            try await app.test(.PUT, "/api/security-groups/\(group.id!)") { req in
+            try await app.test(.PUT, "/api/security-groups/\(group.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(["name": "renamed"])
             } afterResponse: { res in
                 #expect(res.status == .conflict)
             }
-            try await app.test(.DELETE, "/api/security-groups/\(group.id!)") { req in
+            try await app.test(.DELETE, "/api/security-groups/\(group.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .conflict)
             }
             // Its rules stay editable (AWS semantics): deleting one works and
             // bumps the generation.
-            let rule = try await SecurityGroupRule.query(on: app.db)
-                .filter(\.$securityGroup.$id == group.id!)
-                .first()
-            try await app.test(.DELETE, "/api/security-groups/\(group.id!)/rules/\(rule!.id!)") { req in
+            let rule = try await LegacySecurityGroupRuleStore.rules(
+                securityGroupID: group.id, on: app.db).first
+            try await app.test(.DELETE, "/api/security-groups/\(group.id)/rules/\(rule!.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            let reloaded = try await SecurityGroup.find(group.id, on: app.db)
+            let reloaded = try await LegacySecurityGroupStore.group(id: group.id, on: app.db)
             #expect(reloaded?.generation == 1)
         }
     }
@@ -296,9 +292,8 @@ final class SecurityGroupControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            let remaining = try await SecurityGroup.query(on: app.db)
-                .filter(\.$project.$id == project.id!)
-                .count()
+            let remaining = try await LegacySecurityGroupStore.count(
+                projectID: project.id!, on: app.db)
             #expect(remaining == 0)
         }
     }
@@ -344,7 +339,7 @@ final class SecurityGroupControllerTests {
                 // Garbage CIDR.
                 .init(direction: .ingress, ethertype: .ipv4, remoteCIDR: "not-a-cidr"),
                 // Cross-project group reference.
-                .init(direction: .ingress, ethertype: .ipv4, remoteGroupId: foreign.id!),
+                .init(direction: .ingress, ethertype: .ipv4, remoteGroupId: foreign.id),
             ]
             for body in badRules {
                 try await app.test(.POST, "/api/security-groups/\(group.id)/rules") { req in
@@ -377,7 +372,7 @@ final class SecurityGroupControllerTests {
                     #expect(res.status == .ok)
                 }
             }
-            let reloaded = try await SecurityGroup.find(group.id, on: app.db)
+            let reloaded = try await LegacySecurityGroupStore.group(id: group.id, on: app.db)
             #expect(reloaded?.generation == Int64(goodRules.count))
         }
     }
@@ -413,9 +408,11 @@ final class SecurityGroupControllerTests {
             // Give the NIC a second group so `app` is not load-bearing later.
             let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
                 projectID: project.id!, on: app.db)
-            try await VMInterfaceSecurityGroup(
-                interfaceID: nic.id!, securityGroupID: defaultGroup.id!
-            ).save(on: app.db)
+            try await LegacyInterfaceSecurityGroupStore.insert(
+                kind: .vm,
+                interfaceID: nic.id!,
+                securityGroupID: defaultGroup.id,
+                on: app.db)
             try await app.test(.POST, "/api/security-groups/\(app_.id)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(AttachSecurityGroupRequest(vmId: vm.id!))
@@ -456,9 +453,11 @@ final class SecurityGroupControllerTests {
                 protocolVersion: WireProtocol.currentVersion)
             let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
                 projectID: project.id!, on: app.db)
-            try await VMInterfaceSecurityGroup(
-                interfaceID: nic.id!, securityGroupID: defaultGroup.id!
-            ).save(on: app.db)
+            try await LegacyInterfaceSecurityGroupStore.insert(
+                kind: .vm,
+                interfaceID: nic.id!,
+                securityGroupID: defaultGroup.id,
+                on: app.db)
 
             let web = try await self.createGroup(app: app, project: project, token: token, name: "web")
 
@@ -471,9 +470,8 @@ final class SecurityGroupControllerTests {
                     #expect(res.status == .noContent)
                 }
             }
-            let memberships = try await VMInterfaceSecurityGroup.query(on: app.db)
-                .filter(\.$interface.$id == nic.id!)
-                .count()
+            let memberships = try await LegacyInterfaceSecurityGroupStore.count(
+                kind: .vm, interfaceIDs: [nic.id!], on: app.db)
             #expect(memberships == 2)
 
             // Cross-project attach → 400, the one status every cross-project
@@ -483,7 +481,7 @@ final class SecurityGroupControllerTests {
                 name: "Elsewhere", description: "p", organization: org)
             let foreign = try await SecurityGroupService.ensureDefaultGroup(
                 projectID: otherProject.id!, on: app.db)
-            try await app.test(.POST, "/api/security-groups/\(foreign.id!)/attach") { req in
+            try await app.test(.POST, "/api/security-groups/\(foreign.id)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(AttachSecurityGroupRequest(vmId: vm.id!))
             } afterResponse: { res in
@@ -497,7 +495,7 @@ final class SecurityGroupControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            try await app.test(.POST, "/api/security-groups/\(defaultGroup.id!)/detach") { req in
+            try await app.test(.POST, "/api/security-groups/\(defaultGroup.id)/detach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(AttachSecurityGroupRequest(vmId: vm.id!, interfaceId: nic.id!))
             } afterResponse: { res in
@@ -538,8 +536,7 @@ final class SecurityGroupControllerTests {
             let site = Site(name: "SG Offline Site", organizationScope: .organization(org.id!))
             try await site.save(on: app.db)
             let host = try #require(try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.db))
-            host.$site.id = try site.requireID()
-            try await host.save(on: app.db)
+            try await host.replacing(siteID: try site.requireID()).save(on: app.db)
 
             let controllerUUID = try await app.agentService.registerAgent(
                 AgentRegisterMessage(
@@ -552,11 +549,12 @@ final class SecurityGroupControllerTests {
                 agentName: "sg-offline-ctl", siteID: site.id,
                 organizationScope: .organization(org.id!))
             let controller = try #require(try await Agent.find(controllerUUID, on: app.db))
-            site.$networkControllerAgent.id = controllerUUID
-            try await site.save(on: app.db)
-            controller.lastHeartbeat = Date().addingTimeInterval(
-                -(SiteNetworkAuthority.controllerOfflineGrace + 600))
-            try await controller.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: try site.requireID(), agentID: controllerUUID, on: app.db)
+            try await controller.replacing(
+                lastHeartbeat: .some(Date().addingTimeInterval(
+                    -(SiteNetworkAuthority.controllerOfflineGrace + 600)))
+            ).save(on: app.db)
 
             try await app.test(.POST, "/api/security-groups/\(web.id)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -574,8 +572,7 @@ final class SecurityGroupControllerTests {
             #expect(try await SecurityGroupService.enforcementByVM([vm], on: app.db)[vm.id!] == false)
 
             // A heartbeat from the controller unblocks the same attach.
-            controller.lastHeartbeat = Date()
-            try await controller.save(on: app.db)
+            try await controller.replacing(lastHeartbeat: .some(Date())).save(on: app.db)
             try await app.test(.POST, "/api/security-groups/\(web.id)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(AttachSecurityGroupRequest(vmId: vm.id!))
@@ -620,18 +617,16 @@ final class SecurityGroupControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .accepted)
             }
-            let defaultGroup = try await SecurityGroup.query(on: app.db)
-                .filter(\.$project.$id == project.id!)
-                .filter(\.$isDefault == true)
-                .first()
-            let vm1 = try await VM.query(on: app.db).filter(\.$name == "sg-default-vm").first()
-            let nic1 = try await VMNetworkInterface.query(on: app.db)
-                .filter(\.$vm.$id == vm1!.id!)
-                .first()
-            let groups1 = try await VMInterfaceSecurityGroup.query(on: app.db)
-                .filter(\.$interface.$id == nic1!.id!)
-                .all()
-            #expect(groups1.map { $0.$securityGroup.id } == [defaultGroup!.id!])
+            let defaultGroup = try await LegacySecurityGroupStore.defaultGroup(
+                projectID: project.id!, on: app.db)
+            let vm1 = try await LegacyVMStore.vms(on: app.db).first {
+                $0.name == "sg-default-vm"
+            }
+            let nic1 = try await LegacyVMNetworkInterfaceStore.interfaces(
+                vmID: vm1!.id!, on: app.db).first
+            let groups1 = try await LegacyInterfaceSecurityGroupStore.memberships(
+                kind: .vm, interfaceIDs: [nic1!.id!], on: app.db)
+            #expect(groups1.map(\.securityGroupID) == [defaultGroup!.id])
 
             // Explicit group → exactly that group.
             try await app.test(.POST, "/api/vms") { req in
@@ -643,14 +638,14 @@ final class SecurityGroupControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .accepted)
             }
-            let vm2 = try await VM.query(on: app.db).filter(\.$name == "sg-explicit-vm").first()
-            let nic2 = try await VMNetworkInterface.query(on: app.db)
-                .filter(\.$vm.$id == vm2!.id!)
-                .first()
-            let groups2 = try await VMInterfaceSecurityGroup.query(on: app.db)
-                .filter(\.$interface.$id == nic2!.id!)
-                .all()
-            #expect(groups2.map { $0.$securityGroup.id } == [web.id])
+            let vm2 = try await LegacyVMStore.vms(on: app.db).first {
+                $0.name == "sg-explicit-vm"
+            }
+            let nic2 = try await LegacyVMNetworkInterfaceStore.interfaces(
+                vmID: vm2!.id!, on: app.db).first
+            let groups2 = try await LegacyInterfaceSecurityGroupStore.memberships(
+                kind: .vm, interfaceIDs: [nic2!.id!], on: app.db)
+            #expect(groups2.map(\.securityGroupID) == [web.id])
 
             // A group from another project is resolved out of existence rather
             // than refused as cross-project (issue #777): nothing authorizes
@@ -665,11 +660,11 @@ final class SecurityGroupControllerTests {
                 try req.content.encode(
                     CreateVMBody(
                         name: "sg-foreign-vm", imageId: image.id, projectId: project.id,
-                        cpu: 1, memory: gb, disk: 10 * gb, networkId: networkID, securityGroupIds: [foreign.id!]))
+                        cpu: 1, memory: gb, disk: 10 * gb, networkId: networkID, securityGroupIds: [foreign.id]))
             } afterResponse: { res in
                 #expect(res.status == .notFound)
             }
-            let vm3 = try await VM.query(on: app.db).filter(\.$name == "sg-foreign-vm").first()
+            let vm3 = try await LegacyVMStore.vms(name: "sg-foreign-vm", on: app.db).first
             #expect(vm3 == nil)
         }
     }
@@ -690,9 +685,8 @@ final class SecurityGroupControllerTests {
                 username: "outsider", email: "outsider@example.com")
             let otherOrg = try await builder.createOrganization(name: "Other Org")
             try await builder.addUserToOrganization(user: outsider, organization: otherOrg, role: "member")
-            outsider.currentOrganizationId = otherOrg.id
-            try await outsider.save(on: app.db)
-            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
+            try await outsider.replacingCurrentOrganization(otherOrg.id).save(on: app.db)
+            let outsiderToken = try await outsider.generateAPIKey(on: app)
 
             // Every per-resource endpoint denies.
             try await app.test(.GET, "/api/security-groups/\(group.id)") { req in
@@ -781,9 +775,11 @@ final class SecurityGroupControllerTests {
             // Per-group rule cap: fill via direct inserts (fast), then the API.
             let target = groups[0]
             for _ in 0..<(SecurityGroup.maxRulesPerGroup) {
-                try await SecurityGroupRule(
-                    securityGroupID: target.id, direction: .egress, ethertype: .ipv4
-                ).save(on: app.db)
+                try await LegacySecurityGroupRuleStore.insert(
+                    securityGroupID: target.id,
+                    direction: .egress,
+                    ethertype: .ipv4,
+                    on: app.db)
             }
             try await app.test(.POST, "/api/security-groups/\(target.id)/rules") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -794,11 +790,11 @@ final class SecurityGroupControllerTests {
             }
 
             // Per-project cap: fill via direct inserts, then the API.
-            let existing = try await SecurityGroup.query(on: app.db)
-                .filter(\.$project.$id == project.id!)
-                .count()
+            let existing = try await LegacySecurityGroupStore.count(
+                projectID: project.id!, on: app.db)
             for index in 0..<(SecurityGroup.maxGroupsPerProject - existing) {
-                try await SecurityGroup(projectID: project.id!, name: "filler-\(index)").save(on: app.db)
+                _ = try await LegacySecurityGroupStore.insert(
+                    projectID: project.id!, name: "filler-\(index)", on: app.db)
             }
             try await app.test(.POST, "/api/security-groups") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -833,9 +829,8 @@ final class SecurityGroupControllerTests {
                 app: app, org: org, project: project,
                 protocolVersion: WireProtocol.currentVersion)
             try await self.attachBootVolume(app: app, vm: vm, agentID: vm.hypervisorId!)
-            try await VMInterfaceSecurityGroup(
-                interfaceID: nic.id!, securityGroupID: web.id
-            ).save(on: app.db)
+            try await LegacyInterfaceSecurityGroupStore.insert(
+                kind: .vm, interfaceID: nic.id!, securityGroupID: web.id, on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: vm.hypervisorId!)
             let groups = try #require(message.securityGroups)
@@ -861,12 +856,16 @@ final class SecurityGroupControllerTests {
             // Unplaced: enforcement is unknown, not "no".
             let (unplaced, unplacedNIC) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, protocolVersion: nil)
-            try await VMInterfaceSecurityGroup(
-                interfaceID: unplacedNIC.id!, securityGroupID: try defaultGroup.requireID()
-            ).save(on: app.db)
-            try await VMInterfaceSecurityGroup(
-                interfaceID: unplacedNIC.id!, securityGroupID: web.id
-            ).save(on: app.db)
+            try await LegacyInterfaceSecurityGroupStore.insert(
+                kind: .vm,
+                interfaceID: unplacedNIC.id!,
+                securityGroupID: defaultGroup.id,
+                on: app.db)
+            try await LegacyInterfaceSecurityGroupStore.insert(
+                kind: .vm,
+                interfaceID: unplacedNIC.id!,
+                securityGroupID: web.id,
+                on: app.db)
 
             try await app.test(.GET, "/api/vms/\(unplaced.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -876,16 +875,18 @@ final class SecurityGroupControllerTests {
                 #expect(detail.securityGroupsEnforced == nil)
                 let ids = try #require(detail.networkInterfaces.first?.securityGroupIds)
                 // Sorted by uuid string, matching the order agents receive.
-                #expect(Set(ids) == [try defaultGroup.requireID(), web.id])
+                #expect(Set(ids) == [defaultGroup.id, web.id])
                 #expect(ids == ids.sorted { $0.uuidString < $1.uuidString })
             }
 
             let (current, currentNIC) = try await self.createVMWithNIC(
                 app: app, org: org, project: project,
                 protocolVersion: WireProtocol.currentVersion)
-            try await VMInterfaceSecurityGroup(
-                interfaceID: currentNIC.id!, securityGroupID: web.id
-            ).save(on: app.db)
+            try await LegacyInterfaceSecurityGroupStore.insert(
+                kind: .vm,
+                interfaceID: currentNIC.id!,
+                securityGroupID: web.id,
+                on: app.db)
             try await app.test(.GET, "/api/vms/\(current.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
@@ -941,9 +942,8 @@ final class SecurityGroupControllerTests {
                 app: app, org: org, project: project,
                 protocolVersion: WireProtocol.currentVersion)
             try await self.attachBootVolume(app: app, vm: vm, agentID: vm.hypervisorId!)
-            try await VMInterfaceSecurityGroup(
-                interfaceID: nic.id!, securityGroupID: web.id
-            ).save(on: app.db)
+            try await LegacyInterfaceSecurityGroupStore.insert(
+                kind: .vm, interfaceID: nic.id!, securityGroupID: web.id, on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: vm.hypervisorId!)
             let rules = try #require(message.securityGroups?.first { $0.id == web.id }?.rules)
@@ -1020,10 +1020,9 @@ final class SecurityGroupControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            let remaining = try await SandboxInterfaceSecurityGroup.query(on: app.db)
-                .filter(\.$interface.$id == nic.id!)
-                .all()
-            #expect(remaining.map { $0.$securityGroup.id } == [second.id])
+            let remaining = try await LegacyInterfaceSecurityGroupStore.memberships(
+                kind: .sandbox, interfaceIDs: [nic.id!], on: app.db)
+            #expect(remaining.map(\.securityGroupID) == [second.id])
 
             try await app.test(.GET, "/api/sandboxes/\(sandbox.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1065,9 +1064,11 @@ final class SecurityGroupControllerTests {
                 app: app, org: org, project: project,
                 protocolVersion: WireProtocol.currentVersion,
                 sandboxNetworkingCapable: true)
-            try await SandboxInterfaceSecurityGroup(
-                interfaceID: nic.requireID(), securityGroupID: web.id
-            ).save(on: app.db)
+            try await LegacyInterfaceSecurityGroupStore.insert(
+                kind: .sandbox,
+                interfaceID: nic.requireID(),
+                securityGroupID: web.id,
+                on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(
                 agentId: try #require(sandbox.hypervisorId))
@@ -1113,16 +1114,20 @@ final class SecurityGroupControllerTests {
             let (incapable, incapableNIC) = try await self.createSandboxWithNIC(
                 app: app, org: org, project: project,
                 protocolVersion: WireProtocol.currentVersion, sandboxNetworkingCapable: false)
-            try await SandboxInterfaceSecurityGroup(
-                interfaceID: incapableNIC.requireID(), securityGroupID: group.id
-            ).save(on: app.db)
+            try await LegacyInterfaceSecurityGroupStore.insert(
+                kind: .sandbox,
+                interfaceID: incapableNIC.requireID(),
+                securityGroupID: group.id,
+                on: app.db)
 
             let (capable, capableNIC) = try await self.createSandboxWithNIC(
                 app: app, org: org, project: project,
                 protocolVersion: WireProtocol.currentVersion, sandboxNetworkingCapable: true)
-            try await SandboxInterfaceSecurityGroup(
-                interfaceID: capableNIC.requireID(), securityGroupID: group.id
-            ).save(on: app.db)
+            try await LegacyInterfaceSecurityGroupStore.insert(
+                kind: .sandbox,
+                interfaceID: capableNIC.requireID(),
+                securityGroupID: group.id,
+                on: app.db)
 
             for (sandbox, expected) in [(incapable, false), (capable, true)] {
                 try await app.test(.GET, "/api/sandboxes/\(try sandbox.requireID())") { req in
@@ -1228,9 +1233,11 @@ final class SecurityGroupControllerTests {
             let first = try await self.createGroup(app: app, project: project, token: token, name: "race-a")
             let second = try await self.createGroup(app: app, project: project, token: token, name: "race-b")
             for group in [first, second] {
-                try await VMInterfaceSecurityGroup(
-                    interfaceID: nic.requireID(), securityGroupID: group.id
-                ).save(on: app.db)
+                try await LegacyInterfaceSecurityGroupStore.insert(
+                    kind: .vm,
+                    interfaceID: nic.requireID(),
+                    securityGroupID: group.id,
+                    on: app.db)
             }
 
             let vmID = try vm.requireID()
@@ -1257,9 +1264,8 @@ final class SecurityGroupControllerTests {
             #expect(statuses.filter { $0 == .noContent }.count == 1)
             #expect(statuses.filter { $0 == .conflict }.count == 1)
 
-            let remaining = try await VMInterfaceSecurityGroup.query(on: app.db)
-                .filter(\.$interface.$id == interfaceID)
-                .count()
+            let remaining = try await LegacyInterfaceSecurityGroupStore.count(
+                kind: .vm, interfaceIDs: [interfaceID], on: app.db)
             #expect(remaining == 1)
         }
     }
@@ -1274,9 +1280,11 @@ final class SecurityGroupControllerTests {
                 protocolVersion: WireProtocol.currentVersion)
             let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
                 projectID: project.id!, on: app.db)
-            try await VMInterfaceSecurityGroup(
-                interfaceID: nic.requireID(), securityGroupID: try defaultGroup.requireID()
-            ).save(on: app.db)
+            try await LegacyInterfaceSecurityGroupStore.insert(
+                kind: .vm,
+                interfaceID: nic.requireID(),
+                securityGroupID: defaultGroup.id,
+                on: app.db)
 
             // One seat left under the cap, contested by three attaches.
             var contenders: [UUID] = []
@@ -1284,9 +1292,11 @@ final class SecurityGroupControllerTests {
                 let filler = try await self.createGroup(
                     app: app, project: project, token: token, name: "cap-filler-\(index)")
                 if index < SecurityGroup.maxGroupsPerNIC - 2 {
-                    try await VMInterfaceSecurityGroup(
-                        interfaceID: nic.requireID(), securityGroupID: filler.id
-                    ).save(on: app.db)
+                    try await LegacyInterfaceSecurityGroupStore.insert(
+                        kind: .vm,
+                        interfaceID: nic.requireID(),
+                        securityGroupID: filler.id,
+                        on: app.db)
                 } else {
                     contenders.append(filler.id)
                 }
@@ -1318,9 +1328,8 @@ final class SecurityGroupControllerTests {
                 return collected
             }
 
-            let total = try await VMInterfaceSecurityGroup.query(on: app.db)
-                .filter(\.$interface.$id == interfaceID)
-                .count()
+            let total = try await LegacyInterfaceSecurityGroupStore.count(
+                kind: .vm, interfaceIDs: [interfaceID], on: app.db)
             #expect(total == SecurityGroup.maxGroupsPerNIC)
         }
     }
@@ -1358,14 +1367,14 @@ final class SecurityGroupControllerTests {
                 app: app, project: project, token: token, name: "sbx-explicit")
 
             func groupIDs(ofSandbox id: UUID) async throws -> [UUID] {
-                let nics = try await SandboxNetworkInterface.query(on: app.db)
-                    .filter(\.$sandbox.$id == id)
-                    .all()
+                let nics = try await LegacySandboxNetworkInterfaceStore.interfaces(
+                    sandboxID: id, on: app.db)
                 guard let nic = nics.first else { return [] }
-                return try await SandboxInterfaceSecurityGroup.query(on: app.db)
-                    .filter(\.$interface.$id == nic.requireID())
-                    .all()
-                    .map { $0.$securityGroup.id }
+                return try await LegacyInterfaceSecurityGroupStore.memberships(
+                    kind: .sandbox,
+                    interfaceIDs: [nic.requireID()],
+                    on: app.db
+                ).map(\.securityGroupID)
             }
 
             var defaulted: AcceptedMutation<SandboxDetailResponse>?
@@ -1385,7 +1394,7 @@ final class SecurityGroupControllerTests {
                 projectID: project.id!, on: app.db)
             #expect(
                 try await groupIDs(ofSandbox: try #require(defaulted?.resource.id)) == [
-                    try defaultGroup.requireID()
+                    defaultGroup.id
                 ])
 
             var chosen: AcceptedMutation<SandboxDetailResponse>?

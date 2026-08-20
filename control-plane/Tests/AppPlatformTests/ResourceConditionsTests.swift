@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Fluent
 import StratoShared
 import Testing
@@ -33,8 +34,7 @@ final class ResourceConditionsTests {
             )
             let org = try await builder.createOrganization(name: "Conditions Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "Conditions Project",
@@ -73,7 +73,7 @@ final class ResourceConditionsTests {
             protocolVersion: WireProtocol.currentVersion,
             sandboxCapable: hypervisorType == .firecracker
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.db).first?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: agentName,
             organizationScope: orgID.map { .organization($0) })
@@ -107,26 +107,28 @@ final class ResourceConditionsTests {
     /// registration puts an `agent.connected` row there too, and that is not
     /// what any of these tests is about.
     private func mutationOutcomes(app: Application) async throws -> [String] {
-        try await WebhookDelivery.query(on: app.db)
-            .sort(\.$createdAt)
-            .all()
+        try await app.webhookDeliveriesPersistence.all()
             .map(\.eventType)
             .filter { $0.hasPrefix("operation.") }
     }
 
     private func subscribeToEverything(app: Application) async throws {
-        let org = try #require(await Organization.query(on: app.db).sort(\.$createdAt).first())
-        let user = try #require(await User.query(on: app.db).sort(\.$createdAt).first())
-        let subscription = WebhookSubscription(
-            organizationID: try org.requireID(),
-            projectID: nil,
-            name: "conditions hook",
-            url: "http://127.0.0.1:1/hook",
-            eventTypes: [],
-            signingSecret: try app.secretsEncryption.encrypt("whsec_test_secret"),
-            createdByID: try user.requireID()
-        )
-        try await subscription.save(on: app.db)
+        let org = try #require(await Organization.all(on: app.db).first)
+        let user = try #require(await User.all(on: app.db).first)
+        _ = try await app.webhookSubscriptionsPersistence.create(
+            WebhookSubscriptionWrite(
+                id: UUID(),
+                organizationID: try org.requireID(),
+                projectID: nil,
+                name: "conditions hook",
+                url: "http://127.0.0.1:1/hook",
+                eventTypesJSON: try webhookEventTypesJSON([]),
+                encryptedSigningSecret: try app.secretsEncryption.encrypt("whsec_test_secret"),
+                isActive: true,
+                disabledReason: nil,
+                failingSince: nil,
+                createdByID: try user.requireID()
+            ))
     }
 
     // MARK: - Derivation
@@ -363,7 +365,9 @@ final class ResourceConditionsTests {
 
             let vmJSON =
                 try JSONSerialization.jsonObject(
-                    with: JSONEncoder().encode(VMDetailResponse(from: vm))) as? [String: Any]
+                    with: JSONEncoder().encode(
+                        VMDetailResponse(from: vm, observedAddressesByInterfaceID: [:])))
+                    as? [String: Any]
             let vmConditions = try #require(vmJSON?["conditions"] as? [String: Any])
             #expect(vmConditions["converged"] as? Bool == false)
             #expect(vmConditions["targetGeneration"] as? Int == Int(vm.generation))
@@ -425,12 +429,12 @@ final class ResourceConditionsTests {
     @Test("A convergence failure lands as degraded, and survives the generation bump that follows")
     func failureRecordsDegraded() async throws {
         try await withTestApp { app, user, project in
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
             vm.setFixtureDesiredStatus(.running)  // generation 1
-            vm.extendConvergenceDeadline(by: 120)
+            vm = vm.extendingConvergenceDeadline(by: 120)
             try await vm.save(on: app.db)
 
             let envelope = try self.report(
@@ -566,7 +570,7 @@ final class ResourceConditionsTests {
     func advanceAndFailInOneReportRecordsFailure() async throws {
         try await withTestApp { app, user, project in
             try await self.subscribeToEverything(app: app)
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
@@ -574,7 +578,7 @@ final class ResourceConditionsTests {
             vm.setStatus(.running)
             vm.generation = 5
             vm.observedGeneration = 4
-            vm.extendConvergenceDeadline(by: 120)
+            vm = vm.extendingConvergenceDeadline(by: 120)
             try await vm.save(on: app.db)
             _ = try await ResourceEvent.record(
                 .resize, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
@@ -612,7 +616,7 @@ final class ResourceConditionsTests {
     func driftCorrectingFailureDegradesConvergedVM() async throws {
         try await withTestApp { app, user, project in
             try await self.subscribeToEverything(app: app)
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
@@ -620,7 +624,7 @@ final class ResourceConditionsTests {
             vm.setStatus(.running)
             vm.generation = 5
             vm.observedGeneration = 5  // the boot already converged and was reported
-            vm.extendConvergenceDeadline(by: 120)
+            vm = vm.extendingConvergenceDeadline(by: 120)
             try await vm.save(on: app.db)
             _ = try await ResourceEvent.record(
                 .resize, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
@@ -657,7 +661,7 @@ final class ResourceConditionsTests {
     func steadyStateFailurePreservesIntentAndRecovers() async throws {
         try await withTestApp { app, user, project in
             try await self.subscribeToEverything(app: app)
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
@@ -724,7 +728,7 @@ final class ResourceConditionsTests {
     func recoveryAtTheSameGenerationReconverges() async throws {
         try await withTestApp { app, _, project in
             try await self.subscribeToEverything(app: app)
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId

@@ -1,4 +1,5 @@
 import Fluent
+import ControlPlanePostgres
 import StratoShared
 import Vapor
 
@@ -10,6 +11,26 @@ import Vapor
 /// Pools are infrastructure (scoped like sites: org-or-OU owner, optional
 /// site pin); allocations are project resources (scoped like networks).
 struct FloatingIPController: RouteCollection {
+    private let allocations: FloatingIPAllocationsPersistence?
+    private let iam: IAMPersistence
+    private let projects: ProjectsPersistence
+    private let pools: FloatingIPPoolsPersistence
+    private let sites: SitesPersistence
+
+    init(
+        allocations: FloatingIPAllocationsPersistence? = nil,
+        iam: IAMPersistence,
+        projects: ProjectsPersistence,
+        pools: FloatingIPPoolsPersistence,
+        sites: SitesPersistence
+    ) {
+        self.allocations = allocations
+        self.iam = iam
+        self.projects = projects
+        self.pools = pools
+        self.sites = sites
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let pools = routes.grouped("api", "floating-ip-pools").grouped(User.guardMiddleware())
         pools.get(use: listPools)
@@ -44,8 +65,8 @@ struct FloatingIPController: RouteCollection {
     /// scope). Pinning a pool occupies the site's address-overlap scope, so
     /// authorizing only the pool's own org/OU would let one tenant's admin
     /// claim (and block) another tenant's site.
-    private func requireSiteManage(_ req: Request, site: Site) async throws {
-        let allowed = try await req.can("site:manage", on: IAMNode(type: .site, id: try site.requireID()))
+    private func requireSiteManage(_ req: Request, site: SiteSnapshot) async throws {
+        let allowed = try await req.can("site:manage", on: IAMNode(type: .site, id: site.id))
         guard allowed else {
             throw Abort(.forbidden, reason: "You don't have 'manage' permission on this site")
         }
@@ -66,8 +87,16 @@ struct FloatingIPController: RouteCollection {
 
     /// The scope-level permission a pool operation stands for, through the
     /// evaluator.
-    private func requirePoolPermission(_ req: Request, pool: FloatingIPPool, manage: Bool) async throws {
-        guard let scope = pool.organizationScope else {
+    private func requirePoolPermission(
+        _ req: Request,
+        pool: FloatingIPPoolSnapshot,
+        manage: Bool
+    ) async throws {
+        guard let scope = try OrganizationScope.from(
+            organizationID: pool.organizationID,
+            organizationalUnitID: pool.organizationalUnitID,
+            required: false
+        ) else {
             // Rows predating scoping belong to no organization: nothing to
             // evaluate against, so only system admins may touch them
             // (defensive deny, mirroring scopeless quotas; the gate marks
@@ -83,11 +112,11 @@ struct FloatingIPController: RouteCollection {
         }
     }
 
-    private func findPool(_ req: Request) async throws -> FloatingIPPool {
+    private func findPool(_ req: Request) async throws -> FloatingIPPoolSnapshot {
         guard let poolId = req.parameters.get("poolId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid pool ID")
         }
-        guard let pool = try await FloatingIPPool.find(poolId, on: req.db) else {
+        guard let pool = try await pools.pool(id: poolId) else {
             throw Abort(.notFound, reason: "Floating IP pool not found")
         }
         return pool
@@ -105,7 +134,7 @@ struct FloatingIPController: RouteCollection {
     /// Every pool the caller may read, by name, ready for slicing.
     func visiblePools(req: Request) async throws -> [FloatingIPPoolResponse] {
         _ = try req.auth.require(User.self)
-        let pools = try await FloatingIPPool.query(on: req.db).sort(\.$name).sort(\.$id).all()
+        let poolRows = try await pools.allPools()
 
         // One filter for everyone: a scoped pool is an evaluator check on its
         // org/OU, which the tier-1 `platform-system-admin` policy answers for
@@ -120,8 +149,12 @@ struct FloatingIPController: RouteCollection {
         // type determines the action: an Organization node is only ever asked
         // `org:read`, a folder node only ever `folder:read`.
         var nodesByAction: [String: [IAMNode]] = [:]
-        for pool in pools {
-            guard let scope = pool.organizationScope else { continue }
+        for pool in poolRows {
+            guard let scope = try OrganizationScope.from(
+                organizationID: pool.organizationID,
+                organizationalUnitID: pool.organizationalUnitID,
+                required: false
+            ) else { continue }
             let check = Self.poolScopeCheck(scope, manage: false)
             nodesByAction[check.action, default: []].append(check.node)
         }
@@ -130,19 +163,18 @@ struct FloatingIPController: RouteCollection {
         for (action, nodes) in nodesByAction.sorted(by: { $0.key < $1.key }) {
             readable.formUnion(try await req.canFilter(action, on: nodes))
         }
-        let visible = pools.filter { pool in
-            guard let scope = pool.organizationScope else {
+        let visible = try poolRows.filter { pool in
+            guard let scope = try OrganizationScope.from(
+                organizationID: pool.organizationID,
+                organizationalUnitID: pool.organizationalUnitID,
+                required: false
+            ) else {
                 return req.allowsScopelessPlatformRow(action: "floatingip:list")
             }
             return readable.contains(Self.poolScopeCheck(scope, manage: false).node)
         }
 
-        // One grouped count for the page rather than a COUNT per pool.
-        let counts = try await FloatingIP.counts(
-            groupedBy: \.$pool, in: try visible.map { try $0.requireID() }, on: req.db)
-        return try visible.map { pool in
-            try FloatingIPPoolResponse(from: pool, allocatedCount: counts[pool.requireID()] ?? 0)
-        }
+        return visible.map { FloatingIPPoolResponse(from: $0) }
     }
 
     /// POST /api/floating-ip-pools
@@ -156,32 +188,45 @@ struct FloatingIPController: RouteCollection {
         else {
             throw Abort(.badRequest, reason: "Either organizationId or organizationalUnitId is required")
         }
-        try await scope.validateExists(on: req.db)
         try await requireManageAgents(req, scope: scope)
 
         let (cidr, gateway) = try Self.validatePoolAddressing(cidr: create.cidr, gateway: create.gateway)
 
         let siteId = create.siteId
-        guard let site = try await Site.find(siteId, on: req.db) else {
+        guard let site = try await sites.site(id: siteId) else {
             throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
         }
         try await requireSiteManage(req, site: site)
-        try await Self.assertNoPoolOverlap(cidr: cidr, siteId: siteId, excluding: nil, on: req.db)
 
-        let pool = FloatingIPPool(
-            name: create.name, cidr: cidr, gateway: gateway, siteID: siteId, organizationScope: scope)
-        do {
-            try await pool.save(on: req.db)
-        } catch let error as any DatabaseError where error.isConstraintFailure {
-            // Names are unique per owner (STR-105), so this only ever reports a
-            // collision inside the caller's own scope — it can't be used to
-            // probe another tenant's pool names.
+        switch try await pools.create(FloatingIPPoolWrite(
+            name: create.name,
+            cidr: cidr,
+            gateway: gateway,
+            siteID: siteId,
+            organizationID: scope.organizationID,
+            organizationalUnitID: scope.organizationalUnitID
+        )) {
+        case .created(let pool):
+            return FloatingIPPoolResponse(from: pool)
+        case .siteNotFound:
+            throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
+        case .scopeNotFound:
+            switch scope {
+            case .organization(let id):
+                throw Abort(.badRequest, reason: "Organization \(id) does not exist")
+            case .organizationalUnit(let id):
+                throw Abort(.badRequest, reason: "Folder \(id) does not exist")
+            }
+        case .overlaps(let name, let existingCIDR):
+            throw Abort(
+                .conflict,
+                reason: "Pool CIDR \(cidr) overlaps pool '\(name)' (\(existingCIDR)) in the same scope"
+            )
+        case .duplicateName:
             throw Abort(
                 .conflict,
                 reason: "A floating IP pool named '\(create.name)' already exists in this organization scope")
         }
-
-        return try FloatingIPPoolResponse(from: pool, allocatedCount: 0)
     }
 
     /// GET /api/floating-ip-pools/:poolId
@@ -189,10 +234,7 @@ struct FloatingIPController: RouteCollection {
     func getPool(req: Request) async throws -> FloatingIPPoolResponse {
         let pool = try await findPool(req)
         try await requirePoolPermission(req, pool: pool, manage: false)
-        let count = try await FloatingIP.query(on: req.db)
-            .filter(\.$pool.$id == pool.requireID())
-            .count()
-        return try FloatingIPPoolResponse(from: pool, allocatedCount: count)
+        return FloatingIPPoolResponse(from: pool)
     }
 
     /// PUT /api/floating-ip-pools/:poolId — full-replace of the mutable
@@ -207,22 +249,10 @@ struct FloatingIPController: RouteCollection {
         var canonicalGateway: String?
         if let gateway = update.gateway {
             (_, canonicalGateway) = try Self.validatePoolAddressing(cidr: pool.cidr, gateway: gateway)
-            // The gateway is excluded from *future* allocation only, so a new
-            // gateway that matches an already-allocated address would collide
-            // with a live, possibly NAT'd floating IP.
-            let collisions = try await FloatingIP.query(on: req.db)
-                .filter(\.$pool.$id == pool.requireID())
-                .filter(\.$address == canonicalGateway!)
-                .count()
-            guard collisions == 0 else {
-                throw Abort(
-                    .conflict,
-                    reason: "Gateway \(canonicalGateway!) is already allocated as a floating IP; release it first")
-            }
         }
         let siteId = update.siteId
-        if siteId != pool.$site.id {
-            guard let site = try await Site.find(siteId, on: req.db) else {
+        if siteId != pool.siteID {
+            guard let site = try await sites.site(id: siteId) else {
                 throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
             }
             try await requireSiteManage(req, site: site)
@@ -232,31 +262,29 @@ struct FloatingIPController: RouteCollection {
         // strand live attachments: the site constraint is only enforced at
         // attach time, so a move would leave the old site advertising
         // addresses from a pool that now claims to answer elsewhere.
-        if siteId != pool.$site.id {
-            let attached = try await FloatingIP.query(on: req.db)
-                .filter(\.$pool.$id == pool.requireID())
-                .all()
-                .filter { $0.$interface.id != nil }
-                .count
-            guard attached == 0 else {
-                throw Abort(
-                    .conflict,
-                    reason:
-                        "Pool has \(attached) attached floating IP(s); detach them before changing the pool's site"
-                )
-            }
-            try await Self.assertNoPoolOverlap(
-                cidr: pool.cidr, siteId: siteId, excluding: pool.id, on: req.db)
+        switch try await pools.update(id: pool.id, gateway: canonicalGateway, siteID: siteId) {
+        case .updated(let pool):
+            return FloatingIPPoolResponse(from: pool)
+        case .notFound:
+            throw Abort(.notFound, reason: "Floating IP pool not found")
+        case .siteNotFound:
+            throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
+        case .gatewayAlreadyAllocated:
+            throw Abort(
+                .conflict,
+                reason: "Gateway \(canonicalGateway!) is already allocated as a floating IP; release it first"
+            )
+        case .hasAttachedAddresses(let count):
+            throw Abort(
+                .conflict,
+                reason: "Pool has \(count) attached floating IP(s); detach them before changing the pool's site"
+            )
+        case .overlaps(let name, let existingCIDR):
+            throw Abort(
+                .conflict,
+                reason: "Pool CIDR \(pool.cidr) overlaps pool '\(name)' (\(existingCIDR)) in the same scope"
+            )
         }
-
-        pool.gateway = canonicalGateway
-        pool.$site.id = siteId
-        try await pool.save(on: req.db)
-
-        let count = try await FloatingIP.query(on: req.db)
-            .filter(\.$pool.$id == pool.requireID())
-            .count()
-        return try FloatingIPPoolResponse(from: pool, allocatedCount: count)
     }
 
     /// DELETE /api/floating-ip-pools/:poolId
@@ -264,18 +292,14 @@ struct FloatingIPController: RouteCollection {
     func deletePool(req: Request) async throws -> HTTPStatus {
         let pool = try await findPool(req)
         try await requirePoolPermission(req, pool: pool, manage: true)
-        let poolId = try pool.requireID()
-
-        let allocated = try await FloatingIP.query(on: req.db)
-            .filter(\.$pool.$id == poolId)
-            .count()
-        guard allocated == 0 else {
-            throw Abort(.conflict, reason: "Pool has \(allocated) allocated address(es); release them first")
+        switch try await pools.deleteIfEmpty(id: pool.id) {
+        case .deleted:
+            return .noContent
+        case .notFound:
+            throw Abort(.notFound, reason: "Floating IP pool not found")
+        case .hasAllocatedAddresses(let count):
+            throw Abort(.conflict, reason: "Pool has \(count) allocated address(es); release them first")
         }
-
-        try await pool.delete(on: req.db)
-
-        return .noContent
     }
 
     // MARK: - Floating IPs (project resources, network-style authz)
@@ -294,12 +318,12 @@ struct FloatingIPController: RouteCollection {
     func visibleFloatingIPs(req: Request) async throws -> [FloatingIPResponse] {
         _ = try req.auth.require(User.self)
         let requestedProjectId = req.query[String.self, at: "project_id"].flatMap(UUID.init(uuidString:))
-
-        var query = FloatingIP.query(on: req.db)
-            .with(\.$interface) { $0.with(\.$addresses) }
-            .with(\.$loadBalancer) { $0.with(\.$logicalNetwork) }
-            .sort(\.$createdAt, .descending)
-            .sort(\.$id, .descending)
+        guard let allocations else {
+            throw Abort(
+                .internalServerError,
+                reason: "Floating-IP allocation persistence is not configured"
+            )
+        }
 
         // Project scoping runs for every caller. An admin holds no per-project
         // bindings, but every project their rows land in is still put to the
@@ -307,33 +331,32 @@ struct FloatingIPController: RouteCollection {
         // so an admin still sees every project's floating IPs, by a decision
         // that is logged and that a guardrail can narrow.
         var visibility: ProjectVisibility?
+        let rows: [FloatingIPAllocationSnapshot]
         if let requestedProjectId {
             let hasAccess = try await req.can(
                 "project:read", on: IAMNode(type: .project, id: requestedProjectId))
             guard hasAccess else {
                 throw Abort(.forbidden, reason: "You don't have access to this project")
             }
-            query = query.filter(\.$project.$id == requestedProjectId)
+            rows = try await allocations.allocations(projectIDs: [requestedProjectId])
         } else {
             // Narrow to the projects the caller could reach, then let the
             // evaluator decide the ones that carry rows (`ProjectVisibility`).
-            let resolved = try await ProjectVisibility.resolve(on: req)
+            let resolved = try await ProjectVisibility.resolve(on: req, using: iam, projects: projects)
             guard !resolved.reachesNoProject else { return [] }
             if let candidates = resolved.candidateProjectIDs {
-                query = query.filter(\.$project.$id ~~ candidates)
+                rows = try await allocations.allocations(projectIDs: candidates)
+            } else {
+                rows = try await allocations.allAllocations()
             }
             visibility = resolved
         }
-
-        var floatingIPs = try await query.all()
+        var floatingIPs = rows
         if let visibility {
             floatingIPs = try await visibility.readableRows(
-                floatingIPs, projectID: { $0.$project.id }, on: req)
+                floatingIPs, projectID: { $0.projectID }, on: req)
         }
-        return try floatingIPs.map {
-            try FloatingIPResponse(
-                from: $0, interface: $0.interface, loadBalancer: $0.loadBalancer)
-        }
+        return try floatingIPs.map { try FloatingIPResponse(from: $0) }
     }
 
     /// POST /api/floating-ips — allocate the lowest free address in a pool.
@@ -347,49 +370,65 @@ struct FloatingIPController: RouteCollection {
             action: "floatingip:create", resourceKind: "floating IPs", verb: "allocate")
         let projectId = try project.requireID()
 
-        guard let pool = try await FloatingIPPool.find(request.poolId, on: req.db) else {
+        guard let pool = try await pools.pool(id: request.poolId) else {
             throw Abort(.badRequest, reason: "Floating IP pool \(request.poolId) does not exist")
         }
         // The pool serves its owning scope only, exactly as a site serves its
         // scope's projects: a sibling OU's project must not drain addresses
         // delegated elsewhere.
-        guard let poolScope = pool.organizationScope,
+        guard let poolScope = try OrganizationScope.from(
+                organizationID: pool.organizationID,
+                organizationalUnitID: pool.organizationalUnitID,
+                required: false
+            ),
             try await Self.scopeContains(poolScope, project: project, on: req.db)
         else {
             throw Abort(.conflict, reason: "Pool '\(pool.name)' does not serve this project's organization scope")
         }
 
+        guard let allocations else {
+            throw Abort(
+                .internalServerError,
+                reason: "Floating-IP allocation persistence is not configured"
+            )
+        }
         let creatorID = user.id!
-        let floatingIP: FloatingIP
+        let floatingIP: FloatingIPAllocationSnapshot
         do {
-            floatingIP = try await req.db.transaction { db -> FloatingIP in
-                let address = try await IPAMService.allocateFloatingIP(for: pool, on: db)
-                let row = FloatingIP(
-                    poolID: try pool.requireID(),
-                    address: address,
-                    projectID: projectId,
-                    createdByID: creatorID)
-                try await row.save(on: db)
-                // Creator binding (issue #477), mirroring network create.
-                try await RoleBindingService.grant(
-                    principalType: .user,
-                    principalID: creatorID,
-                    role: .admin,
-                    nodeType: .floatingIP,
-                    nodeID: row.id!,
-                    createdBy: creatorID,
-                    on: db
+            floatingIP = try await allocations.allocate(
+                fromPoolID: pool.id,
+                toProjectID: projectId,
+                createdByID: creatorID
+            )
+            Telemetry.ipamAllocated(family: "ipv4")
+        } catch let error as FloatingIPAllocationError {
+            switch error {
+            case .poolExhausted(let poolName, let cidr):
+                Telemetry.ipamAllocationFailed(family: "ipv4", reason: "pool_exhausted")
+                throw Abort(
+                    .conflict,
+                    reason: "No free IP addresses left in network \(poolName) (\(cidr))"
                 )
-                return row
+            case .poolNotFound:
+                throw Abort(
+                    .badRequest,
+                    reason: "Floating IP pool \(request.poolId) does not exist"
+                )
+            case .invalidSubnet:
+                Telemetry.ipamAllocationFailed(family: "ipv4", reason: "invalid_subnet")
+                throw error
+            case .invalidGateway:
+                Telemetry.ipamAllocationFailed(family: "ipv4", reason: "invalid_gateway")
+                throw error
+            case .unexpectedRowCount:
+                throw error
             }
-        } catch let error as IPAMService.IPAMError {
-            throw Abort(.conflict, reason: error.localizedDescription)
         }
 
         req.logger.info(
             "Floating IP allocated",
             metadata: [
-                "floatingIpId": .string(floatingIP.id!.uuidString),
+                "floatingIpId": .string(floatingIP.id.uuidString),
                 "address": .string(floatingIP.address),
                 "pool": .string(pool.name),
             ])
@@ -399,11 +438,11 @@ struct FloatingIPController: RouteCollection {
     /// GET /api/floating-ips/:floatingIpId
     @Sendable
     func getFloatingIP(req: Request) async throws -> FloatingIPResponse {
-        let floatingIP = try await fetchFloatingIPWithAction(req: req, action: "floatingip:read")
-        let interface = try await loadedInterface(of: floatingIP, on: req.db)
-        let loadBalancer = try await loadedLoadBalancer(of: floatingIP, on: req.db)
-        return try FloatingIPResponse(
-            from: floatingIP, interface: interface, loadBalancer: loadBalancer)
+        let floatingIP = try await fetchNativeFloatingIPWithAction(
+            req: req,
+            action: "floatingip:read"
+        )
+        return try FloatingIPResponse(from: floatingIP)
     }
 
     /// DELETE /api/floating-ips/:floatingIpId — release the address back to
@@ -411,23 +450,31 @@ struct FloatingIPController: RouteCollection {
     /// down its NAT as a side effect; detaching first makes that explicit.
     @Sendable
     func releaseFloatingIP(req: Request) async throws -> HTTPStatus {
-        let floatingIP = try await fetchFloatingIPWithAction(req: req, action: "floatingip:release")
-        guard floatingIP.$interface.id == nil, floatingIP.$loadBalancer.id == nil else {
+        let floatingIP = try await fetchNativeFloatingIPWithAction(
+            req: req,
+            action: "floatingip:release"
+        )
+        guard let allocations else {
+            throw Abort(
+                .internalServerError,
+                reason: "Floating-IP allocation persistence is not configured"
+            )
+        }
+        switch try await allocations.releaseIfDetached(id: floatingIP.id) {
+        case .released:
+            return .noContent
+        case .notFound:
+            throw Abort(.notFound, reason: "Floating IP not found")
+        case .attached:
             throw Abort(.conflict, reason: "Floating IP is attached; detach it first")
         }
-        let floatingIpId = try floatingIP.requireID()
-
-        try await req.db.transaction { db in
-            try await floatingIP.delete(on: db)
-            try await RoleBindingService.revokeAll(nodeType: .floatingIP, nodeID: floatingIpId, on: db)
-        }
-        return .noContent
     }
 
     /// POST /api/floating-ips/:floatingIpId/attach
     @Sendable
     func attachFloatingIP(req: Request) async throws -> FloatingIPResponse {
-        let floatingIP = try await fetchFloatingIPWithAction(req: req, action: "floatingip:attach")
+        let floatingIP = try await fetchNativeFloatingIPWithAction(
+            req: req, action: "floatingip:attach")
         let request = try req.content.decode(AttachFloatingIPRequest.self)
 
         guard (request.vmId != nil) != (request.loadBalancerId != nil) else {
@@ -456,16 +503,12 @@ struct FloatingIPController: RouteCollection {
         // caller who can't touch the VM would tell them it exists in another
         // project (issue #777).
         try ProjectContainment.require(
-            "VM", in: vm.$project.id,
-            sameProjectAs: "the floating IP", in: floatingIP.$project.id)
+            "VM", in: vm.projectID,
+            sameProjectAs: "the floating IP", in: floatingIP.projectID)
 
-        let interfaces = try await VMNetworkInterface.query(on: req.db)
-            .filter(\.$vm.$id == vmID)
-            .with(\.$addresses)
-            // The response reports the NIC's network by name as well as id.
-            .with(\.$logicalNetwork)
-            .sort(\.$orderIndex)
-            .all()
+        let interfaces = try await LegacyInterfaceAddressStore.loading(
+            LegacyVMNetworkInterfaceStore.interfaces(vmID: vmID, on: req.db),
+            on: req.db)
         let interface: VMNetworkInterface
         if let interfaceId = request.interfaceId {
             guard let match = interfaces.first(where: { $0.id == interfaceId }) else {
@@ -480,14 +523,14 @@ struct FloatingIPController: RouteCollection {
         }
         let interfaceId = try interface.requireID()
 
-        if floatingIP.$loadBalancer.id != nil {
+        if floatingIP.loadBalancerID != nil {
             throw Abort(.conflict, reason: "Floating IP is already attached; detach it first")
         }
-        if let currentId = floatingIP.$interface.id {
+        if let currentId = floatingIP.interfaceID {
             guard currentId == interfaceId else {
                 throw Abort(.conflict, reason: "Floating IP is already attached; detach it first")
             }
-            return try FloatingIPResponse(from: floatingIP, interface: interface)
+            return try FloatingIPResponse(from: floatingIP)
         }
 
         // The NAT rule needs the NIC's fixed IPv4 as its logical IP, and a
@@ -497,7 +540,7 @@ struct FloatingIPController: RouteCollection {
         guard interface.ipv4Address != nil else {
             throw Abort(.conflict, reason: "Interface has no IPv4 address to NAT to")
         }
-        guard let network = try await LogicalNetwork.find(interface.$logicalNetwork.id, on: req.db) else {
+        guard let network = try await LogicalNetwork.find(interface.logicalNetworkID, on: req.db) else {
             throw Abort(.conflict, reason: "Interface's network no longer exists")
         }
         guard network.externalAccess else {
@@ -506,8 +549,10 @@ struct FloatingIPController: RouteCollection {
                 reason: "Network '\(network.name)' has no external access; floating IPs need an egress network")
         }
         // A site-pinned pool only answers for its own site's OVN deployment.
-        let pool = try await floatingIP.$pool.get(on: req.db)
-        if network.$site.id != pool.$site.id {
+        guard let pool = try await pools.pool(id: floatingIP.poolID) else {
+            throw Abort(.conflict, reason: "Floating IP pool no longer exists")
+        }
+        if network.siteID != pool.siteID {
             throw Abort(
                 .conflict,
                 reason: "Pool '\(pool.name)' is pinned to a different site than network '\(network.name)'")
@@ -519,35 +564,26 @@ struct FloatingIPController: RouteCollection {
             for: vm,
             offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
             on: req.db)
-        // One floating IP per NIC: two rules would fight over the NIC's
-        // outbound SNAT. This read is the friendly-error fast path; the
-        // partial unique index on interface_id is the authority — two
-        // concurrent attaches can both pass this check, and the second one's
-        // save then fails the constraint (caught below).
-        let existingOnNIC = try await FloatingIP.query(on: req.db)
-            .filter(\.$interface.$id == interfaceId)
-            .count()
-        guard existingOnNIC == 0 else {
-            throw Abort(.conflict, reason: "Interface already has a floating IP attached")
+        guard let allocations else {
+            throw Abort(
+                .internalServerError,
+                reason: "Floating-IP allocation persistence is not configured")
         }
-
-        floatingIP.$interface.id = interfaceId
-        do {
-            try await req.db.transaction { db in
-                try await floatingIP.save(on: db)
-                switch try await DesiredStateGenerationWriter.advance(
-                    schema: LogicalNetwork.schema, id: try network.requireID(), on: db)
-                {
-                case .applied:
-                    break
-                case .missing:
-                    throw Abort(.notFound, reason: "Network no longer exists")
-                case .superseded:
-                    throw Abort(.internalServerError, reason: "Network generation did not advance")
-                }
-            }
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        let attached: FloatingIPAllocationSnapshot
+        switch try await allocations.attach(
+            id: floatingIP.id,
+            to: .interface(id: interfaceId, networkID: try network.requireID()))
+        {
+        case .attached(let snapshot), .unchanged(let snapshot):
+            attached = snapshot
+        case .notFound:
+            throw Abort(.notFound, reason: "Floating IP not found")
+        case .alreadyAttached:
+            throw Abort(.conflict, reason: "Floating IP is already attached; detach it first")
+        case .targetInUse:
             throw Abort(.conflict, reason: "Interface already has a floating IP attached")
+        case .networkNotFound:
+            throw Abort(.notFound, reason: "Network no longer exists")
         }
 
         // Ring the fleet for the new NAT desired state (the site's controller
@@ -557,49 +593,37 @@ struct FloatingIPController: RouteCollection {
         req.logger.info(
             "Floating IP attached",
             metadata: [
-                "floatingIpId": .string(floatingIP.id!.uuidString),
-                "address": .string(floatingIP.address),
+                "floatingIpId": .string(floatingIP.id.uuidString),
+                "address": .string(attached.address),
                 "vmId": .string(vmID.uuidString),
                 "interfaceId": .string(interfaceId.uuidString),
             ])
-        return try FloatingIPResponse(from: floatingIP, interface: interface)
+        return try FloatingIPResponse(from: attached)
     }
 
     /// POST /api/floating-ips/:floatingIpId/detach
     @Sendable
     func detachFloatingIP(req: Request) async throws -> FloatingIPResponse {
-        let floatingIP = try await fetchFloatingIPWithAction(req: req, action: "floatingip:detach")
-        guard floatingIP.$interface.id != nil || floatingIP.$loadBalancer.id != nil else {
+        let floatingIP = try await fetchNativeFloatingIPWithAction(
+            req: req, action: "floatingip:detach")
+        guard floatingIP.interfaceID != nil || floatingIP.loadBalancerID != nil else {
             return try FloatingIPResponse(from: floatingIP)
         }
-        let interface = try await loadedInterface(of: floatingIP, on: req.db)
-        let loadBalancer = try await loadedLoadBalancer(of: floatingIP, on: req.db)
-
-        floatingIP.$interface.id = nil
-        floatingIP.$loadBalancer.id = nil
-        // Bump the (former) network's generation for the same replay-safety
-        // reason as attach; the NAT rule drops out of the desired state and
-        // the agent tears it down.
-        let network: LogicalNetwork?
-        if let networkID = interface?.$logicalNetwork.id ?? loadBalancer?.$logicalNetwork.id {
-            network = try await LogicalNetwork.find(networkID, on: req.db)
-        } else {
-            network = nil
+        guard let allocations else {
+            throw Abort(
+                .internalServerError,
+                reason: "Floating-IP allocation persistence is not configured")
         }
-        try await req.db.transaction { db in
-            try await floatingIP.save(on: db)
-            if let network {
-                switch try await DesiredStateGenerationWriter.advance(
-                    schema: LogicalNetwork.schema, id: try network.requireID(), on: db)
-                {
-                case .applied:
-                    break
-                case .missing:
-                    throw Abort(.notFound, reason: "Network no longer exists")
-                case .superseded:
-                    throw Abort(.internalServerError, reason: "Network generation did not advance")
-                }
-            }
+        let detached: FloatingIPAllocationSnapshot
+        switch try await allocations.detach(id: floatingIP.id) {
+        case .attached(let snapshot), .unchanged(let snapshot):
+            detached = snapshot
+        case .notFound:
+            throw Abort(.notFound, reason: "Floating IP not found")
+        case .networkNotFound:
+            throw Abort(.notFound, reason: "Network no longer exists")
+        case .alreadyAttached, .targetInUse:
+            throw Abort(.internalServerError, reason: "Floating IP detach failed")
         }
 
         await req.application.agentService.syncDesiredStateToFleet()
@@ -607,39 +631,38 @@ struct FloatingIPController: RouteCollection {
         req.logger.info(
             "Floating IP detached",
             metadata: [
-                "floatingIpId": .string(floatingIP.id!.uuidString),
-                "address": .string(floatingIP.address),
+                "floatingIpId": .string(floatingIP.id.uuidString),
+                "address": .string(detached.address),
             ])
-        return try FloatingIPResponse(from: floatingIP)
+        return try FloatingIPResponse(from: detached)
     }
 
     // MARK: - Helpers
 
     private func attach(
-        floatingIP: FloatingIP,
+        floatingIP: FloatingIPAllocationSnapshot,
         toLoadBalancer loadBalancerID: UUID,
         req: Request
     ) async throws -> FloatingIPResponse {
         let loadBalancer = try await req.authorizedLoadBalancer(
             loadBalancerID, action: "loadbalancer:update")
         try ProjectContainment.require(
-            "Load balancer", in: loadBalancer.$project.id,
-            sameProjectAs: "the floating IP", in: floatingIP.$project.id)
+            "Load balancer", in: loadBalancer.projectID,
+            sameProjectAs: "the floating IP", in: floatingIP.projectID)
 
-        if floatingIP.$interface.id != nil {
+        if floatingIP.interfaceID != nil {
             throw Abort(.conflict, reason: "Floating IP is already attached; detach it first")
         }
-        if let currentID = floatingIP.$loadBalancer.id {
+        if let currentID = floatingIP.loadBalancerID {
             guard currentID == loadBalancerID else {
                 throw Abort(.conflict, reason: "Floating IP is already attached; detach it first")
             }
-            let loaded = try await loadedLoadBalancer(of: floatingIP, on: req.db)
-            return try FloatingIPResponse(from: floatingIP, loadBalancer: loaded)
+            return try FloatingIPResponse(from: floatingIP)
         }
 
         guard
             let network = try await LogicalNetwork.find(
-                loadBalancer.$logicalNetwork.id, on: req.db)
+                loadBalancer.logicalNetworkID, on: req.db)
         else {
             throw Abort(.conflict, reason: "Load balancer's network no longer exists")
         }
@@ -648,13 +671,15 @@ struct FloatingIPController: RouteCollection {
                 .conflict,
                 reason: "Network '\(network.name)' has no external access; floating IPs need an egress network")
         }
-        let pool = try await floatingIP.$pool.get(on: req.db)
-        guard network.$site.id == pool.$site.id else {
+        guard let pool = try await pools.pool(id: floatingIP.poolID) else {
+            throw Abort(.conflict, reason: "Floating IP pool no longer exists")
+        }
+        guard network.siteID == pool.siteID else {
             throw Abort(
                 .conflict,
                 reason: "Pool '\(pool.name)' is pinned to a different site than network '\(network.name)'")
         }
-        guard let site = try await Site.find(network.$site.id, on: req.db) else {
+        guard let site = try await LegacySiteStore.site(id: network.siteID, on: req.db) else {
             throw Abort(.conflict, reason: "Load balancer's network site no longer exists")
         }
         if let refusal = SiteNetworkAuthority.refusal(
@@ -667,44 +692,39 @@ struct FloatingIPController: RouteCollection {
             throw refusal
         }
 
-        let existing = try await FloatingIP.query(on: req.db)
-            .filter(\.$loadBalancer.$id == loadBalancerID)
-            .count()
-        guard existing == 0 else {
-            throw Abort(.conflict, reason: "Load balancer already has a floating IP attached")
+        guard let allocations else {
+            throw Abort(
+                .internalServerError,
+                reason: "Floating-IP allocation persistence is not configured")
         }
-
-        floatingIP.$loadBalancer.id = loadBalancerID
-        do {
-            try await req.db.transaction { db in
-                try await floatingIP.save(on: db)
-                switch try await DesiredStateGenerationWriter.advance(
-                    schema: LogicalNetwork.schema, id: try network.requireID(), on: db)
-                {
-                case .applied:
-                    break
-                case .missing:
-                    throw Abort(.notFound, reason: "Network no longer exists")
-                case .superseded:
-                    throw Abort(.internalServerError, reason: "Network generation did not advance")
-                }
-            }
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        let attached: FloatingIPAllocationSnapshot
+        switch try await allocations.attach(
+            id: floatingIP.id,
+            to: .loadBalancer(id: loadBalancerID, networkID: try network.requireID()))
+        {
+        case .attached(let snapshot), .unchanged(let snapshot):
+            attached = snapshot
+        case .notFound:
+            throw Abort(.notFound, reason: "Floating IP not found")
+        case .alreadyAttached:
+            throw Abort(.conflict, reason: "Floating IP is already attached; detach it first")
+        case .targetInUse:
             throw Abort(.conflict, reason: "Load balancer already has a floating IP attached")
+        case .networkNotFound:
+            throw Abort(.notFound, reason: "Network no longer exists")
         }
 
         await req.application.agentService.syncDesiredStateToFleet()
-        let loaded = try await loadedLoadBalancer(of: floatingIP, on: req.db)
-        return try FloatingIPResponse(from: floatingIP, loadBalancer: loaded)
+        return try FloatingIPResponse(from: attached)
     }
 
     /// Whether a pool's owning scope contains a project (same containment rule
     /// as sites serving projects).
     static func scopeContains(_ scope: OrganizationScope, project: Project, on db: Database) async throws -> Bool {
         let projectScope: OrganizationScope
-        if let orgID = project.$organization.id {
+        if let orgID = project.organizationID {
             projectScope = .organization(orgID)
-        } else if let ouID = project.$organizationalUnit.id {
+        } else if let ouID = project.organizationalUnitID {
             projectScope = .organizationalUnit(ouID)
         } else {
             return false
@@ -720,11 +740,14 @@ struct FloatingIPController: RouteCollection {
     /// same-site and unpinned pools, and an unpinned pool conflicts with
     /// everything.
     static func assertNoPoolOverlap(
-        cidr: String, siteId: UUID?, excluding poolId: UUID?, on db: Database
+        cidr: String,
+        siteId: UUID?,
+        excluding poolId: UUID?,
+        using pools: FloatingIPPoolsPersistence
     ) async throws {
-        let others = try await FloatingIPPool.query(on: db).all()
+        let others = try await pools.allPools()
         for other in others where other.id != poolId {
-            if let siteId, siteId != other.$site.id { continue }
+            if let siteId, siteId != other.siteID { continue }
             if NetworkController.subnetsOverlap(cidr, other.cidr) {
                 throw Abort(
                     .conflict,
@@ -799,39 +822,26 @@ struct FloatingIPController: RouteCollection {
         }
     }
 
-    private func fetchFloatingIPWithAction(req: Request, action: String) async throws -> FloatingIP {
-        guard let floatingIpId = req.parameters.get("floatingIpId", as: UUID.self) else {
+    private func fetchNativeFloatingIPWithAction(
+        req: Request,
+        action: String
+    ) async throws -> FloatingIPAllocationSnapshot {
+        guard let floatingIPID = req.parameters.get("floatingIpId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid floating IP ID")
         }
-        guard let floatingIP = try await FloatingIP.find(floatingIpId, on: req.db) else {
+        guard let allocations else {
+            throw Abort(
+                .internalServerError,
+                reason: "Floating-IP allocation persistence is not configured"
+            )
+        }
+        guard let floatingIP = try await allocations.allocation(id: floatingIPID) else {
             throw Abort(.notFound, reason: "Floating IP not found")
         }
-        let allowed = try await req.can(action, on: IAMNode(type: .floatingIP, id: floatingIpId))
-        guard allowed else {
+        guard try await req.can(action, on: IAMNode(type: .floatingIP, id: floatingIPID)) else {
             throw Abort(.forbidden, reason: "You don't have '\(action)' access on this floating IP")
         }
         return floatingIP
     }
 
-    /// The floating IP's attached interface with addresses eager-loaded, nil
-    /// while unattached.
-    private func loadedInterface(of floatingIP: FloatingIP, on db: Database) async throws -> VMNetworkInterface? {
-        guard let interfaceId = floatingIP.$interface.id else { return nil }
-        return try await VMNetworkInterface.query(on: db)
-            .filter(\.$id == interfaceId)
-            .with(\.$addresses)
-            // The response reports the NIC's network by name as well as id.
-            .with(\.$logicalNetwork)
-            .first()
-    }
-
-    /// The floating IP's attached load balancer with its display network, nil
-    /// while the address is not attached to an LB.
-    private func loadedLoadBalancer(of floatingIP: FloatingIP, on db: Database) async throws -> LoadBalancer? {
-        guard let loadBalancerID = floatingIP.$loadBalancer.id else { return nil }
-        return try await LoadBalancer.query(on: db)
-            .filter(\.$id == loadBalancerID)
-            .with(\.$logicalNetwork)
-            .first()
-    }
 }

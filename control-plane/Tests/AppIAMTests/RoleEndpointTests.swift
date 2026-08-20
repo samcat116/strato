@@ -40,12 +40,11 @@ final class RoleEndpointTests {
             )
             let org = try await builder.createOrganization(name: "Role Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
             let project = try await builder.createProject(
                 name: "Role Project", description: "d", organization: org)
 
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
             try await test(app, Fixture(user: user, token: token, org: org, project: project))
         } catch {
             try await app.shutdownForTesting()
@@ -174,7 +173,7 @@ final class RoleEndpointTests {
                         #expect(res.status == .badRequest)
                     })
             }
-            let stored = try await IAMRoleDefinition.query(on: app.db).filter(\.$managed == false).count()
+            let stored = try await RoleStore.legacyRoleCount(managed: false, on: app.db)
             #expect(stored == 0)
         }
     }
@@ -196,7 +195,7 @@ final class RoleEndpointTests {
                     #expect(res.body.string.contains("vm:raed"))
                 })
 
-            let stored = try await IAMRoleDefinition.query(on: app.db).filter(\.$managed == false).count()
+            let stored = try await RoleStore.legacyRoleCount(managed: false, on: app.db)
             let after = try await PolicySetVersionService.current(on: app.db)
             #expect(stored == 0)
             #expect(after == before)
@@ -235,7 +234,7 @@ final class RoleEndpointTests {
                     #expect(res.body.string.contains(group))
                 })
 
-            let stored = try await IAMRoleDefinition.query(on: app.db).filter(\.$managed == false).count()
+            let stored = try await RoleStore.legacyRoleCount(managed: false, on: app.db)
             #expect(stored == 0)
         }
     }
@@ -325,7 +324,7 @@ final class RoleEndpointTests {
                 afterResponse: { res in
                     #expect(res.status == .badRequest)
                 })
-            let stored = try await IAMRoleDefinition.query(on: app.db).filter(\.$managed == false).count()
+            let stored = try await RoleStore.legacyRoleCount(managed: false, on: app.db)
             #expect(stored == 0)
         }
     }
@@ -363,7 +362,7 @@ final class RoleEndpointTests {
                             name: "fake-default",
                             description: nil,
                             ownerType: .platform,
-                            ownerId: IAMRoleDefinition.platformOwnerID,
+                            ownerId: IAMRoleOwnerType.platformOwnerID,
                             actions: ["vm:read"],
                             cedarText: nil,
                             id: nil
@@ -428,7 +427,7 @@ final class RoleEndpointTests {
     func listRejectsUnusableOwners() async throws {
         try await withApp { app, fixture in
             try await app.test(
-                .GET, "/api/iam/roles?ownerType=platform&ownerId=\(IAMRoleDefinition.platformOwnerID)",
+                .GET, "/api/iam/roles?ownerType=platform&ownerId=\(IAMRoleOwnerType.platformOwnerID)",
                 beforeRequest: { req in
                     req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
                 },
@@ -477,7 +476,7 @@ final class RoleEndpointTests {
                     #expect(res.status == .forbidden)
                 })
 
-            let stored = try await IAMRoleDefinition.find(adminRole, on: app.db)
+            let stored = try await RoleStore.legacyRole(id: adminRole, on: app.db)
             #expect(stored?.actions.contains("iam:setPolicy") == true)
             #expect(try await PolicySetVersionService.current(on: app.db) == before)
         }
@@ -536,7 +535,7 @@ final class RoleEndpointTests {
                     #expect(res.status == .conflict)
                     #expect(res.body.string.contains("1 active binding"))
                 })
-            #expect(try await IAMRoleDefinition.find(role.id, on: app.db) != nil)
+            #expect(try await RoleStore.legacyRole(id: role.id, on: app.db) != nil)
 
             try await RoleBindingService.revoke(
                 principalType: .user,
@@ -556,7 +555,7 @@ final class RoleEndpointTests {
                 afterResponse: { res in
                     #expect(res.status == .noContent)
                 })
-            #expect(try await IAMRoleDefinition.find(role.id, on: app.db) == nil)
+            #expect(try await RoleStore.legacyRole(id: role.id, on: app.db) == nil)
             #expect(try await PolicySetVersionService.current(on: app.db) == before + 1)
         }
     }
@@ -701,7 +700,7 @@ final class RoleEndpointTests {
                     #expect(res.status == .badRequest)
                 })
 
-            let stored = try await IAMRoleDefinition.query(on: app.db).filter(\.$managed == false).count()
+            let stored = try await RoleStore.legacyRoleCount(managed: false, on: app.db)
             #expect(stored == 0)
             #expect(try await PolicySetVersionService.current(on: app.db) == before)
         }
@@ -763,7 +762,7 @@ final class RoleEndpointTests {
                     #expect(res.status == .noContent)
                 })
 
-            #expect(try await IAMRoleDefinition.find(role.id, on: app.db) == nil)
+            #expect(try await RoleStore.legacyRole(id: role.id, on: app.db) == nil)
             #expect(try await PolicySetVersionService.current(on: app.db) == before + 1)
         }
     }

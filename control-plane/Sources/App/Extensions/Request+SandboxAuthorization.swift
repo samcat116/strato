@@ -1,5 +1,5 @@
-import Fluent
 import Vapor
+import Fluent
 
 extension Request {
     /// Fetch a sandbox and enforce a canonical action on it in one call, through

@@ -28,12 +28,11 @@ final class VMMetadataOptOutTests {
                 isSystemAdmin: false)
             let org = try await builder.createOrganization(name: "Metadata Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
             let project = try await builder.createProject(
                 name: "Metadata Project", description: "Project for kill-switch tests",
                 organization: org)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, project, token)
         } catch {
@@ -61,7 +60,7 @@ final class VMMetadataOptOutTests {
             ],
             protocolVersion: protocolVersion
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.db).first?.id
         let uuid = try await app.agentService.registerAgent(
             message, agentName: name, siteID: nil,
             organizationScope: orgID.map { .organization($0) })
@@ -144,7 +143,7 @@ final class VMMetadataOptOutTests {
     @Test("An update that omits the switch leaves it alone")
     func omittedSwitchIsNotAnInstruction() async throws {
         try await withVMTestApp { app, project, token in
-            let vm = try await self.placeVM(
+            var vm = try await self.placeVM(
                 app: app, project: project, named: "vm-omit", onAgent: nil)
             vm.metadataEnabled = false
             try await vm.save(on: app.db)

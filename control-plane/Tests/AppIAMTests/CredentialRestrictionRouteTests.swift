@@ -46,15 +46,14 @@ final class CredentialRestrictionRouteTests {
         try await RoleBindingService.grant(
             principalType: .user, principalID: try user.requireID(), role: .admin,
             nodeType: .organization, nodeID: try org.requireID(), createdBy: nil, on: app.db)
-        user.currentOrganizationId = try org.requireID()
-        try await user.save(on: app.db)
+        try await user.replacingCurrentOrganization(try org.requireID()).save(on: app.db)
         return Fixture(
             org: org,
             project: project,
             vm: vm,
             readOnlyKey: try await user.generateAPIKey(
-                on: app.db, name: "read-only", restriction: .readOnly),
-            unrestrictedKey: try await user.generateAPIKey(on: app.db, name: "unrestricted")
+                on: app, name: "read-only", restriction: .readOnly),
+            unrestrictedKey: try await user.generateAPIKey(on: app, name: "unrestricted")
         )
     }
 
@@ -123,11 +122,11 @@ final class CredentialRestrictionRouteTests {
     func enrollmentListIsEmptyForReadOnlyCredentials() async throws {
         try await withApp { app in
             let fixture = try await fixture(app, admin: true)
-            let enrollment = AgentEnrollment(
+            let enrollment = TestAgentEnrollment(
                 agentName: "restriction-agent",
                 spiffeID: "spiffe://example.org/agent/restriction-agent",
                 organizationScope: .organization(try fixture.org.requireID()))
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
 
             struct Page: Content { let total: Int }
 

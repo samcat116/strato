@@ -159,8 +159,11 @@ final class WhoCanCeilingTests {
                 createdBy: nil, on: app.db)
             // Simulate a row written before the migration: clear the stored
             // text so the cache must regenerate it from the matchers.
-            guardrail.cedarText = nil
-            try await guardrail.save(on: app.db)
+            try await LegacyGuardrailStore.setCedarText(
+                id: guardrail.id,
+                cedarText: nil,
+                on: app.db
+            )
             try await rebuild(app)
 
             let decision = try await IAMAuthorizer.authorize(

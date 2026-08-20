@@ -74,7 +74,7 @@ final class SnapshotConvergenceTests {
             protocolVersion: protocolVersion,
             sandboxCapable: true
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.db).first?.id
         let uuid = try await app.agentService.registerAgent(
             message, agentName: name, organizationScope: orgID.map { .organization($0) })
         return uuid.uuidString
@@ -99,14 +99,14 @@ final class SnapshotConvergenceTests {
             vmID: try vm.requireID(),
             projectID: try project.requireID(),
             environment: vm.environment,
+            status: status,
+            size: 1 << 30,
             agentId: agentId,
+            desiredStatus: desired,
+            generation: generation,
+            observedGeneration: observedGeneration,
             expiresAt: expiresAt,
             createdByID: try user.requireID())
-        snapshot.status = status
-        snapshot.desiredStatus = desired
-        snapshot.generation = generation
-        snapshot.observedGeneration = observedGeneration
-        snapshot.size = 1 << 30
         try await snapshot.save(on: app.db)
         return snapshot
     }
@@ -129,7 +129,7 @@ final class SnapshotConvergenceTests {
     private func placedVM(
         _ builder: TestDataBuilder, project: Project, agentId: String, name: String = "vm"
     ) async throws -> VM {
-        let vm = try await builder.createVM(name: name, project: project)
+        var vm = try await builder.createVM(name: name, project: project)
         vm.hypervisorId = agentId
         vm.setStatus(.running)
         try await vm.save(on: builder.db)
@@ -167,11 +167,11 @@ final class SnapshotConvergenceTests {
     func captureModeRidesTheSync() async throws {
         try await withSnapshotApp { app, builder, user, project in
             let agentId = try await registerAgent(app: app, named: "mode-agent")
-            let sandbox = try await builder.createSandbox(name: "sb", project: project)
+            var sandbox = try await builder.createSandbox(name: "sb", project: project)
             sandbox.hypervisorId = agentId
             try await sandbox.save(on: app.db)
 
-            let snapshot = SandboxSnapshot(
+            var snapshot = SandboxSnapshot(
                 name: "stopper",
                 sandboxID: try sandbox.requireID(),
                 projectID: try project.requireID(),
@@ -194,7 +194,7 @@ final class SnapshotConvergenceTests {
     func exportPutsUploadSlotsOnTheSync() async throws {
         try await withSnapshotApp { app, builder, user, project in
             let agentId = try await registerAgent(app: app, named: "export-agent")
-            let sandbox = try await builder.createSandbox(name: "sb", project: project)
+            var sandbox = try await builder.createSandbox(name: "sb", project: project)
             sandbox.hypervisorId = agentId
             try await sandbox.save(on: app.db)
 
@@ -203,10 +203,10 @@ final class SnapshotConvergenceTests {
                 sandboxID: try sandbox.requireID(),
                 projectID: try project.requireID(),
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: agentId,
+                exportDesired: true,
                 createdByID: try user.requireID())
-            snapshot.status = .ready
-            snapshot.exportDesired = true
             try await snapshot.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
@@ -299,25 +299,26 @@ final class SnapshotConvergenceTests {
             let snapshot = try await makeCheckpoint(
                 on: app, user: user, project: project, vm: vm, agentId: agentId,
                 status: .creating, generation: 10, observedGeneration: 9)
-            snapshot.convergenceDeadline = Date().addingTimeInterval(120)
+                .replacing(convergenceDeadline: .some(Date().addingTimeInterval(120)))
             try await snapshot.save(on: app.db)
             let snapshotID = try #require(snapshot.id)
             let stale = try #require(try await VMSnapshot.find(snapshotID, on: app.db))
             let deleteCopy = try #require(try await VMSnapshot.find(snapshotID, on: app.db))
 
-            let accepted = try await app.resourceMutation.accept(
+            let acceptedResult = try await app.resourceMutation.acceptValue(
                 .delete, on: deleteCopy, actor: .user(try user.requireID()),
                 dispatch: .directResolution { _ in false }, on: app.db, app: app
-            ) { db in
-                try await ResourceFinalizerService.stampForDeletion(deleteCopy, on: db)
-                deleteCopy.setDesiredStatus(.absent)
+            ) { current, db in
+                try await ResourceFinalizerService.stampForDeletion(current, on: db)
+                    .replacingDesiredStatus(.absent)
             }
+            let accepted = acceptedResult.accepted
             #expect(accepted.targetGeneration == 11)
 
-            let outcome = try await ResourceConvergence.recordFailure(
+            let outcome = try await ResourceConvergence.recordValueFailure(
                 stale, mutation: .create, reason: "obsolete capture failure",
                 telemetryReason: "convergence_failed", on: app.db)
-            #expect(outcome == .superseded(actualGeneration: 11))
+            #expect(outcome.outcome == .superseded(actualGeneration: 11))
 
             let stored = try #require(try await VMSnapshot.find(snapshotID, on: app.db))
             #expect(stored.generation == 11)
@@ -340,7 +341,7 @@ final class SnapshotConvergenceTests {
             let snapshot = try await makeCheckpoint(
                 on: app, user: user, project: project, vm: vm, agentId: agentId,
                 desired: .absent)
-            snapshot.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
+                .replacing(finalizers: [ResourceFinalizer.agentAbsent.rawValue])
             try await snapshot.save(on: app.db)
 
             // Still listed: nothing is confirmed, so the row stays.
@@ -374,7 +375,7 @@ final class SnapshotConvergenceTests {
             let terminating = try await makeCheckpoint(
                 on: app, user: user, project: project, vm: vm, agentId: agentId,
                 name: "terminating", desired: .absent)
-            terminating.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
+                .replacing(finalizers: [ResourceFinalizer.agentAbsent.rawValue])
             try await terminating.save(on: app.db)
             let live = try await makeCheckpoint(
                 on: app, user: user, project: project, vm: vm, agentId: agentId, name: "live")
@@ -498,20 +499,20 @@ final class SnapshotConvergenceTests {
     func outstandingExportBlocksConvergence() async throws {
         try await withSnapshotApp { app, builder, user, project in
             let agentId = try await registerAgent(app: app, named: "export-converge")
-            let sandbox = try await builder.createSandbox(name: "sb", project: project)
+            var sandbox = try await builder.createSandbox(name: "sb", project: project)
             sandbox.hypervisorId = agentId
             try await sandbox.save(on: app.db)
 
-            let snapshot = SandboxSnapshot(
+            var snapshot = SandboxSnapshot(
                 name: "awaiting-export",
                 sandboxID: try sandbox.requireID(),
                 projectID: try project.requireID(),
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: agentId,
+                observedGeneration: 1,
+                exportDesired: true,
                 createdByID: try user.requireID())
-            snapshot.status = .ready
-            snapshot.observedGeneration = snapshot.generation
-            snapshot.exportDesired = true
             try await snapshot.save(on: app.db)
 
             #expect(!snapshot.isConverged)
@@ -519,10 +520,11 @@ final class SnapshotConvergenceTests {
 
             // The upload route's completion is what settles it — never the
             // agent's word.
-            snapshot.exportedArtifacts = SandboxSnapshotArtifactKind.allCases.map {
-                SandboxSnapshotExportedArtifact(kind: $0, sizeBytes: 1, sha256: "abc")
-            }
-            snapshot.exportedAt = Date()
+            snapshot = snapshot.replacing(
+                exportedAt: .some(Date()),
+                exportedArtifacts: .some(SandboxSnapshotArtifactKind.allCases.map {
+                    SandboxSnapshotExportedArtifact(kind: $0, sizeBytes: 1, sha256: "abc")
+                }))
             #expect(snapshot.isConverged)
             #expect(snapshot.conditions.converged)
         }
@@ -536,21 +538,21 @@ final class SnapshotConvergenceTests {
     func currentGenerationFailureUnconvergesArtifact() async throws {
         try await withSnapshotApp { app, builder, user, project in
             let agentId = try await registerAgent(app: app, named: "artifact-degraded")
-            let sandbox = try await builder.createSandbox(name: "sb", project: project)
+            var sandbox = try await builder.createSandbox(name: "sb", project: project)
             sandbox.hypervisorId = agentId
             try await sandbox.save(on: app.db)
 
-            let snapshot = SandboxSnapshot(
+            var snapshot = SandboxSnapshot(
                 name: "failed-capture",
                 sandboxID: try sandbox.requireID(),
                 projectID: try project.requireID(),
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: agentId,
+                errorMessage: "capture failed: no space left on device",
+                observedGeneration: 1,
+                failedGeneration: 1,
                 createdByID: try user.requireID())
-            snapshot.status = .ready
-            snapshot.observedGeneration = snapshot.generation
-            snapshot.errorMessage = "capture failed: no space left on device"
-            snapshot.failedGeneration = snapshot.generation
             try await snapshot.save(on: app.db)
 
             #expect(!snapshot.isConverged)
@@ -559,8 +561,7 @@ final class SnapshotConvergenceTests {
 
             // A failure a newer mutation already moved past still stands, but it
             // is not this generation's verdict.
-            snapshot.generation += 1
-            snapshot.observedGeneration = snapshot.generation
+            snapshot = snapshot.replacing(generation: 2, observedGeneration: 2)
             #expect(snapshot.isConverged)
             #expect(snapshot.conditions.converged)
             #expect(snapshot.conditions.degraded != nil)
@@ -571,20 +572,20 @@ final class SnapshotConvergenceTests {
     func terminatingArtifactIsNeverConverged() async throws {
         try await withSnapshotApp { app, builder, user, project in
             let agentId = try await registerAgent(app: app, named: "artifact-terminating")
-            let sandbox = try await builder.createSandbox(name: "sb", project: project)
+            var sandbox = try await builder.createSandbox(name: "sb", project: project)
             sandbox.hypervisorId = agentId
             try await sandbox.save(on: app.db)
 
-            let snapshot = SandboxSnapshot(
+            var snapshot = SandboxSnapshot(
                 name: "going-away",
                 sandboxID: try sandbox.requireID(),
                 projectID: try project.requireID(),
                 environment: sandbox.environment,
                 agentId: agentId,
                 createdByID: try user.requireID())
-            snapshot.status = .ready
-            snapshot.setFixtureDesiredStatus(.absent)
-            snapshot.observedGeneration = snapshot.generation
+            snapshot = snapshot.replacing(status: .ready)
+                .settingFixtureDesiredStatus(.absent)
+                .replacingObservedGeneration(snapshot.generation + 1)
             try await snapshot.save(on: app.db)
 
             // Absence is confirmed by omission from the agent's report, which

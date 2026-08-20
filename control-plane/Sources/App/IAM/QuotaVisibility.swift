@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import Vapor
 
@@ -47,9 +46,9 @@ enum QuotaVisibility {
     /// which is why a corrupt row can appear in an admin's quota list and not in
     /// their compliance figures.
     static func measuredNode(of quota: ResourceQuota) -> IAMNode? {
-        if let projectID = quota.$project.id { return IAMNode(type: .project, id: projectID) }
-        if let folderID = quota.$organizationalUnit.id { return IAMNode(type: .organizationalUnit, id: folderID) }
-        if let organizationID = quota.$organization.id { return IAMNode(type: .organization, id: organizationID) }
+        if let projectID = quota.projectID { return IAMNode(type: .project, id: projectID) }
+        if let folderID = quota.organizationalUnitID { return IAMNode(type: .organizationalUnit, id: folderID) }
+        if let organizationID = quota.organizationID { return IAMNode(type: .organization, id: organizationID) }
         return nil
     }
 

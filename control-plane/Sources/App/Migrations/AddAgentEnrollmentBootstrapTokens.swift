@@ -6,14 +6,14 @@ import Fluent
 /// which the new hash could be reconstructed or silently migrated.
 struct AddAgentEnrollmentBootstrapTokens: AsyncMigration {
     func prepare(on database: Database) async throws {
-        try await database.schema(AgentEnrollment.schema)
+        try await database.schema("agent_enrollments")
             .field("bootstrap_token_hash", .string)
             .unique(on: "bootstrap_token_hash")
             .update()
     }
 
     func revert(on database: Database) async throws {
-        try await database.schema(AgentEnrollment.schema)
+        try await database.schema("agent_enrollments")
             .deleteUnique(on: "bootstrap_token_hash")
             .deleteField("bootstrap_token_hash")
             .update()

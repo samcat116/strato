@@ -40,8 +40,7 @@ final class SandboxTests {
             )
             let org = try await builder.createOrganization(name: "Sandbox Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "Sandbox Project",
@@ -49,7 +48,7 @@ final class SandboxTests {
                 organization: org
             )
             let sandbox = try await builder.createSandbox(name: "test-sandbox", project: project)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, project, sandbox, token)
 
@@ -99,7 +98,7 @@ final class SandboxTests {
             sandboxCapable: sandboxCapable,
             sandboxNetworkingCapable: sandboxNetworkingCapable
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.db).first?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: agentName,
             organizationScope: orgID.map { .organization($0) })
@@ -376,17 +375,17 @@ final class SandboxTests {
             #expect(sandbox.desiredStatus == .stopped)
             #expect(sandbox.generation == 1)
             #expect(sandbox.observedGeneration == 0)
-            #expect(sandbox.$project.id == project.id)
+            #expect(sandbox.projectID == project.id)
 
             // Ownership: the creator gets an admin binding on the sandbox node
             // in the create transaction.
-            let ownerBindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
-                .filter(\.$principalID == user.id!)
-                .filter(\.$roleID == IAMRole.admin.seededID)
-                .filter(\.$nodeType == IAMNodeType.sandbox.rawValue)
-                .filter(\.$nodeID == body.resource.id!)
-                .count()
+            let ownerBindings = try await LegacyRoleBindingStore.bindings(
+                principalType: IAMPrincipalType.user.rawValue,
+                principalID: user.id!,
+                roleID: IAMRole.admin.seededID,
+                nodeType: IAMNodeType.sandbox.rawValue,
+                nodeID: body.resource.id!,
+                on: app.db).count
             #expect(ownerBindings == 1)
 
             // No schedulable agent exists, so background placement must degrade
@@ -399,7 +398,8 @@ final class SandboxTests {
 
     @Test("POST /api/sandboxes forks a ready snapshot with new identity and pinned placement")
     func createFromSnapshot() async throws {
-        try await withSandboxTestApp { app, user, project, source, token in
+        try await withSandboxTestApp { app, user, project, initialSource, token in
+            var source = initialSource
             let agentId = try await registerAgent(
                 app: app,
                 sandbox: source,
@@ -432,13 +432,12 @@ final class SandboxTests {
                 sandboxID: source.id!,
                 projectID: project.id!,
                 environment: source.environment,
+                status: .ready,
                 agentId: agentId,
+                architecture: CPUArchitecture.current.rawValue,
+                guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
+                forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.architecture = CPUArchitecture.current.rawValue
-            snapshot.guestControlProtocolVersion =
-                SandboxGuestControlProtocol.currentVersion
-            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
             try await snapshot.save(on: app.db)
 
             var accepted: AcceptedSandbox?
@@ -485,9 +484,8 @@ final class SandboxTests {
             #expect(forkState.registryCredential == nil)
 
             let forkNIC = try #require(
-                await SandboxNetworkInterface.query(on: app.db)
-                    .filter(\.$sandbox.$id == forkID)
-                    .first())
+                await LegacySandboxNetworkInterfaceStore.interfaces(
+                    sandboxID: forkID, on: app.db).first)
             #expect(forkNIC.macAddress != sourceNIC.macAddress)
             #expect(forkNIC.deviceName == "net0")
         }
@@ -495,7 +493,8 @@ final class SandboxTests {
 
     @Test("Fork refuses machine overrides")
     func createFromSnapshotGuards() async throws {
-        try await withSandboxTestApp { app, user, project, source, token in
+        try await withSandboxTestApp { app, user, project, initialSource, token in
+            var source = initialSource
             let agent = try await registerAgent(
                 app: app,
                 sandbox: source,
@@ -506,9 +505,9 @@ final class SandboxTests {
                 sandboxID: source.id!,
                 projectID: project.id!,
                 environment: source.environment,
+                status: .ready,
                 agentId: agent,
                 createdByID: user.id!)
-            snapshot.status = .ready
             try await snapshot.save(on: app.db)
 
             // A fork resumes the checkpointed machine, so a spec override the
@@ -529,7 +528,8 @@ final class SandboxTests {
 
     @Test("Fork refuses a checkpoint whose guest is not on the exact current protocol")
     func createFromSnapshotRejectsLegacyGuest() async throws {
-        try await withSandboxTestApp { app, user, project, source, token in
+        try await withSandboxTestApp { app, user, project, initialSource, token in
+            var source = initialSource
             let agentId = try await registerAgent(
                 app: app,
                 sandbox: source,
@@ -540,12 +540,11 @@ final class SandboxTests {
                 sandboxID: source.id!,
                 projectID: project.id!,
                 environment: source.environment,
+                status: .ready,
                 agentId: agentId,
+                guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion - 1,
+                forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.guestControlProtocolVersion =
-                SandboxGuestControlProtocol.currentVersion - 1
-            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
             try await snapshot.save(on: app.db)
 
             try await app.test(.POST, "/api/sandboxes") { req in
@@ -633,9 +632,8 @@ final class SandboxTests {
 
             let forkID = try #require(accepted).resource.id!
             let forkNIC = try #require(
-                await SandboxNetworkInterface.query(on: app.db)
-                    .filter(\.$sandbox.$id == forkID)
-                    .first())
+                await LegacySandboxNetworkInterfaceStore.interfaces(
+                    sandboxID: forkID, on: app.db).first)
             #expect(forkNIC.logicalNetworkID == (try network.requireID()))
             #expect(forkNIC.macAddress != sourceNIC.macAddress)
         }
@@ -715,10 +713,10 @@ final class SandboxTests {
                 sandboxID: source.id!,
                 projectID: project.id!,
                 environment: source.environment,
+                status: .ready,
                 agentId: agentId,
+                guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
             try await snapshot.save(on: app.db)
 
             try await app.test(.POST, "/api/sandboxes") { req in
@@ -747,16 +745,16 @@ final class SandboxTests {
                 sandboxID: source.id!,
                 projectID: project.id!,
                 environment: source.environment,
+                status: .ready,
                 agentId: nil,
+                guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
+                forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion,
+                exportedAt: Date(),
+                exportedArtifacts: SandboxSnapshotArtifactKind.allCases.map {
+                    SandboxSnapshotExportedArtifact(
+                        kind: $0, sizeBytes: 16, sha256: String(repeating: "0", count: 64))
+                },
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
-            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
-            snapshot.exportedArtifacts = SandboxSnapshotArtifactKind.allCases.map {
-                SandboxSnapshotExportedArtifact(
-                    kind: $0, sizeBytes: 16, sha256: String(repeating: "0", count: 64))
-            }
-            snapshot.exportedAt = Date()
             try await snapshot.save(on: app.db)
 
             var accepted: AcceptedSandbox?
@@ -785,11 +783,11 @@ final class SandboxTests {
                 sandboxID: source.id!,
                 projectID: project.id!,
                 environment: source.environment,
+                status: .ready,
                 agentId: nil,
+                guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
+                forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
-            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
             try await snapshot.save(on: app.db)
 
             try await app.test(.POST, "/api/sandboxes") { req in
@@ -847,6 +845,7 @@ final class SandboxTests {
     @Test("Fork transaction rechecks destructive source transitions")
     func createFromSnapshotRechecksLineage() async throws {
         try await withSandboxTestApp { app, user, project, source, token in
+            var source = source
             let agentId = try await registerAgent(
                 app: app,
                 sandbox: source,
@@ -857,12 +856,11 @@ final class SandboxTests {
                 sandboxID: source.id!,
                 projectID: project.id!,
                 environment: source.environment,
+                status: .ready,
                 agentId: agentId,
+                guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
+                forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.guestControlProtocolVersion =
-                SandboxGuestControlProtocol.currentVersion
-            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
             try await snapshot.save(on: app.db)
 
             source.desiredStatus = .absent
@@ -912,6 +910,7 @@ final class SandboxTests {
     @Test("A restore hidden behind a newer mutation still blocks a fork")
     func createFromSnapshotBlockedByRestoreBehindNewerMutation() async throws {
         try await withSandboxTestApp { app, user, project, source, token in
+            var source = source
             let agentId = try await registerAgent(
                 app: app,
                 sandbox: source,
@@ -922,12 +921,11 @@ final class SandboxTests {
                 sandboxID: source.id!,
                 projectID: project.id!,
                 environment: source.environment,
+                status: .ready,
                 agentId: agentId,
+                guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
+                forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.guestControlProtocolVersion =
-                SandboxGuestControlProtocol.currentVersion
-            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
             try await snapshot.save(on: app.db)
 
             let sourceID = try source.requireID()
@@ -969,6 +967,7 @@ final class SandboxTests {
     @Test("A converged restore stops blocking forks of the source")
     func createFromSnapshotAllowedOnceRestoreConverges() async throws {
         try await withSandboxTestApp { app, user, project, source, token in
+            var source = source
             let agentId = try await registerAgent(
                 app: app,
                 sandbox: source,
@@ -979,12 +978,11 @@ final class SandboxTests {
                 sandboxID: source.id!,
                 projectID: project.id!,
                 environment: source.environment,
+                status: .ready,
                 agentId: agentId,
+                guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
+                forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.guestControlProtocolVersion =
-                SandboxGuestControlProtocol.currentVersion
-            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
             try await snapshot.save(on: app.db)
 
             source.setStatus(.running)
@@ -1106,7 +1104,7 @@ final class SandboxTests {
             // A mutation in flight: desired state moved and the agent has not
             // confirmed it, which is what the operation mutex used to key on.
             sandbox.setFixtureDesiredStatus(.running)
-            sandbox.extendConvergenceDeadline(by: 600)
+            sandbox = sandbox.extendingConvergenceDeadline(by: 600)
             try await sandbox.save(on: app.db)
 
             // The double-submit `409` went with the operation row (STR-147):
@@ -1136,7 +1134,7 @@ final class SandboxTests {
                 principalType: .user, principalID: user.id!, role: .admin,
                 nodeType: .sandbox, nodeID: sandboxID, createdBy: user.id!, on: app.db)
             let snapshot = SandboxSnapshot(
-                name: "snap", sandboxID: sandboxID, projectID: sandbox.$project.id,
+                name: "snap", sandboxID: sandboxID, projectID: sandbox.projectID,
                 environment: sandbox.environment, agentId: nil, createdByID: user.id!)
             try await snapshot.save(on: app.db)
             let snapshotID = try snapshot.requireID()
@@ -1167,15 +1165,15 @@ final class SandboxTests {
                 #expect(operation.kind == .delete)
             }
 
-            let sandboxBindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$nodeType == IAMNodeType.sandbox.rawValue)
-                .filter(\.$nodeID == sandboxID)
-                .count()
+            let sandboxBindings = try await LegacyRoleBindingStore.bindings(
+                nodeType: IAMNodeType.sandbox.rawValue,
+                nodeID: sandboxID,
+                on: app.db).count
             #expect(sandboxBindings == 0)
-            let snapshotBindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$nodeType == IAMNodeType.sandboxSnapshot.rawValue)
-                .filter(\.$nodeID == snapshotID)
-                .count()
+            let snapshotBindings = try await LegacyRoleBindingStore.bindings(
+                nodeType: IAMNodeType.sandboxSnapshot.rawValue,
+                nodeID: snapshotID,
+                on: app.db).count
             #expect(snapshotBindings == 0)
         }
     }
@@ -1244,7 +1242,8 @@ final class SandboxTests {
 
     @Test("Environment removal is rejected (409) while sandboxes use it")
     func environmentRemovalBlockedBySandboxes() async throws {
-        try await withSandboxTestApp { app, _, project, sandbox, token in
+        try await withSandboxTestApp { app, _, project, initialSandbox, token in
+            var sandbox = initialSandbox
             // Move the sandbox off the default environment so the requests
             // below reach the sandbox guard (the default is unremovable, and
             // no VMs exist to trip the VM guard first).
@@ -1276,7 +1275,7 @@ final class SandboxTests {
         try await withSandboxTestApp { app, _, _, sandbox, _ in
             let outsider = try await TestDataBuilder(db: app.db).createUser(
                 username: "sandbox-outsider", email: "sandbox-outsider@example.com")
-            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
+            let outsiderToken = try await outsider.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/sandboxes/\(sandbox.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
@@ -1291,7 +1290,7 @@ final class SandboxTests {
         try await withSandboxTestApp { app, _, _, sandbox, _ in
             let outsider = try await TestDataBuilder(db: app.db).createUser(
                 username: "sandbox-outsider2", email: "sandbox-outsider2@example.com")
-            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
+            let outsiderToken = try await outsider.generateAPIKey(on: app)
 
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!)/start") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
@@ -1354,21 +1353,20 @@ final class SandboxTests {
             sandboxID: source.id!,
             projectID: project.id!,
             environment: source.environment,
+            status: .ready,
             agentId: agentId,
+            architecture: CPUArchitecture.current.rawValue,
+            guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
+            forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion,
             createdByID: user.id!)
-        snapshot.status = .ready
-        snapshot.architecture = CPUArchitecture.current.rawValue
-        snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
-        snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
         try await snapshot.save(on: db)
         return snapshot
     }
 
     private func projectNetwork(project: Project, on db: any Database) async throws -> LogicalNetwork {
-        if let existing = try await LogicalNetwork.query(on: db)
-            .filter(\.$project.$id == project.requireID())
-            .filter(\.$name == "default")
-            .first()
+        if let existing = try await LegacyLogicalNetworkStore.networks(
+            projectID: project.requireID(), name: "default", on: db
+        ).first
         {
             return existing
         }
@@ -1395,10 +1393,10 @@ final class SandboxTests {
             }
 
             let sandboxID = try #require(accepted?.resource.id)
-            let interfaces = try await SandboxNetworkInterface.query(on: app.db)
-                .filter(\.$sandbox.$id == sandboxID)
-                .with(\.$addresses)
-                .all()
+            let interfaces = try await LegacyInterfaceAddressStore.loading(
+                LegacySandboxNetworkInterfaceStore.interfaces(
+                    sandboxID: sandboxID, on: app.db),
+                on: app.db)
             #expect(interfaces.count == 1)
             let nic = try #require(interfaces.first)
             #expect(nic.logicalNetworkID == network.id)
@@ -1433,9 +1431,8 @@ final class SandboxTests {
             }
 
             let sandboxID = try #require(accepted?.resource.id)
-            let interfaces = try await SandboxNetworkInterface.query(on: app.db)
-                .filter(\.$sandbox.$id == sandboxID)
-                .all()
+            let interfaces = try await LegacySandboxNetworkInterfaceStore.interfaces(
+                sandboxID: sandboxID, on: app.db)
             #expect(interfaces.isEmpty)
         }
     }
@@ -1453,19 +1450,21 @@ final class SandboxTests {
                 vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: VMNetworkInterface.generateMACAddress())
             try await vmNIC.save(on: app.db)
-            try await VMInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: try vmNIC.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
-                address: "192.168.1.2", prefixLength: 24, gateway: network.gateway
-            ).save(on: app.db)
+                address: "192.168.1.2", prefixLength: 24, gateway: network.gateway,
+                on: app.db)
 
             let sbNIC = SandboxNetworkInterface(
                 sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: VMNetworkInterface.generateMACAddress())
             try await sbNIC.save(on: app.db)
-            try await SandboxInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .sandbox,
                 interfaceID: try sbNIC.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
-                address: "192.168.1.3", prefixLength: 24, gateway: network.gateway
-            ).save(on: app.db)
+                address: "192.168.1.3", prefixLength: 24, gateway: network.gateway,
+                on: app.db)
 
             let allocation = try await IPAMService.allocateIP(for: network, on: app.db)
             #expect(allocation.ipAddress == "192.168.1.4")
@@ -1484,10 +1483,11 @@ final class SandboxTests {
                 sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: "00:0c:29:ab:cd:ef")
             try await nic.save(on: app.db)
-            try await SandboxInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .sandbox,
                 interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
-                address: "192.168.1.7", prefixLength: 24, gateway: network.gateway
-            ).save(on: app.db)
+                address: "192.168.1.7", prefixLength: 24, gateway: network.gateway,
+                on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let entry = try #require(message.sandboxes.first)
@@ -1517,10 +1517,11 @@ final class SandboxTests {
                 sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: "00:0c:29:ab:cd:ee")
             try await nic.save(on: app.db)
-            try await SandboxInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .sandbox,
                 interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
-                address: "192.168.1.8", prefixLength: 24, gateway: network.gateway
-            ).save(on: app.db)
+                address: "192.168.1.8", prefixLength: 24, gateway: network.gateway,
+                on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let entry = try #require(message.sandboxes.first)
@@ -1561,10 +1562,10 @@ final class SandboxTests {
             let spec = try #require(entry.spec.network)
 
             let nic = try #require(
-                await SandboxNetworkInterface.query(on: app.db)
-                    .filter(\.$sandbox.$id == sandboxID)
-                    .with(\.$addresses)
-                    .first())
+                await LegacyInterfaceAddressStore.loading(
+                    LegacySandboxNetworkInterfaceStore.interfaces(
+                        sandboxID: sandboxID, on: app.db),
+                    on: app.db).first)
             #expect(spec.ipAddress == nic.ipv4Address?.address)
             // The default group the create transaction attached rides with it,
             // so the port is filtered from the moment it exists (STR-102).
@@ -1583,22 +1584,24 @@ final class SandboxTests {
                 sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: "00:0c:29:ab:cd:11")
             try await nic.save(on: app.db)
-            try await SandboxInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .sandbox,
                 interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
-                address: "192.168.1.9", prefixLength: 24, gateway: network.gateway
-            ).save(on: app.db)
-            try await nic.$addresses.load(on: app.db)
+                address: "192.168.1.9", prefixLength: 24, gateway: network.gateway,
+                on: app.db)
+            let loadedNIC = try #require(
+                await LegacyInterfaceAddressStore.loading([nic], on: app.db).first)
 
             let groupIDs = [UUID(), UUID()]
             // The gate is the outermost check: ids or no ids.
             #expect(
                 SandboxSpecBuilder.networkSpec(
-                    from: nic, network: network, securityGroupIds: groupIDs,
+                    from: loadedNIC, network: network, securityGroupIds: groupIDs,
                     agentRealizesSandboxNICs: false) == nil)
 
             let spec = try #require(
                 SandboxSpecBuilder.networkSpec(
-                    from: nic, network: network, securityGroupIds: groupIDs,
+                    from: loadedNIC, network: network, securityGroupIds: groupIDs,
                     agentRealizesSandboxNICs: true))
             #expect(spec.securityGroupIds == groupIDs)
             #expect(spec.macAddress == nic.macAddress)
@@ -1661,9 +1664,8 @@ final class SandboxTests {
             let network = try await self.projectNetwork(project: project, on: app.db)
             let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
                 projectID: try project.requireID(), on: app.db)
-            let other = SecurityGroup(
-                projectID: try project.requireID(), name: "sbx-second", description: nil)
-            try await other.save(on: app.db)
+            let other = try await LegacySecurityGroupStore.insert(
+                projectID: try project.requireID(), name: "sbx-second", on: app.db)
 
             // Saved net1 first, so insertion order and device-name order differ.
             for (deviceName, group) in [("net1", other), ("net0", defaultGroup)] {
@@ -1671,18 +1673,22 @@ final class SandboxTests {
                     sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
                     macAddress: VMNetworkInterface.generateMACAddress(), deviceName: deviceName)
                 try await nic.save(on: app.db)
-                try await SandboxInterfaceSecurityGroup(
-                    interfaceID: try nic.requireID(), securityGroupID: try group.requireID()
-                ).save(on: app.db)
+                try await LegacyInterfaceSecurityGroupStore.insert(
+                    kind: .sandbox,
+                    interfaceID: try nic.requireID(),
+                    securityGroupID: group.id,
+                    on: app.db)
             }
 
-            try await sandbox.$networkInterfaces.load(on: app.db)
-            for interface in sandbox.networkInterfaces {
-                try await interface.$securityGroupMemberships.load(on: app.db)
-            }
-            let detail = SandboxDetailResponse(from: sandbox)
+            try await LegacySandboxNetworkInterfaceStore.load([sandbox], on: app.db)
+            let memberships = try await LegacyInterfaceSecurityGroupStore.securityGroupIDsByInterface(
+                kind: .sandbox,
+                interfaceIDs: sandbox.networkInterfaces.compactMap(\.id),
+                on: app.db)
+            let detail = SandboxDetailResponse(
+                from: sandbox, securityGroupIDsByInterfaceID: memberships)
             #expect(detail.networkInterfaces.map(\.deviceName) == ["net0", "net1"])
-            #expect(detail.securityGroupIds == [try defaultGroup.requireID()])
+            #expect(detail.securityGroupIds == [defaultGroup.id])
             #expect(detail.securityGroupIds == detail.networkInterfaces.first?.securityGroupIds)
         }
     }
@@ -1706,18 +1712,18 @@ final class SandboxTests {
             let sandboxID = try #require(accepted?.resource.id)
 
             // Sanity: rows exist before deletion.
-            let nicIDs = try await SandboxNetworkInterface.query(on: app.db)
-                .filter(\.$sandbox.$id == sandboxID).all().map { try $0.requireID() }
+            let nicIDs = try await LegacySandboxNetworkInterfaceStore.interfaces(
+                sandboxID: sandboxID, on: app.db).map { try $0.requireID() }
             #expect(nicIDs.count == 1)
 
             let sandbox = try #require(await Sandbox.find(sandboxID, on: app.db))
             try await sandbox.delete(on: app.db)
 
-            let remainingNICs = try await SandboxNetworkInterface.query(on: app.db)
-                .filter(\.$sandbox.$id == sandboxID).count()
-            #expect(remainingNICs == 0)
-            let remainingAddresses = try await SandboxInterfaceAddress.query(on: app.db)
-                .filter(\.$interface.$id ~~ nicIDs).count()
+            let remainingNICs = try await LegacySandboxNetworkInterfaceStore.interfaces(
+                sandboxID: sandboxID, on: app.db)
+            #expect(remainingNICs.isEmpty)
+            let remainingAddresses = try await LegacyInterfaceAddressStore.count(
+                kind: .sandbox, interfaceIDs: nicIDs, on: app.db)
             #expect(remainingAddresses == 0)
         }
     }
@@ -1726,11 +1732,12 @@ final class SandboxTests {
 
     @Test("A converged observation completes the pending boot operation")
     func observedRunningCompletesBoot() async throws {
-        try await withSandboxTestApp { app, user, _, sandbox, _ in
+        try await withSandboxTestApp { app, user, _, initialSandbox, _ in
+            var sandbox = initialSandbox
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
             sandbox.setFixtureDesiredStatus(.running)
-            sandbox.extendConvergenceDeadline(by: 600)
+            sandbox = sandbox.extendingConvergenceDeadline(by: 600)
             try await sandbox.save(on: app.db)
 
             let envelope = try self.report(
@@ -1754,7 +1761,8 @@ final class SandboxTests {
 
     @Test("An exited observation satisfies desired running and records the exit code")
     func observedExitedSatisfiesRunning() async throws {
-        try await withSandboxTestApp { app, user, _, sandbox, _ in
+        try await withSandboxTestApp { app, user, _, initialSandbox, _ in
+            var sandbox = initialSandbox
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
             sandbox.setFixtureDesiredStatus(.running)
@@ -1778,11 +1786,12 @@ final class SandboxTests {
 
     @Test("A failed convergence at the current generation degrades the sandbox and reverts desired")
     func observedFailureDegradesSandbox() async throws {
-        try await withSandboxTestApp { app, user, _, sandbox, _ in
+        try await withSandboxTestApp { app, user, _, initialSandbox, _ in
+            var sandbox = initialSandbox
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
             sandbox.setFixtureDesiredStatus(.running)
-            sandbox.extendConvergenceDeadline(by: 600)
+            sandbox = sandbox.extendingConvergenceDeadline(by: 600)
             try await sandbox.save(on: app.db)
             let generation = sandbox.generation
             _ = try await ResourceEvent.record(
@@ -1812,9 +1821,10 @@ final class SandboxTests {
     @Test("Absence from the report confirms a pending deletion and removes the row")
     func absenceConfirmsDeletion() async throws {
         try await withSandboxTestApp { app, user, _, sandbox, _ in
+            var sandbox = sandbox
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
-            try await ResourceFinalizerService.stampForDeletion(sandbox, on: app.db)
+            sandbox = try await ResourceFinalizerService.stampForDeletion(sandbox, on: app.db)
             sandbox.setFixtureDesiredStatus(.absent)
             try await sandbox.save(on: app.db)
             let request = try await ResourceEvent.record(
@@ -1829,7 +1839,7 @@ final class SandboxTests {
                 principalType: .user, principalID: user.id!, role: .admin,
                 nodeType: .sandbox, nodeID: sandbox.id!, createdBy: user.id!, on: app.db)
             let snapshot = SandboxSnapshot(
-                name: "snap", sandboxID: sandbox.id!, projectID: sandbox.$project.id,
+                name: "snap", sandboxID: sandbox.id!, projectID: sandbox.projectID,
                 environment: sandbox.environment, agentId: agentId, createdByID: user.id!)
             try await snapshot.save(on: app.db)
             let snapshotID = try snapshot.requireID()
@@ -1851,15 +1861,15 @@ final class SandboxTests {
             #expect(terminal.mutation == .delete)
             #expect(terminal.id != request.id)
 
-            let bindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$nodeType == IAMNodeType.sandbox.rawValue)
-                .filter(\.$nodeID == sandbox.id!)
-                .count()
+            let bindings = try await LegacyRoleBindingStore.bindings(
+                nodeType: IAMNodeType.sandbox.rawValue,
+                nodeID: sandbox.id!,
+                on: app.db).count
             #expect(bindings == 0)
-            let snapshotBindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$nodeType == IAMNodeType.sandboxSnapshot.rawValue)
-                .filter(\.$nodeID == snapshotID)
-                .count()
+            let snapshotBindings = try await LegacyRoleBindingStore.bindings(
+                nodeType: IAMNodeType.sandboxSnapshot.rawValue,
+                nodeID: snapshotID,
+                on: app.db).count
             #expect(snapshotBindings == 0)
         }
     }
@@ -1908,6 +1918,7 @@ final class SandboxTests {
     @Test("A timed-out sandbox delete keeps converging on absent instead of resurrecting it")
     func sweepLeavesStuckDeleteConvergingOnAbsent() async throws {
         try await withSandboxTestApp { app, user, _, sandbox, _ in
+            var sandbox = sandbox
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
             // A delete leaves `status` non-transitional: the user deleted a

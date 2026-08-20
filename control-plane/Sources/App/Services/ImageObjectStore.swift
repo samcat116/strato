@@ -5,7 +5,7 @@ import Vapor
 /// Where the control plane keeps image bytes.
 ///
 /// Object keys are the same relative paths the database has always stored in
-/// `ImageArtifact.storagePath` (`{projectId}/{imageId}/{kind}/{filename}`), so
+/// the persisted artifact storage path (`{projectId}/{imageId}/{kind}/{filename}`), so
 /// switching backends needs no database representation change — only movement
 /// of the bytes themselves.
 ///

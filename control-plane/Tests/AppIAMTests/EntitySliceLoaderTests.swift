@@ -68,7 +68,7 @@ final class EntitySliceLoaderTests {
     @Test("Chain entities carry the parent edges Cedar's `in` walks")
     func chainParentEdges() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Chain")
             let user = try await builder.createUser(username: "chain-user", email: "chain@example.com")
 
@@ -92,7 +92,7 @@ final class EntitySliceLoaderTests {
     @Test("A dangling node yields a one-entity chain and no grants — under-report, never invent")
     func danglingNode() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(username: "dangle-user", email: "dangle@example.com")
             let orphan = IAMNode(type: .virtualMachine, id: UUID())
 
@@ -108,7 +108,7 @@ final class EntitySliceLoaderTests {
     @Test("The target resource carries its environment attribute")
     func environmentAttribute() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Env")
             let user = try await builder.createUser(username: "env-user", email: "env@example.com")
 
@@ -125,7 +125,7 @@ final class EntitySliceLoaderTests {
     @Test("A network's slice climbs to its project, carrying no open-to-all attribute")
     func networkSliceClimbsToProject() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Net")
             let user = try await builder.createUser(username: "net-user", email: "net@example.com")
 
@@ -148,7 +148,7 @@ final class EntitySliceLoaderTests {
     @Test("A stale materialized folder path does not change the chain")
     func staleFolderPathIsOnlyAHint() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Stale")
             let expected = try await IAMResourceTree.ancestors(of: tree.vmNode, on: app.db)
 
@@ -158,10 +158,18 @@ final class EntitySliceLoaderTests {
             // naming an unrelated folder — and the chain must not move.
             let unrelated = try await builder.createOU(
                 name: "Stale Unrelated", description: "d", organization: tree.org)
-            tree.childOU.path = "/nonsense"
-            try await tree.childOU.save(on: app.db)
-            tree.ou.path = "/\(tree.org.id!.uuidString)/\(unrelated.id!.uuidString)/\(tree.ou.id!.uuidString)"
-            try await tree.ou.save(on: app.db)
+            try await OrganizationalUnit(
+                id: tree.childOU.id, name: tree.childOU.name, description: tree.childOU.description,
+                organizationID: tree.childOU.organizationID, parentOUID: tree.childOU.parentOUID,
+                path: "/nonsense", depth: tree.childOU.depth,
+                createdAt: tree.childOU.createdAt, updatedAt: tree.childOU.updatedAt
+            ).save(on: app.db)
+            try await OrganizationalUnit(
+                id: tree.ou.id, name: tree.ou.name, description: tree.ou.description,
+                organizationID: tree.ou.organizationID, parentOUID: tree.ou.parentOUID,
+                path: "/\(tree.org.id!.uuidString)/\(unrelated.id!.uuidString)/\(tree.ou.id!.uuidString)",
+                depth: tree.ou.depth, createdAt: tree.ou.createdAt, updatedAt: tree.ou.updatedAt
+            ).save(on: app.db)
 
             let actual = try await IAMResourceTree.ancestors(of: tree.vmNode, on: app.db)
             #expect(actual == expected)
@@ -179,12 +187,12 @@ final class EntitySliceLoaderTests {
     @Test("Loading through a request cache yields the same slices as loading without one")
     func requestCachedSlicesAreUnchanged() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Cache")
             let user = try await builder.createUser(username: "cache-user", email: "cache@example.com")
             try await builder.addUserToOrganization(user: user, organization: tree.org)
             let group = try await builder.createGroup(name: "cache-team", description: "d", organization: tree.org)
-            try await UserGroup(userID: user.id!, groupID: group.id!).save(on: app.db)
+            try await builder.addUserToGroup(user: user, group: group)
             try await RoleBindingService.grant(
                 principalType: .group, principalID: group.id!, role: .viewer,
                 nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
@@ -214,12 +222,12 @@ final class EntitySliceLoaderTests {
     @Test("A later check on an already-covered chain loads its slice without touching the database")
     func laterChecksReuseTheSliceComponents() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Reuse")
             let user = try await builder.createUser(username: "reuse-user", email: "reuse@example.com")
             try await builder.addUserToOrganization(user: user, organization: tree.org)
             let group = try await builder.createGroup(name: "reuse-team", description: "d", organization: tree.org)
-            try await UserGroup(userID: user.id!, groupID: group.id!).save(on: app.db)
+            try await builder.addUserToGroup(user: user, group: group)
             try await RoleBindingService.grant(
                 principalType: .group, principalID: group.id!, role: .viewer,
                 nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
@@ -264,12 +272,12 @@ final class EntitySliceLoaderTests {
     @Test("The principal carries group parent edges, org memberships, and the systemAdmin attribute")
     func principalShape() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Principal")
             let user = try await builder.createUser(username: "prin-user", email: "prin@example.com")
             try await builder.addUserToOrganization(user: user, organization: tree.org)
             let group = try await builder.createGroup(name: "team", description: "d", organization: tree.org)
-            try await UserGroup(userID: user.id!, groupID: group.id!).save(on: app.db)
+            try await builder.addUserToGroup(user: user, group: group)
 
             let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
 
@@ -287,7 +295,7 @@ final class EntitySliceLoaderTests {
     @Test("A system admin's attribute is set; a missing user gets the powerless defaults")
     func systemAdminAndMissingUser() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Admin")
             let admin = try await builder.createUser(
                 username: "root", email: "root@example.com", isSystemAdmin: true)
@@ -308,7 +316,7 @@ final class EntitySliceLoaderTests {
     @Test("Bindings anywhere along the chain flatten into the role grants")
     func bindingsAlongChain() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Grants")
             let user = try await builder.createUser(username: "grant-user", email: "grant@example.com")
 
@@ -330,7 +338,7 @@ final class EntitySliceLoaderTests {
     @Test("A binding outside the chain does not leak in")
     func bindingOutsideChain() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Leak")
             let other = try await buildTree(builder, prefix: "LeakOther")
             let user = try await builder.createUser(username: "leak-user", email: "leak@example.com")
@@ -347,11 +355,12 @@ final class EntitySliceLoaderTests {
     @Test("Group bindings flatten as group grants, reachable through the principal's parent edge")
     func groupBindings() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Group")
             let user = try await builder.createUser(username: "group-user", email: "group@example.com")
             let group = try await builder.createGroup(name: "ops", description: "d", organization: tree.org)
-            try await UserGroup(userID: user.id!, groupID: group.id!).save(on: app.db)
+            try await builder.addUserToOrganization(user: user, organization: tree.org)
+            try await builder.addUserToGroup(user: user, group: group)
 
             try await RoleBindingService.grant(
                 principalType: .group, principalID: group.id!, role: .operator,
@@ -368,7 +377,7 @@ final class EntitySliceLoaderTests {
     @Test("Another group's binding is not loaded for a non-member")
     func otherGroupsBindingExcluded() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "NonMember")
             let user = try await builder.createUser(username: "nonmember", email: "nonmember@example.com")
             let group = try await builder.createGroup(name: "others", description: "d", organization: tree.org)
@@ -385,7 +394,7 @@ final class EntitySliceLoaderTests {
     @Test("Expired bindings are excluded; conditioned bindings are skipped and counted, never flattened")
     func expiredAndConditionedBindings() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Expiry")
             let user = try await builder.createUser(username: "exp-user", email: "exp@example.com")
 
@@ -412,7 +421,7 @@ final class EntitySliceLoaderTests {
     @Test("A cross-org principal's bindings load; its memberOfOrgs names its own org, not the resource's")
     func crossOrgPrincipal() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Home")
             let otherOrg = try await builder.createOrganization(name: "Other Org")
             let outsider = try await builder.createUser(username: "outsider", email: "outsider@example.com")
@@ -439,13 +448,13 @@ final class EntitySliceLoaderTests {
     @Test("Two loads of the same slice are identical, including the JSON rendering")
     func deterministicSlices() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Det")
             let user = try await builder.createUser(username: "det-user", email: "det@example.com")
             try await builder.addUserToOrganization(user: user, organization: tree.org)
             for name in ["g1", "g2", "g3"] {
                 let group = try await builder.createGroup(name: name, description: "d", organization: tree.org)
-                try await UserGroup(userID: user.id!, groupID: group.id!).save(on: app.db)
+                try await builder.addUserToGroup(user: user, group: group)
                 try await RoleBindingService.grant(
                     principalType: .group, principalID: group.id!, role: .viewer,
                     nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
@@ -464,7 +473,7 @@ final class EntitySliceLoaderTests {
     @Test("Entities JSON uses Cedar's uid/attrs/parents shape with the __entity escape")
     func entitiesJSONShape() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "JSON")
             let user = try await builder.createUser(username: "json-user", email: "json@example.com")
             try await builder.addUserToOrganization(user: user, organization: tree.org)
@@ -483,7 +492,7 @@ final class EntitySliceLoaderTests {
     @Test("The base context carries every grants bucket, empty ones included")
     func baseContextShape() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Ctx")
             let user = try await builder.createUser(username: "ctx-user", email: "ctx@example.com")
             try await RoleBindingService.grant(
@@ -513,7 +522,7 @@ final class EntitySliceLoaderTests {
     @Test("Grants for roles outside the compiled set are dropped from the context, not emitted")
     func staleSchemaGrantsDropped() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Stale")
             let user = try await builder.createUser(username: "stale-user", email: "stale@example.com")
 
@@ -589,7 +598,7 @@ final class EntitySliceLoaderTests {
     @Test("Evaluator decisions agree with a hand-simulation of the static policies across a grid")
     func sliceCrossCheckAgainstWhoCan() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Cross")
             let otherOrg = try await builder.createOrganization(name: "Cross Other Org")
 
@@ -597,7 +606,8 @@ final class EntitySliceLoaderTests {
             try await builder.addUserToOrganization(user: member, organization: tree.org)
             let viaGroup = try await builder.createUser(username: "cross-group", email: "cg@example.com")
             let group = try await builder.createGroup(name: "cross-ops", description: "d", organization: tree.org)
-            try await UserGroup(userID: viaGroup.id!, groupID: group.id!).save(on: app.db)
+            try await builder.addUserToOrganization(user: viaGroup, organization: tree.org)
+            try await builder.addUserToGroup(user: viaGroup, group: group)
             let outsider = try await builder.createUser(username: "cross-out", email: "co@example.com")
             try await builder.addUserToOrganization(user: outsider, organization: otherOrg)
             let admin = try await builder.createUser(

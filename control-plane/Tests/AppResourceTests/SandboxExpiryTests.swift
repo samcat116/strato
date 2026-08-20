@@ -20,7 +20,7 @@ final class SandboxExpiryTests {
     /// agent to converge on, expiry takes the direct-deletion path and the row
     /// goes without an agent report.
     private func withSandboxTestApp(
-        _ test: (Application, User, Project, Sandbox) async throws -> Void
+        _ test: (Application, User, Project, inout Sandbox) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
 
@@ -37,17 +37,16 @@ final class SandboxExpiryTests {
             )
             let org = try await builder.createOrganization(name: "Expiry Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "member")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
 
             let project = try await builder.createProject(
                 name: "Expiry Project",
                 description: "Project for sandbox expiry tests",
                 organization: org
             )
-            let sandbox = try await builder.createSandbox(name: "expiry-sandbox", project: project)
+            var sandbox = try await builder.createSandbox(name: "expiry-sandbox", project: project)
 
-            try await test(app, user, project, sandbox)
+            try await test(app, user, project, &sandbox)
         } catch {
             try await app.shutdownForTesting()
             throw error
@@ -58,7 +57,7 @@ final class SandboxExpiryTests {
 
     /// `@Timestamp(on: .create)` overwrites `createdAt` on insert, so ageing a
     /// row means saving it first and backdating afterwards.
-    private func backdateCreation(_ sandbox: Sandbox, bySeconds seconds: TimeInterval, on db: any Database)
+    private func backdateCreation(_ sandbox: inout Sandbox, bySeconds seconds: TimeInterval, on db: any Database)
         async throws
     {
         sandbox.createdAt = Date().addingTimeInterval(-seconds)
@@ -79,11 +78,13 @@ final class SandboxExpiryTests {
     /// `resource_events` row an expiry appends, which replaced the operation
     /// row it used to insert (STR-147).
     private func deletionRequested(for sandboxID: UUID, on db: any Database) async throws -> Bool {
-        try await ResourceEvent.query(on: db)
-            .filter(\.$resourceKind == .sandbox)
-            .filter(\.$resourceID == sandboxID)
-            .filter(\.$mutation == .delete)
-            .first() != nil
+        try await ResourceEvent.matching(
+            resourceKind: .sandbox,
+            resourceID: sandboxID,
+            mutation: .delete,
+            limit: 1,
+            on: db
+        ).first != nil
     }
 
     /// The `resource_events` rows recording the sandbox's deletion: the
@@ -122,7 +123,7 @@ final class SandboxExpiryTests {
             #expect(sandbox.isExpired() == false)
 
             // A sandbox created before its own budget elapsed is expired now.
-            try await backdateCreation(sandbox, bySeconds: 7200, on: app.db)
+            try await backdateCreation(&sandbox, bySeconds: 7200, on: app.db)
             #expect(sandbox.isExpired())
         }
     }
@@ -148,7 +149,7 @@ final class SandboxExpiryTests {
         try await withSandboxTestApp { app, _, _, sandbox in
             let sandboxID = try sandbox.requireID()
             sandbox.ttlSeconds = 60
-            try await backdateCreation(sandbox, bySeconds: 120, on: app.db)
+            try await backdateCreation(&sandbox, bySeconds: 120, on: app.db)
 
             await app.agentService.sweepExpiredSandboxes()
 
@@ -170,7 +171,7 @@ final class SandboxExpiryTests {
         try await withSandboxTestApp { app, _, _, sandbox in
             let sandboxID = try sandbox.requireID()
             sandbox.ttlSeconds = 3600
-            try await backdateCreation(sandbox, bySeconds: 60, on: app.db)
+            try await backdateCreation(&sandbox, bySeconds: 60, on: app.db)
 
             await app.agentService.sweepExpiredSandboxes()
 
@@ -184,7 +185,7 @@ final class SandboxExpiryTests {
     func sweepIgnoresSandboxWithoutTTL() async throws {
         try await withSandboxTestApp { app, _, _, sandbox in
             let sandboxID = try sandbox.requireID()
-            try await backdateCreation(sandbox, bySeconds: 86400 * 30, on: app.db)
+            try await backdateCreation(&sandbox, bySeconds: 86400 * 30, on: app.db)
 
             await app.agentService.sweepExpiredSandboxes()
 
@@ -205,9 +206,9 @@ final class SandboxExpiryTests {
                 sandboxID: sandboxID,
                 projectID: try project.requireID(),
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: nil,
                 createdByID: try user.requireID())
-            snapshot.status = .ready
             try await snapshot.save(on: app.db)
 
             let fork = Sandbox(
@@ -222,7 +223,7 @@ final class SandboxExpiryTests {
 
             if useTTL {
                 sandbox.ttlSeconds = 60
-                try await backdateCreation(sandbox, bySeconds: 120, on: app.db)
+            try await backdateCreation(&sandbox, bySeconds: 120, on: app.db)
             } else {
                 let window = TimeInterval(AgentService.defaultSandboxRetentionHours) * 3600
                 sandbox.setStatus(.exited, at: Date().addingTimeInterval(-window - 60))
@@ -334,13 +335,14 @@ final class SandboxExpiryTests {
             // holding its vCPUs and memory. Set directly rather than via
             // `reserveSandbox`, which admits a sandbox *before* its row exists
             // and so would count this one twice.
-            quota.reservedVCPUs = sandbox.cpus
-            quota.reservedMemory = sandbox.memory
-            quota.sandboxCount = 1
-            try await quota.save(on: app.db)
+            let occupiedQuota = quota.replacingCounters(
+                reservedVCPUs: sandbox.cpus,
+                reservedMemory: sandbox.memory,
+                sandboxCount: 1)
+            try await occupiedQuota.save(on: app.db)
 
             sandbox.ttlSeconds = 60
-            try await backdateCreation(sandbox, bySeconds: 120, on: app.db)
+            try await backdateCreation(&sandbox, bySeconds: 120, on: app.db)
 
             await app.agentService.sweepExpiredSandboxes()
             try await pollSandboxDeleted(sandboxID, on: app.db)
@@ -359,7 +361,7 @@ final class SandboxExpiryTests {
         try await withSandboxTestApp { app, _, _, sandbox in
             let sandboxID = try sandbox.requireID()
             sandbox.ttlSeconds = 60
-            try await backdateCreation(sandbox, bySeconds: 120, on: app.db)
+            try await backdateCreation(&sandbox, bySeconds: 120, on: app.db)
 
             // Stand in for another replica's in-flight pass.
             let acquired = await app.coordination.acquireSweepLock("sandbox_expiry")
@@ -378,7 +380,7 @@ final class SandboxExpiryTests {
         try await withSandboxTestApp { app, user, _, sandbox in
             let sandboxID = try sandbox.requireID()
             sandbox.ttlSeconds = 60
-            try await backdateCreation(sandbox, bySeconds: 120, on: app.db)
+            try await backdateCreation(&sandbox, bySeconds: 120, on: app.db)
 
             // A capture in flight: its own resource, with its own generation
             // (STR-150), so it neither blocks nor is blocked by the sandbox's
@@ -386,7 +388,7 @@ final class SandboxExpiryTests {
             let snapshot = SandboxSnapshot(
                 name: "in-flight",
                 sandboxID: sandboxID,
-                projectID: sandbox.$project.id,
+                projectID: sandbox.projectID,
                 environment: sandbox.environment,
                 agentId: nil,
                 createdByID: try user.requireID())
