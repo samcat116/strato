@@ -2,8 +2,6 @@ import Logging
 import NIOCore
 import NIOPosix
 import OTel
-// Terminal / ConsoleLogger below come from ConsoleKit, which Vapor re-exports;
-// it is not a direct dependency of this target.
 import Vapor
 
 @main

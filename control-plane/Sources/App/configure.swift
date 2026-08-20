@@ -30,12 +30,6 @@ public func configure(
             "environment": .string(identity.environment),
         ])
 
-    // OpenTelemetry (metrics, logs, traces) goes in first, ahead of every client
-    // this function configures. Instrumented clients capture
-    // `InstrumentationSystem.tracer` when their *configuration* is built, not
-    // per request — bootstrapping later left the shared HTTP client and the
-    // Valkey client holding a NoOpTracer for the process lifetime, so neither
-    // emitted spans. See `Application.bootstrapObservability` for the details.
     try app.bootstrapObservability()
 
     // Track fire-and-forget background work (async VM operations) so shutdown
