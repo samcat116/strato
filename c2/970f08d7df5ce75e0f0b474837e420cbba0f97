@@ -1,0 +1,19 @@
+.claude/settings.json
+  s_e96ba4ae06c4bf::t_2e772d9cb602fb 7-48,51,56-70,74-89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "c2970f08d7df5ce75e0f0b474837e420cbba0f97",
+  "prompts": {},
+  "sessions": {
+    "s_e96ba4ae06c4bf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01c11-f4dd-70d3-b494-f3a755bc4814",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
