@@ -8,6 +8,7 @@ control-plane/Sources/App/Bootstrap/RuntimeBootstrap.swift
   s_e61e04c83ddb19::t_78931d6f60d5af 1-5,7-35
 control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
   s_e61e04c83ddb19::t_a24343df73c7f2 1-119,125-126
+  s_e61e04c83ddb19::t_dfb3ebdf34d272 120-124
 control-plane/Sources/App/Bootstrap/StateStoresBootstrap.swift
   s_e61e04c83ddb19::t_5001d7d06b7374 1-101
 control-plane/Sources/App/Bootstrap/HTTPPipelineBootstrap.swift
