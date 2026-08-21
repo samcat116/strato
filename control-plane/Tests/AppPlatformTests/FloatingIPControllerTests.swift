@@ -108,7 +108,7 @@ final class FloatingIPControllerTests {
             interfaceID: nic.id!, logicalNetworkID: try network.requireID(), family: .ipv4,
             address: fixedIP, prefixLength: 24, gateway: network.gateway,
             on: app.testPostgres)
-        try await placeVM(
+        vm = try await placeVM(
             vm, app: app, org: org, protocolVersion: WireProtocol.currentVersion,
             named: "agent-\(UUID().uuidString.prefix(8))")
         return (vm, nic)
@@ -500,7 +500,7 @@ final class FloatingIPControllerTests {
     /// VM on it, so attach hits the realizing-agent version gate.
     private func placeVM(
         _ vm: VM, app: Application, org: Organization, protocolVersion: Int, named: String = "fip-agent"
-    ) async throws {
+    ) async throws -> VM {
         var vm = vm
         let message = AgentRegisterMessage(
             agentId: named,
@@ -525,6 +525,7 @@ final class FloatingIPControllerTests {
         }
         vm.hypervisorId = agentUUID.uuidString
         try await vm.save(on: app.testPostgres)
+        return vm
     }
 
     @Test("Attach is refused while the VM is unplaced")
@@ -575,8 +576,9 @@ final class FloatingIPControllerTests {
             // so nothing would realize the NAT rule.
             let site = Site(name: "controllerless", organizationScope: .organization(org.id!))
             try await site.save(on: app.testPostgres)
-            let agent = try #require(
-                try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.testPostgres))
+            let hypervisorID = try #require(vm.hypervisorId)
+            let agentID = try #require(UUID(uuidString: hypervisorID))
+            let agent = try #require(try await Agent.find(agentID, on: app.testPostgres))
             try await agent.replacing(siteID: try site.requireID()).save(on: app.testPostgres)
 
             var fipId: UUID?
@@ -622,7 +624,9 @@ final class FloatingIPControllerTests {
             // #833's cross-node case, distinct from having no controller at all.
             let site = Site(name: "offline-controller", organizationScope: .organization(org.id!))
             try await site.save(on: app.testPostgres)
-            let host = try #require(try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.testPostgres))
+            let hypervisorID = try #require(vm.hypervisorId)
+            let hostID = try #require(UUID(uuidString: hypervisorID))
+            let host = try #require(try await Agent.find(hostID, on: app.testPostgres))
             try await host.replacing(siteID: try site.requireID()).save(on: app.testPostgres)
 
             let controllerUUID = try await app.agentService.registerAgent(

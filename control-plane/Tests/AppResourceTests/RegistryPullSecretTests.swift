@@ -323,6 +323,10 @@ final class RegistryPullSecretTests {
         do {
             let fake = FakeRegistryHTTPClient(on: app.eventLoopGroup.next())
             app.clients.use { _ in fake }
+            // These are distribution-protocol unit tests. Keep the guarded
+            // client on its documented test seam instead of requiring a full
+            // configured application only to obtain the testing SSRF bypass.
+            app.guardedHTTPClient = GuardedHTTPClient(app: app, validator: { _ in [] })
             let client = DistributionRegistryClient(app: app)
             try await test(client, fake)
         } catch {

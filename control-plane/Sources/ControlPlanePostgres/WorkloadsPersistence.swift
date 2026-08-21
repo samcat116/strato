@@ -408,6 +408,29 @@ public struct WorkloadsPersistence: Sendable {
         }
     }
 
+    /// Transaction-scoped counterpart used when observed-state reconciliation
+    /// already holds the owning VM row lock. Reusing that context preserves
+    /// atomicity and avoids a nested pool lease.
+    public func replaceObservedInterfaceAddresses(
+        interfaceID: UUID,
+        addresses: [ObservedInterfaceAddressWrite],
+        on context: PostgresStoreContext
+    ) async throws {
+        _ = try await context.execute(
+            DeleteObservedInterfaceAddresses(interfaceIDs: [interfaceID]),
+            operation: "workloads.observed_addresses.replace.delete")
+        for address in addresses {
+            let inserted = try await context.execute(
+                InsertObservedInterfaceAddress(
+                    id: UUID(), interfaceID: interfaceID, address: address),
+                operation: "workloads.observed_addresses.replace.insert")
+            guard inserted.count == 1 else {
+                throw WorkloadsPersistenceError.unexpectedRowCount(
+                    expected: 1, actual: inserted.count)
+            }
+        }
+    }
+
     @discardableResult
     public func deleteObservedInterfaceAddresses(interfaceIDs: [UUID]) async throws -> [UUID] {
         guard !interfaceIDs.isEmpty else { return [] }
@@ -416,6 +439,18 @@ public struct WorkloadsPersistence: Sendable {
                 DeleteObservedInterfaceAddresses(interfaceIDs: Array(Set(interfaceIDs))),
                 operation: "workloads.observed_addresses.delete.query")
         }
+    }
+
+    /// Delete observed addresses on an already-pinned transaction context.
+    @discardableResult
+    public func deleteObservedInterfaceAddresses(
+        interfaceIDs: [UUID],
+        on context: PostgresStoreContext
+    ) async throws -> [UUID] {
+        guard !interfaceIDs.isEmpty else { return [] }
+        return try await context.execute(
+            DeleteObservedInterfaceAddresses(interfaceIDs: Array(Set(interfaceIDs))),
+            operation: "workloads.observed_addresses.delete.query")
     }
 
     /// Inserts one report's new claims with one prepared statement. JSON is a

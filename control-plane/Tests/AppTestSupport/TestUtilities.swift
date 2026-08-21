@@ -394,7 +394,10 @@ package actor PostgresTestDatabases {
     /// application pools are independently capped at one connection.
     package static let appEventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 2)
 
-    package static func nativeConfiguration(database: String) throws
+    package static func nativeConfiguration(
+        database: String,
+        maximumConnections: Int = 1
+    ) throws
         -> ControlPlanePostgres.PostgresDatabase.Configuration
     {
         try .init(
@@ -405,7 +408,7 @@ package actor PostgresTestDatabases {
             password: Environment.get("DATABASE_PASSWORD") ?? "strato_password",
             database: database,
             tls: .disable,
-            maximumConnections: 1,
+            maximumConnections: maximumConnections,
             connectionAcquireTimeout: .seconds(10),
             statementTimeoutMilliseconds: 300_000
         )
@@ -579,14 +582,18 @@ package actor PostgresTestDatabases {
 // MARK: - Test Extensions
 
 extension Application {
-    package static func makeForTesting(_ environment: Environment = .testing) async throws -> Application {
+    package static func makeForTesting(
+        _ environment: Environment = .testing,
+        maximumConnections: Int = 1
+    ) async throws -> Application {
         var env = environment
         env.arguments = ["vapor"]
 
         // Each test gets its own server-side clone of the migrated template
         // database.
         let databaseName = try await PostgresTestDatabases.shared.createDatabaseForTest()
-        return try await make(env, database: databaseName)
+        return try await make(
+            env, database: databaseName, maximumConnections: maximumConnections)
     }
 
     /// Like `makeForTesting`, but on an EMPTY database with no migrations
@@ -623,12 +630,16 @@ extension Application {
     private static func make(
         _ env: Environment,
         database databaseName: String,
-        owningDatabase: Bool = true
+        owningDatabase: Bool = true,
+        maximumConnections: Int = 1
     ) async throws -> Application {
         let app = try await Application.make(env, .shared(PostgresTestDatabases.appEventLoopGroup))
-        app.logger.logLevel = .debug
+        // A full Swift Testing run creates hundreds of short-lived apps. Debug
+        // logging can fill SwiftPM's child-process pipe before it is drained,
+        // stalling the suite independently of application or database state.
+        app.logger.logLevel = .error
         app.nativePostgresConfigurationOverride = try PostgresTestDatabases.nativeConfiguration(
-            database: databaseName)
+            database: databaseName, maximumConnections: maximumConnections)
         if owningDatabase {
             app.storage[TestDatabaseNameKey.self] = databaseName
         }
@@ -685,8 +696,12 @@ package struct PermissiveGuardrailAnalyzer: GuardrailAnalyzer {
     }
 }
 
-package func withTestApp(_ test: (Application) async throws -> Void) async throws {
-    let app = try await Application.makeForTesting()
+package func withTestApp(
+    maximumConnections: Int = 1,
+    _ test: (Application) async throws -> Void
+) async throws {
+    let app = try await Application.makeForTesting(
+        maximumConnections: maximumConnections)
 
     do {
         try await configure(app)
@@ -702,8 +717,11 @@ package func withTestApp(_ test: (Application) async throws -> Void) async throw
 
 // Historical alias: the two helpers only differed in a teardown-time
 // autoRevert(), which per-test database clones made obsolete.
-package func withApp(_ test: (Application) async throws -> Void) async throws {
-    try await withTestApp(test)
+package func withApp(
+    maximumConnections: Int = 1,
+    _ test: (Application) async throws -> Void
+) async throws {
+    try await withTestApp(maximumConnections: maximumConnections, test)
 }
 
 extension User {

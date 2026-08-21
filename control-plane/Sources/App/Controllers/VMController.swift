@@ -1297,7 +1297,8 @@ struct VMController: RouteCollection {
             .create, resourceType: VM.self, resourceID: vmID,
             targetGeneration: accepted.targetGeneration, agentIDs: [],
             strategy: .placement { @Sendable [app = req.application] db in
-                try await app.agentService.createVM(vm: createdVM, db: db, image: image)
+                try await app.agentService.createVM(
+                    vm: createdVM, db: db, image: image, storagePool: bootPool)
             }, app: req.application)
 
         req.logger.info(

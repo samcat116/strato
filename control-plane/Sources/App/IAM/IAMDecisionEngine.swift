@@ -89,7 +89,10 @@ enum IAMDecisionEngine {
     /// reporting fail closed identically: a who-can that silently degraded to
     /// a weaker model would be exactly the drift this module exists to end.
     static func compiledSet(_ app: Application) async throws -> CedarPolicySetCache.Built {
-        guard let built = await app.cedarPolicySet.current else {
+        guard
+            let cache = app.configuredCedarPolicySet,
+            let built = await cache.current
+        else {
             app.logger.error("IAM check with no compiled Cedar policy set; failing closed")
             throw Abort(.serviceUnavailable, reason: "Authorization system is not ready")
         }

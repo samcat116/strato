@@ -2479,7 +2479,8 @@ actor AgentService {
         vm: VM,
         db: PostgresStoreContext,
         strategy: SchedulingStrategy? = nil,
-        image: Image? = nil
+        image: Image? = nil,
+        storagePool: StoragePoolSnapshot? = nil
     ) async throws {
         let schedulableAgents = await schedulableAgentsFromDatabase()
         let vmId = try vm.requireID().uuidString
@@ -2510,13 +2511,13 @@ actor AgentService {
                 }
                 let pool: StoragePoolSnapshot?
                 if let poolID = bootVolume.poolID {
-                    guard let storagePools else {
+                    guard let storagePool, storagePool.id == poolID else {
                         throw Abort(
                             .internalServerError,
-                            reason: "Storage-pool persistence is not configured"
+                            reason: "The VM boot volume's storage pool was not supplied for placement"
                         )
                     }
-                    pool = try await storagePools.pool(id: poolID)
+                    pool = storagePool
                 } else {
                     pool = nil
                 }

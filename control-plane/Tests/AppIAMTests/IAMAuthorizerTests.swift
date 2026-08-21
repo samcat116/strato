@@ -228,8 +228,7 @@ final class IAMAuthorizerTests {
                 node: IAMNode(type: .virtualMachine, id: UUID()),
                 context: IAMCheckContext(path: "/api/vms", method: "GET", requestID: nil),
                 state: .detached,
-                app: app,
-                db: app.testPostgres
+                app: app
             )
         } catch {
             thrown = error

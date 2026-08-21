@@ -416,6 +416,14 @@ extension Application {
         set { setStorageValue(CedarPolicySetCacheKey.self, to: newValue) }
     }
 
+    /// The authorization entry point needs to distinguish "not configured"
+    /// from a configured cache that has not produced its first valid set yet.
+    /// Both states are unavailable to callers and must fail closed with 503;
+    /// neither is a programmer precondition in a request path.
+    var configuredCedarPolicySet: CedarPolicySetCache? {
+        storage[CedarPolicySetCacheKey.self]
+    }
+
     /// Hang the compiled-set rebuild off the policy-set version watch. Call
     /// *before* `startPolicySetVersionWatch()`, so the watch's initial refresh
     /// already lands here — that first refresh is what builds the boot-time

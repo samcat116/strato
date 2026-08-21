@@ -330,7 +330,7 @@ struct AgentRecord: Sendable {
             ),
             architecture: try row["architecture"].decode(String?.self),
             operatingSystem: try row["operating_system"].decode(String?.self),
-            hypervisors: try row["hypervisors"].decode(HypervisorSupportArrayJSON.self).value,
+            hypervisors: try row["hypervisors"].decode([HypervisorSupportJSON].self).map(\.value),
             networkCapability: try row["network_capability"].decode(String?.self),
             hostInfo: try row["host_info"].decode(HostInfoJSON?.self)?.value,
             siteID: try row["site_id"].decode(UUID.self),
@@ -340,7 +340,7 @@ struct AgentRecord: Sendable {
             resolverCapable: try row["resolver_capable"].decode(Bool.self),
             metadataServiceCapable: try row["metadata_service_capable"].decode(Bool.self),
             dependencyObservations: try row["dependency_observations"]
-                .decode(NodeDependencyObservationArrayJSON.self).value,
+                .decode([NodeDependencyObservationJSON].self).map(\.value),
             dependencyObservationsReceivedAt: try row["dependency_observations_received_at"]
                 .decode(Date?.self),
             organizationID: try row["organization_id"].decode(UUID?.self),
@@ -660,11 +660,14 @@ private struct AssignAgentManualUpdate: AgentStatement {
     }
 }
 
-private struct HypervisorSupportArrayJSON: Decodable, PostgresDecodable, Sendable {
-    let value: [HypervisorSupport]
+private struct HypervisorSupportJSON: Decodable, PostgresDecodable,
+    PostgresArrayDecodable, Sendable
+{
+    static let psqlArrayType: PostgresDataType = .jsonbArray
+    let value: HypervisorSupport
 
     init(from decoder: any Decoder) throws {
-        value = try decoder.singleValueContainer().decode([HypervisorSupport].self)
+        value = try decoder.singleValueContainer().decode(HypervisorSupport.self)
     }
 }
 
@@ -676,10 +679,13 @@ private struct HostInfoJSON: Decodable, PostgresDecodable, Sendable {
     }
 }
 
-private struct NodeDependencyObservationArrayJSON: Decodable, PostgresDecodable, Sendable {
-    let value: [NodeDependencyObservation]
+private struct NodeDependencyObservationJSON: Decodable, PostgresDecodable,
+    PostgresArrayDecodable, Sendable
+{
+    static let psqlArrayType: PostgresDataType = .jsonbArray
+    let value: NodeDependencyObservation
 
     init(from decoder: any Decoder) throws {
-        value = try decoder.singleValueContainer().decode([NodeDependencyObservation].self)
+        value = try decoder.singleValueContainer().decode(NodeDependencyObservation.self)
     }
 }

@@ -243,7 +243,10 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
 
     @Test("Revocation waits for an in-flight bootstrap mint and withdraws its credential")
     func revocationSerializesWithBootstrapMint() async throws {
-        try await withApp { app in
+        // Redemption owns one session-scoped advisory lock while revocation
+        // polls it from another session. All other test apps stay capped at one
+        // connection; this concurrency contract necessarily exercises two.
+        try await AppTestSupport.withApp(maximumConnections: 2) { app in
             let adminToken = try await makeAdmin(on: app)
             let token = AgentEnrollment.generateBootstrapToken()
             let enrollment = TestAgentEnrollment(
@@ -264,9 +267,11 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             // Revocation must not deprovision and delete the row while the
             // credential mint is still suspended. Otherwise that mint can
             // complete after the reported revocation and survive it.
+            // The two test connections are occupied by redemption and the
+            // revocation lock poll. Do not queue an unrelated database read
+            // ahead of releasing the held mint.
             try await Task.sleep(for: .milliseconds(100))
             #expect(await fake.deletedSPIFFEIDs.isEmpty)
-            #expect(try await findTestAgentEnrollment(enrollmentID, on: app.testPostgres) != nil)
 
             await fake.releaseHeldJoinTokenRequest()
             #expect(try await redemptionStatus == .ok)

@@ -200,10 +200,13 @@ public struct AgentEnrollmentsPersistence: Sendable {
         )
     }
 
-    /// The preparation step runs under the enrollment lock but before the
+    /// The preparation step runs before the enrollment lock and before the
     /// bearer is consumed. Use it for availability checks whose failure must
-    /// leave the credential retryable. The operation runs only after the
-    /// conditional claim succeeds.
+    /// leave the credential retryable. Keeping preparation outside the pinned
+    /// session also lets it consult other persistence modules without nesting
+    /// a second pool lease. The locked lookup below revalidates the enrollment
+    /// before the conditional claim, so revocation can still win safely while
+    /// preparation is in flight.
     public func redeemBootstrapToken<Preparation: Sendable, Result: Sendable>(
         tokenHash: String,
         now: Date = Date(),
@@ -231,6 +234,7 @@ public struct AgentEnrollmentsPersistence: Sendable {
         guard let enrollment, enrollment.isValid(at: now) else {
             throw AgentEnrollmentPersistenceError.invalidBootstrapToken
         }
+        let preparation = try await prepare(enrollment)
 
         return try await withOperationLock(id: enrollment.id) { session in
             let locked = try oneOrNone(
@@ -242,8 +246,6 @@ public struct AgentEnrollmentsPersistence: Sendable {
             guard let locked, locked.id == enrollment.id, locked.isValid(at: now) else {
                 throw AgentEnrollmentPersistenceError.invalidBootstrapToken
             }
-
-            let preparation = try await prepare(locked)
 
             let claimed = try await session.execute(
                 ClaimAgentEnrollmentBootstrapToken(tokenHash: tokenHash, now: now),

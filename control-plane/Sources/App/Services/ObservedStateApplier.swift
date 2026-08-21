@@ -1045,7 +1045,8 @@ struct ObservedStateApplier {
                         family: $0.family.rawValue,
                         address: $0.address,
                         prefixLength: $0.prefixLength)
-                })
+                },
+                on: db)
         }
         return current
     }
@@ -1114,7 +1115,8 @@ struct ObservedStateApplier {
 
         let nicIDs = interfaces.compactMap(\.id)
         if !nicIDs.isEmpty {
-            _ = try await workloads.deleteObservedInterfaceAddresses(interfaceIDs: nicIDs)
+            _ = try await workloads.deleteObservedInterfaceAddresses(
+                interfaceIDs: nicIDs, on: db)
         }
         return updated
     }

@@ -99,6 +99,24 @@ public struct PostgresStoreContext: Sendable {
         }
     }
 
+    /// Execute a persistence module's stable statement on this context. When
+    /// the context represents a transaction, the statement stays on that
+    /// pinned connection instead of leasing a second pool connection.
+    func execute<Statement: PostgresPreparedStatement>(
+        _ statement: Statement,
+        operation: PostgresOperation
+    ) async throws -> [Statement.Row] where Statement.Row: Sendable {
+        history.record()
+        switch backend {
+        case .database(let database):
+            return try await database.withSession(operation: operation) { session in
+                try await session.execute(statement, operation: operation)
+            }
+        case .session(let session):
+            return try await session.execute(statement, operation: operation)
+        }
+    }
+
 #if DEBUG
     /// Test-only bridge for legacy integration helpers while their call sites
     /// move to intent-oriented persistence modules.
