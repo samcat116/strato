@@ -84,6 +84,7 @@ enum SSFValidation {
 
 actor SSFService {
     private let app: Application
+    private let configuration: ControlPlaneConfiguration
     private let apiKeys: APIKeysPersistence
     private let streams: SSFStreamsPersistence
     private let userSecurity: UserSecurityPersistence
@@ -92,11 +93,13 @@ actor SSFService {
 
     init(
         app: Application,
+        configuration: ControlPlaneConfiguration,
         apiKeys: APIKeysPersistence,
         streams: SSFStreamsPersistence,
         userSecurity: UserSecurityPersistence
     ) {
         self.app = app
+        self.configuration = configuration
         self.apiKeys = apiKeys
         self.streams = streams
         self.userSecurity = userSecurity
@@ -115,13 +118,13 @@ actor SSFService {
         // Re-validated here (not just at create) so rows predating a
         // tightened allow-list can't reach a now-disallowed host.
         try SSFValidation.validateTransmitterURL(
-            stream.transmitterURL, configuration: app.controlPlaneConfiguration)
+            stream.transmitterURL, configuration: configuration)
         guard let transmitterURL = URL(string: stream.transmitterURL) else {
             throw Abort(.unprocessableEntity, reason: "Invalid transmitter URL")
         }
         let allowUnverified =
             app.environment == .testing
-            && app.controlPlaneConfiguration.bool(.ssfAllowUnverifiedTokens) == true
+            && configuration.bool(.ssfAllowUnverifiedTokens) == true
         let audience = stream.expectedAudience
         let configuration = SSFReceiverConfiguration(
             transmitterURL: transmitterURL,
@@ -207,7 +210,7 @@ actor SSFService {
         case .push:
             guard
                 let endpoint = Self.pushEndpointURL(
-                    for: stream.id, configuration: app.controlPlaneConfiguration),
+                    for: stream.id, configuration: self.configuration),
                 let endpointURL = URL(string: endpoint)
             else {
                 throw Abort(
@@ -245,7 +248,7 @@ actor SSFService {
                 try SSFValidation.validateTransmitterURL(
                     endpoint,
                     label: "Transmitter poll endpoint",
-                    configuration: app.controlPlaneConfiguration)
+                    configuration: self.configuration)
             } catch {
                 try? await receiver.deleteStream(id: configuration.stream_id)
                 throw error
@@ -322,7 +325,7 @@ actor SSFService {
         try SSFValidation.validateTransmitterURL(
             endpointRaw,
             label: "Transmitter poll endpoint",
-            configuration: app.controlPlaneConfiguration)
+            configuration: configuration)
         guard let endpoint = URL(string: endpointRaw) else {
             throw Abort(.unprocessableEntity, reason: "Invalid poll endpoint URL")
         }
@@ -390,18 +393,21 @@ actor SSFService {
     // MARK: - Poll sweep lifecycle
 
     private var pollIntervalSeconds: Int {
-        app.controlPlaneConfiguration.int(.ssfPollIntervalSeconds)!
+        configuration.int(.ssfPollIntervalSeconds)!
     }
 
     private var pollSweepEnabled: Bool {
-        app.controlPlaneConfiguration.bool(.ssfPollEnabled)!
+        configuration.bool(.ssfPollEnabled)!
     }
 
     /// Arm the periodic poll sweep. Called once from the boot lifecycle.
-    nonisolated func startPollSweep() {
+    nonisolated func startPollSweep(
+        beforeRun: @escaping @Sendable () async -> Void = {}
+    ) {
         pollTask.withLockedValue { task in
             guard task == nil else { return }
             task = Task { [weak self] in
+                await beforeRun()
                 guard let self, await self.pollSweepEnabled else { return }
                 let interval = await self.pollIntervalSeconds
                 while !Task.isCancelled {
@@ -417,11 +423,14 @@ actor SSFService {
     }
 
     /// Cancel the poll sweep so it never outlives the application.
-    nonisolated func shutdown() {
-        pollTask.withLockedValue { task in
+    nonisolated func shutdown() async {
+        let task = pollTask.withLockedValue { task -> Task<Void, Never>? in
+            let running = task
             task?.cancel()
             task = nil
+            return running
         }
+        await task?.value
     }
 }
 
@@ -457,6 +466,6 @@ struct SSFPollLifecycleHandler: LifecycleHandler {
     }
 
     func shutdownAsync(_ application: Application) async {
-        application.ssfServiceIfCreated?.shutdown()
+        await application.ssfServiceIfCreated?.shutdown()
     }
 }

@@ -118,6 +118,7 @@ public func configure(
         persistence: persistence.vmCommandExecutions)
     app.ssf = SSFService(
         app: app,
+        configuration: app.controlPlaneConfiguration,
         apiKeys: persistence.apiKeys,
         streams: persistence.ssfStreams,
         userSecurity: persistence.userSecurity
