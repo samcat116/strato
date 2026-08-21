@@ -1,122 +1,311 @@
-import Fluent
+import ControlPlanePostgres
+import Foundation
 import Vapor
 
-/// A NIC attached to a VM, mirroring how `Volume` models disks. Each row is one
-/// interface on a logical network; `VMSpecBuilder` turns the VM's interfaces into
-/// the `NetworkSpec` list sent to agents, ordered by `orderIndex` then `deviceName`.
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class VMNetworkInterface: Model, @unchecked Sendable {
+/// Immutable persistence snapshot for one VM network interface.
+struct VMNetworkInterface: Equatable, Sendable {
     static let schema = "vm_network_interfaces"
+    static let maxInterfacesPerVM = 8
 
-    @ID(key: .id)
-    var id: UUID?
-
-    @Parent(key: "vm_id")
-    var vm: VM
-
-    /// The logical network this NIC attaches to. A real FK (issue #765): the
-    /// name is a per-project display label and cannot identify a network.
-    @Parent(key: "logical_network_id")
-    var logicalNetwork: LogicalNetwork
-
-    @Field(key: "mac_address")
-    var macAddress: String
-
-    /// The addresses allocated to this NIC, one row per family (requires
-    /// eager loading with `.with(\.$addresses)`).
-    @Children(for: \.$interface)
-    var addresses: [VMInterfaceAddress]
-
-    /// The addresses the guest actually configured on this NIC, as reported by
-    /// the QEMU guest agent (issue #563) — distinct from the allocated
-    /// `addresses` above: these include DHCP leases, IPv6 SLAAC, and any manual
-    /// changes the control plane never assigned. Requires eager loading with
-    /// `.with(\.$observedAddresses)`.
-    @Children(for: \.$interface)
-    var observedAddresses: [VMInterfaceObservedAddress]
-
-    /// This NIC's security-group memberships (STR-34). Requires eager loading
-    /// with `.with(\.$securityGroupMemberships)`; `NetworkInterfaceResponse`
-    /// reports nil rather than an empty list when it wasn't loaded, because
-    /// "attached to no groups" is a claim about filtering that a missing
-    /// eager-load must never make.
-    @Children(for: \.$interface)
-    var securityGroupMemberships: [VMInterfaceSecurityGroup]
-
-    @OptionalField(key: "mtu")
-    var mtu: Int?
-
-    /// Stable device identifier within the VM (e.g. "net0", "net1").
-    @Field(key: "device_name")
-    var deviceName: String
-
-    /// Position of this NIC in the VM's interface list (lower = earlier).
-    @Field(key: "order_index")
-    var orderIndex: Int
-
-    /// VM generation that first asked the agent to realize this NIC. Nil marks
-    /// rows created before STR-202, which are treated as already attached.
-    @OptionalField(key: "attach_generation")
-    var attachGeneration: Int64?
-
-    /// VM generation that asks the agent to remove this NIC. The row and its IP
-    /// leases remain until an observed v40 manifest confirms absence.
-    @OptionalField(key: "detach_generation")
-    var detachGeneration: Int64?
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
+    let id: UUID?
+    let vmID: UUID
+    let logicalNetworkID: UUID
+    let logicalNetworkName: String?
+    let macAddress: String
+    let loadedAddresses: [InterfaceAddressSnapshot]?
+    let mtu: Int?
+    let deviceName: String
+    let orderIndex: Int
+    let attachGeneration: Int64?
+    let detachGeneration: Int64?
+    let createdAt: Date?
+    let updatedAt: Date?
 
     init(
         id: UUID? = nil,
         vmID: UUID,
         logicalNetworkID: UUID,
+        logicalNetworkName: String? = nil,
         macAddress: String,
+        loadedAddresses: [InterfaceAddressSnapshot]? = nil,
         mtu: Int? = nil,
         deviceName: String = "net0",
-        orderIndex: Int = 0
+        orderIndex: Int = 0,
+        attachGeneration: Int64? = nil,
+        detachGeneration: Int64? = nil,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
     ) {
-        self.id = id
-        self.$vm.id = vmID
-        self.$logicalNetwork.id = logicalNetworkID
+        self.id = id ?? UUID()
+        self.vmID = vmID
+        self.logicalNetworkID = logicalNetworkID
+        self.logicalNetworkName = logicalNetworkName
         self.macAddress = macAddress
+        self.loadedAddresses = loadedAddresses
         self.mtu = mtu
         self.deviceName = deviceName
         self.orderIndex = orderIndex
-        self.attachGeneration = nil
-        self.detachGeneration = nil
+        self.attachGeneration = attachGeneration
+        self.detachGeneration = detachGeneration
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 
-    /// Generates a random MAC address with VMware OUI (00:0c:29)
+    func requireID() throws -> UUID {
+        guard let id else {
+            throw Abort(.internalServerError, reason: "VM interface has no identifier")
+        }
+        return id
+    }
+
+    func loading(addresses: [InterfaceAddressSnapshot]) -> Self {
+        Self(
+            id: id,
+            vmID: vmID,
+            logicalNetworkID: logicalNetworkID,
+            logicalNetworkName: logicalNetworkName,
+            macAddress: macAddress,
+            loadedAddresses: addresses,
+            mtu: mtu,
+            deviceName: deviceName,
+            orderIndex: orderIndex,
+            attachGeneration: attachGeneration,
+            detachGeneration: detachGeneration,
+            createdAt: createdAt,
+            updatedAt: updatedAt)
+    }
+
     static func generateMACAddress() -> String {
         let randomBytes = (0..<3).map { _ in String(format: "%02x", Int.random(in: 0...255)) }
         return "00:0c:29:\(randomBytes.joined(separator: ":"))"
     }
-}
 
-extension VMNetworkInterface {
-    static let maxInterfacesPerVM = 8
+    /// Transitional test-builder convenience. Production uses the store's
+    /// insert operation and consumes its returned snapshot.
+    @discardableResult
+    func save(on db: PostgresStoreContext) async throws -> Self {
+        try await LegacyVMNetworkInterfaceStore.insert(self, on: db)
+    }
 }
-
-extension VMNetworkInterface: Content {}
 
 extension Sequence where Element == VMNetworkInterface {
-    /// The interfaces in the VM's device order: `orderIndex`, then
-    /// `deviceName` for stability when orders collide.
-    ///
-    /// One definition because four things have to agree on it — the `VMSpec`'s
-    /// `NetworkSpec` list, the `InstanceMetadata` the guest reads, the API's
-    /// `VMDetailResponse`, and a floating IP's `nicIndex`, which *is* a
-    /// position in this order on the wire. Four copies of the comparator meant
-    /// four places to change it and one guest whose NIC list disagreed with its
-    /// links if you missed one.
     var inDeviceOrder: [VMNetworkInterface] {
         sorted { ($0.orderIndex, $0.deviceName) < ($1.orderIndex, $1.deviceName) }
+    }
+}
+
+/// Explicit SQL bridge for VM NICs while the VM aggregate is moved to the
+/// native PostgresNIO workload module.
+enum LegacyVMNetworkInterfaceStore {
+    static func interfaces(
+        vmIDs: [UUID]? = nil,
+        ids: [UUID]? = nil,
+        logicalNetworkID: UUID? = nil,
+        logicalNetworkIDs: [UUID]? = nil,
+        on db: PostgresStoreContext
+    ) async throws -> [VMNetworkInterface] {
+        if let vmIDs, vmIDs.isEmpty { return [] }
+        if let ids, ids.isEmpty { return [] }
+        if let logicalNetworkIDs, logicalNetworkIDs.isEmpty { return [] }
+        let sql = try requireSQL(db)
+        var query: PostgresSQLQuery =
+            "SELECT \(unsafeRaw: columns) FROM vm_network_interfaces AS vni LEFT JOIN logical_networks AS ln ON ln.id = vni.logical_network_id WHERE TRUE"
+        if let vmIDs { query += " AND vni.vm_id = ANY(\(bind: vmIDs))" }
+        if let ids { query += " AND vni.id = ANY(\(bind: ids))" }
+        if let logicalNetworkID { query += " AND vni.logical_network_id = \(bind: logicalNetworkID)" }
+        if let logicalNetworkIDs {
+            query += " AND vni.logical_network_id = ANY(\(bind: logicalNetworkIDs))"
+        }
+        query += " ORDER BY vni.order_index, vni.device_name, vni.id"
+        return try await sql.raw(query).all(decoding: Record.self).map(\.snapshot)
+    }
+
+    static func interfaces(vmID: UUID, on db: PostgresStoreContext) async throws -> [VMNetworkInterface] {
+        try await interfaces(vmIDs: [vmID], on: db)
+    }
+
+    static func interface(id: UUID, vmID: UUID? = nil, on db: PostgresStoreContext) async throws
+        -> VMNetworkInterface?
+    {
+        let matches = try await interfaces(vmIDs: vmID.map { [$0] }, ids: [id], on: db)
+        guard matches.count <= 1 else {
+            throw Abort(.internalServerError, reason: "VM interface lookup returned duplicate rows")
+        }
+        return matches.first
+    }
+
+    static func interface(vmID: UUID, orderIndex: Int, on db: PostgresStoreContext) async throws
+        -> VMNetworkInterface?
+    {
+        try await interfaces(vmID: vmID, on: db).first { $0.orderIndex == orderIndex }
+    }
+
+    static func loading(_ vms: [VM], on db: PostgresStoreContext) async throws -> [VM] {
+        let byVM = Dictionary(
+            grouping: try await interfaces(vmIDs: vms.compactMap(\.id), on: db),
+            by: \.vmID)
+        return vms.map { vm in
+            vm.loadingNetworkInterfaces(vm.id.flatMap { byVM[$0] } ?? [])
+        }
+    }
+
+    static func loadingWithAddresses(_ vms: [VM], on db: PostgresStoreContext) async throws -> [VM] {
+        let loaded = try await loading(vms, on: db)
+        let detailed = try await LegacyInterfaceAddressStore.loading(
+            loaded.flatMap(\.networkInterfaces), on: db)
+        let byVM = Dictionary(grouping: detailed, by: \.vmID)
+        return loaded.map { vm in
+            vm.loadingNetworkInterfaces(vm.id.flatMap { byVM[$0] } ?? [])
+        }
+    }
+
+    @discardableResult
+    static func insert(_ interface: VMNetworkInterface, on db: PostgresStoreContext) async throws
+        -> VMNetworkInterface
+    {
+        let id = try interface.requireID()
+        guard let row = try await requireSQL(db).raw(
+            """
+            INSERT INTO vm_network_interfaces (
+                id, vm_id, logical_network_id, mac_address, mtu, device_name,
+                order_index, attach_generation, detach_generation,
+                created_at, updated_at
+            ) VALUES (
+                \(bind: id), \(bind: interface.vmID), \(bind: interface.logicalNetworkID),
+                \(bind: interface.macAddress), \(bind: interface.mtu),
+                \(bind: interface.deviceName), \(bind: interface.orderIndex),
+                \(bind: interface.attachGeneration), \(bind: interface.detachGeneration),
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            RETURNING
+                id, vm_id AS "vmID", logical_network_id AS "logicalNetworkID",
+                NULL::text AS "logicalNetworkName", mac_address AS "macAddress",
+                mtu, device_name AS "deviceName", order_index AS "orderIndex",
+                attach_generation AS "attachGeneration",
+                detach_generation AS "detachGeneration",
+                created_at AS "createdAt", updated_at AS "updatedAt"
+            """
+        ).first(decoding: Record.self) else {
+            throw Abort(.internalServerError, reason: "Could not create VM network interface")
+        }
+        return row.snapshot
+    }
+
+    @discardableResult
+    static func updateGenerations(
+        id: UUID,
+        attachGeneration: Int64?,
+        detachGeneration: Int64?,
+        on db: PostgresStoreContext
+    ) async throws -> VMNetworkInterface? {
+        try await requireSQL(db).raw(
+            """
+            UPDATE vm_network_interfaces
+            SET attach_generation = \(bind: attachGeneration),
+                detach_generation = \(bind: detachGeneration),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = \(bind: id)
+            RETURNING
+                id, vm_id AS "vmID", logical_network_id AS "logicalNetworkID",
+                NULL::text AS "logicalNetworkName", mac_address AS "macAddress",
+                mtu, device_name AS "deviceName", order_index AS "orderIndex",
+                attach_generation AS "attachGeneration",
+                detach_generation AS "detachGeneration",
+                created_at AS "createdAt", updated_at AS "updatedAt"
+            """
+        ).first(decoding: Record.self)?.snapshot
+    }
+
+    @discardableResult
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
+        struct Deleted: Decodable { let id: UUID }
+        return try await requireSQL(db).raw(
+            "DELETE FROM vm_network_interfaces WHERE id = \(bind: id) RETURNING id"
+        ).first(decoding: Deleted.self)?.id
+    }
+
+    static func count(logicalNetworkID: UUID, on db: PostgresStoreContext) async throws -> Int {
+        struct Count: Decodable { let count: Int }
+        return try await requireSQL(db).raw(
+            """
+            SELECT count(*)::bigint AS count
+            FROM vm_network_interfaces
+            WHERE logical_network_id = \(bind: logicalNetworkID)
+            """
+        ).first(decoding: Count.self)?.count ?? 0
+    }
+
+    static func hostnameExists(
+        _ hostname: String,
+        logicalNetworkIDs: [UUID],
+        excludingVMID: UUID?,
+        on db: PostgresStoreContext
+    ) async throws -> Bool {
+        if logicalNetworkIDs.isEmpty { return false }
+        struct Exists: Decodable { let exists: Bool }
+        var query: PostgresSQLQuery = """
+            SELECT EXISTS(
+                SELECT 1
+                FROM vms AS vm
+                JOIN vm_network_interfaces AS vni ON vni.vm_id = vm.id
+                WHERE vni.logical_network_id = ANY(\(bind: logicalNetworkIDs))
+                  AND vm.hostname = \(bind: hostname)
+            """
+        if let excludingVMID { query += " AND vm.id <> \(bind: excludingVMID)" }
+        query += ") AS exists"
+        return try await requireSQL(db).raw(query).first(decoding: Exists.self)?.exists ?? false
+    }
+
+    private struct Record: Decodable, Sendable {
+        let id: UUID
+        let vmID: UUID
+        let logicalNetworkID: UUID
+        let logicalNetworkName: String?
+        let macAddress: String
+        let mtu: Int?
+        let deviceName: String
+        let orderIndex: Int
+        let attachGeneration: Int64?
+        let detachGeneration: Int64?
+        let createdAt: Date?
+        let updatedAt: Date?
+
+        var snapshot: VMNetworkInterface {
+            VMNetworkInterface(
+                id: id,
+                vmID: vmID,
+                logicalNetworkID: logicalNetworkID,
+                logicalNetworkName: logicalNetworkName,
+                macAddress: macAddress,
+                mtu: mtu,
+                deviceName: deviceName,
+                orderIndex: orderIndex,
+                attachGeneration: attachGeneration,
+                detachGeneration: detachGeneration,
+                createdAt: createdAt,
+                updatedAt: updatedAt)
+        }
+    }
+
+    private static let columns = """
+        vni.id,
+        vni.vm_id AS "vmID",
+        vni.logical_network_id AS "logicalNetworkID",
+        ln.name AS "logicalNetworkName",
+        vni.mac_address AS "macAddress",
+        vni.mtu,
+        vni.device_name AS "deviceName",
+        vni.order_index AS "orderIndex",
+        vni.attach_generation AS "attachGeneration",
+        vni.detach_generation AS "detachGeneration",
+        vni.created_at AS "createdAt",
+        vni.updated_at AS "updatedAt"
+        """
+
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
+            throw Abort(.internalServerError, reason: "VM interfaces require PostgreSQL")
+        }
+        return sql
     }
 }

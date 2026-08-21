@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 extension Request {
@@ -11,8 +11,10 @@ extension Request {
     ///
     /// - Throws: `.unauthorized` if unauthenticated, `.notFound` if the VM does not
     ///   exist, `.forbidden` if the user lacks `action` on this VM.
-    func authorizedVM(_ vmID: UUID, action: String) async throws -> VM {
-        guard let vm = try await VM.find(vmID, on: db) else {
+    func authorizedVM(
+        _ vmID: UUID, action: String, on database: PostgresStoreContext
+    ) async throws -> VM {
+        guard let vm = try await VM.find(vmID, on: database) else {
             throw Abort(.notFound)
         }
 
@@ -61,8 +63,10 @@ extension Request {
     /// remain separable by timing. Closing that would mean evaluating against a
     /// VM that does not exist, and the severity does not justify it — ids are
     /// random UUIDv4, so latency alone is nothing cheap to sweep.
-    func reachableVM(_ vmID: UUID, action: String) async throws -> VM {
-        guard let vm = try await VM.find(vmID, on: db),
+    func reachableVM(
+        _ vmID: UUID, action: String, on database: PostgresStoreContext
+    ) async throws -> VM {
+        guard let vm = try await VM.find(vmID, on: database),
             try await can(action, on: IAMNode(type: .virtualMachine, id: vmID))
         else {
             throw Abort(.notFound, reason: "VM \(vmID) not found")

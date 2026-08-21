@@ -13,10 +13,7 @@ let package = Package(
         .package(path: "../shared"),
         // 💧 A server-side Swift web framework.
         .package(url: "https://github.com/vapor/vapor.git", from: "4.122.0"),
-        // 🗄 An ORM for SQL and NoSQL databases.
-        .package(url: "https://github.com/vapor/fluent.git", from: "4.13.0"),
-        // 🐘 Fluent driver for Postgres.
-        .package(url: "https://github.com/vapor/fluent-postgres-driver.git", from: "2.12.0"),
+        .package(url: "https://github.com/vapor/postgres-nio.git", exact: "1.33.0"),
         // 🔵 Non-blocking, event-driven networking for Swift. Used for custom executors
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.101.0"),
         // 🔐 WebAuthn/Passkey authentication
@@ -81,6 +78,25 @@ let package = Package(
         .package(url: "https://github.com/samcat116/swift-cedar.git", from: "0.2.0"),
     ],
     targets: [
+        // Native PostgreSQL persistence. This target is deliberately below the
+        // HTTP framework boundary: it may not import Vapor, Fluent, PostgresKit,
+        // or SQLKit. Application code receives its concrete domain modules
+        // instead of reaching through Request/Application for a database.
+        .target(
+            name: "ControlPlanePostgres",
+            dependencies: [
+                .product(name: "StratoShared", package: "shared"),
+                .product(name: "PostgresNIO", package: "postgres-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "Metrics", package: "swift-metrics"),
+                .product(name: "Tracing", package: "swift-distributed-tracing"),
+            ],
+            resources: [
+                .copy("Migrations/CurrentSchema.sql")
+            ],
+            swiftSettings: swiftSettings
+        ),
         // SPIRE Server registration API client (join tokens + registration
         // entries). A separate library target so tests can exercise it against
         // an in-process gRPC server and so the generated protobuf code stays
@@ -104,10 +120,9 @@ let package = Package(
         .executableTarget(
             name: "App",
             dependencies: [
+                .target(name: "ControlPlanePostgres"),
                 .target(name: "SPIREServerAPI"),
                 .product(name: "StratoShared", package: "shared"),
-                .product(name: "Fluent", package: "fluent"),
-                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
                 .product(name: "Vapor", package: "vapor"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
@@ -135,10 +150,6 @@ let package = Package(
                 // swift-openapi-generator build plugin consumes; declaring it a
                 // resource additionally copies it into the product bundle.
                 .copy("openapi.yaml"),
-                // The single fresh-install schema baseline (STR-234). Keeping
-                // the reviewed SQL as a resource avoids compiling thousands of
-                // lines of historical compatibility migrations.
-                .copy("Migrations/CurrentSchema.sql"),
             ],
             swiftSettings: swiftSettings,
             plugins: [
@@ -161,10 +172,20 @@ let package = Package(
             name: "AppTestSupport",
             dependencies: [
                 .target(name: "App"),
+                .target(name: "ControlPlanePostgres"),
                 .product(name: "VaporTesting", package: "vapor"),
-                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
             ],
             path: "Tests/AppTestSupport",
+            swiftSettings: testSwiftSettings
+        ),
+        .testTarget(
+            name: "ControlPlanePostgresTests",
+            dependencies: [
+                .target(name: "ControlPlanePostgres"),
+                .target(name: "AppTestSupport"),
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+            ],
             swiftSettings: testSwiftSettings
         ),
         // The suite is split across four targets rather than one, because a
@@ -178,10 +199,10 @@ let package = Package(
             name: "AppIdentityTests",
             dependencies: [
                 .target(name: "App"),
+                .target(name: "ControlPlanePostgres"),
                 .target(name: "SPIREServerAPI"),
                 .target(name: "AppTestSupport"),
                 .product(name: "VaporTesting", package: "vapor"),
-                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
                 .product(name: "X509", package: "swift-certificates"),
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "GRPCNIOTransportHTTP2Posix", package: "grpc-swift-nio-transport"),
@@ -193,9 +214,9 @@ let package = Package(
             name: "AppIAMTests",
             dependencies: [
                 .target(name: "App"),
+                .target(name: "ControlPlanePostgres"),
                 .target(name: "AppTestSupport"),
                 .product(name: "VaporTesting", package: "vapor"),
-                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
             ],
             swiftSettings: testSwiftSettings
         ),
@@ -203,9 +224,9 @@ let package = Package(
             name: "AppResourceTests",
             dependencies: [
                 .target(name: "App"),
+                .target(name: "ControlPlanePostgres"),
                 .target(name: "AppTestSupport"),
                 .product(name: "VaporTesting", package: "vapor"),
-                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
             ],
             swiftSettings: testSwiftSettings
         ),
@@ -213,9 +234,9 @@ let package = Package(
             name: "AppPlatformTests",
             dependencies: [
                 .target(name: "App"),
+                .target(name: "ControlPlanePostgres"),
                 .target(name: "AppTestSupport"),
                 .product(name: "VaporTesting", package: "vapor"),
-                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
                 .product(name: "MetricsTestKit", package: "swift-metrics"),
                 // Mints the throwaway server certificate GuardedHTTPClientTests
                 // uses to prove TLS is still verified against the hostname when

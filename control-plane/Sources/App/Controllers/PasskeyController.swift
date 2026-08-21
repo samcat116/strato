@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 import WebAuthn
@@ -27,6 +27,12 @@ struct PasskeyController: RouteCollection {
     /// growing without limit.
     static let maxPasskeysPerUser = 20
 
+    private let passkeys: PasskeysPersistence
+
+    init(passkeys: PasskeysPersistence) {
+        self.passkeys = passkeys
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let passkeys = routes.grouped("api", "users", "me", "passkeys")
         passkeys.get(use: index)
@@ -42,10 +48,7 @@ struct PasskeyController: RouteCollection {
 
     func index(req: Request) async throws -> [PasskeyResponse] {
         let user = try currentUser(req)
-        let credentials = try await UserCredential.query(on: req.db)
-            .filter(\.$user.$id == user.requireID())
-            .sort(\.$createdAt, .ascending)
-            .all()
+        let credentials = try await passkeys.credentials(userID: user.requireID())
         return credentials.map(PasskeyResponse.init(from:))
     }
 
@@ -56,8 +59,8 @@ struct PasskeyController: RouteCollection {
         try requireSessionAuth(req)
         try rejectDisabledAccount(user)
 
-        try await user.$credentials.load(on: req.db)
-        guard user.credentials.count < Self.maxPasskeysPerUser else {
+        let credentials = try await passkeys.credentials(userID: user.requireID())
+        guard credentials.count < Self.maxPasskeysPerUser else {
             throw Abort(
                 .conflict,
                 reason: "You already have the maximum of \(Self.maxPasskeysPerUser) passkeys"
@@ -67,7 +70,7 @@ struct PasskeyController: RouteCollection {
         // Registered credentials are excluded so an authenticator that already
         // holds a passkey for this account reports it instead of silently
         // enrolling a duplicate.
-        let excludeCredentials = user.credentials.map { credential in
+        let excludeCredentials = credentials.map { credential in
             PublicKeyCredentialDescriptor(
                 type: .publicKey,
                 id: Array(credential.credentialID),
@@ -81,8 +84,7 @@ struct PasskeyController: RouteCollection {
         try await req.webAuthn.storeChallenge(
             options.challenge.base64URLEncodedString().asString(),
             for: user.id,
-            operation: Self.addChallengeOperation,
-            on: req.db
+            operation: Self.addChallengeOperation
         )
         return RegistrationBeginResponse(options: options, excludeCredentials: excludeCredentials)
     }
@@ -100,38 +102,29 @@ struct PasskeyController: RouteCollection {
         // challenge captured from another user's ceremony can't be redeemed
         // here (and so this route can never enroll onto a different account).
         guard
-            let challengeRecord = try await AuthenticationChallenge.query(on: req.db)
-                .filter(\.$challenge == body.challenge)
-                .filter(\.$operation == Self.addChallengeOperation)
-                .first(),
+            let challengeRecord = try await passkeys.challenge(
+                body.challenge,
+                operation: Self.addChallengeOperation
+            ),
             challengeRecord.userID == userID
         else {
             throw Abort(.badRequest, reason: "This passkey request does not belong to your account")
         }
 
+        let name = try Self.validatedName(body.name)
         let credential = try await req.webAuthn.finishRegistration(
             challenge: body.challenge,
             credentialCreationData: body.response,
             transports: body.transports,
             operation: Self.addChallengeOperation,
-            on: req.db
+            expectedUserID: userID,
+            maximumCredentialsPerUser: Self.maxPasskeysPerUser,
+            name: name
         )
-
-        // Defense in depth: finishRegistration derives the user from the
-        // challenge row independently of the check above.
-        guard credential.$user.id == userID else {
-            try? await credential.delete(on: req.db)
-            throw Abort(.badRequest, reason: "This passkey request does not belong to your account")
-        }
-
-        if let name = try Self.validatedName(body.name) {
-            credential.name = name
-            try await credential.save(on: req.db)
-        }
 
         await req.recordAuthEvent(
             .passkeyAdded, user: user,
-            metadata: ["credentialId": try credential.requireID().uuidString])
+            metadata: ["credentialId": credential.id.uuidString])
 
         return PasskeyResponse(from: credential)
     }
@@ -142,10 +135,19 @@ struct PasskeyController: RouteCollection {
         let user = try currentUser(req)
         try requireSessionAuth(req)
 
-        let credential = try await findOwnedCredential(req, user: user)
+        guard let credentialID = req.parameters.get("credentialID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid passkey ID")
+        }
         let body = try req.content.decode(RenamePasskeyRequest.self)
-        credential.name = try Self.validatedName(body.name)
-        try await credential.save(on: req.db)
+        guard
+            let credential = try await passkeys.renameOwnedCredential(
+                id: credentialID,
+                userID: user.requireID(),
+                name: Self.validatedName(body.name)
+            )
+        else {
+            throw Abort(.notFound, reason: "Passkey not found")
+        }
 
         return PasskeyResponse(from: credential)
     }
@@ -156,26 +158,25 @@ struct PasskeyController: RouteCollection {
         let user = try currentUser(req)
         try requireSessionAuth(req)
 
-        let credential = try await findOwnedCredential(req, user: user)
-
-        // Never let a user lock themselves out. Passkeys are the only local
-        // sign-in method, so the last one may only be removed by an account
-        // that can still authenticate another way (a linked OIDC provider).
-        let remaining =
-            try await UserCredential.query(on: req.db)
-            .filter(\.$user.$id == user.requireID())
-            .count() - 1
-        if remaining <= 0 && !user.isOIDCAuthenticated {
-            throw Abort(
-                .conflict,
-                reason: "This is your only passkey — add another before removing it"
-            )
+        guard let credentialID = req.parameters.get("credentialID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid passkey ID")
         }
 
-        let credentialID = try credential.requireID()
-        try await credential.delete(on: req.db)
+        let removed: PasskeySnapshot
+        do {
+            removed = try await passkeys.deleteOwnedCredential(
+                id: credentialID,
+                userID: user.requireID(),
+                allowsDeletingLastCredential: user.isOIDCAuthenticated
+            )
+        } catch PasskeyPersistenceError.credentialNotFound {
+            throw Abort(.notFound, reason: "Passkey not found")
+        } catch PasskeyPersistenceError.lastCredential {
+            throw Abort(.conflict, reason: "This is your only passkey — add another before removing it")
+        }
+
         await req.recordAuthEvent(
-            .passkeyRemoved, user: user, metadata: ["credentialId": credentialID.uuidString])
+            .passkeyRemoved, user: user, metadata: ["credentialId": removed.id.uuidString])
 
         return .noContent
     }
@@ -197,23 +198,6 @@ struct PasskeyController: RouteCollection {
                 reason: "Passkeys can only be managed from a signed-in browser session"
             )
         }
-    }
-
-    private func findOwnedCredential(_ req: Request, user: User) async throws -> UserCredential {
-        guard let credentialID = req.parameters.get("credentialID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid passkey ID")
-        }
-        // Scoped by owner, so another user's passkey is indistinguishable from
-        // one that doesn't exist.
-        guard
-            let credential = try await UserCredential.query(on: req.db)
-                .filter(\.$id == credentialID)
-                .filter(\.$user.$id == user.requireID())
-                .first()
-        else {
-            throw Abort(.notFound, reason: "Passkey not found")
-        }
-        return credential
     }
 
     /// Trims a user-supplied label; an empty/whitespace name clears it back to
@@ -242,7 +226,7 @@ struct PasskeyResponse: Content {
     let createdAt: Date?
     let lastUsedAt: Date?
 
-    init(from credential: UserCredential) {
+    init(from credential: PasskeySnapshot) {
         self.id = credential.id
         self.name = credential.name
         self.deviceType = credential.deviceType

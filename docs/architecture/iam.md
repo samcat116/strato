@@ -1164,8 +1164,8 @@ pieces that matter:
   when recording is switched off, so the kill switch stops new rows without
   stranding the ones already written.
 - **Recording is bounded, not free.** Recording is off the request path but
-  not off the connection pool: a row still costs a connection, against a
-  Fluent pool that defaults to one connection per event loop. It used to cost
+  not off the connection pool: a row still costs a native PostgresNIO lease.
+  It used to cost
   one background task and one single-row insert *per check*, so a VM create —
   three authorizations — spawned three inserts competing with the create's own
   queries; the wait for a connection, up to ~530ms on a loaded host, is what
@@ -1181,7 +1181,7 @@ pieces that matter:
   service context: it outlives the request that started it and carries other
   requests' rows, so its inserts form their own trace instead of nesting under
   one arbitrary `iam.authorize` span. Shutdown flushes the queue before
-  Fluent's pools close.
+  the PostgresNIO pool closes.
 
 Since cutover the system-admin bypass is gone from the middleware and
 `req.can`: admins are allowed by the `platform-system-admin` policy inside the

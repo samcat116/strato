@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Testing
 import Vapor
@@ -12,7 +12,7 @@ struct OAuthDeviceFlowTests {
 
     // MARK: - Helpers
 
-    func createTestUser(on db: Database, username: String = "clitester") async throws -> User {
+    func createTestUser(on db: PostgresStoreContext, username: String = "clitester") async throws -> User {
         let user = User(
             username: username,
             email: "\(username)@example.com",
@@ -59,10 +59,15 @@ struct OAuthDeviceFlowTests {
 
     /// Clears the poll-interval gate so consecutive polls in one test don't
     /// trip slow_down.
-    func resetPollTimer(deviceCode: String, on db: Database) async throws {
-        let authorization = try #require(try await DeviceAuthorization.findByDeviceCode(deviceCode, on: db))
-        authorization.lastPolledAt = Date().addingTimeInterval(-60)
-        try await authorization.save(on: db)
+    func resetPollTimer(deviceCode: String, on app: Application) async throws {
+        let authorization = try #require(
+            try await app.oauthDeviceSessionsPersistence.authorization(
+                deviceCodeHash: DeviceAuthorization.hashCode(deviceCode)
+            ))
+        _ = try await app.oauthDeviceSessionsPersistence.recordPoll(
+            authorizationID: authorization.id,
+            at: Date().addingTimeInterval(-60)
+        )
     }
 
     func pollToken(_ app: Application, deviceCode: String) async throws -> (HTTPStatus, TokenResponse?, String?) {
@@ -150,8 +155,8 @@ struct OAuthDeviceFlowTests {
     @Test("Happy path: authorize, approve, redeem, authenticate")
     func testDeviceFlowHappyPath() async throws {
         try await withTestApp { app in
-            let user = try await createTestUser(on: app.db)
-            let apiKey = try await user.generateAPIKey(on: app.db)
+            let user = try await createTestUser(on: app.testPostgres)
+            let apiKey = try await user.generateAPIKey(on: app)
 
             let start = try await startDeviceFlow(app)
             #expect(start.verificationUri.hasSuffix("/activate"))
@@ -178,7 +183,7 @@ struct OAuthDeviceFlowTests {
 
             #expect(try await approve(app, userCode: start.userCode, apiKey: apiKey) == .ok)
 
-            try await resetPollTimer(deviceCode: start.deviceCode, on: app.db)
+            try await resetPollTimer(deviceCode: start.deviceCode, on: app)
             let (status, token, _) = try await pollToken(app, deviceCode: start.deviceCode)
             #expect(status == .ok)
             let issued = try #require(token)
@@ -200,7 +205,7 @@ struct OAuthDeviceFlowTests {
             }
 
             // A device code is single-redemption.
-            try await resetPollTimer(deviceCode: start.deviceCode, on: app.db)
+            try await resetPollTimer(deviceCode: start.deviceCode, on: app)
             let (replayStatus, _, replayError) = try await pollToken(app, deviceCode: start.deviceCode)
             #expect(replayStatus == .badRequest)
             #expect(replayError == "invalid_grant")
@@ -227,10 +232,14 @@ struct OAuthDeviceFlowTests {
         try await withTestApp { app in
             let start = try await startDeviceFlow(app)
 
-            let authorization = try #require(
-                try await DeviceAuthorization.findByDeviceCode(start.deviceCode, on: app.db))
-            authorization.expiresAt = Date().addingTimeInterval(-60)
-            try await authorization.save(on: app.db)
+            let sql = try #require(Optional(app.testPostgres))
+            try await sql.raw(
+                """
+                UPDATE oauth_device_authorizations
+                SET expires_at = \(bind: Date().addingTimeInterval(-60))
+                WHERE device_code_hash = \(bind: DeviceAuthorization.hashCode(start.deviceCode))
+                """
+            ).run()
 
             let (status, _, errorCode) = try await pollToken(app, deviceCode: start.deviceCode)
             #expect(status == .badRequest)
@@ -241,8 +250,8 @@ struct OAuthDeviceFlowTests {
     @Test("Denied requests return access_denied and disappear from lookup")
     func testDeniedDeviceCode() async throws {
         try await withTestApp { app in
-            let user = try await createTestUser(on: app.db)
-            let apiKey = try await user.generateAPIKey(on: app.db)
+            let user = try await createTestUser(on: app.testPostgres)
+            let apiKey = try await user.generateAPIKey(on: app)
             let start = try await startDeviceFlow(app)
 
             try await app.test(
@@ -282,8 +291,8 @@ struct OAuthDeviceFlowTests {
     @Test("Approval accepts sloppy user-code input")
     func testApprovalNormalizesUserCode() async throws {
         try await withTestApp { app in
-            let user = try await createTestUser(on: app.db)
-            let apiKey = try await user.generateAPIKey(on: app.db)
+            let user = try await createTestUser(on: app.testPostgres)
+            let apiKey = try await user.generateAPIKey(on: app)
             let start = try await startDeviceFlow(app)
 
             let sloppy = start.userCode.replacingOccurrences(of: "-", with: "").lowercased()
@@ -313,11 +322,11 @@ struct OAuthDeviceFlowTests {
     @Test("Refresh rotates both tokens; replaying an old refresh revokes the session")
     func testRefreshRotationAndReplayDetection() async throws {
         try await withTestApp { app in
-            let user = try await createTestUser(on: app.db)
-            let apiKey = try await user.generateAPIKey(on: app.db)
+            let user = try await createTestUser(on: app.testPostgres)
+            let apiKey = try await user.generateAPIKey(on: app)
             let start = try await startDeviceFlow(app)
             _ = try await approve(app, userCode: start.userCode, apiKey: apiKey)
-            try await resetPollTimer(deviceCode: start.deviceCode, on: app.db)
+            try await resetPollTimer(deviceCode: start.deviceCode, on: app)
             let (_, firstToken, _) = try await pollToken(app, deviceCode: start.deviceCode)
             let first = try #require(firstToken)
 
@@ -363,11 +372,11 @@ struct OAuthDeviceFlowTests {
     @Test("POST /oauth/revoke invalidates the session by either token")
     func testRevokeEndpoint() async throws {
         try await withTestApp { app in
-            let user = try await createTestUser(on: app.db)
-            let apiKey = try await user.generateAPIKey(on: app.db)
+            let user = try await createTestUser(on: app.testPostgres)
+            let apiKey = try await user.generateAPIKey(on: app)
             let start = try await startDeviceFlow(app)
             _ = try await approve(app, userCode: start.userCode, apiKey: apiKey)
-            try await resetPollTimer(deviceCode: start.deviceCode, on: app.db)
+            try await resetPollTimer(deviceCode: start.deviceCode, on: app)
             let (_, issuedToken, _) = try await pollToken(app, deviceCode: start.deviceCode)
             let issued = try #require(issuedToken)
 
@@ -409,14 +418,14 @@ struct OAuthDeviceFlowTests {
     @Test("Settings can list and revoke CLI sessions, scoped to the owner")
     func testSessionManagement() async throws {
         try await withTestApp { app in
-            let user = try await createTestUser(on: app.db)
-            let apiKey = try await user.generateAPIKey(on: app.db)
-            let other = try await createTestUser(on: app.db, username: "someoneelse")
-            let otherKey = try await other.generateAPIKey(on: app.db)
+            let user = try await createTestUser(on: app.testPostgres)
+            let apiKey = try await user.generateAPIKey(on: app)
+            let other = try await createTestUser(on: app.testPostgres, username: "someoneelse")
+            let otherKey = try await other.generateAPIKey(on: app)
 
             let start = try await startDeviceFlow(app)
             _ = try await approve(app, userCode: start.userCode, apiKey: apiKey)
-            try await resetPollTimer(deviceCode: start.deviceCode, on: app.db)
+            try await resetPollTimer(deviceCode: start.deviceCode, on: app)
             let (_, issuedToken, _) = try await pollToken(app, deviceCode: start.deviceCode)
             let issued = try #require(issuedToken)
 
@@ -477,12 +486,12 @@ struct OAuthDeviceFlowTests {
     @Test("Read-only CLI tokens are forbidden from writes")
     func testCLITokenRestrictionEnforcement() async throws {
         try await withTestApp { app in
-            let user = try await createTestUser(on: app.db)
-            let apiKey = try await user.generateAPIKey(on: app.db)
+            let user = try await createTestUser(on: app.testPostgres)
+            let apiKey = try await user.generateAPIKey(on: app)
             let start = try await startDeviceFlow(
                 app, restriction: CredentialRestrictionPayload(.readOnly))
             _ = try await approve(app, userCode: start.userCode, apiKey: apiKey)
-            try await resetPollTimer(deviceCode: start.deviceCode, on: app.db)
+            try await resetPollTimer(deviceCode: start.deviceCode, on: app)
             let (_, issuedToken, _) = try await pollToken(app, deviceCode: start.deviceCode)
             let issued = try #require(issuedToken)
 
@@ -491,7 +500,10 @@ struct OAuthDeviceFlowTests {
             // so the default-deny middleware treats it as login-gated (#482).
             app.testOnlyLoginRoutePrefixes = ["/resource"]
             let protected = app.grouped(
-                BearerAuthorizationHeaderAuthenticator(),
+                BearerAuthorizationHeaderAuthenticator(
+                    apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
+                    users: app.userDirectoryPersistence, workloads: app.workloadsPersistence
+                ),
                 CredentialRestrictionMiddleware()
             )
             protected.get("resource") { _ in "read-ok" }
@@ -540,20 +552,22 @@ struct OAuthDeviceFlowTests {
     @Test("Expired access tokens stop authenticating but refresh still works")
     func testExpiredAccessToken() async throws {
         try await withTestApp { app in
-            let user = try await createTestUser(on: app.db)
-            let apiKey = try await user.generateAPIKey(on: app.db)
+            let user = try await createTestUser(on: app.testPostgres)
+            let apiKey = try await user.generateAPIKey(on: app)
             let start = try await startDeviceFlow(app)
             _ = try await approve(app, userCode: start.userCode, apiKey: apiKey)
-            try await resetPollTimer(deviceCode: start.deviceCode, on: app.db)
+            try await resetPollTimer(deviceCode: start.deviceCode, on: app)
             let (_, issuedToken, _) = try await pollToken(app, deviceCode: start.deviceCode)
             let issued = try #require(issuedToken)
 
-            let session = try #require(
-                try await CLISession.query(on: app.db)
-                    .filter(\.$accessTokenHash == CLISession.hashToken(issued.accessToken))
-                    .first())
-            session.accessTokenExpiresAt = Date().addingTimeInterval(-60)
-            try await session.save(on: app.db)
+            let sql = try #require(Optional(app.testPostgres))
+            try await sql.raw(
+                """
+                UPDATE cli_sessions
+                SET access_token_expires_at = \(bind: Date().addingTimeInterval(-60))
+                WHERE access_token_hash = \(bind: CLISession.hashToken(issued.accessToken))
+                """
+            ).run()
 
             try await app.test(
                 .GET, "/api/oauth/sessions",

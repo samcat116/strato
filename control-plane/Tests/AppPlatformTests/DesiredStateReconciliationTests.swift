@@ -1,6 +1,5 @@
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import StratoShared
 import AppTestSupport
@@ -37,35 +36,33 @@ final class DesiredStateReconciliationTests {
     private func network(app: Application, vm: VM, named name: String = "default") async throws
         -> LogicalNetwork
     {
-        let projectID = vm.$project.id
-        if let existing = try await LogicalNetwork.query(on: app.db)
-            .filter(\.$project.$id == projectID)
-            .filter(\.$name == name)
-            .first()
+        let projectID = vm.projectID
+        if let existing = try await LegacyLogicalNetworkStore.networks(
+            projectID: projectID, name: name, on: app.testPostgres
+        ).first
         {
             return existing
         }
-        let project = try #require(try await Project.find(projectID, on: app.db))
-        let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
+        let project = try #require(try await Project.find(projectID, on: app.testPostgres))
+        let siteID = try await TestDataBuilder(db: app.testPostgres).placementSite(for: project).requireID()
         let network = LogicalNetwork(
             name: name, subnet: "192.168.1.0/24", gateway: "192.168.1.1", projectID: projectID,
             siteID: siteID)
-        try await network.save(on: app.db)
+        try await network.save(on: app.testPostgres)
         return network
     }
 
     /// Same harness as `VMOperationTests`: full middleware stack, API-key
     /// auth, one VM.
     private func withVMTestApp(
-        _ test: (Application, User, VM, String) async throws -> Void
+        _ test: (Application, User, inout VM, String) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "reconuser",
                 email: "recon@example.com",
@@ -74,18 +71,17 @@ final class DesiredStateReconciliationTests {
             )
             let org = try await builder.createOrganization(name: "Recon Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Recon Project",
                 description: "Project for reconciliation tests",
                 organization: org
             )
-            let vm = try await builder.createVM(name: "recon-vm", project: project)
-            let token = try await user.generateAPIKey(on: app.db)
+            var vm = try await builder.createVM(name: "recon-vm", project: project)
+            let token = try await user.generateAPIKey(on: app)
 
-            try await test(app, user, vm, token)
+            try await test(app, user, &vm, token)
 
         } catch {
             try await app.shutdownForTesting()
@@ -104,6 +100,7 @@ final class DesiredStateReconciliationTests {
         protocolVersion: Int,
         placeVM: Bool = true
     ) async throws -> String {
+        var vm = vm
         let message = AgentRegisterMessage(
             agentId: agentName,
             hostname: "test-host",
@@ -117,39 +114,36 @@ final class DesiredStateReconciliationTests {
             protocolVersion: protocolVersion,
             dependencyObservations: [Self.healthyOverlayObservation()]
         )
-        let project = try #require(try await Project.find(vm.$project.id, on: app.db))
-        let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let project = try #require(try await Project.find(vm.projectID, on: app.testPostgres))
+        let siteID = try await TestDataBuilder(db: app.testPostgres).placementSite(for: project).requireID()
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: agentName, siteID: siteID,
             organizationScope: orgID.map { .organization($0) })
-        let site = try #require(try await Site.find(siteID, on: app.db))
-        if site.$networkControllerAgent.id == nil {
-            site.$networkControllerAgent.id = agentUUID
-            try await site.save(on: app.db)
+        let site = try #require(try await LegacySiteStore.site(id: siteID, on: app.testPostgres))
+        if site.networkControllerAgentID == nil {
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: siteID, agentID: agentUUID, condition: .unset, on: app.testPostgres)
         }
         if placeVM {
             vm.hypervisorId = agentUUID.uuidString
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
         }
         return agentUUID.uuidString
     }
 
     private func attachBootVolume(app: Application, vm: VM, agentID: String) async throws {
-        let owner = try #require(try await User.query(on: app.db).sort(\.$createdAt).first())
+        let owner = try #require(try await User.all(on: app.testPostgres).first)
         let boot = Volume(
-            name: "\(vm.name)-boot", description: "", projectID: vm.$project.id,
+            name: "\(vm.name)-boot", description: "", projectID: vm.projectID,
             environment: vm.environment, size: vm.disk, format: .qcow2,
-            volumeType: .boot, status: .attached, createdByID: try owner.requireID())
-        boot.$vm.id = try vm.requireID()
-        boot.deviceName = VolumeDeviceName.disk(0).rawValue
-        boot.bootOrder = 0
-        boot.generation = 1
-        boot.observedGeneration = 1
-        try await boot.save(on: app.db)
+            volumeType: .boot, status: .attached, generation: 1, observedGeneration: 1,
+            createdByID: try owner.requireID(), vmID: try vm.requireID(),
+            deviceName: VolumeDeviceName.disk(0).rawValue, bootOrder: 0)
+        try await boot.save(on: app.testPostgres)
         try await placeVolume(
             boot, on: agentID, at: "/var/lib/strato/volumes/\(try boot.requireID())/volume.qcow2",
-            state: .healthy, using: app.db)
+            state: .healthy, using: app.testPostgres)
     }
 
     private func report(
@@ -198,7 +192,7 @@ final class DesiredStateReconciliationTests {
                 #expect(res.status == .accepted)
             }
 
-            let refreshed = try await VM.find(vm.id, on: app.db)
+            let refreshed = try await VM.find(vm.id, on: app.testPostgres)
             #expect(refreshed?.desiredStatus == .running)
             #expect(refreshed?.generation == 1)
         }
@@ -211,8 +205,7 @@ final class DesiredStateReconciliationTests {
 
             // The agent went dark: its row is offline cluster-wide.
             let agent = try #require(await app.agentService.getAgentInfo(agentId))
-            agent.status = .offline
-            try await agent.save(on: app.db)
+            try await agent.replacing(status: .offline).save(on: app.testPostgres)
 
             var targetGeneration: Int64?
             try await app.test(.POST, "/api/vms/\(vm.id!)/start") { req in
@@ -230,7 +223,7 @@ final class DesiredStateReconciliationTests {
             // agent returns.
             var refreshed: VM?
             for _ in 0..<250 {
-                refreshed = try await VM.find(vm.id, on: app.db)
+                refreshed = try await VM.find(vm.id, on: app.testPostgres)
                 if refreshed?.conditions.degraded != nil { break }
                 try await Task.sleep(for: .milliseconds(20))
             }
@@ -254,7 +247,7 @@ final class DesiredStateReconciliationTests {
 
             // No `.starting` marker on the sync path: in-flight state is the
             // gap between desired and observed.
-            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.status == .created)
             #expect(refreshed.desiredStatus == .running)
             #expect(refreshed.generation == 1)
@@ -284,7 +277,7 @@ final class DesiredStateReconciliationTests {
             }
 
             // Refused agents leave no registry row behind.
-            let rows = try await Agent.query(on: app.db).all()
+            let rows = try await Agent.all(on: app.testPostgres)
             #expect(rows.isEmpty)
 
             // An exactly matching agent registers fine.
@@ -306,7 +299,7 @@ final class DesiredStateReconciliationTests {
             try await self.attachBootVolume(app: app, vm: vm, agentID: agentId)
 
             vm.setFixtureDesiredStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(message.vms.count == 1)
@@ -331,24 +324,24 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             try await self.attachBootVolume(app: app, vm: vm, agentID: agentId)
-            let project = try #require(try await Project.find(vm.$project.id, on: app.db))
-            let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
+            let project = try #require(try await Project.find(vm.projectID, on: app.testPostgres))
+            let siteID = try await TestDataBuilder(db: app.testPostgres).placementSite(for: project).requireID()
 
             // A project-scoped network the VM references via a NIC.
             let network = LogicalNetwork(
                 name: "app-net",
                 subnet: "10.20.0.0/24",
                 gateway: "10.20.0.1",
-                projectID: vm.$project.id,
+                projectID: vm.projectID,
                 externalAccess: true,
                 generation: 3,
                 siteID: siteID
             )
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: try network.requireID(),
                 macAddress: VMNetworkInterface.generateMACAddress())
-            try await nic.save(on: app.db)
+            try await nic.save(on: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let net = try #require(message.networks.first { $0.name == "app-net" })
@@ -362,7 +355,7 @@ final class DesiredStateReconciliationTests {
             // edits bump no generation and converged VMs never re-realize).
             #expect(net.dhcpEnabled == true)
             // Per-project router: the key is derived from the owning project.
-            #expect(net.routerKey == "project-\(vm.$project.id.uuidString)")
+            #expect(net.routerKey == "project-\(vm.projectID.uuidString)")
 
             // A network no VM on this agent references is not synced to it.
             #expect(!message.networks.contains { $0.name == "unreferenced" })
@@ -375,47 +368,46 @@ final class DesiredStateReconciliationTests {
             let agentId = try await self.registerAgent(
                 app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             try await self.attachBootVolume(app: app, vm: vm, agentID: agentId)
-            let project = try #require(try await Project.find(vm.$project.id, on: app.db))
-            let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
+            let project = try #require(try await Project.find(vm.projectID, on: app.testPostgres))
+            let siteID = try await TestDataBuilder(db: app.testPostgres).placementSite(for: project).requireID()
 
             let network = LogicalNetwork(
                 name: "fip-net", subnet: "10.30.0.0/24", gateway: "10.30.0.1",
-                projectID: vm.$project.id, externalAccess: true, siteID: siteID)
-            try await network.save(on: app.db)
+                projectID: vm.projectID, externalAccess: true, siteID: siteID)
+            try await network.save(on: app.testPostgres)
             let networkID = try network.requireID()
             let net0 = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: networkID,
                 macAddress: VMNetworkInterface.generateMACAddress(),
                 deviceName: "net0", orderIndex: 0)
-            try await net0.save(on: app.db)
+            try await net0.save(on: app.testPostgres)
             let net1 = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: networkID,
                 macAddress: VMNetworkInterface.generateMACAddress(),
-                deviceName: "net1", orderIndex: 1)
-            net1.detachGeneration = vm.generation
-            try await net1.save(on: app.db)
+                deviceName: "net1", orderIndex: 1,
+                detachGeneration: vm.generation)
+            try await net1.save(on: app.testPostgres)
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: networkID,
                 macAddress: VMNetworkInterface.generateMACAddress(),
                 deviceName: "net2", orderIndex: 2)
-            try await nic.save(on: app.db)
-            try await VMInterfaceAddress(
+            try await nic.save(on: app.testPostgres)
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: nic.id!, logicalNetworkID: networkID, family: .ipv4,
-                address: "10.30.0.5", prefixLength: 24, gateway: "10.30.0.1"
-            ).save(on: app.db)
+                address: "10.30.0.5", prefixLength: 24, gateway: "10.30.0.1",
+                on: app.testPostgres)
 
-            let pool = FloatingIPPool(
-                name: "edge", cidr: "203.0.113.0/24", gateway: "203.0.113.1", siteID: siteID)
-            try await pool.save(on: app.db)
-            let attached = FloatingIP(
-                poolID: pool.id!, address: "203.0.113.10", projectID: vm.$project.id,
-                interfaceID: nic.id!, createdByID: user.id!)
-            try await attached.save(on: app.db)
+            let pool = try await TestDataBuilder(app: app).createFloatingIPPool(
+                name: "edge", cidr: "203.0.113.0/24", gateway: "203.0.113.1", siteID: siteID,
+                organizationID: project.organizationID)
+            try await LegacyFloatingIPStore.insert(
+                poolID: pool.id, address: "203.0.113.10", projectID: vm.projectID,
+                interfaceID: nic.id!, createdByID: user.id!, on: app.testPostgres)
             // A reserved-but-unattached address must not produce a NAT rule.
-            try await FloatingIP(
-                poolID: pool.id!, address: "203.0.113.11", projectID: vm.$project.id,
-                createdByID: user.id!
-            ).save(on: app.db)
+            try await LegacyFloatingIPStore.insert(
+                poolID: pool.id, address: "203.0.113.11", projectID: vm.projectID,
+                createdByID: user.id!, on: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let net = try #require(message.networks.first { $0.name == "fip-net" })
@@ -447,34 +439,37 @@ final class DesiredStateReconciliationTests {
 
             let initialGeneration = vm.generation
             #expect(
-                try await vm.advanceDesiredStateGeneration(
-                    expectedGeneration: initialGeneration, on: app.db)
+                try await DesiredStateGenerationWriter.advance(
+                    schema: VM.schema, id: try vm.requireID(),
+                    expectedGeneration: initialGeneration, on: app.testPostgres)
                     == .applied(initialGeneration + 1))
             let nic = VMNetworkInterface(
                 vmID: try vm.requireID(), logicalNetworkID: networkID,
-                macAddress: "52:54:00:de:7a:01", deviceName: "net0", orderIndex: 0)
-            nic.attachGeneration = 0
-            nic.detachGeneration = vm.generation
-            try await nic.save(on: app.db)
+                macAddress: "52:54:00:de:7a:01", deviceName: "net0", orderIndex: 0,
+                attachGeneration: 0, detachGeneration: initialGeneration + 1)
+            try await nic.save(on: app.testPostgres)
             let nicID = try nic.requireID()
-            let address = VMInterfaceAddress(
+            let address = try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: nicID, logicalNetworkID: networkID, family: .ipv4,
-                address: "192.168.1.50", prefixLength: 24, gateway: "192.168.1.1")
-            try await address.save(on: app.db)
+                address: "192.168.1.50", prefixLength: 24, gateway: "192.168.1.1",
+                on: app.testPostgres)
             let group = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: vm.$project.id, on: app.db)
-            let membership = VMInterfaceSecurityGroup(
-                interfaceID: nicID, securityGroupID: try group.requireID())
-            try await membership.save(on: app.db)
-            let pool = FloatingIPPool(
+                projectID: vm.projectID, on: app.testPostgres)
+            let membership = try await LegacyInterfaceSecurityGroupStore.insert(
+                kind: .vm,
+                interfaceID: nicID,
+                securityGroupID: group.id,
+                on: app.testPostgres)
+            let project = try #require(try await Project.find(vm.projectID, on: app.testPostgres))
+            let pool = try await TestDataBuilder(app: app).createFloatingIPPool(
                 name: "detach-pool", cidr: "203.0.113.0/24", gateway: "203.0.113.1",
-                siteID: network.$site.id)
-            try await pool.save(on: app.db)
-            let floatingIP = FloatingIP(
-                poolID: try pool.requireID(), address: "203.0.113.50",
-                projectID: vm.$project.id, interfaceID: nicID,
-                createdByID: try user.requireID())
-            try await floatingIP.save(on: app.db)
+                siteID: network.siteID,
+                organizationID: project.organizationID)
+            let floatingIP = try await LegacyFloatingIPStore.insert(
+                poolID: pool.id, address: "203.0.113.50",
+                projectID: vm.projectID, interfaceID: nicID,
+                createdByID: try user.requireID(), on: app.testPostgres)
 
             func apply(appliedIDs: [UUID]) async throws {
                 let envelope = try self.report(
@@ -493,19 +488,27 @@ final class DesiredStateReconciliationTests {
             // manifest still says this NIC is applied, so every related row is
             // retained for a safe retry.
             try await apply(appliedIDs: [nicID])
-            #expect(try await VMNetworkInterface.find(nicID, on: app.db) != nil)
-            #expect(try await VMInterfaceAddress.find(address.id, on: app.db) != nil)
-            #expect(try await VMInterfaceSecurityGroup.find(membership.id, on: app.db) != nil)
-            #expect(try await FloatingIP.find(floatingIP.id, on: app.db)?.$interface.id == nicID)
+            #expect(try await LegacyVMNetworkInterfaceStore.interface(id: nicID, on: app.testPostgres) != nil)
+            #expect(try await LegacyInterfaceAddressStore.address(
+                kind: .vm, id: address.id, on: app.testPostgres) != nil)
+            #expect(try await LegacyInterfaceSecurityGroupStore.membership(
+                kind: .vm, id: membership.id, on: app.testPostgres) != nil)
+            #expect(
+                try await LegacyFloatingIPStore.find(id: floatingIP.id, on: app.testPostgres)?.interfaceID
+                    == nicID)
 
             // Only an explicit, authoritative absence releases the retained
             // NIC. Its FK cascades release leases and memberships; the
             // floating IP allocation remains reserved but becomes unattached.
             try await apply(appliedIDs: [])
-            #expect(try await VMNetworkInterface.find(nicID, on: app.db) == nil)
-            #expect(try await VMInterfaceAddress.find(address.id, on: app.db) == nil)
-            #expect(try await VMInterfaceSecurityGroup.find(membership.id, on: app.db) == nil)
-            #expect(try await FloatingIP.find(floatingIP.id, on: app.db)?.$interface.id == nil)
+            #expect(try await LegacyVMNetworkInterfaceStore.interface(id: nicID, on: app.testPostgres) == nil)
+            #expect(try await LegacyInterfaceAddressStore.address(
+                kind: .vm, id: address.id, on: app.testPostgres) == nil)
+            #expect(try await LegacyInterfaceSecurityGroupStore.membership(
+                kind: .vm, id: membership.id, on: app.testPostgres) == nil)
+            #expect(
+                try await LegacyFloatingIPStore.find(id: floatingIP.id, on: app.testPostgres)?.interfaceID
+                    == nil)
         }
     }
 
@@ -515,8 +518,8 @@ final class DesiredStateReconciliationTests {
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             vm.setFixtureDesiredStatus(.running)
-            vm.extendConvergenceDeadline(by: 600)
-            try await vm.save(on: app.db)
+            vm = vm.extendingConvergenceDeadline(by: 600)
+            try await vm.save(on: app.testPostgres)
 
             let envelope = try self.report(
                 agentId: agentId,
@@ -524,7 +527,7 @@ final class DesiredStateReconciliationTests {
             )
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
-            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.status == .running)
             #expect(refreshed.observedGeneration == 1)
             #expect(refreshed.conditions.converged)
@@ -570,11 +573,11 @@ final class DesiredStateReconciliationTests {
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             vm.setFixtureDesiredStatus(.running)
-            vm.extendConvergenceDeadline(by: 600)
-            try await vm.save(on: app.db)
+            vm = vm.extendingConvergenceDeadline(by: 600)
+            try await vm.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .boot, resourceKind: .virtualMachine, resourceID: vm.id!,
-                actor: .user(user.id!), on: app.db)
+                actor: .user(user.id!), on: app.testPostgres)
 
             // Generation 1 was attempted and failed; the agent reports the
             // failure tagged with the generation that produced it.
@@ -589,7 +592,7 @@ final class DesiredStateReconciliationTests {
             )
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
-            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             let degraded = try #require(refreshed.conditions.degraded)
             #expect(degraded.reason == "boot failed: no bootable device")
             #expect(degraded.sinceGeneration == 1)
@@ -608,8 +611,8 @@ final class DesiredStateReconciliationTests {
             let agentId = try await self.registerAgent(
                 app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             vm.setFixtureDesiredStatus(.running)
-            vm.extendConvergenceDeadline(by: 600)
-            try await vm.save(on: app.db)
+            vm = vm.extendingConvergenceDeadline(by: 600)
+            try await vm.save(on: app.testPostgres)
             let reason = "agent `hv-03` has 12 GiB available; this operation requires 64 GiB additional memory"
 
             let envelope = try self.report(
@@ -622,7 +625,7 @@ final class DesiredStateReconciliationTests {
             await app.agentService.applyObservedStateReport(
                 envelope, fromAgentKey: agentKey("recon-agent"))
 
-            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.conditions.degraded?.reason == reason)
             #expect(refreshed.conditions.degraded?.sinceGeneration == 1)
             #expect(refreshed.convergenceDeadline == nil)
@@ -638,7 +641,7 @@ final class DesiredStateReconciliationTests {
             // minting generation 2.
             vm.setFixtureDesiredStatus(.running)  // gen 1
             vm.setFixtureDesiredStatus(.running)  // gen 2 (retry)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             // A heartbeat report still carrying generation 1's error arrives
             // before the agent attempts generation 2.
@@ -657,7 +660,7 @@ final class DesiredStateReconciliationTests {
             // that produced it — so a client comparing `sinceGeneration`
             // against `targetGeneration` sees a superseded failure, not a
             // failure of the retry.
-            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             let conditions = refreshed.conditions
             #expect(conditions.targetGeneration == 2)
             #expect(conditions.degraded?.sinceGeneration == 1)
@@ -671,7 +674,7 @@ final class DesiredStateReconciliationTests {
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             vm.setFixtureDesiredStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let envelope = try self.report(
                 agentId: agentId,
@@ -683,7 +686,7 @@ final class DesiredStateReconciliationTests {
             )
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
-            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.status == .created)  // untouched
 
             let conditions = refreshed.conditions
@@ -698,12 +701,12 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, user, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
-            try await ResourceFinalizerService.stampForDeletion(vm, on: app.db)
+            try await ResourceFinalizerService.stampForDeletion(vm, on: app.testPostgres)
             vm.setFixtureDesiredStatus(.absent)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .delete, resourceKind: .virtualMachine, resourceID: vm.id!,
-                actor: .user(user.id!), on: app.db)
+                actor: .user(user.id!), on: app.testPostgres)
 
             // The creator binding VM creation writes, plus a checkpoint whose
             // row cascades away with the VM. Bindings have no FK to either, so
@@ -711,38 +714,38 @@ final class DesiredStateReconciliationTests {
             // checkpoint's only if the revoke reads it before the delete.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .virtualMachine, nodeID: vm.id!, createdBy: user.id!, on: app.db)
+                nodeType: .virtualMachine, nodeID: vm.id!, createdBy: user.id!, on: app.testPostgres)
             let snapshot = VMSnapshot(
-                name: "checkpoint", vmID: vm.id!, projectID: vm.$project.id,
+                name: "checkpoint", vmID: vm.id!, projectID: vm.projectID,
                 environment: vm.environment, agentId: agentId, createdByID: user.id!)
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
             let snapshotID = try snapshot.requireID()
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .vmSnapshot, nodeID: snapshotID, createdBy: user.id!, on: app.db)
+                nodeType: .vmSnapshot, nodeID: snapshotID, createdBy: user.id!, on: app.testPostgres)
 
             // Full-list semantics: the VM is missing from the agent's report.
             let envelope = try self.report(agentId: agentId, vms: [])
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
-            let gone = try await VM.find(vm.id, on: app.db)
+            let gone = try await VM.find(vm.id, on: app.testPostgres)
             #expect(gone == nil)
 
             // The reap appended the terminal event a client polling the delete
             // reads as "done" (STR-147).
             let terminal = try await ResourceEvent.latest(
-                .completed, resourceKind: .virtualMachine, resourceID: vm.id!, on: app.db)
+                .completed, resourceKind: .virtualMachine, resourceID: vm.id!, on: app.testPostgres)
             #expect(terminal?.mutation == .delete)
 
-            let bindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$nodeType == IAMNodeType.virtualMachine.rawValue)
-                .filter(\.$nodeID == vm.id!)
-                .count()
+            let bindings = try await LegacyRoleBindingStore.bindings(
+                nodeType: IAMNodeType.virtualMachine.rawValue,
+                nodeID: vm.id!,
+                on: app.testPostgres).count
             #expect(bindings == 0)
-            let snapshotBindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$nodeType == IAMNodeType.vmSnapshot.rawValue)
-                .filter(\.$nodeID == snapshotID)
-                .count()
+            let snapshotBindings = try await LegacyRoleBindingStore.bindings(
+                nodeType: IAMNodeType.vmSnapshot.rawValue,
+                nodeID: snapshotID,
+                on: app.testPostgres).count
             #expect(snapshotBindings == 0)
         }
     }
@@ -758,17 +761,17 @@ final class DesiredStateReconciliationTests {
             vm.setFixtureDesiredStatus(.absent)
             // Already past its budget when the sweep runs.
             vm.convergenceDeadline = Date().addingTimeInterval(-100)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .delete, resourceKind: .virtualMachine, resourceID: vm.id!,
-                actor: .user(user.id!), on: app.db)
+                actor: .user(user.id!), on: app.testPostgres)
 
             await app.agentService.sweepStuckConvergence()
 
             // The delete is marked degraded, but the deletion intent survives
             // it (issue #734) — reverting desired to `.running` here would have
             // the agent recreate a fresh, blank VM under this id.
-            let sweptVM = try #require(try await VM.find(vm.id, on: app.db))
+            let sweptVM = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(sweptVM.conditions.degraded?.sinceGeneration == vm.generation)
             #expect(sweptVM.desiredStatus == .absent)
             #expect(sweptVM.generation == vm.generation)
@@ -778,7 +781,7 @@ final class DesiredStateReconciliationTests {
             let envelope = try self.report(agentId: agentId, vms: [])
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
-            let gone = try await VM.find(vm.id, on: app.db)
+            let gone = try await VM.find(vm.id, on: app.testPostgres)
             #expect(gone == nil)
         }
     }
@@ -790,12 +793,12 @@ final class DesiredStateReconciliationTests {
 
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let envelope = try self.report(agentId: agentId, vms: [])
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
-            let refreshed = try await VM.find(vm.id, on: app.db)
+            let refreshed = try await VM.find(vm.id, on: app.testPostgres)
             #expect(refreshed?.status == .error)
         }
     }
@@ -808,12 +811,12 @@ final class DesiredStateReconciliationTests {
             // `.created` may be mid-create on an agent that hasn't received
             // the sync yet — absence must not escalate it.
             vm.setFixtureDesiredStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let envelope = try self.report(agentId: agentId, vms: [])
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
-            let refreshed = try await VM.find(vm.id, on: app.db)
+            let refreshed = try await VM.find(vm.id, on: app.testPostgres)
             #expect(refreshed?.status == .created)
         }
     }
@@ -826,7 +829,7 @@ final class DesiredStateReconciliationTests {
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.observedGeneration = 1
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             // The guest paused itself out of band; no operation asked for it.
             let envelope = try self.report(
@@ -835,7 +838,7 @@ final class DesiredStateReconciliationTests {
             )
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
-            let refreshed = try await VM.find(vm.id, on: app.db)
+            let refreshed = try await VM.find(vm.id, on: app.testPostgres)
             #expect(refreshed?.status == .paused)
         }
     }
@@ -846,7 +849,7 @@ final class DesiredStateReconciliationTests {
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             vm.setFixtureDesiredStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let envelope = try self.report(
                 agentId: agentId,
@@ -855,7 +858,7 @@ final class DesiredStateReconciliationTests {
             // Delivered over a connection authenticated as a different agent.
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("impostor"))
 
-            let refreshed = try await VM.find(vm.id, on: app.db)
+            let refreshed = try await VM.find(vm.id, on: app.testPostgres)
             #expect(refreshed?.status == .created)
             #expect(refreshed?.observedGeneration == 0)
         }
@@ -868,7 +871,7 @@ final class DesiredStateReconciliationTests {
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.observedGeneration = vm.generation
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let envelope = try self.report(
                 agentId: agentId,
@@ -884,7 +887,7 @@ final class DesiredStateReconciliationTests {
                 fromAgentKey: agentKey("recon-agent")
             )
             let afterFirst = try #require(
-                try await Agent.find(UUID(uuidString: agentId), on: app.db)
+                try await Agent.find(UUID(uuidString: agentId), on: app.testPostgres)
             )
             let firstUpdatedAt = afterFirst.updatedAt
             let firstHeartbeat = afterFirst.lastHeartbeat
@@ -894,7 +897,7 @@ final class DesiredStateReconciliationTests {
                 fromAgentKey: agentKey("recon-agent")
             )
             let afterSecond = try #require(
-                try await Agent.find(UUID(uuidString: agentId), on: app.db)
+                try await Agent.find(UUID(uuidString: agentId), on: app.testPostgres)
             )
             #expect(afterSecond.updatedAt == firstUpdatedAt)
             #expect(afterSecond.lastHeartbeat == firstHeartbeat)
@@ -907,7 +910,7 @@ final class DesiredStateReconciliationTests {
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             try await app.agentService.updateAgentHeartbeat(
                 AgentHeartbeatMessage(
@@ -921,7 +924,7 @@ final class DesiredStateReconciliationTests {
                 fromAgentKey: agentKey("recon-agent")
             )
 
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.status == .running)
         }
     }
@@ -937,7 +940,7 @@ final class DesiredStateReconciliationTests {
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: try await self.network(app: app, vm: vm).requireID(),
                 macAddress: "52:54:00:ab:cd:ef", deviceName: "net0")
-            try await nic.save(on: app.db)
+            try await nic.save(on: app.testPostgres)
 
             let guestInfo = GuestInfo(
                 qgaAvailable: true,
@@ -960,13 +963,12 @@ final class DesiredStateReconciliationTests {
             )
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.qgaAvailable == true)
             #expect(refreshed.observedHostname == "web-01")
 
-            let observed = try await VMInterfaceObservedAddress.query(on: app.db)
-                .filter(\.$interface.$id == nic.id!)
-                .all()
+            let observed = try await app.workloadsPersistence.observedInterfaceAddresses(
+                interfaceIDs: [nic.id!])
             #expect(observed.count == 2)
             #expect(
                 observed.contains {
@@ -986,7 +988,7 @@ final class DesiredStateReconciliationTests {
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: try await self.network(app: app, vm: vm).requireID(),
                 macAddress: "52:54:00:ab:cd:ef", deviceName: "net0")
-            try await nic.save(on: app.db)
+            try await nic.save(on: app.testPostgres)
 
             func send(_ guestInfo: GuestInfo?) async throws {
                 let envelope = try self.report(
@@ -1005,7 +1007,8 @@ final class DesiredStateReconciliationTests {
                             name: "eth0", hardwareAddress: "52:54:00:ab:cd:ef",
                             addresses: [GuestIPAddress(family: .ipv4, address: "10.0.0.5", prefixLength: 24)])
                     ]))
-            var rows = try await VMInterfaceObservedAddress.query(on: app.db).filter(\.$interface.$id == nic.id!).all()
+            var rows = try await app.workloadsPersistence.observedInterfaceAddresses(
+                interfaceIDs: [nic.id!])
             #expect(rows.map(\.address) == ["10.0.0.5"])
 
             // The lease changed: the set is reconciled wholesale to the new address.
@@ -1017,13 +1020,15 @@ final class DesiredStateReconciliationTests {
                             name: "eth0", hardwareAddress: "52:54:00:ab:cd:ef",
                             addresses: [GuestIPAddress(family: .ipv4, address: "10.0.0.9", prefixLength: 24)])
                     ]))
-            rows = try await VMInterfaceObservedAddress.query(on: app.db).filter(\.$interface.$id == nic.id!).all()
+            rows = try await app.workloadsPersistence.observedInterfaceAddresses(
+                interfaceIDs: [nic.id!])
             #expect(rows.map(\.address) == ["10.0.0.9"])
 
             // A report without guestInfo (e.g. a transient probe miss) must NOT
             // wipe the last-known observed addresses.
             try await send(nil)
-            rows = try await VMInterfaceObservedAddress.query(on: app.db).filter(\.$interface.$id == nic.id!).all()
+            rows = try await app.workloadsPersistence.observedInterfaceAddresses(
+                interfaceIDs: [nic.id!])
             #expect(rows.map(\.address) == ["10.0.0.9"])
         }
     }
@@ -1035,7 +1040,7 @@ final class DesiredStateReconciliationTests {
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: try await self.network(app: app, vm: vm).requireID(),
                 macAddress: "52:54:00:ab:cd:ef", deviceName: "net0")
-            try await nic.save(on: app.db)
+            try await nic.save(on: app.testPostgres)
 
             func send(status: VMStatus, guestInfo: GuestInfo?) async throws {
                 let envelope = try self.report(
@@ -1055,16 +1060,16 @@ final class DesiredStateReconciliationTests {
                             name: "eth0", hardwareAddress: "52:54:00:ab:cd:ef",
                             addresses: [GuestIPAddress(family: .ipv4, address: "10.0.0.5", prefixLength: 24)])
                     ]))
-            #expect(try await VM.find(vm.id, on: app.db)?.qgaAvailable == true)
+            #expect(try await VM.find(vm.id, on: app.testPostgres)?.qgaAvailable == true)
 
             // The VM is now observed shut down with no guest info: the stale qga
             // view (which would otherwise persist forever) is cleared.
             try await send(status: .shutdown, guestInfo: nil)
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.qgaAvailable == nil)
             #expect(refreshed.observedHostname == nil)
-            let rows = try await VMInterfaceObservedAddress.query(on: app.db)
-                .filter(\.$interface.$id == nic.id!).all()
+            let rows = try await app.workloadsPersistence.observedInterfaceAddresses(
+                interfaceIDs: [nic.id!])
             #expect(rows.isEmpty)
         }
     }
@@ -1088,7 +1093,7 @@ final class DesiredStateReconciliationTests {
             )
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.guestMemoryTotalBytes == 8_254_390_272)
             #expect(refreshed.guestMemoryAvailableBytes == 6_442_450_944)
             #expect(refreshed.guestMemoryBalloonActualBytes == 8_589_934_592)
@@ -1120,13 +1125,13 @@ final class DesiredStateReconciliationTests {
             // A transient probe miss (nil stats on a running VM) must NOT wipe
             // the last-known usage.
             try await send(status: .running, memoryStats: nil)
-            var refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            var refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.guestMemoryTotalBytes == 4_000_000_000)
             #expect(refreshed.guestMemoryAvailableBytes == 3_000_000_000)
 
             // Observed shut down: a stopped guest's last-known usage is stale.
             try await send(status: .shutdown, memoryStats: nil)
-            refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.guestMemoryTotalBytes == nil)
             #expect(refreshed.guestMemoryAvailableBytes == nil)
             #expect(refreshed.guestMemoryBalloonActualBytes == nil)

@@ -148,6 +148,8 @@ startup rather than run with an unbounded query.
 | `resources.requests.memory` | string | `"512Mi"` | Memory request |
 | `strato.logLevel` | string | `"info"` | Log level (debug, info, warn, error) |
 | `strato.database.statementTimeoutMs` | int | `300000` | Maximum duration in milliseconds for statements on normal pooled control-plane connections |
+| `strato.database.maxConnections` | int | `20` | Maximum native PostgreSQL connections per control-plane replica |
+| `strato.database.connectionAcquireTimeoutMs` | int | `10000` | Maximum wait in milliseconds for a native PostgreSQL connection lease |
 | `strato.webauthn.relyingPartyId` | string | `""` | WebAuthn relying party identifier; empty derives it from the Gateway hostname (falling back to `localhost`) |
 | `strato.webauthn.relyingPartyName` | string | `"Strato"` | WebAuthn relying party name |
 | `strato.webauthn.relyingPartyOrigin` | string | `""` | WebAuthn relying party origin; empty derives it from the Gateway settings (falling back to `http://localhost:8080`) |

@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import NIOConcurrencyHelpers
 import SwiftSSF
@@ -84,19 +84,33 @@ enum SSFValidation {
 
 actor SSFService {
     private let app: Application
+    private let configuration: ControlPlaneConfiguration
+    private let apiKeys: APIKeysPersistence
+    private let streams: SSFStreamsPersistence
+    private let userSecurity: UserSecurityPersistence
     private var receivers: [UUID: SSFReceiver] = [:]
     private let pollTask = NIOLockedValueBox<Task<Void, Never>?>(nil)
 
-    init(app: Application) {
+    init(
+        app: Application,
+        configuration: ControlPlaneConfiguration,
+        apiKeys: APIKeysPersistence,
+        streams: SSFStreamsPersistence,
+        userSecurity: UserSecurityPersistence
+    ) {
         self.app = app
+        self.configuration = configuration
+        self.apiKeys = apiKeys
+        self.streams = streams
+        self.userSecurity = userSecurity
     }
 
     // MARK: - Receiver construction
 
     /// The receiver for a stream, cached so transmitter metadata and JWKS
     /// caches survive across events. Invalidate on config changes.
-    func receiver(for stream: SSFStream) throws -> SSFReceiver {
-        let id = try stream.requireID()
+    func receiver(for stream: SSFStreamSnapshot) throws -> SSFReceiver {
+        let id = stream.id
         if let cached = receivers[id] {
             return cached
         }
@@ -104,17 +118,17 @@ actor SSFService {
         // Re-validated here (not just at create) so rows predating a
         // tightened allow-list can't reach a now-disallowed host.
         try SSFValidation.validateTransmitterURL(
-            stream.transmitterURL, configuration: app.controlPlaneConfiguration)
+            stream.transmitterURL, configuration: configuration)
         guard let transmitterURL = URL(string: stream.transmitterURL) else {
             throw Abort(.unprocessableEntity, reason: "Invalid transmitter URL")
         }
         let allowUnverified =
             app.environment == .testing
-            && app.controlPlaneConfiguration.bool(.ssfAllowUnverifiedTokens) == true
-        let audience = stream.expectedAudienceArray
+            && configuration.bool(.ssfAllowUnverifiedTokens) == true
+        let audience = stream.expectedAudience
         let configuration = SSFReceiverConfiguration(
             transmitterURL: transmitterURL,
-            authToken: try stream.authToken.map { try app.secretsEncryption.decrypt($0) },
+            authToken: try stream.encryptedAuthToken.map { try app.secretsEncryption.decrypt($0) },
             expectedIssuer: stream.expectedIssuer.flatMap(URL.init(string:)),
             expectedAudience: audience.isEmpty ? nil : audience,
             allowUnverifiedTokens: allowUnverified,
@@ -135,12 +149,15 @@ actor SSFService {
 
     /// Parse, verify, and act on one inbound SET. Throws `SSFError` for the
     /// controller to translate into an RFC 8935 error response.
-    func processInboundToken(_ token: String, stream: SSFStream) async throws {
+    func processInboundToken(_ token: String, stream: SSFStreamSnapshot) async throws {
         let receiver = try self.receiver(for: stream)
         let processor = SSFSignalProcessor(
             app: app,
-            streamID: try stream.requireID(),
-            organizationID: stream.$organization.id
+            apiKeys: apiKeys,
+            streams: streams,
+            userSecurity: userSecurity,
+            streamID: stream.id,
+            organizationID: stream.organizationID
         )
         try await receiver.processSecurityEventToken(token, handler: processor)
     }
@@ -166,7 +183,9 @@ actor SSFService {
     /// the only time the plaintext token is available. Re-registering an
     /// already-registered stream deletes the old remote stream first
     /// (best-effort).
-    func registerStream(_ stream: SSFStream, on db: Database) async throws -> String? {
+    func registerStream(
+        _ stream: SSFStreamSnapshot
+    ) async throws -> (stream: SSFStreamSnapshot, pushToken: String?) {
         guard let method = stream.deliveryMethodValue else {
             throw Abort(.unprocessableEntity, reason: "Unknown delivery method: \(stream.deliveryMethod)")
         }
@@ -178,21 +197,20 @@ actor SSFService {
             // replacement: if createStream fails below, the row must not
             // keep claiming a remote stream that was just deleted — and the
             // old push token must stop authenticating deliveries.
-            stream.remoteStreamID = nil
-            stream.pollEndpoint = nil
-            stream.verifiedAt = nil
-            stream.pushTokenHash = nil
-            stream.pushTokenPrefix = nil
-            try await stream.save(on: db)
+            guard try await streams.clearRegistration(id: stream.id) != nil else {
+                throw Abort(.notFound, reason: "SSF stream not found")
+            }
         }
 
         var pushToken: String?
+        var pushTokenHash: String?
+        var pushTokenPrefix: String?
         let delivery: DeliveryConfiguration
         switch method {
         case .push:
             guard
                 let endpoint = Self.pushEndpointURL(
-                    for: try stream.requireID(), configuration: app.controlPlaneConfiguration),
+                    for: stream.id, configuration: self.configuration),
                 let endpointURL = URL(string: endpoint)
             else {
                 throw Abort(
@@ -201,10 +219,10 @@ actor SSFService {
                         "Push delivery requires a public callback URL; set SSF_CALLBACK_BASE_URL "
                         + "(or WEBAUTHN_RELYING_PARTY_ORIGIN)")
             }
-            let token = SSFStream.generatePushToken()
+            let token = SSFPushCredential.generatePushToken()
             pushToken = token
-            stream.pushTokenHash = SSFStream.hashPushToken(token)
-            stream.pushTokenPrefix = SSFStream.extractPushTokenPrefix(token)
+            pushTokenHash = SSFPushCredential.hashPushToken(token)
+            pushTokenPrefix = SSFPushCredential.extractPushTokenPrefix(token)
             delivery = DeliveryConfiguration(
                 method: .push,
                 endpoint_url: endpointURL,
@@ -214,15 +232,14 @@ actor SSFService {
             delivery = DeliveryConfiguration(method: .poll)
         }
 
-        let events = stream.eventsRequestedArray
+        let events = stream.eventsRequested
         let configuration = try await receiver.createStream(
             eventsRequested: events.isEmpty ? nil : events,
             delivery: delivery,
             description: stream.description
         )
 
-        stream.remoteStreamID = configuration.stream_id
-        stream.pollEndpoint = nil
+        var pollEndpoint: String?
         if method == .poll, let endpoint = configuration.delivery?.endpoint_url?.absoluteString {
             // The poll endpoint is transmitter-controlled; hold it to the
             // same HTTPS/allow-list rules as the transmitter itself. On
@@ -231,23 +248,30 @@ actor SSFService {
                 try SSFValidation.validateTransmitterURL(
                     endpoint,
                     label: "Transmitter poll endpoint",
-                    configuration: app.controlPlaneConfiguration)
+                    configuration: self.configuration)
             } catch {
                 try? await receiver.deleteStream(id: configuration.stream_id)
-                stream.remoteStreamID = nil
-                try await stream.save(on: db)
                 throw error
             }
-            stream.pollEndpoint = endpoint
+            pollEndpoint = endpoint
         }
-        stream.verifiedAt = nil
-        stream.lastError = nil
-        try await stream.save(on: db)
-        return pushToken
+        guard
+            let registered = try await streams.completeRegistration(
+                id: stream.id,
+                remoteStreamID: configuration.stream_id,
+                pollEndpoint: pollEndpoint,
+                pushTokenHash: pushTokenHash,
+                pushTokenPrefix: pushTokenPrefix
+            )
+        else {
+            try? await receiver.deleteStream(id: configuration.stream_id)
+            throw Abort(.notFound, reason: "SSF stream not found")
+        }
+        return (registered, pushToken)
     }
 
     /// Ask the transmitter to send a verification event on this stream.
-    func requestVerification(of stream: SSFStream) async throws {
+    func requestVerification(of stream: SSFStreamSnapshot) async throws {
         guard let remoteID = stream.remoteStreamID else {
             throw Abort(.conflict, reason: "Stream is not registered with the transmitter")
         }
@@ -255,7 +279,7 @@ actor SSFService {
         try await receiver.verifyStream(id: remoteID, state: UUID().uuidString)
     }
 
-    func streamStatus(of stream: SSFStream) async throws -> StreamStatusResponse {
+    func streamStatus(of stream: SSFStreamSnapshot) async throws -> StreamStatusResponse {
         guard let remoteID = stream.remoteStreamID else {
             throw Abort(.conflict, reason: "Stream is not registered with the transmitter")
         }
@@ -265,7 +289,7 @@ actor SSFService {
 
     /// Delete the stream at the transmitter, tolerating failure — the local
     /// row is being removed either way.
-    func deleteRemoteStream(_ stream: SSFStream) async {
+    func deleteRemoteStream(_ stream: SSFStreamSnapshot) async {
         guard let remoteID = stream.remoteStreamID,
             let receiver = try? self.receiver(for: stream)
         else { return }
@@ -275,7 +299,7 @@ actor SSFService {
             app.logger.warning(
                 "Failed to delete SSF stream at transmitter; continuing with local delete",
                 metadata: [
-                    "streamID": .string(stream.id?.uuidString ?? ""),
+                    "streamID": .string(stream.id.uuidString),
                     "error": .string("\(error)"),
                 ])
         }
@@ -287,7 +311,7 @@ actor SSFService {
     /// transmitter reports no more events (bounded to keep a sweep pass from
     /// monopolizing a hot stream).
     @discardableResult
-    func pollStream(_ stream: SSFStream, on db: Database) async throws -> SSFPollResultResponse {
+    func pollStream(_ stream: SSFStreamSnapshot) async throws -> SSFPollResultResponse {
         guard stream.deliveryMethodValue == .poll else {
             throw Abort(.unprocessableEntity, reason: "Not a poll-delivery stream")
         }
@@ -301,7 +325,7 @@ actor SSFService {
         try SSFValidation.validateTransmitterURL(
             endpointRaw,
             label: "Transmitter poll endpoint",
-            configuration: app.controlPlaneConfiguration)
+            configuration: configuration)
         guard let endpoint = URL(string: endpointRaw) else {
             throw Abort(.unprocessableEntity, reason: "Invalid poll endpoint URL")
         }
@@ -309,8 +333,11 @@ actor SSFService {
         let receiver = try self.receiver(for: stream)
         let processor = SSFSignalProcessor(
             app: app,
-            streamID: try stream.requireID(),
-            organizationID: stream.$organization.id
+            apiKeys: apiKeys,
+            streams: streams,
+            userSecurity: userSecurity,
+            streamID: stream.id,
+            organizationID: stream.organizationID
         )
 
         var processed = 0
@@ -340,30 +367,25 @@ actor SSFService {
             return
         }
 
-        let streams: [SSFStream]
+        let pollStreams: [SSFStreamSnapshot]
         do {
-            streams = try await SSFStream.query(on: app.db)
-                .filter(\.$enabled == true)
-                .filter(\.$deliveryMethod == SSFDeliveryMethod.poll.rawValue)
-                .filter(\.$remoteStreamID != nil)
-                .all()
+            pollStreams = try await streams.registeredPollStreams()
         } catch {
             app.logger.error("SSF poll sweep failed to load streams: \(error)")
             return
         }
 
-        for stream in streams {
+        for stream in pollStreams {
             do {
-                try await pollStream(stream, on: app.db)
+                try await pollStream(stream)
             } catch {
                 app.logger.warning(
                     "SSF poll failed",
                     metadata: [
-                        "streamID": .string(stream.id?.uuidString ?? ""),
+                        "streamID": .string(stream.id.uuidString),
                         "error": .string("\(error)"),
                     ])
-                stream.lastError = "\(error)"
-                try? await stream.save(on: app.db)
+                _ = try? await streams.recordError(id: stream.id, message: "\(error)")
             }
         }
     }
@@ -371,18 +393,21 @@ actor SSFService {
     // MARK: - Poll sweep lifecycle
 
     private var pollIntervalSeconds: Int {
-        app.controlPlaneConfiguration.int(.ssfPollIntervalSeconds)!
+        configuration.int(.ssfPollIntervalSeconds)!
     }
 
     private var pollSweepEnabled: Bool {
-        app.controlPlaneConfiguration.bool(.ssfPollEnabled)!
+        configuration.bool(.ssfPollEnabled)!
     }
 
     /// Arm the periodic poll sweep. Called once from the boot lifecycle.
-    nonisolated func startPollSweep() {
+    nonisolated func startPollSweep(
+        beforeRun: @escaping @Sendable () async -> Void = {}
+    ) {
         pollTask.withLockedValue { task in
             guard task == nil else { return }
             task = Task { [weak self] in
+                await beforeRun()
                 guard let self, await self.pollSweepEnabled else { return }
                 let interval = await self.pollIntervalSeconds
                 while !Task.isCancelled {
@@ -398,23 +423,32 @@ actor SSFService {
     }
 
     /// Cancel the poll sweep so it never outlives the application.
-    nonisolated func shutdown() {
-        pollTask.withLockedValue { task in
+    nonisolated func shutdown() async {
+        let task = pollTask.withLockedValue { task -> Task<Void, Never>? in
+            let running = task
             task?.cancel()
             task = nil
+            return running
         }
+        await task?.value
     }
 }
 
 // MARK: - Application accessor / lifecycle
 
 extension Application {
-    private struct SSFServiceKey: StorageKey, LockKey {
+    private struct SSFServiceKey: StorageKey {
         typealias Value = SSFService
     }
 
     var ssf: SSFService {
-        lazyService(SSFServiceKey.self) { SSFService(app: self) }
+        get {
+            guard let service = storage[SSFServiceKey.self] else {
+                preconditionFailure("SSF service has not been configured")
+            }
+            return service
+        }
+        set { setStorageValue(SSFServiceKey.self, to: newValue) }
     }
 
     /// The SSF service if something already created it. Shutdown must not
@@ -432,6 +466,6 @@ struct SSFPollLifecycleHandler: LifecycleHandler {
     }
 
     func shutdownAsync(_ application: Application) async {
-        application.ssfServiceIfCreated?.shutdown()
+        await application.ssfServiceIfCreated?.shutdown()
     }
 }

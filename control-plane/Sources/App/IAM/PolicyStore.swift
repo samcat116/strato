@@ -1,6 +1,20 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
+
+struct LegacyIAMPolicyRecord: Decodable, Equatable, Sendable {
+    let id: UUID
+    let name: String
+    let description: String?
+    let ownerType: String
+    let ownerID: UUID
+    let cedarText: String
+    let effect: String
+    let enabled: Bool
+    let createdBy: UUID?
+    let createdAt: Date?
+    let updatedAt: Date?
+}
 
 /// Reads and writes authored Cedar policies (issue #606).
 ///
@@ -20,6 +34,11 @@ import Vapor
 /// `PolicySetVersionService.withPolicySetChange` and bump the version in the
 /// same transaction — see `PolicyController`.
 enum PolicyStore {
+    private static let columns = """
+        id, name, description, owner_type AS "ownerType", owner_id AS "ownerID",
+        cedar_text AS "cedarText", effect, enabled, created_by AS "createdBy",
+        created_at AS "createdAt", updated_at AS "updatedAt"
+        """
 
     // MARK: - Preparing a write
 
@@ -49,7 +68,7 @@ enum PolicyStore {
         ownerType: IAMRoleOwnerType,
         ownerID: UUID,
         engine: any CedarEngine,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Prepared {
         guard !cedarText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw PolicyError.emptyCedarText
@@ -63,6 +82,46 @@ enum PolicyStore {
         return Prepared(
             cedarText: cedarText, effect: shape.effect,
             principalConstrained: shape.principalConstrained, principalScope: shape.principalScope)
+    }
+
+    /// Native-persistence variant used by production policy routes. Hierarchy
+    /// containment still uses the transitional resource-tree reader until its
+    /// cohort moves, while role schema assembly comes from the native IAM
+    /// module.
+    static func prepare(
+        id: UUID,
+        cedarText: String,
+        ownerType: IAMRoleOwnerType,
+        ownerID: UUID,
+        engine: any CedarEngine,
+        using iam: IAMPersistence
+    ) async throws -> Prepared {
+        guard !cedarText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw PolicyError.emptyCedarText
+        }
+        let policyID = PolicyDescriptor.policyID(id)
+        let shape = try CedarAuthoredPolicyInspector.describe(cedarText: cedarText, policyID: policyID)
+
+        try await requireContained(
+            shape,
+            ownerType: ownerType,
+            ownerID: ownerID,
+            using: iam
+        )
+        let roles = try await iam.allRoles().map(RoleDescriptor.init(row:))
+        try compileCandidate(
+            policyID: policyID,
+            cedarText: cedarText,
+            roles: roles,
+            engine: engine
+        )
+
+        return Prepared(
+            cedarText: cedarText,
+            effect: shape.effect,
+            principalConstrained: shape.principalConstrained,
+            principalScope: shape.principalScope
+        )
     }
 
     /// Prove the policy's resource scope names something inside the owner's
@@ -90,7 +149,7 @@ enum PolicyStore {
         _ shape: AuthoredPolicyShape,
         ownerType: IAMRoleOwnerType,
         ownerID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws {
         guard let ownerNodeType = ownerType.nodeType else {
             throw PolicyError.uncreatableOwnerType(ownerType.rawValue)
@@ -113,15 +172,55 @@ enum PolicyStore {
         }
     }
 
+    private static func requireContained(
+        _ shape: AuthoredPolicyShape,
+        ownerType: IAMRoleOwnerType,
+        ownerID: UUID,
+        using iam: IAMPersistence
+    ) async throws {
+        guard let ownerNodeType = ownerType.nodeType else {
+            throw PolicyError.uncreatableOwnerType(ownerType.rawValue)
+        }
+        let ownerNode = IAMNode(type: ownerNodeType, id: ownerID)
+        guard let scope = shape.resourceScope else {
+            throw PolicyError.unscopedResource
+        }
+        guard let resourceNodeType = scope.type.nodeType else {
+            throw PolicyError.principalResourceScope(scope.type.rawValue)
+        }
+        let resourceNode = IAMNode(type: resourceNodeType, id: scope.id)
+        let chain = try await IAMResourceTree.ancestors(of: resourceNode, using: iam)
+        guard chain.contains(ownerNode) else {
+            throw PolicyError.outOfScope(
+                owner: "\(ownerType.rawValue)/\(ownerID)",
+                resource: "\(scope.type.rawValue)/\(scope.id)"
+            )
+        }
+    }
+
     /// Compile the candidate against the schema the store would have, the same
     /// per-policy validation `CedarPolicySetCache` runs at boot.
     private static func compileCandidate(
         policyID: String,
         cedarText: String,
         engine: any CedarEngine,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws {
         let roles = try await RoleStore.allDescriptors(on: db)
+        try compileCandidate(
+            policyID: policyID,
+            cedarText: cedarText,
+            roles: roles,
+            engine: engine
+        )
+    }
+
+    private static func compileCandidate(
+        policyID: String,
+        cedarText: String,
+        roles: [RoleDescriptor],
+        engine: any CedarEngine
+    ) throws {
         let schemaText = CedarSchemaBuilder.schemaText(roles: roles)
         let source = CedarPolicySource(id: policyID, text: cedarText)
         if let issue = engine.policyIssue(schemaText: schemaText, policy: source) {
@@ -133,13 +232,25 @@ enum PolicyStore {
 
     /// The policies a node owns.
     static func owned(
-        by ownerType: IAMRoleOwnerType, ownerID: UUID, on db: any Database
-    ) async throws -> [IAMPolicy] {
-        try await IAMPolicy.query(on: db)
-            .filter(\.$ownerType == ownerType.rawValue)
-            .filter(\.$ownerID == ownerID)
-            .sort(\.$name)
-            .all()
+        by ownerType: IAMRoleOwnerType, ownerID: UUID, on db: PostgresStoreContext
+    ) async throws -> [LegacyIAMPolicyRecord] {
+        try await requireSQL(db).raw(
+            """
+            SELECT \(unsafeRaw: columns) FROM iam_policies
+            WHERE owner_type = \(bind: ownerType.rawValue) AND owner_id = \(bind: ownerID)
+            ORDER BY name, id
+            """
+        ).all(decoding: LegacyIAMPolicyRecord.self)
+    }
+
+    static func owned(
+        by ownerType: IAMRoleOwnerType,
+        ownerID: UUID,
+        using iam: IAMPersistence
+    ) async throws -> [IAMPolicySnapshot] {
+        try await iam.policies(
+            ownedBy: IAMOwnerReference(type: ownerType.rawValue, id: ownerID)
+        )
     }
 
     /// Every enabled authored policy owned by an organization or project on
@@ -149,28 +260,41 @@ enum PolicyStore {
     /// is in force on the project and below, and nowhere else. Whether it
     /// actually reaches a given resource is a further containment question the
     /// caller answers per policy (see `WhoCanService`).
-    static func inScope(along chain: [IAMNode], on db: any Database) async throws -> [IAMPolicy] {
+    static func inScope(
+        along chain: [IAMNode], on db: PostgresStoreContext
+    ) async throws -> [LegacyIAMPolicyRecord] {
         let organizationIDs = chain.filter { $0.type == .organization }.map(\.id)
         let projectIDs = chain.filter { $0.type == .project }.map(\.id)
         guard !organizationIDs.isEmpty || !projectIDs.isEmpty else { return [] }
-        return try await IAMPolicy.query(on: db)
-            .filter(\.$enabled == true)
-            .group(.or) { anyOwner in
-                if !organizationIDs.isEmpty {
-                    anyOwner.group(.and) { owner in
-                        owner.filter(\.$ownerType == IAMRoleOwnerType.organization.rawValue)
-                        owner.filter(\.$ownerID ~~ organizationIDs)
-                    }
-                }
-                if !projectIDs.isEmpty {
-                    anyOwner.group(.and) { owner in
-                        owner.filter(\.$ownerType == IAMRoleOwnerType.project.rawValue)
-                        owner.filter(\.$ownerID ~~ projectIDs)
-                    }
-                }
+        let sql = try requireSQL(db)
+        var query: PostgresSQLQuery =
+            "SELECT \(unsafeRaw: columns) FROM iam_policies WHERE enabled = true AND (FALSE"
+        if !organizationIDs.isEmpty {
+            query +=
+                " OR (owner_type = 'organization' AND owner_id = ANY(\(bind: organizationIDs)))"
+        }
+        if !projectIDs.isEmpty {
+            query += " OR (owner_type = 'project' AND owner_id = ANY(\(bind: projectIDs)))"
+        }
+        query += ") ORDER BY name, id"
+        return try await sql.raw(query).all(decoding: LegacyIAMPolicyRecord.self)
+    }
+
+    static func inScope(
+        along chain: [IAMNode],
+        using iam: IAMPersistence
+    ) async throws -> [IAMPolicySnapshot] {
+        let owners = chain.compactMap { node -> IAMOwnerReference? in
+            switch node.type {
+            case .organization:
+                return IAMOwnerReference(type: IAMRoleOwnerType.organization.rawValue, id: node.id)
+            case .project:
+                return IAMOwnerReference(type: IAMRoleOwnerType.project.rawValue, id: node.id)
+            default:
+                return nil
             }
-            .sort(\.$name)
-            .all()
+        }
+        return try await iam.enabledPolicies(owners: owners)
     }
 
     // MARK: - Writes
@@ -185,28 +309,76 @@ enum PolicyStore {
         prepared: Prepared,
         createdBy: UUID?,
         enabled: Bool,
-        on db: any Database
-    ) async throws -> IAMPolicy {
+        on db: PostgresStoreContext
+    ) async throws -> LegacyIAMPolicyRecord {
         guard IAMRoleOwnerType.creatableOwners.contains(ownerType) else {
             throw PolicyError.uncreatableOwnerType(ownerType.rawValue)
         }
-        let policy = IAMPolicy(
-            id: id,
-            name: name,
-            description: description,
-            ownerType: ownerType,
-            ownerID: ownerID,
-            cedarText: prepared.cedarText,
-            effect: prepared.effect,
-            enabled: enabled,
-            createdBy: createdBy
-        )
         do {
-            try await policy.create(on: db)
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+            guard let policy = try await requireSQL(db).raw(
+                """
+                INSERT INTO iam_policies (
+                    id, name, description, owner_type, owner_id, cedar_text, effect,
+                    enabled, created_by, created_at, updated_at
+                ) VALUES (
+                    \(bind: id), \(bind: name), \(bind: description),
+                    \(bind: ownerType.rawValue), \(bind: ownerID),
+                    \(bind: prepared.cedarText), \(bind: prepared.effect.rawValue),
+                    \(bind: enabled), \(bind: createdBy), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                )
+                RETURNING \(unsafeRaw: columns)
+                """
+            ).first(decoding: LegacyIAMPolicyRecord.self) else {
+                throw IAMPersistenceError.unexpectedRowCount(expected: 1, actual: 0)
+            }
+            return policy
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw PolicyError.duplicateName(name)
         }
-        return policy
+    }
+
+    static func create(
+        id: UUID,
+        name: String,
+        description: String?,
+        ownerType: IAMRoleOwnerType,
+        ownerID: UUID,
+        prepared: Prepared,
+        createdBy: UUID?,
+        enabled: Bool,
+        in transaction: IAMPolicySetTransaction
+    ) async throws -> IAMPolicySnapshot {
+        guard IAMRoleOwnerType.creatableOwners.contains(ownerType) else {
+            throw PolicyError.uncreatableOwnerType(ownerType.rawValue)
+        }
+        do {
+            return try await transaction.createPolicy(
+                IAMPolicySnapshot(
+                    id: id,
+                    name: name,
+                    description: description,
+                    ownerType: ownerType.rawValue,
+                    ownerID: ownerID,
+                    cedarText: prepared.cedarText,
+                    effect: prepared.effect.rawValue,
+                    enabled: enabled,
+                    createdBy: createdBy
+                )
+            )
+        } catch IAMPersistenceError.duplicatePolicyName {
+            throw PolicyError.duplicateName(name)
+        }
+    }
+
+    @discardableResult
+    static func deleteOwned(
+        by ownerType: IAMRoleOwnerType,
+        ownerID: UUID,
+        in transaction: IAMPolicySetTransaction
+    ) async throws -> Int {
+        try await transaction.deletePolicies(
+            ownedBy: IAMOwnerReference(type: ownerType.rawValue, id: ownerID)
+        )
     }
 
     /// Delete every policy a node owns, returning how many went.
@@ -216,21 +388,30 @@ enum PolicyStore {
     /// contributing a permit or forbid to the compiled set.
     @discardableResult
     static func deleteOwned(
-        by ownerType: IAMRoleOwnerType, ownerID: UUID, on db: any Database
+        by ownerType: IAMRoleOwnerType, ownerID: UUID, on db: PostgresStoreContext
     ) async throws -> Int {
-        // Count, then delete — the caller only needs the tally (to decide
-        // whether the cascade bumps the policy-set version), so there is no
-        // reason to materialize every row's `cedar_text` first.
-        let count = try await IAMPolicy.query(on: db)
-            .filter(\.$ownerType == ownerType.rawValue)
-            .filter(\.$ownerID == ownerID)
-            .count()
-        guard count > 0 else { return 0 }
-        try await IAMPolicy.query(on: db)
-            .filter(\.$ownerType == ownerType.rawValue)
-            .filter(\.$ownerID == ownerID)
-            .delete()
-        return count
+        struct Identifier: Decodable { let id: UUID }
+        return try await requireSQL(db).raw(
+            """
+            DELETE FROM iam_policies
+            WHERE owner_type = \(bind: ownerType.rawValue) AND owner_id = \(bind: ownerID)
+            RETURNING id
+            """
+        ).all(decoding: Identifier.self).count
+    }
+
+    static func count(on db: PostgresStoreContext) async throws -> Int {
+        struct CountRow: Decodable { let count: Int }
+        return try await requireSQL(db).raw(
+            "SELECT count(*)::bigint AS count FROM iam_policies"
+        ).first(decoding: CountRow.self)?.count ?? 0
+    }
+
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
+            throw IAMPersistenceError.unexpectedRowCount(expected: 1, actual: 0)
+        }
+        return sql
     }
 }
 

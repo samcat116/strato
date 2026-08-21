@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import SPIREServerAPI
 import Vapor
@@ -24,6 +24,8 @@ struct OrgSPIREClientRegistry: Sendable {
     private let platform: SPIRERegistrationService
     private let platformConfig: SPIRERegistrationConfig
     private let logger: Logger
+    private let hierarchy: HierarchyPersistence
+    private let trustDomains: OrgTrustDomainsPersistence
 
     /// Both flags are values, not environment reads at the point of use. The
     /// environment is consulted once, in `fromApplication`; tests construct the
@@ -37,12 +39,16 @@ struct OrgSPIREClientRegistry: Sendable {
         platform: SPIRERegistrationService,
         platformConfig: SPIRERegistrationConfig,
         logger: Logger,
+        hierarchy: HierarchyPersistence,
+        trustDomains: OrgTrustDomainsPersistence,
         orgTrustDomainsEnabled: Bool = false,
         legacyEnrollmentsAllowed: Bool = true
     ) {
         self.platform = platform
         self.platformConfig = platformConfig
         self.logger = logger
+        self.hierarchy = hierarchy
+        self.trustDomains = trustDomains
         self.orgTrustDomainsEnabled = orgTrustDomainsEnabled
         self.legacyEnrollmentsAllowed = legacyEnrollmentsAllowed
     }
@@ -55,12 +61,18 @@ struct OrgSPIREClientRegistry: Sendable {
     /// from a fresh environment read: the service is what actually provisions,
     /// so anything that reconfigures it — including a test installing a fake —
     /// must be what org instances inherit from too.
-    static func fromApplication(_ app: Application) -> OrgSPIREClientRegistry? {
+    static func fromApplication(
+        _ app: Application,
+        hierarchy: HierarchyPersistence,
+        trustDomains: OrgTrustDomainsPersistence
+    ) -> OrgSPIREClientRegistry? {
         guard let platform = app.spireRegistrationService else { return nil }
         return OrgSPIREClientRegistry(
             platform: platform,
             platformConfig: platform.registrationConfig,
             logger: app.logger,
+            hierarchy: hierarchy,
+            trustDomains: trustDomains,
             orgTrustDomainsEnabled: app.controlPlaneConfiguration.bool(.spireOrgTrustDomainsEnabled)!,
             legacyEnrollmentsAllowed: app.controlPlaneConfiguration.bool(.spireLegacyEnrollments)!)
     }
@@ -82,7 +94,7 @@ struct OrgSPIREClientRegistry: Sendable {
     /// - Ready-but-not-yet, i.e. the reconciler has claimed a domain but has
     ///   not finished provisioning it: the platform instance when legacy
     ///   enrollments are allowed, otherwise a 503 telling the operator to wait.
-    func resolve(scope: OrganizationScope, on db: Database) async throws -> OrgSPIRESelection {
+    func resolve(scope: OrganizationScope) async throws -> OrgSPIRESelection {
         guard orgTrustDomainsEnabled else {
             return platformSelection(reason: .featureDisabled)
         }
@@ -90,7 +102,7 @@ struct OrgSPIREClientRegistry: Sendable {
         // The trust domain follows the *organization*, not the folder: capacity
         // delegated to a folder is still the org's tenancy, and a folder has no
         // CA of its own. So an OU-scoped enrollment resolves to its root org.
-        guard let organizationID = try await scope.rootOrganizationID(on: db) else {
+        guard let organizationID = try await scope.rootOrganizationID(using: hierarchy) else {
             // A dangling folder reference. The scope was validated to exist
             // before this call, so this is a corrupt hierarchy rather than user
             // error — provision in the platform domain rather than fail the
@@ -102,9 +114,7 @@ struct OrgSPIREClientRegistry: Sendable {
         }
 
         guard
-            let row = try await OrgTrustDomain.query(on: db)
-                .filter(\.$organizationID == organizationID)
-                .first()
+            let row = try await trustDomains.trustDomain(organizationID: organizationID)
         else {
             // Organizations created before the feature was switched on never
             // claimed a domain. They are platform-domain tenants until an
@@ -123,7 +133,7 @@ struct OrgSPIREClientRegistry: Sendable {
                     .serviceUnavailable,
                     reason:
                         "Organization \(organizationID)'s trust domain (\(row.trustDomain)) is not ready yet "
-                        + "(phase: \(row.phase.rawValue)\(row.lastError.map { ", last error: \($0)" } ?? "")). "
+                        + "(phase: \(row.phase)\(row.lastError.map { ", last error: \($0)" } ?? "")). "
                         + "Wait for it to become active, or set SPIRE_LEGACY_ENROLLMENTS=true to enroll into the "
                         + "platform trust domain meanwhile."
                 )
@@ -133,7 +143,7 @@ struct OrgSPIREClientRegistry: Sendable {
                 metadata: [
                     "organizationID": .string(organizationID.uuidString),
                     "trustDomain": .string(row.trustDomain),
-                    "phase": .string(row.phase.rawValue),
+                    "phase": .string(row.phase),
                 ])
             return platformSelection(reason: .trustDomainNotReady(trustDomain: row.trustDomain))
         }
@@ -165,15 +175,13 @@ struct OrgSPIREClientRegistry: Sendable {
     /// whether to proceed. Throws only for a row we *should* be able to reach
     /// but cannot build a client for — callers still fail closed there rather
     /// than report a revocation that did not happen.
-    func service(forTrustDomain trustDomain: String, on db: Database) async throws
+    func service(forTrustDomain trustDomain: String) async throws
         -> SPIRERegistrationService?
     {
         guard trustDomain != platformTrustDomain else { return platform }
 
         guard
-            let row = try await OrgTrustDomain.query(on: db)
-                .filter(\.$trustDomain == trustDomain)
-                .first()
+            let row = try await trustDomains.trustDomain(named: trustDomain)
         else {
             // The row is gone — teardown finished, or it was never recorded —
             // while a resource still names the domain. Nothing here can remove
@@ -183,11 +191,25 @@ struct OrgSPIREClientRegistry: Sendable {
         return try adminService(row: row)
     }
 
+#if DEBUG
+    package func resolve(
+        scope: OrganizationScope, on _: PostgresStoreContext
+    ) async throws -> OrgSPIRESelection {
+        try await resolve(scope: scope)
+    }
+
+    package func service(
+        forTrustDomain trustDomain: String, on _: PostgresStoreContext
+    ) async throws -> SPIRERegistrationService? {
+        try await service(forTrustDomain: trustDomain)
+    }
+#endif
+
     /// Resolve the exact trust domain already recorded on an enrollment.
     /// Bootstrap must not re-run scope selection: an enrollment that fell back
     /// to the platform domain must stay there even if its organization's own
     /// domain becomes active before the host redeems the token.
-    func bootstrapSelection(forTrustDomain trustDomain: String, on db: Database) async throws
+    func bootstrapSelection(forTrustDomain trustDomain: String) async throws
         -> OrgSPIRESelection?
     {
         if trustDomain == platformTrustDomain {
@@ -195,9 +217,7 @@ struct OrgSPIREClientRegistry: Sendable {
         }
 
         guard
-            let row = try await OrgTrustDomain.query(on: db)
-                .filter(\.$trustDomain == trustDomain)
-                .first()
+            let row = try await trustDomains.trustDomain(named: trustDomain)
         else {
             return nil
         }
@@ -244,7 +264,9 @@ struct OrgSPIREClientRegistry: Sendable {
     /// bootstrap command, and `orgSelection` below is what requires it. Keeping
     /// it optional here is what lets revocation work against a row the
     /// reconciler never finished.
-    private func adminService(row: OrgTrustDomain) throws -> SPIRERegistrationService {
+    private func adminService(
+        row: ControlPlanePostgres.OrgTrustDomainSnapshot
+    ) throws -> SPIRERegistrationService {
         guard let nodeAddress = row.nodeAddress, !nodeAddress.isEmpty else {
             throw Abort(
                 .serviceUnavailable,
@@ -294,7 +316,9 @@ struct OrgSPIREClientRegistry: Sendable {
         return SPIRERegistrationService(api: client, config: config, logger: logger)
     }
 
-    private func orgSelection(row: OrgTrustDomain) throws -> OrgSPIRESelection {
+    private func orgSelection(
+        row: ControlPlanePostgres.OrgTrustDomainSnapshot
+    ) throws -> OrgSPIRESelection {
         // Only enrollment needs this: it is the address the *node* dials to
         // attest, which ends up in the bootstrap command. Checked before
         // building the client so a half-provisioned row fails naming the

@@ -1,5 +1,4 @@
-import Fluent
-import SQLKit
+import ControlPlanePostgres
 import Vapor
 
 /// A resource whose deletion runs through finalizers: the row is marked
@@ -9,10 +8,12 @@ import Vapor
 /// Divergence between the workload kinds lives in `reap` — what each one has
 /// to tear down alongside its row — rather than in the finalizer bookkeeping,
 /// which is identical for both.
-protocol FinalizableResource: Model, AgentPlacedResource where IDValue == UUID {
+protocol FinalizableResource: PersistentResourceRecord, AgentPlacedResource {
     /// Cleanup tokens still outstanding for a terminating resource; empty for
     /// a live one. Persisted as a Postgres `text[]`.
-    var finalizers: [String] { get set }
+    var finalizers: [String] { get }
+
+    func replacingFinalizers(_ finalizers: [String]) -> Self
 
     /// Whether a `DELETE` has been accepted — desired state is `.absent`. Only
     /// a terminating resource reaps, so a stray `clear` on a live one is a
@@ -28,7 +29,7 @@ protocol FinalizableResource: Model, AgentPlacedResource where IDValue == UUID {
     /// (`reapClaim`) and the loser returns false rather than logging a removal
     /// it did not perform. Everything before the claim must tolerate running
     /// twice; the row is what records that the teardown finished.
-    static func reap(_ resource: Self, on db: any Database, app: Application) async throws -> Bool
+    static func reap(_ resource: Self, on db: PostgresStoreContext, app: Application) async throws -> Bool
 
     /// Which table the resource's `resource_events` rows point into.
     static var operationResourceKind: OperationResourceKind { get }
@@ -70,7 +71,7 @@ enum ResourceFinalizerService {
     /// agent has nothing to confirm, so it stamps nothing and reaps on the
     /// first `clear` — which is how an unplaced VM still deletes immediately.
     static func tokens<R: FinalizableResource>(
-        forDeleting resource: R, on db: any Database
+        forDeleting resource: R, on db: PostgresStoreContext
     ) async throws -> [ResourceFinalizer] {
         try await resource.placementAgentIDs(on: db).isEmpty ? [] : [.agentAbsent]
     }
@@ -80,10 +81,11 @@ enum ResourceFinalizerService {
     /// terminating keeps the list it has, because re-stamping would resurrect
     /// tokens their participants have already cleared. Does not persist.
     static func stampForDeletion<R: FinalizableResource>(
-        _ resource: R, on db: any Database
-    ) async throws {
-        guard !resource.isTerminating else { return }
-        resource.finalizers = try await tokens(forDeleting: resource, on: db).map(\.rawValue)
+        _ resource: R, on db: PostgresStoreContext
+    ) async throws -> R {
+        guard !resource.isTerminating else { return resource }
+        return resource.replacingFinalizers(
+            try await tokens(forDeleting: resource, on: db).map(\.rawValue))
     }
 
     /// Idempotently clears `token` from a terminating resource, reaping the row
@@ -108,13 +110,13 @@ enum ResourceFinalizerService {
     static func clear<R: FinalizableResource>(
         _ token: ResourceFinalizer,
         from resource: R,
-        on db: any Database,
+        on db: PostgresStoreContext,
         app: Application
     ) async throws -> ClearOutcome {
         guard resource.isTerminating else { return .notTerminating }
         let id = try resource.requireID()
 
-        guard let sql = db as? any SQLDatabase else {
+        guard let sql = db as? PostgresStoreContext else {
             throw FinalizerError.unsupportedDatabase
         }
 
@@ -131,7 +133,7 @@ enum ResourceFinalizerService {
 
         // The post-update list from the database, not a hand-computed one: this
         // instance may be saved later, and the row may have changed under it.
-        resource.finalizers = row.finalizers
+        let updatedResource = resource.replacingFinalizers(row.finalizers)
 
         guard row.finalizers.isEmpty else { return .held(row.finalizers) }
 
@@ -142,7 +144,7 @@ enum ResourceFinalizerService {
         // verdict recording bails on a drained application anyway.
         try Task.checkCancellation()
 
-        return try await R.reap(resource, on: db, app: app) ? .reaped : .alreadyGone
+        return try await R.reap(updatedResource, on: db, app: app) ? .reaped : .alreadyGone
     }
 
     /// Resolve a VM-owned boot volume when its agent is offline. Physical
@@ -150,12 +152,10 @@ enum ResourceFinalizerService {
     /// but database ownership still tears down in boot-volume-before-VM order.
     /// Online deletes never call this; their agent must confirm both absences.
     static func abandonBootVolumeForOfflineVM(
-        vmID: UUID, on db: any Database, app: Application
+        vmID: UUID, on db: PostgresStoreContext, app: Application
     ) async throws {
-        let bootVolumes = try await Volume.query(on: db)
-            .filter(\.$vm.$id == vmID)
-            .filter(\.$volumeType == .boot)
-            .all()
+        let bootVolumes = try await LegacyVolumeStore.volumes(
+            attachment: .attachedTo(vmID), volumeType: .boot, on: db)
 
         if bootVolumes.isEmpty, let vm = try await VM.find(vmID, on: db) {
             _ = try await clear(.bootVolumeAbsent, from: vm, on: db, app: app)
@@ -187,7 +187,7 @@ enum ResourceFinalizerService {
     /// still gets a terminal event, just without the scope, which is strictly
     /// better than none.
     static func recordDeletionCompleted<R: FinalizableResource>(
-        _ resource: R, in tx: any Database
+        _ resource: R, in tx: PostgresStoreContext
     ) async throws {
         let id = try resource.requireID()
         let request = try await ResourceEvent.latest(
@@ -215,9 +215,9 @@ enum ResourceFinalizerService {
     /// then finds nothing — which is what makes "this call removed the row"
     /// exactly true for one of them.
     static func reapClaim<R: FinalizableResource>(
-        _ type: R.Type, id: UUID, in tx: any Database
+        _ type: R.Type, id: UUID, in tx: PostgresStoreContext
     ) async throws -> Bool {
-        guard let sql = tx as? any SQLDatabase else {
+        guard let sql = tx as? PostgresStoreContext else {
             throw FinalizerError.unsupportedDatabase
         }
         return try await sql.raw(
@@ -250,7 +250,13 @@ enum ResourceFinalizerService {
 extension VM: FinalizableResource {
     var isTerminating: Bool { desiredStatus == .absent }
 
-    static func reap(_ vm: VM, on db: any Database, app: Application) async throws -> Bool {
+    func replacingFinalizers(_ finalizers: [String]) -> Self {
+        var copy = self
+        copy.finalizers = finalizers
+        return copy
+    }
+
+    static func reap(_ vm: VM, on db: PostgresStoreContext, app: Application) async throws -> Bool {
         let vmID = try vm.requireID()
 
         let reaped = try await db.transaction { tx in
@@ -308,7 +314,13 @@ extension VM: FinalizableResource {
 extension Sandbox: FinalizableResource {
     var isTerminating: Bool { desiredStatus == .absent }
 
-    static func reap(_ sandbox: Sandbox, on db: any Database, app: Application) async throws -> Bool {
+    func replacingFinalizers(_ finalizers: [String]) -> Self {
+        var copy = self
+        copy.finalizers = finalizers
+        return copy
+    }
+
+    static func reap(_ sandbox: Sandbox, on db: PostgresStoreContext, app: Application) async throws -> Bool {
         let sandboxID = try sandbox.requireID()
 
         // Exported snapshot objects first: the snapshot rows cascade with the
@@ -316,7 +328,8 @@ extension Sandbox: FinalizableResource {
         // object-store I/O, so it can run twice — once per side of a reap race,
         // or again after a crash. Deleting an already-deleted object is a
         // no-op, which is what makes that safe.
-        await SandboxController.cleanUpExportedSnapshotObjects(for: sandboxID, app: app)
+        await SandboxController.cleanUpExportedSnapshotObjects(
+            for: sandboxID, app: app, on: db)
 
         let reaped = try await db.transaction { tx in
             guard try await ResourceFinalizerService.reapClaim(Sandbox.self, id: sandboxID, in: tx) else {
@@ -344,9 +357,13 @@ extension Sandbox: FinalizableResource {
 // MARK: - Volume
 
 extension Volume: FinalizableResource {
-    static func reap(_ volume: Volume, on db: any Database, app: Application) async throws -> Bool {
+    func replacingFinalizers(_ finalizers: [String]) -> Self {
+        replacing(finalizers: finalizers)
+    }
+
+    static func reap(_ volume: Volume, on db: PostgresStoreContext, app: Application) async throws -> Bool {
         let volumeID = try volume.requireID()
-        let parentVMID = volume.volumeType == .boot ? volume.$vm.id : nil
+        let parentVMID = volume.volumeType == .boot ? volume.vmID : nil
 
         let reaped = try await db.transaction { tx in
             guard try await ResourceFinalizerService.reapClaim(Volume.self, id: volumeID, in: tx) else {
@@ -359,7 +376,7 @@ extension Volume: FinalizableResource {
             try await ResourceFinalizerService.recordDeletionCompleted(volume, in: tx)
             try await volume.delete(on: tx)
             if let parentVMID {
-                guard let sql = tx as? any SQLDatabase else {
+                guard let sql = tx as? PostgresStoreContext else {
                     throw ResourceFinalizerService.FinalizerError.unsupportedDatabase
                 }
                 // Removing the child row and acknowledging its absence on the
@@ -406,10 +423,10 @@ extension Volume: FinalizableResource {
 enum SnapshotArtifactReap {
     static func reap<A: SnapshotArtifactResource>(
         _ artifact: A,
-        on db: any Database,
+        on db: PostgresStoreContext,
         app: Application,
         externalCleanup: @Sendable (A, Application) async -> Void = { _, _ in },
-        releaseQuota: @escaping @Sendable (A, any Database) async throws -> Void = { _, _ in }
+        releaseQuota: @escaping @Sendable (A, PostgresStoreContext) async throws -> Void = { _, _ in }
     ) async throws -> Bool {
         let artifactID = try artifact.requireID()
 
@@ -429,7 +446,7 @@ enum SnapshotArtifactReap {
             // Before the row goes: the terminal event reads the delete
             // request's scope, and after the delete there is nothing to read.
             try await ResourceFinalizerService.recordDeletionCompleted(artifact, in: tx)
-            try await artifact.delete(on: tx)
+            try await artifact.remove(on: tx)
             try await releaseQuota(artifact, tx)
             return true
         }
@@ -437,33 +454,33 @@ enum SnapshotArtifactReap {
 }
 
 extension VolumeSnapshot: FinalizableResource {
-    static func reap(_ snapshot: VolumeSnapshot, on db: any Database, app: Application) async throws -> Bool {
+    static func reap(_ snapshot: VolumeSnapshot, on db: PostgresStoreContext, app: Application) async throws -> Bool {
         try await SnapshotArtifactReap.reap(
             snapshot, on: db, app: app,
             releaseQuota: { snapshot, tx in
                 // The overlay was charged to the project's storage pool at
                 // admission (STR-181); recount now that it is gone.
                 _ = try? await QuotaEnforcementService.storageOverCommit(
-                    projectID: snapshot.$project.id, environment: snapshot.environment, on: tx)
+                    projectID: snapshot.projectID, environment: snapshot.environment, on: tx)
             })
     }
 }
 
 extension VMSnapshot: FinalizableResource {
-    static func reap(_ snapshot: VMSnapshot, on db: any Database, app: Application) async throws -> Bool {
+    static func reap(_ snapshot: VMSnapshot, on db: PostgresStoreContext, app: Application) async throws -> Bool {
         try await SnapshotArtifactReap.reap(
             snapshot, on: db, app: app,
             releaseQuota: { snapshot, tx in
                 // The checkpoint's machine state was charged to the project's
                 // storage pool at admission; recount now that it is gone.
                 _ = try? await QuotaEnforcementService.storageOverCommit(
-                    projectID: snapshot.$project.id, environment: snapshot.environment, on: tx)
+                    projectID: snapshot.projectID, environment: snapshot.environment, on: tx)
             })
     }
 }
 
 extension SandboxSnapshot: FinalizableResource {
-    static func reap(_ snapshot: SandboxSnapshot, on db: any Database, app: Application) async throws -> Bool {
+    static func reap(_ snapshot: SandboxSnapshot, on db: PostgresStoreContext, app: Application) async throws -> Bool {
         try await SnapshotArtifactReap.reap(
             snapshot, on: db, app: app,
             externalCleanup: { snapshot, app in
@@ -472,7 +489,7 @@ extension SandboxSnapshot: FinalizableResource {
             },
             releaseQuota: { snapshot, tx in
                 _ = try? await QuotaEnforcementService.storageOverCommit(
-                    projectID: snapshot.$project.id, environment: snapshot.environment, on: tx)
+                    projectID: snapshot.projectID, environment: snapshot.environment, on: tx)
             })
     }
 }

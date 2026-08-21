@@ -1,6 +1,6 @@
+import ControlPlanePostgres
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import StratoShared
 import AppTestSupport
@@ -25,15 +25,14 @@ final class VMResizeTests {
         quotaMemoryGB: Double = 64,
         agentAvailableCPU: Int = 32,
         agentAvailableMemory: Int64 = 64_000_000_000,
-        _ test: (Application, User, VM, Project, String) async throws -> Void
+        _ test: (Application, User, inout VM, Project, String) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "resizeuser",
                 email: "resize@example.com",
@@ -42,8 +41,7 @@ final class VMResizeTests {
             )
             let org = try await builder.createOrganization(name: "Resize Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Resize Project",
@@ -69,19 +67,19 @@ final class VMResizeTests {
                 ),
                 architecture: agentArchitecture,
                 lastHeartbeat: Date()
-            )
-            agent.wireProtocolVersion = agentWireVersion
-            agent.$site.id = try await builder.placementSite(for: project).requireID()
-            try await agent.save(on: app.db)
+            ).replacing(
+                siteID: try await builder.placementSite(for: project).requireID(),
+                wireProtocolVersion: .some(agentWireVersion))
+            try await agent.save(on: app.testPostgres)
 
-            let vm = try await builder.createVM(name: "resize-vm", project: project)
+            var vm = try await builder.createVM(name: "resize-vm", project: project)
             vm.maxCpu = 8
             vm.maxMemory = 8 * 1024 * 1024 * 1024
             vm.hypervisorId = agent.id?.uuidString
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
-            let token = try await user.generateAPIKey(on: app.db)
-            try await test(app, user, vm, project, token)
+            let token = try await user.generateAPIKey(on: app)
+            try await test(app, user, &vm, project, token)
         } catch {
             try await app.shutdownForTesting()
             throw error
@@ -90,7 +88,7 @@ final class VMResizeTests {
         try await app.shutdownForTesting()
     }
 
-    private func running(_ vm: VM, on db: any Database) async throws {
+    private func running(_ vm: inout VM, on db: PostgresStoreContext) async throws {
         vm.setStatus(.running)
         vm.setFixtureDesiredStatus(.running)
         try await vm.save(on: db)
@@ -120,7 +118,7 @@ final class VMResizeTests {
                 #expect(detail.name == "renamed")
                 #expect(detail.cpu == 2)
             }
-            let refreshed = try await VM.find(vm.id, on: app.db)
+            let refreshed = try await VM.find(vm.id, on: app.testPostgres)
             #expect(refreshed?.generation == vm.generation)
         }
     }
@@ -143,7 +141,7 @@ final class VMResizeTests {
                 )
             }
 
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.cpu == 12)
             #expect(refreshed.memory == sixteenGB)
             // A stopped VM re-spawns from the new spec, so its ceilings move with it.
@@ -163,7 +161,7 @@ final class VMResizeTests {
     @Test("Placed resize accepts an exact fit")
     func placedExactFit() async throws {
         try await withResizeTestApp(agentAvailableCPU: 4) { app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.testPostgres)
             try await put(app, vm, token: token, body: ["cpu": 6]) { res in
                 #expect(res.status == .accepted)
             }
@@ -173,10 +171,10 @@ final class VMResizeTests {
     @Test("Placed resize rejects CPU shortage without changing sizing, generation, or quota")
     func placedCPUShortage() async throws {
         try await withResizeTestApp(agentAvailableCPU: 3) { app, _, vm, project, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.testPostgres)
             let generation = vm.generation
             let quotasBefore = try await QuotaEnforcementService.applicableQuotas(
-                for: project, environment: vm.environment, on: app.db)
+                for: project, environment: vm.environment, on: app.testPostgres)
             let reservedBefore = try #require(quotasBefore.first).reservedVCPUs
 
             try await put(app, vm, token: token, body: ["cpu": 6]) { res in
@@ -185,11 +183,11 @@ final class VMResizeTests {
                 #expect(res.body.string.contains("4 additional vCPUs"))
             }
 
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.cpu == 2)
             #expect(refreshed.generation == generation)
             let quotasAfter = try await QuotaEnforcementService.applicableQuotas(
-                for: project, environment: vm.environment, on: app.db)
+                for: project, environment: vm.environment, on: app.testPostgres)
             #expect(try #require(quotasAfter.first).reservedVCPUs == reservedBefore)
         }
     }
@@ -197,7 +195,7 @@ final class VMResizeTests {
     @Test("Placed resize subtracts active placement reservations")
     func activePlacementReservation() async throws {
         try await withResizeTestApp(agentAvailableCPU: 4) { app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.testPostgres)
             let agentID = try #require(vm.hypervisorId)
             #expect(
                 await app.coordination.reserveCapacity(
@@ -236,10 +234,10 @@ final class VMResizeTests {
             let requested = gib + 256 * 1024 * 1024
             vm.memory = gib
             vm.maxMemory = requested
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             let generation = vm.generation
             let quotasBefore = try await QuotaEnforcementService.applicableQuotas(
-                for: project, environment: vm.environment, on: app.db)
+                for: project, environment: vm.environment, on: app.testPostgres)
             let reservedBefore = try #require(quotasBefore.first).reservedMemory
 
             try await put(app, vm, token: token, body: ["memory": requested]) { res in
@@ -247,12 +245,12 @@ final class VMResizeTests {
                 #expect(res.body.string.contains("256 MiB additional memory"))
             }
 
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.memory == gib)
             #expect(refreshed.maxMemory == requested)
             #expect(refreshed.generation == generation)
             let quotasAfter = try await QuotaEnforcementService.applicableQuotas(
-                for: project, environment: vm.environment, on: app.db)
+                for: project, environment: vm.environment, on: app.testPostgres)
             #expect(try #require(quotasAfter.first).reservedMemory == reservedBefore)
         }
     }
@@ -266,13 +264,13 @@ final class VMResizeTests {
             let gib: Int64 = 1024 * 1024 * 1024
             vm.memory = gib + 768 * 1024 * 1024
             vm.maxMemory = 2 * gib
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             try await put(app, vm, token: token, body: ["memory": gib]) { res in
                 #expect(res.status == .ok)
             }
 
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.memory == gib)
         }
     }
@@ -282,7 +280,7 @@ final class VMResizeTests {
         try await withResizeTestApp(agentAvailableMemory: 1024 * 1024 * 1024) {
             app, _, vm, _, token in
             vm.hypervisorType = .firecracker
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             try await put(
                 app, vm, token: token,
                 body: ["memory": Int64(4 * 1024 * 1024 * 1024)]
@@ -296,7 +294,7 @@ final class VMResizeTests {
     func memoryShrinkOnFullHost() async throws {
         try await withResizeTestApp(agentAvailableCPU: 0, agentAvailableMemory: 0) {
             app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.testPostgres)
             try await put(
                 app, vm, token: token,
                 body: ["memory": Int64(1024 * 1024 * 1024)]
@@ -309,17 +307,17 @@ final class VMResizeTests {
     @Test("A running vCPU shrink is rejected without changing convergence, sizing, or quota")
     func runningVCPUShrinkRejected() async throws {
         try await withResizeTestApp { app, _, vm, project, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.testPostgres)
             // Model a live count the agent has confirmed, so the control plane
             // can distinguish this from a smaller replacement for a pending
             // growth request.
             vm.observedGeneration = vm.generation
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             let generationBefore = vm.generation
             let observedBefore = vm.observedGeneration
             let conditionsBefore = vm.conditions
             let quotasBefore = try await QuotaEnforcementService.applicableQuotas(
-                for: project, environment: vm.environment, on: app.db)
+                for: project, environment: vm.environment, on: app.testPostgres)
             let reservedBefore = try #require(quotasBefore.first).reservedVCPUs
 
             try await put(app, vm, token: token, body: ["cpu": 1]) { res in
@@ -329,14 +327,14 @@ final class VMResizeTests {
                 #expect(res.body.string.contains("no resize was recorded"))
             }
 
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.cpu == 2)
             #expect(refreshed.generation == generationBefore)
             #expect(refreshed.observedGeneration == observedBefore)
             #expect(refreshed.conditions == conditionsBefore)
             #expect(refreshed.convergenceDeadline == nil)
             let quotasAfter = try await QuotaEnforcementService.applicableQuotas(
-                for: project, environment: vm.environment, on: app.db)
+                for: project, environment: vm.environment, on: app.testPostgres)
             #expect(try #require(quotasAfter.first).reservedVCPUs == reservedBefore)
         }
     }
@@ -346,7 +344,7 @@ final class VMResizeTests {
         try await withResizeTestApp(agentAvailableCPU: 0, agentAvailableMemory: 0) {
             app, _, vm, _, token in
             vm.hypervisorId = nil
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             try await put(app, vm, token: token, body: ["cpu": 12]) { res in
                 #expect(res.status == .ok)
             }
@@ -356,7 +354,7 @@ final class VMResizeTests {
     @Test("Resizing a running VM returns 202 with the VM and bumps the generation")
     func runningResizeAccepted() async throws {
         try await withResizeTestApp { app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.testPostgres)
             let generationBefore = vm.generation
 
             try await put(app, vm, token: token, body: ["cpu": 6]) { res in
@@ -367,7 +365,7 @@ final class VMResizeTests {
                 #expect(body.targetGeneration == body.resource.conditions.targetGeneration)
             }
 
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.cpu == 6)
             // A resize is a spec change, not a power-state change.
             #expect(refreshed.desiredStatus == .running)
@@ -378,14 +376,14 @@ final class VMResizeTests {
     @Test("Growing a running VM past its vCPU ceiling is a 422 naming the restart")
     func beyondMaxCPURejected() async throws {
         try await withResizeTestApp { app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.testPostgres)
 
             try await put(app, vm, token: token, body: ["cpu": 12]) { res in
                 #expect(res.status == .unprocessableEntity)
                 #expect(res.body.string.contains("restart"))
             }
 
-            let refreshed = try await VM.find(vm.id, on: app.db)
+            let refreshed = try await VM.find(vm.id, on: app.testPostgres)
             #expect(refreshed?.cpu == 2)
         }
     }
@@ -393,13 +391,13 @@ final class VMResizeTests {
     @Test("Growing a running VM past its memory ceiling is a 422")
     func beyondMaxMemoryRejected() async throws {
         try await withResizeTestApp { app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.testPostgres)
 
             try await put(app, vm, token: token, body: ["memory": Int64(32 * 1024 * 1024 * 1024)]) { res in
                 #expect(res.status == .unprocessableEntity)
             }
 
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             let unchanged = Int64(2 * 1024 * 1024 * 1024)
             #expect(refreshed.memory == unchanged)
         }
@@ -408,14 +406,14 @@ final class VMResizeTests {
     @Test("A resize that would exceed the project's quota is refused")
     func quotaEnforcedOnGrowth() async throws {
         try await withResizeTestApp(quotaVCPUs: 4) { app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.testPostgres)
 
             try await put(app, vm, token: token, body: ["cpu": 6]) { res in
                 #expect(res.status == .forbidden)
                 #expect(res.body.string.lowercased().contains("quota"))
             }
 
-            let refreshed = try await VM.find(vm.id, on: app.db)
+            let refreshed = try await VM.find(vm.id, on: app.testPostgres)
             #expect(refreshed?.cpu == 2)
         }
     }
@@ -428,7 +426,7 @@ final class VMResizeTests {
             }
 
             let quotas = try await QuotaEnforcementService.applicableQuotas(
-                for: project, environment: vm.environment, on: app.db)
+                for: project, environment: vm.environment, on: app.testPostgres)
             let quota = try #require(quotas.first)
             #expect(quota.reservedVCPUs == 1)
         }
@@ -437,7 +435,7 @@ final class VMResizeTests {
     @Test("Two overlapping resizes charge quota once each, against the committed sizing")
     func overlappingResizesChargeQuotaCorrectly() async throws {
         try await withResizeTestApp { app, _, vm, project, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.testPostgres)
 
             // The "operation already pending" mutex is gone (STR-147), so
             // nothing refuses the second resize. What replaces it is the row
@@ -464,9 +462,9 @@ final class VMResizeTests {
             // Whichever landed last owns the sizing, and the project is charged
             // exactly the difference from the VM's original 2 vCPUs — never
             // both deltas computed from the same base.
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             let quotas = try await QuotaEnforcementService.applicableQuotas(
-                for: project, environment: vm.environment, on: app.db)
+                for: project, environment: vm.environment, on: app.testPostgres)
             let quota = try #require(quotas.first)
             #expect(quota.reservedVCPUs == refreshed.cpu)
         }
@@ -475,14 +473,14 @@ final class VMResizeTests {
     @Test("A smaller pending growth supersedes a larger one instead of becoming a shrink")
     func pendingGrowthRemainsLastWriterWins() async throws {
         try await withResizeTestApp { app, _, vm, project, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.testPostgres)
             vm.observedGeneration = vm.generation
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             try await put(app, vm, token: token, body: ["cpu": 6]) { res in
                 #expect(res.status == .accepted)
             }
-            let first = try #require(try await VM.find(vm.id, on: app.db))
+            let first = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(first.cpu == 6)
             #expect(!first.conditions.converged)
 
@@ -493,9 +491,9 @@ final class VMResizeTests {
                 #expect(res.status == .accepted)
             }
 
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             let quotas = try await QuotaEnforcementService.applicableQuotas(
-                for: project, environment: vm.environment, on: app.db)
+                for: project, environment: vm.environment, on: app.testPostgres)
             #expect(refreshed.cpu == 4)
             #expect(try #require(quotas.first).reservedVCPUs == 4)
         }
@@ -506,7 +504,7 @@ final class VMResizeTests {
     @Test("Setting a balloon target on a running VM returns 202 and leaves the grant alone")
     func balloonTargetOnRunningVM() async throws {
         try await withResizeTestApp { app, _, vm, project, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.testPostgres)
             let generationBefore = vm.generation
             let oneGB = Int64(1024 * 1024 * 1024)
 
@@ -516,7 +514,7 @@ final class VMResizeTests {
                 #expect(body.resource.balloonTarget == oneGB)
             }
 
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.balloonTarget == oneGB)
             // The grant — and so the quota charge — is untouched: reclaim is
             // opportunistic, the memory is still committed to this VM.
@@ -524,7 +522,7 @@ final class VMResizeTests {
             #expect(refreshed.generation > generationBefore)
 
             let quotas = try await QuotaEnforcementService.applicableQuotas(
-                for: project, environment: vm.environment, on: app.db)
+                for: project, environment: vm.environment, on: app.testPostgres)
             let quota = try #require(quotas.first)
             #expect(quota.reservedVCPUs == 2)
         }
@@ -534,14 +532,14 @@ final class VMResizeTests {
     func balloonTargetCleared() async throws {
         try await withResizeTestApp { app, _, vm, _, token in
             vm.balloonTarget = 1024 * 1024 * 1024
-            try await vm.save(on: app.db)
-            try await running(vm, on: app.db)
+            try await vm.save(on: app.testPostgres)
+            try await running(&vm, on: app.testPostgres)
 
             try await put(app, vm, token: token, body: ["balloonTarget": NSNull()]) { res in
                 #expect(res.status == .accepted)
             }
 
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.balloonTarget == nil)
         }
     }
@@ -553,14 +551,14 @@ final class VMResizeTests {
         try await withResizeTestApp { app, _, vm, _, token in
             let oneGB = Int64(1024 * 1024 * 1024)
             vm.balloonTarget = oneGB
-            try await vm.save(on: app.db)
-            try await running(vm, on: app.db)
+            try await vm.save(on: app.testPostgres)
+            try await running(&vm, on: app.testPostgres)
 
             try await put(app, vm, token: token, body: ["name": "renamed"]) { res in
                 #expect(res.status == .ok)
             }
 
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.balloonTarget == oneGB)
         }
     }
@@ -576,7 +574,7 @@ final class VMResizeTests {
                 #expect(detail.balloonTarget == oneGB)
             }
 
-            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.balloonTarget == oneGB)
             #expect(refreshed.generation > vm.generation)
         }
@@ -585,7 +583,7 @@ final class VMResizeTests {
     @Test("A balloon target above the VM's memory is a 400")
     func balloonTargetAboveMemoryRejected() async throws {
         try await withResizeTestApp { app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.testPostgres)
             let tenGB = Int64(10 * 1024 * 1024 * 1024)
 
             try await put(app, vm, token: token, body: ["balloonTarget": tenGB]) { res in
@@ -593,7 +591,7 @@ final class VMResizeTests {
                 #expect(res.body.string.contains("memory"))
             }
 
-            let refreshed = try await VM.find(vm.id, on: app.db)
+            let refreshed = try await VM.find(vm.id, on: app.testPostgres)
             #expect(refreshed?.balloonTarget == nil)
         }
     }
@@ -601,13 +599,13 @@ final class VMResizeTests {
     @Test("A balloon target below the survivable floor is a 400")
     func balloonTargetBelowFloorRejected() async throws {
         try await withResizeTestApp { app, _, vm, _, token in
-            try await running(vm, on: app.db)
+            try await running(&vm, on: app.testPostgres)
 
             try await put(app, vm, token: token, body: ["balloonTarget": 1024]) { res in
                 #expect(res.status == .badRequest)
             }
 
-            let refreshed = try await VM.find(vm.id, on: app.db)
+            let refreshed = try await VM.find(vm.id, on: app.testPostgres)
             #expect(refreshed?.balloonTarget == nil)
         }
     }

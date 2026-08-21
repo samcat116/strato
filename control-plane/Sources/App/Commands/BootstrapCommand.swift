@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 /// `App bootstrap` — seed a first admin user, organization, and project, and
@@ -14,7 +14,7 @@ import Vapor
 /// Two shapes, chosen by `--admin-email` (STR-178):
 ///
 /// - **With `--admin-email`** the seeded account belongs to a *person*. It gets
-///   an `AccountClaimToken`, and the command prints the claim link they open in
+///   an account claim, and the command prints the claim link they open in
 ///   a browser to enroll a passkey. This is the recommended path for an
 ///   interactive install: the operator ends up administering the deployment as
 ///   themselves, rather than through a second account.
@@ -28,6 +28,12 @@ import Vapor
 /// account nobody could log in as. Runs after `configure`, so migrations and
 /// the IAM role registry are already in place.
 struct BootstrapCommand: AsyncCommand {
+    private let persistence: BootstrapPersistence
+
+    init(persistence: BootstrapPersistence) {
+        self.persistence = persistence
+    }
+
     struct Signature: CommandSignature {
         @Option(
             name: "admin-email",
@@ -112,7 +118,7 @@ struct BootstrapCommand: AsyncCommand {
         let app = context.application
         let console = context.console
 
-        guard try await User.isFirstUser(on: app.db) else {
+        guard !(try await persistence.hasUsers()) else {
             console.error("Refusing to bootstrap: one or more users already exist.")
             console.error("This command only seeds a brand-new deployment; manage access through the UI/API instead.")
             throw RefusedError()
@@ -142,110 +148,57 @@ struct BootstrapCommand: AsyncCommand {
         let projectName = signature.projectName ?? "Default Project"
         let keyName = signature.keyName ?? "bootstrap"
 
-        // Mirrors UserController.finishRegistration (first user ⇒ system admin)
-        // followed by OrganizationController.create — but as ONE transaction
-        // covering every relational row including the API key. A failure at any
-        // point rolls everything back, keeping `isFirstUser` true so the
-        // command can simply be re-run.
-        let user = User(username: username, email: email, displayName: username, isSystemAdmin: true)
-        let organization = Organization(name: orgName, description: "Created by `App bootstrap`")
+        let userID = UUID()
+        let orgID = UUID()
+        let projectID = UUID()
+        let siteID = UUID()
         // A permanent admin-scoped credential in terminal scrollback is exactly
         // what the headless path needs and what the human path usually does not
         // — there, the passkey is the credential. Opt-out rather than opt-in so
         // existing automation keeps working unchanged.
-        let fullKey = signature.noAPIKey ? nil : APIKey.generateAPIKey()
+        let fullKey = signature.noAPIKey ? nil : APIKeyCredential.generate()
         // Minted outside the transaction like the API key, so the raw value
         // survives for printing; only its hash is ever stored. Nil on the
         // headless path, which seeds no credential of any kind.
-        let claimToken = adminEmail == nil ? nil : AccountClaimToken.generateToken()
+        let claimToken = adminEmail == nil ? nil : AccountClaimSecret.generateToken()
         let claimExpiresAt = Date().addingTimeInterval(UserController.claimTokenTTL)
-
-        let project = try await app.db.transaction { db -> Project in
-            // Re-ask under the registration lock. The check above is a
-            // courtesy that fails the command with a readable message; this is
-            // the one that holds, because a concurrent self-registration could
-            // have created the first user in between.
-            try await UserController.lockRegistration(on: db)
-            guard try await User.isFirstUser(on: db) else { throw RefusedError() }
-
-            try await user.save(on: db)
-            let userID = try user.requireID()
-
-            // The invite rides the same transaction as the user row, so the
-            // token is visible the instant the account is — the same ordering
-            // `UserController.create` relies on to keep a racing
-            // /auth/register/begin from attaching a passkey to an unclaimed
-            // account.
-            if let claimToken {
-                let claim = AccountClaimToken(
-                    userID: userID,
-                    tokenHash: AccountClaimToken.hashToken(claimToken),
-                    tokenPrefix: AccountClaimToken.extractPrefix(claimToken),
-                    expiresAt: claimExpiresAt,
-                    createdByID: userID
-                )
-                try await claim.save(on: db)
-            }
-
-            try await organization.save(on: db)
-            let orgID = try organization.requireID()
-
-            let membership = UserOrganization(
-                userID: userID, organizationID: orgID, roleID: IAMRole.admin.seededID)
-            try await membership.save(on: db)
-            try await RoleBindingService.grant(
-                principalType: .user,
-                principalID: userID,
-                role: .admin,
-                nodeType: .organization,
-                nodeID: orgID,
-                createdBy: userID,
-                on: db
+        let claim = claimToken.map {
+            AccountClaimIssue(
+                tokenHash: AccountClaimSecret.hashToken($0),
+                tokenPrefix: AccountClaimSecret.extractPrefix($0),
+                expiresAt: claimExpiresAt,
+                createdByID: userID
             )
-
-            user.currentOrganizationId = orgID
-            try await user.save(on: db)
-
-            let project = Project(
-                name: projectName,
-                description: "Created by `App bootstrap`",
-                organizationID: orgID,
-                path: "/\(orgID.uuidString)"
-            )
-            try await project.save(on: db)
-            let projectID = try project.requireID()
-            project.path = "/\(orgID.uuidString)/\(projectID.uuidString)"
-            try await project.save(on: db)
-
-            try await RoleBindingService.grant(
-                principalType: .user,
-                principalID: userID,
-                role: .admin,
-                nodeType: .project,
-                nodeID: projectID,
-                createdBy: userID,
-                on: db
-            )
-
-            // A default site (availability zone) so the seeded org can enroll
-            // agents immediately — enrollment requires a site.
-            try await Site.createDefault(forOrganization: orgID, named: orgName, on: db)
-
-            if let fullKey {
-                let apiKey = APIKey(
-                    userID: userID,
-                    name: keyName,
-                    keyHash: APIKey.hashAPIKey(fullKey),
-                    keyPrefix: String(fullKey.prefix(12)) + "..."
-                )
-                try await apiKey.save(on: db)
-            }
-            return project
         }
-
-        let userID = try user.requireID()
-        let orgID = try organization.requireID()
-        let projectID = try project.requireID()
+        let apiKey = fullKey.map {
+            APIKeyWrite(
+                userID: userID,
+                name: keyName,
+                keyHash: APIKeyCredential.hash($0),
+                keyPrefix: String($0.prefix(12)) + "...",
+                restriction: CredentialRestriction.unrestricted.stored
+            )
+        }
+        do {
+            _ = try await persistence.createInstallation(
+                BootstrapInstallationWrite(
+                    userID: userID,
+                    username: username,
+                    email: email,
+                    organizationID: orgID,
+                    organizationName: orgName,
+                    projectID: projectID,
+                    projectName: projectName,
+                    siteID: siteID,
+                    siteName: Site.defaultName(forOrganizationNamed: orgName),
+                    adminRoleID: IAMRole.admin.seededID,
+                    claim: claim,
+                    apiKey: apiKey
+                )
+            )
+        } catch BootstrapPersistenceError.alreadyInitialized {
+            throw RefusedError()
+        }
 
         if signature.quiet {
             // One secret per line, in a fixed order. The extra lines appear

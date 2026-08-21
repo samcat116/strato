@@ -5,7 +5,7 @@ import StratoShared
 import Vapor
 
 /// Plaintext credential material for registry API calls — a decrypted
-/// `RegistryPullSecret`. Exists only in memory on the way to a registry
+/// `RegistryPullSecretSnapshot`. Exists only in memory on the way to a registry
 /// request; never stored or logged.
 struct RegistryBasicCredential: Sendable {
     let username: String

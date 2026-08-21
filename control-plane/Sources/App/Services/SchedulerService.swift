@@ -1,5 +1,4 @@
 import Vapor
-import Fluent
 import NIOConcurrencyHelpers
 import StratoShared
 import Tracing

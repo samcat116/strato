@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -93,7 +92,7 @@ final class RegistrationPolicyTests: BaseTestCase {
     @Test("once a user exists the disabled setting takes effect")
     func testDisabledOnceUsersExist() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             app.registrationPolicy = RegistrationPolicy(selfRegistrationEnabled: false)
 
             try await app.test(.GET, "/api/public/registration") { res in
@@ -108,7 +107,7 @@ final class RegistrationPolicyTests: BaseTestCase {
     @Test("the default deployment reports registration open")
     func testEnabledByDefault() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             app.registrationPolicy = RegistrationPolicy(selfRegistrationEnabled: true)
 
             try await app.test(.GET, "/api/public/registration") { res in
@@ -127,12 +126,12 @@ final class RegistrationPolicyTests: BaseTestCase {
     @Test("register is refused when self-registration is disabled")
     func testRegisterForbiddenWhenDisabled() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             app.registrationPolicy = RegistrationPolicy(selfRegistrationEnabled: false)
 
             try await register(app, username: "neo", expect: .forbidden)
 
-            let created = try await User.query(on: app.db).filter(\.$username == "neo").first()
+            let created = try await LegacyUserStore.users(username: "neo", on: app.testPostgres).first
             #expect(created == nil)
         }
     }
@@ -146,12 +145,12 @@ final class RegistrationPolicyTests: BaseTestCase {
 
             try await register(app, username: "first", expect: .ok)
 
-            let created = try await User.query(on: app.db).filter(\.$username == "first").first()
+            let created = try await LegacyUserStore.users(username: "first", on: app.testPostgres).first
             #expect(created?.isSystemAdmin == true)
 
             // ...and the door closes again behind it.
             try await register(app, username: "second", expect: .forbidden)
-            let second = try await User.query(on: app.db).filter(\.$username == "second").first()
+            let second = try await LegacyUserStore.users(username: "second", on: app.testPostgres).first
             #expect(second == nil)
         }
     }
@@ -159,12 +158,12 @@ final class RegistrationPolicyTests: BaseTestCase {
     @Test("register still works when self-registration is enabled")
     func testRegisterAllowedWhenEnabled() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             app.registrationPolicy = RegistrationPolicy(selfRegistrationEnabled: true)
 
             try await register(app, username: "neo", expect: .ok)
 
-            let created = try await User.query(on: app.db).filter(\.$username == "neo").first()
+            let created = try await LegacyUserStore.users(username: "neo", on: app.testPostgres).first
             #expect(created != nil)
             // Not the first account, so no free system-admin bit.
             #expect(created?.isSystemAdmin == false)
@@ -193,7 +192,7 @@ final class RegistrationPolicyTests: BaseTestCase {
             #expect(statuses.filter { $0 == .ok }.count == 1)
             #expect(statuses.filter { $0 == .forbidden }.count == attempts - 1)
 
-            let users = try await User.query(on: app.db).all()
+            let users = try await User.all(on: app.testPostgres)
             #expect(users.count == 1)
             #expect(users.first?.isSystemAdmin == true)
         }
@@ -204,7 +203,7 @@ final class RegistrationPolicyTests: BaseTestCase {
     @Test("refusal does not reveal whether a username is taken")
     func testDisabledDoesNotLeakExistingUsernames() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
+            try await setupCommonTestData(on: app)
             app.registrationPolicy = RegistrationPolicy(selfRegistrationEnabled: false)
 
             try await register(app, username: "testuser", expect: .forbidden)

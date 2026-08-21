@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import SPIREServerAPI
 import StratoShared
@@ -24,9 +23,8 @@ final class AgentOrganizationScopeTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Scope Org")
 
             try await test(app, org)
@@ -61,8 +59,8 @@ final class AgentOrganizationScopeTests {
         agentName: String,
         siteID: UUID? = nil,
         organizationScope: OrganizationScope? = nil
-    ) -> AgentEnrollment {
-        AgentEnrollment(
+    ) -> TestAgentEnrollment {
+        TestAgentEnrollment(
             agentName: agentName,
             spiffeID: "spiffe://strato.local/agent/\(agentName)",
             expirationHours: 1,
@@ -96,13 +94,15 @@ final class AgentOrganizationScopeTests {
         if resolvedSiteID == nil, let organizationScope {
             let existing: Site?
             if let organizationID = organizationScope.organizationID {
-                existing = try await Site.query(on: app.db)
-                    .filter(\.$organization.$id == organizationID)
-                    .first()
+                existing = try await LegacySiteStore.sites(
+                    organizationID: organizationID,
+                    on: app.testPostgres
+                ).first
             } else if let organizationalUnitID = organizationScope.organizationalUnitID {
-                existing = try await Site.query(on: app.db)
-                    .filter(\.$organizationalUnit.$id == organizationalUnitID)
-                    .first()
+                existing = try await LegacySiteStore.sites(
+                    organizationalUnitID: organizationalUnitID,
+                    on: app.testPostgres
+                ).first
             } else {
                 existing = nil
             }
@@ -112,7 +112,7 @@ final class AgentOrganizationScopeTests {
                 let site = Site(
                     name: "scope-site-\(UUID().uuidString.prefix(8))",
                     organizationScope: organizationScope)
-                try await site.save(on: app.db)
+                try await site.save(on: app.testPostgres)
                 resolvedSiteID = try site.requireID()
             }
         }
@@ -132,9 +132,9 @@ final class AgentOrganizationScopeTests {
                 on: app, agentName: "scoped-agent",
                 organizationScope: .organization(org.id!))
 
-            let agent = try #require(try await Agent.find(agentUUID, on: app.db))
-            #expect(agent.$organization.id == org.id)
-            #expect(agent.$organizationalUnit.id == nil)
+            let agent = try #require(try await Agent.find(agentUUID, on: app.testPostgres))
+            #expect(agent.organizationID == org.id)
+            #expect(agent.organizationalUnitID == nil)
         }
     }
 
@@ -144,7 +144,7 @@ final class AgentOrganizationScopeTests {
             await #expect(throws: AgentServiceError.self) {
                 _ = try await self.registerAgent(on: app, agentName: "unowned-agent")
             }
-            let count = try await Agent.query(on: app.db).count()
+            let count = try await Agent.count(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -157,21 +157,23 @@ final class AgentOrganizationScopeTests {
             // this name is the only source of both, and the WebSocket controller
             // passes neither parameter.
             let site = Site(name: "enroll-dc", organizationScope: .organization(org.id!))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
             let enrollment = self.makeEnrollment(
                 agentName: "mtls-node", siteID: site.id,
                 organizationScope: .organization(org.id!))
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             let agentUUID = try await self.registerAgent(on: app, agentName: "mtls-node")
 
-            let agent = try #require(try await Agent.find(agentUUID, on: app.db))
-            #expect(agent.$organization.id == org.id)
-            #expect(agent.$site.id == site.id)
+            let agent = try #require(try await Agent.find(agentUUID, on: app.testPostgres))
+            #expect(agent.organizationID == org.id)
+            #expect(agent.siteID == site.id)
 
             // The enrollment is marked redeemed but survives: scope stays
             // readable, and unlike a single-use token it is not consumed.
-            let reloaded = try #require(try await AgentEnrollment.find(enrollment.id, on: app.db))
+            let reloaded = try #require(
+                try await findTestAgentEnrollment(enrollment.id, on: app.testPostgres)
+            )
             #expect(reloaded.isUsed == true)
         }
     }
@@ -186,25 +188,24 @@ final class AgentOrganizationScopeTests {
             // Every reconnect passes no scope; nil must not clear.
             _ = try await self.registerAgent(on: app, agentName: "sticky-agent")
 
-            let agent = try #require(try await Agent.find(agentUUID, on: app.db))
-            #expect(agent.$organization.id == org.id)
+            let agent = try #require(try await Agent.find(agentUUID, on: app.testPostgres))
+            #expect(agent.organizationID == org.id)
         }
     }
 
     @Test("An existing agent does not re-read its enrollment on reconnect")
     func existingAgentIgnoresEnrollmentOnReconnect() async throws {
         try await withScopedApp { app, org in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let otherOrg = try await builder.createOrganization(name: "Enrollment Drift Org")
 
             let agentUUID = try await self.registerAgent(
                 on: app, agentName: "durable-agent",
                 organizationScope: .organization(org.id!))
             let site = Site(name: "drift-dc", organizationScope: .organization(org.id!))
-            try await site.save(on: app.db)
-            let agent = try #require(try await Agent.find(agentUUID, on: app.db))
-            agent.$site.id = try site.requireID()
-            try await agent.save(on: app.db)
+            try await site.save(on: app.testPostgres)
+            let agent = try #require(try await Agent.find(agentUUID, on: app.testPostgres))
+            try await agent.replacing(siteID: try site.requireID()).save(on: app.testPostgres)
 
             // A stale enrollment naming a different org and no site. Both values
             // are durable on the agent row, and re-reading the enrollment on
@@ -212,20 +213,20 @@ final class AgentOrganizationScopeTests {
             // agent — so the enrollment is deliberately not consulted again.
             let enrollment = self.makeEnrollment(
                 agentName: "durable-agent", organizationScope: .organization(otherOrg.id!))
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             _ = try await self.registerAgent(on: app, agentName: "durable-agent")
 
-            let reloaded = try #require(try await Agent.find(agentUUID, on: app.db))
-            #expect(reloaded.$organization.id == org.id)
-            #expect(reloaded.$site.id == site.id)
+            let reloaded = try #require(try await Agent.find(agentUUID, on: app.testPostgres))
+            #expect(reloaded.organizationID == org.id)
+            #expect(reloaded.siteID == site.id)
         }
     }
 
     @Test("An org change is refused while the agent hosts VMs")
     func orgChangeRefusedWhileHostingVMs() async throws {
         try await withScopedApp { app, org in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let otherOrg = try await builder.createOrganization(name: "Other Org")
             let project = try await builder.createProject(
                 name: "Scope Project", description: "p", organization: org)
@@ -234,66 +235,66 @@ final class AgentOrganizationScopeTests {
                 on: app, agentName: "loaded-agent",
                 organizationScope: .organization(org.id!))
 
-            let vm = try await builder.createVM(name: "resident", project: project)
+            var vm = try await builder.createVM(name: "resident", project: project)
             vm.hypervisorId = agentUUID.uuidString
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             // Refused (logged, not fatal): the agent keeps its original org.
             _ = try await self.registerAgent(
                 on: app, agentName: "loaded-agent",
                 organizationScope: .organization(otherOrg.id!))
 
-            let agent = try #require(try await Agent.find(agentUUID, on: app.db))
-            #expect(agent.$organization.id == org.id)
+            let agent = try #require(try await Agent.find(agentUUID, on: app.testPostgres))
+            #expect(agent.organizationID == org.id)
         }
     }
 
     @Test("A site assignment in a different org than the agent is ignored")
     func crossOrgSiteAssignmentIgnored() async throws {
         try await withScopedApp { app, org in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let otherOrg = try await builder.createOrganization(name: "Foreign Org")
             let foreignSite = Site(name: "foreign-dc", organizationScope: .organization(otherOrg.id!))
-            try await foreignSite.save(on: app.db)
+            try await foreignSite.save(on: app.testPostgres)
 
             let agentUUID = try await self.registerAgent(
                 on: app, agentName: "cross-org-agent",
                 organizationScope: .organization(org.id!))
-            let originalAgent = try #require(try await Agent.find(agentUUID, on: app.db))
-            let originalSiteID = originalAgent.$site.id
+            let originalAgent = try #require(try await Agent.find(agentUUID, on: app.testPostgres))
+            let originalSiteID = originalAgent.siteID
             _ = try await self.registerAgent(
                 on: app, agentName: "cross-org-agent",
                 siteID: foreignSite.id,
                 organizationScope: .organization(org.id!))
 
-            let agent = try #require(try await Agent.find(agentUUID, on: app.db))
-            #expect(agent.$site.id == originalSiteID)
-            #expect(agent.$organization.id == org.id)
+            let agent = try #require(try await Agent.find(agentUUID, on: app.testPostgres))
+            #expect(agent.siteID == originalSiteID)
+            #expect(agent.organizationID == org.id)
 
             // Sibling-OU delegation within one org is refused the same way:
             // an OU-B site must not admit an OU-A agent (root org matches).
             let ouA = OrganizationalUnit(
                 name: "Member OU A", description: "a", organizationID: org.id!,
                 path: "/\(org.id!.uuidString)", depth: 1)
-            try await ouA.save(on: app.db)
+            try await ouA.save(on: app.testPostgres)
             let ouB = OrganizationalUnit(
                 name: "Member OU B", description: "b", organizationID: org.id!,
                 path: "/\(org.id!.uuidString)", depth: 1)
-            try await ouB.save(on: app.db)
+            try await ouB.save(on: app.testPostgres)
             let ouBSite = Site(name: "ou-b-dc", organizationScope: .organizationalUnit(ouB.id!))
-            try await ouBSite.save(on: app.db)
+            try await ouBSite.save(on: app.testPostgres)
 
             let ouAgentUUID = try await self.registerAgent(
                 on: app, agentName: "ou-a-agent",
                 organizationScope: .organizationalUnit(ouA.id!))
-            let originalOUAgent = try #require(try await Agent.find(ouAgentUUID, on: app.db))
-            let originalOUSiteID = originalOUAgent.$site.id
+            let originalOUAgent = try #require(try await Agent.find(ouAgentUUID, on: app.testPostgres))
+            let originalOUSiteID = originalOUAgent.siteID
             _ = try await self.registerAgent(
                 on: app, agentName: "ou-a-agent",
                 siteID: ouBSite.id,
                 organizationScope: .organizationalUnit(ouA.id!))
-            let ouAgent = try #require(try await Agent.find(ouAgentUUID, on: app.db))
-            #expect(ouAgent.$site.id == originalOUSiteID)
+            let ouAgent = try #require(try await Agent.find(ouAgentUUID, on: app.testPostgres))
+            #expect(ouAgent.siteID == originalOUSiteID)
         }
     }
 
@@ -303,11 +304,11 @@ final class AgentOrganizationScopeTests {
     func enrollmentCreationRequiresScope() async throws {
         try await withScopedApp { app, org in
             self.installFakeSPIRE(on: app)
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let admin = try await builder.createUser(
                 username: "scope-admin", email: "scope-admin@example.com",
                 displayName: "Scope Admin", isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             struct Body: Content {
                 let agentName: String
@@ -318,7 +319,7 @@ final class AgentOrganizationScopeTests {
             // A site the org owns, so the otherwise-valid case below can join
             // it (enrollment now requires a site).
             let site = Site(name: "scope-dc", organizationScope: .organization(org.id!))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -337,8 +338,8 @@ final class AgentOrganizationScopeTests {
             }
 
             let row = try #require(
-                try await AgentEnrollment.query(on: app.db)
-                    .filter(\.$agentName == "node-x").first())
+                try await findTestAgentEnrollment(agentName: "node-x", on: app.testPostgres)
+            )
             #expect(row.organizationID == org.id)
         }
     }
@@ -347,11 +348,11 @@ final class AgentOrganizationScopeTests {
     func enrollmentCreationDeniedWithoutManageAgents() async throws {
         try await withScopedApp { app, org in
             self.installFakeSPIRE(on: app)
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "scope-pleb", email: "scope-pleb@example.com",
                 displayName: "Pleb", isSystemAdmin: false)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             struct Body: Content {
                 let agentName: String
@@ -360,7 +361,7 @@ final class AgentOrganizationScopeTests {
             }
 
             let site = Site(name: "pleb-dc", organizationScope: .organization(org.id!))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
 
             // The user holds no binding or membership anywhere, so agent
             // management on the org is denied — the manage_agents check fires
@@ -387,15 +388,15 @@ final class AgentOrganizationScopeTests {
     func enrollmentSiteMustMatchOrg() async throws {
         try await withScopedApp { app, org in
             self.installFakeSPIRE(on: app)
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let admin = try await builder.createUser(
                 username: "scope-admin2", email: "scope-admin2@example.com",
                 displayName: "Scope Admin 2", isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             let otherOrg = try await builder.createOrganization(name: "Elsewhere Org")
             let foreignSite = Site(name: "elsewhere-dc", organizationScope: .organization(otherOrg.id!))
-            try await foreignSite.save(on: app.db)
+            try await foreignSite.save(on: app.testPostgres)
 
             struct Body: Content {
                 let agentName: String
@@ -418,11 +419,11 @@ final class AgentOrganizationScopeTests {
     @Test("Site create persists the org parent; delete removes the row")
     func siteParentageLifecycle() async throws {
         try await withScopedApp { app, org in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let admin = try await builder.createUser(
                 username: "site-scope-admin", email: "site-scope-admin@example.com",
                 displayName: "Site Scope Admin", isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             var siteId: UUID?
             try await app.test(.POST, "/api/sites") { req in
@@ -436,10 +437,10 @@ final class AgentOrganizationScopeTests {
                 siteId = try res.content.decode(SiteResponse.self).id
             }
 
-            let createdSite = try await Site.find(siteId!, on: app.db)
+            let createdSite = try await LegacySiteStore.site(id: siteId!, on: app.testPostgres)
             let site = try #require(createdSite)
-            #expect(site.$organization.id == org.id)
-            #expect(site.$organizationalUnit.id == nil)
+            #expect(site.organizationID == org.id)
+            #expect(site.organizationalUnitID == nil)
 
             try await app.test(.DELETE, "/api/sites/\(siteId!.uuidString)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -447,7 +448,7 @@ final class AgentOrganizationScopeTests {
                 #expect(res.status == .noContent)
             }
 
-            let remaining = try await Site.find(siteId!, on: app.db)
+            let remaining = try await LegacySiteStore.site(id: siteId!, on: app.testPostgres)
             #expect(remaining == nil)
         }
     }
@@ -455,7 +456,7 @@ final class AgentOrganizationScopeTests {
     @Test("Destructive agent actions require a system admin while foreign-org VMs are hosted")
     func destructiveActionsGuardForeignVMs() async throws {
         try await withScopedApp { app, org in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             // Delegated org admin: not a system admin; their org-admin binding
             // grants agent:manage, so only the foreign-VM guard stands in the
             // way.
@@ -463,7 +464,7 @@ final class AgentOrganizationScopeTests {
                 username: "delegated-admin", email: "delegated-admin@example.com",
                 displayName: "Delegated Admin", isSystemAdmin: false)
             try await builder.addUserToOrganization(user: orgAdmin, organization: org, role: "admin")
-            let orgAdminToken = try await orgAdmin.generateAPIKey(on: app.db)
+            let orgAdminToken = try await orgAdmin.generateAPIKey(on: app)
 
             let agentUUID = try await self.registerAgent(
                 on: app, agentName: "shared-agent",
@@ -474,9 +475,9 @@ final class AgentOrganizationScopeTests {
             let foreignOrg = try await builder.createOrganization(name: "Foreign Tenant")
             let foreignProject = try await builder.createProject(
                 name: "Foreign Project", description: "p", organization: foreignOrg)
-            let foreignVM = try await builder.createVM(name: "tenant-vm", project: foreignProject)
+            var foreignVM = try await builder.createVM(name: "tenant-vm", project: foreignProject)
             foreignVM.hypervisorId = agentUUID.uuidString
-            try await foreignVM.save(on: app.db)
+            try await foreignVM.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/agents/\(agentUUID.uuidString)/actions/force-offline") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: orgAdminToken)
@@ -492,12 +493,12 @@ final class AgentOrganizationScopeTests {
             // A foreign-org DETACHED VOLUME stored on the agent blocks the
             // delegated admin the same way (volume placement is unscoped
             // until phase 2 too).
-            try await foreignVM.delete(on: app.db)
+            try await foreignVM.delete(on: app.testPostgres)
             let foreignVolume = Volume(
                 name: "tenant-vol", description: "v", projectID: foreignProject.id!, environment: "development",
                 size: 1 << 30, createdByID: orgAdmin.id!)
-            try await foreignVolume.save(on: app.db)
-            try await placeVolume(foreignVolume, on: agentUUID.uuidString, using: app.db)
+            try await foreignVolume.save(on: app.testPostgres)
+            try await placeVolume(foreignVolume, on: agentUUID.uuidString, using: app.testPostgres)
 
             try await app.test(.POST, "/api/agents/\(agentUUID.uuidString)/actions/force-offline") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: orgAdminToken)
@@ -506,7 +507,7 @@ final class AgentOrganizationScopeTests {
             }
 
             // Once the foreign workloads are gone, the delegated admin may act.
-            try await foreignVolume.delete(on: app.db)
+            try await foreignVolume.delete(on: app.testPostgres)
             try await app.test(.POST, "/api/agents/\(agentUUID.uuidString)/actions/force-offline") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: orgAdminToken)
             } afterResponse: { res in
@@ -519,18 +520,18 @@ final class AgentOrganizationScopeTests {
     func deregistrationClearsEnrollment() async throws {
         try await withScopedApp { app, org in
             self.installFakeSPIRE(on: app)
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let admin = try await builder.createUser(
                 username: "dereg-admin", email: "dereg-admin@example.com",
                 displayName: "Dereg Admin", isSystemAdmin: true)
-            let adminToken = try await admin.generateAPIKey(on: app.db)
+            let adminToken = try await admin.generateAPIKey(on: app)
 
             let site = Site(name: "retiring-site", organizationScope: .organization(org.id!))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
             let enrollment = self.makeEnrollment(
                 agentName: "retiring-agent", siteID: try site.requireID(),
                 organizationScope: .organization(org.id!))
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
             let agentUUID = try await self.registerAgent(on: app, agentName: "retiring-agent")
 
             try await app.test(.DELETE, "/api/agents/\(agentUUID.uuidString)") { req in
@@ -539,9 +540,10 @@ final class AgentOrganizationScopeTests {
                 #expect(res.status == .noContent)
             }
 
-            let leftover = try await AgentEnrollment.query(on: app.db)
-                .filter(\.$agentName == "retiring-agent")
-                .count()
+            let leftover = try await testAgentEnrollmentCount(
+                agentName: "retiring-agent",
+                on: app.testPostgres
+            )
             #expect(leftover == 0)
 
             // The name is immediately reusable — a leftover row would trip the
@@ -552,7 +554,7 @@ final class AgentOrganizationScopeTests {
                 let siteId: UUID?
             }
             let replacementSite = Site(name: "dereg-dc", organizationScope: .organization(org.id!))
-            try await replacementSite.save(on: app.db)
+            try await replacementSite.save(on: app.testPostgres)
             try await app.test(.POST, "/api/agent-enrollments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
                 try req.content.encode(
@@ -568,22 +570,21 @@ final class AgentOrganizationScopeTests {
     @Test("A network cannot pin to a site in a different organization")
     func networkSitePinRequiresSameOrg() async throws {
         try await withScopedApp { app, org in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "net-pinner", email: "net-pinner@example.com",
                 displayName: "Net Pinner", isSystemAdmin: false)
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
             let project = try await builder.createProject(
                 name: "Pin Project", description: "p", organization: org)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             let foreignOrg = try await builder.createOrganization(name: "Pin Foreign Org")
             let foreignSite = Site(name: "pin-foreign-dc", organizationScope: .organization(foreignOrg.id!))
-            try await foreignSite.save(on: app.db)
+            try await foreignSite.save(on: app.testPostgres)
             let ownSite = Site(name: "pin-own-dc", organizationScope: .organization(org.id!))
-            try await ownSite.save(on: app.db)
+            try await ownSite.save(on: app.testPostgres)
 
             struct Body: Content {
                 let name: String
@@ -616,17 +617,17 @@ final class AgentOrganizationScopeTests {
             let ouA = OrganizationalUnit(
                 name: "Pin OU A", description: "a", organizationID: org.id!,
                 path: "/\(org.id!.uuidString)", depth: 1)
-            try await ouA.save(on: app.db)
+            try await ouA.save(on: app.testPostgres)
             let ouB = OrganizationalUnit(
                 name: "Pin OU B", description: "b", organizationID: org.id!,
                 path: "/\(org.id!.uuidString)", depth: 1)
-            try await ouB.save(on: app.db)
+            try await ouB.save(on: app.testPostgres)
             let projectA = try await builder.createProject(
                 name: "Pin Project A", description: "p", ou: ouA)
             let projectB = try await builder.createProject(
                 name: "Pin Project B", description: "p", ou: ouB)
             let siteB = Site(name: "pin-ou-b-dc", organizationScope: .organizationalUnit(ouB.id!))
-            try await siteB.save(on: app.db)
+            try await siteB.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -649,11 +650,11 @@ final class AgentOrganizationScopeTests {
     func enrollmentSitePinRequiresSiteManage() async throws {
         try await withScopedApp { app, org in
             self.installFakeSPIRE(on: app)
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "agents-only-admin", email: "agents-only-admin@example.com",
                 displayName: "Agents Only Admin", isSystemAdmin: false)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             // The delegated-subtree scenario: the caller admins one OU (so
             // manage_agents on the enrollment's OU scope passes), but the
@@ -662,13 +663,13 @@ final class AgentOrganizationScopeTests {
             let ou = OrganizationalUnit(
                 name: "Pin Gated OU", description: "ou", organizationID: org.id!,
                 path: "/\(org.id!.uuidString)", depth: 1)
-            try await ou.save(on: app.db)
+            try await ou.save(on: app.testPostgres)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .organizationalUnit, nodeID: ou.id!, createdBy: nil, on: app.db)
+                nodeType: .organizationalUnit, nodeID: ou.id!, createdBy: nil, on: app.testPostgres)
 
             let site = Site(name: "pin-gated-dc", organizationScope: .organization(org.id!))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
 
             struct Body: Content {
                 let agentName: String
@@ -688,11 +689,11 @@ final class AgentOrganizationScopeTests {
     @Test("Site membership changes require manage on the agent, not just the site")
     func siteMembershipRequiresAgentManage() async throws {
         try await withScopedApp { app, org in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "site-only-admin", email: "site-only-admin@example.com",
                 displayName: "Site Only Admin", isSystemAdmin: false)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             // The delegated-subtree scenario: the site lives in an OU the
             // caller admins (site manage passes), but the agent is owned at
@@ -701,13 +702,13 @@ final class AgentOrganizationScopeTests {
             let ou = OrganizationalUnit(
                 name: "Membership OU", description: "ou", organizationID: org.id!,
                 path: "/\(org.id!.uuidString)", depth: 1)
-            try await ou.save(on: app.db)
+            try await ou.save(on: app.testPostgres)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .organizationalUnit, nodeID: ou.id!, createdBy: nil, on: app.db)
+                nodeType: .organizationalUnit, nodeID: ou.id!, createdBy: nil, on: app.testPostgres)
 
             let site = Site(name: "membership-dc", organizationScope: .organizationalUnit(ou.id!))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
             let agentUUID = try await self.registerAgent(
                 on: app, agentName: "membership-agent",
                 organizationScope: .organization(org.id!))
@@ -718,8 +719,8 @@ final class AgentOrganizationScopeTests {
                 #expect(res.status == .forbidden)
             }
 
-            let agent = try #require(try await Agent.find(agentUUID, on: app.db))
-            #expect(agent.$site.id != site.id)
+            let agent = try #require(try await Agent.find(agentUUID, on: app.testPostgres))
+            #expect(agent.siteID != site.id)
         }
     }
 
@@ -731,16 +732,16 @@ final class AgentOrganizationScopeTests {
             let ou = OrganizationalUnit(
                 name: "Scope OU", description: "ou", organizationID: org.id!,
                 path: "/\(org.id!.uuidString)", depth: 1)
-            try await ou.save(on: app.db)
+            try await ou.save(on: app.testPostgres)
 
             let agentUUID = try await self.registerAgent(
                 on: app, agentName: "ou-agent",
                 organizationScope: .organizationalUnit(ou.id!))
 
-            let agent = try #require(try await Agent.find(agentUUID, on: app.db))
-            #expect(agent.$organizationalUnit.id == ou.id)
-            #expect(agent.$organization.id == nil)
-            let rootOrg = try await agent.rootOrganizationID(on: app.db)
+            let agent = try #require(try await Agent.find(agentUUID, on: app.testPostgres))
+            #expect(agent.organizationalUnitID == ou.id)
+            #expect(agent.organizationID == nil)
+            let rootOrg = try await agent.rootOrganizationID(on: app.testPostgres)
             #expect(rootOrg == org.id)
         }
     }

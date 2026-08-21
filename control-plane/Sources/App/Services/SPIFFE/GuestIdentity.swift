@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -82,7 +82,7 @@ enum GuestIdentity {
     static func trustDomain(
         forOrganization organizationID: UUID?,
         configuration: ControlPlaneConfiguration,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> String {
         let platform = configuration.string(.spireTrustDomain)!
         guard configuration.bool(.spireOrgTrustDomainsEnabled) == true, let organizationID else {
@@ -90,10 +90,9 @@ enum GuestIdentity {
         }
 
         guard
-            let row = try await OrgTrustDomain.query(on: db)
-                .filter(\.$organizationID == organizationID)
-                .filter(\.$phase == .active)
-                .first(),
+            let row = try await OrgTrustDomainStore.find(
+                organizationID: organizationID, on: db),
+            row.phase == .active,
             row.acceptsIdentities
         else { return platform }
 
@@ -120,19 +119,18 @@ enum GuestIdentity {
         organizationID: UUID?,
         createdBy: UUID?,
         configuration: ControlPlaneConfiguration,
-        on db: any Database
-    ) async throws -> WorkloadRegistration {
+        on db: PostgresStoreContext
+    ) async throws -> LegacyWorkloadRegistrationRecord {
         let trustDomain = try await trustDomain(
             forOrganization: organizationID, configuration: configuration, on: db)
-        let registration = WorkloadRegistration(
-            spiffeID: spiffeID(forVM: vmID, trustDomain: trustDomain),
-            kind: .workload,
-            organizationID: organizationID,
-            createdBy: createdBy,
-            vmID: vmID
-        )
-        try await registration.save(on: db)
-        return registration
+        return try await LegacyWorkloadRegistrationStore.insert(
+            WorkloadRegistrationWrite(
+                spiffeID: spiffeID(forVM: vmID, trustDomain: trustDomain),
+                kind: WorkloadRegistrationKind.workload.rawValue,
+                organizationID: organizationID,
+                createdBy: createdBy,
+                vmID: vmID),
+            on: db)
     }
 
     /// Convenience for focused tests whose subject is registration rather than
@@ -143,28 +141,27 @@ enum GuestIdentity {
         vmID: UUID,
         organizationID: UUID?,
         createdBy: UUID?,
-        on db: any Database
-    ) async throws -> WorkloadRegistration {
-        let registration = WorkloadRegistration(
-            spiffeID: spiffeID(forVM: vmID, trustDomain: PlatformTrustDomain.current),
-            kind: .workload,
-            organizationID: organizationID,
-            createdBy: createdBy,
-            vmID: vmID
-        )
-        try await registration.save(on: db)
-        return registration
+        on db: PostgresStoreContext
+    ) async throws -> LegacyWorkloadRegistrationRecord {
+        try await LegacyWorkloadRegistrationStore.insert(
+            WorkloadRegistrationWrite(
+                spiffeID: spiffeID(forVM: vmID, trustDomain: PlatformTrustDomain.current),
+                kind: WorkloadRegistrationKind.workload.rawValue,
+                organizationID: organizationID,
+                createdBy: createdBy,
+                vmID: vmID),
+            on: db)
     }
 
     /// The current names of a set of VMs, for hydrating registry labels.
     /// Chunked and batched for the same reason `spiffeIDs(forVMs:on:)` is.
-    static func names(forVMs vmIDs: [UUID], on db: any Database) async throws -> [UUID: String] {
+    static func names(forVMs vmIDs: [UUID], on db: PostgresStoreContext) async throws -> [UUID: String] {
         guard !vmIDs.isEmpty else { return [:] }
 
         var result: [UUID: String] = [:]
         for start in stride(from: 0, to: vmIDs.count, by: lookupChunkSize) {
             let chunk = Array(vmIDs[start..<min(start + lookupChunkSize, vmIDs.count)])
-            let rows = try await VM.query(on: db).filter(\.$id ~~ chunk).all()
+            let rows = try await LegacyVMStore.vms(ids: chunk, on: db)
             for row in rows {
                 guard let vmID = row.id else { continue }
                 result[vmID] = row.name
@@ -189,20 +186,19 @@ enum GuestIdentity {
     /// rather than a per-VM cost. A VM missing from the result has no
     /// registration — an administrator revoked it — and is vended no identity.
     static func registrations(
-        forVMs vmIDs: [UUID], on db: any Database
+        forVMs vmIDs: [UUID], on db: PostgresStoreContext
     ) async throws -> [UUID: RegistrationReference] {
         guard !vmIDs.isEmpty else { return [:] }
 
         var result: [UUID: RegistrationReference] = [:]
         for start in stride(from: 0, to: vmIDs.count, by: lookupChunkSize) {
             let chunk = Array(vmIDs[start..<min(start + lookupChunkSize, vmIDs.count)])
-            let rows = try await WorkloadRegistration.query(on: db)
-                .filter(\.$vm.$id ~~ chunk)
-                .all()
+            let rows = try await LegacyWorkloadRegistrationStore.registrations(
+                vmIDs: chunk, on: db)
             for row in rows {
-                guard let vmID = row.$vm.id, let principalID = row.id else { continue }
+                guard let vmID = row.vmID else { continue }
                 result[vmID] = RegistrationReference(
-                    principalID: principalID, spiffeID: row.spiffeID)
+                    principalID: row.id, spiffeID: row.spiffeID)
             }
         }
         return result
@@ -210,21 +206,22 @@ enum GuestIdentity {
 
     /// The SPIFFE IDs of a set of VMs, for desired-state assembly and other
     /// callers that do not need the principal id.
-    static func spiffeIDs(forVMs vmIDs: [UUID], on db: any Database) async throws -> [UUID: String] {
+    static func spiffeIDs(forVMs vmIDs: [UUID], on db: PostgresStoreContext) async throws -> [UUID: String] {
         try await registrations(forVMs: vmIDs, on: db).mapValues(\.spiffeID)
     }
 
     /// One VM's registration reference. Nil after an administrator revokes
     /// the identity through the one-way registry deletion surface.
     static func registration(
-        forVM vmID: UUID, on db: any Database
+        forVM vmID: UUID, on db: PostgresStoreContext
     ) async throws -> RegistrationReference? {
         try await registrations(forVMs: [vmID], on: db)[vmID]
     }
 
     /// One VM's SPIFFE ID, for the single-resource endpoints. Nil when the VM
     /// has no registration.
-    static func spiffeID(forVM vmID: UUID, on db: any Database) async throws -> String? {
+    static func spiffeID(forVM vmID: UUID, on db: PostgresStoreContext) async throws -> String? {
         try await registration(forVM: vmID, on: db)?.spiffeID
     }
 }
+import ControlPlanePostgres

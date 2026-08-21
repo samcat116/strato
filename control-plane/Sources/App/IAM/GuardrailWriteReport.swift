@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -153,13 +153,25 @@ enum GuardrailWriteReport {
     /// refused writes. What is *not* best-effort is saying which happened:
     /// a failure is named in `analysisUnavailable` rather than rendered as an
     /// all-clear.
-    static func report(for binding: ProposedBinding, req: Request) async -> GrantWriteResponse {
+    static func report(
+        for binding: ProposedBinding,
+        using iam: IAMPersistence,
+        groups: GroupsPersistence,
+        hierarchy: HierarchyPersistence,
+        projects: ProjectsPersistence,
+        users: UserDirectoryPersistence,
+        req: Request
+    ) async -> GrantWriteResponse {
         let found: [GrantCeiling]
         do {
             found = try await ceilings(
                 narrowing: binding,
                 analyzer: req.application.guardrailAnalyzer,
-                on: req.db,
+                using: iam,
+                groups: groups,
+                hierarchy: hierarchy,
+                projects: projects,
+                users: users,
                 logger: req.logger
             )
         } catch {
@@ -169,7 +181,8 @@ enum GuardrailWriteReport {
                     "role": .string(binding.roleLabel),
                     "node": .string("\(binding.node.type.rawValue)/\(binding.node.id)"),
                     "error": .string("\(error)"),
-                ])
+                ]
+            )
             return GrantWriteResponse(ceilings: [], analysisUnavailable: "\(error)")
         }
         for ceiling in found {
@@ -180,7 +193,8 @@ enum GuardrailWriteReport {
                     "role": .string(binding.roleLabel),
                     "node": .string("\(binding.node.type.rawValue)/\(binding.node.id)"),
                     "ceilinged_actions": .string(ceiling.ceilingedActions.joined(separator: ", ")),
-                ])
+                ]
+            )
         }
         return GrantWriteResponse(ceilings: found, analysisUnavailable: nil)
     }
@@ -193,7 +207,7 @@ enum GuardrailWriteReport {
     static func ceilings(
         narrowing binding: ProposedBinding,
         analyzer: any GuardrailAnalyzer,
-        on db: any Database,
+        on db: PostgresStoreContext,
         logger: Logger
     ) async throws -> [GrantCeiling] {
         let deadline = ContinuousClock.now + analysisBudget
@@ -234,6 +248,58 @@ enum GuardrailWriteReport {
         return ceilings
     }
 
+    static func ceilings(
+        narrowing binding: ProposedBinding,
+        analyzer: any GuardrailAnalyzer,
+        using iam: IAMPersistence,
+        groups: GroupsPersistence,
+        hierarchy: HierarchyPersistence,
+        projects: ProjectsPersistence,
+        users: UserDirectoryPersistence,
+        logger: Logger
+    ) async throws -> [GrantCeiling] {
+        let deadline = ContinuousClock.now + analysisBudget
+        let chain = try await IAMResourceTree.ancestors(of: binding.node, using: iam)
+        let candidates = try await GuardrailStore.effective(along: chain, using: iam)
+            .filter { !$0.authored }
+        guard !candidates.isEmpty else { return [] }
+        let organizationID = chain.first(where: { $0.type == .organization })?.id
+
+        var ceilings: [GrantCeiling] = []
+        for guardrail in candidates {
+            guard let rendering = try? GuardrailRendering(guardrail) else { continue }
+            guard
+                try await applies(
+                    rendering,
+                    to: binding,
+                    organizationID: organizationID,
+                    using: iam,
+                    groups: groups
+                )
+            else { continue }
+            guard
+                let overlap = try await overlap(
+                    between: binding,
+                    and: rendering,
+                    analyzer: analyzer,
+                    deadline: deadline,
+                    logger: logger
+                )
+            else { continue }
+            ceilings.append(
+                try await describe(
+                    guardrail,
+                    binding: binding,
+                    overlap: overlap,
+                    hierarchy: hierarchy,
+                    projects: projects,
+                    users: users
+                )
+            )
+        }
+        return ceilings
+    }
+
     // MARK: - Guardrail writes
 
     /// The active bindings a newly written guardrail now shadows.
@@ -245,32 +311,20 @@ enum GuardrailWriteReport {
     /// so the author sees what they just took away, and audited so it is on
     /// the record.
     static func shadowedBindings(
-        by guardrail: Guardrail,
+        by guardrail: IAMGuardrailSnapshot,
         analyzer: any GuardrailAnalyzer,
-        on db: any Database,
+        on db: PostgresStoreContext,
         logger: Logger
     ) async throws -> [ShadowedBinding] {
         let deadline = ContinuousClock.now + analysisBudget
-        // Authored ceilings are not analyzed against existing bindings for the
-        // same reason they are skipped on binding writes (`ceilings`): their
-        // free-form principal side cannot be resolved against the database, and
-        // eval-time enforcement covers them. The shadow report is a matcher-path
-        // courtesy — which is also why an unrenderable row reports nothing.
         guard guardrail.enabled, !guardrail.authored,
             let rendering = try? GuardrailRendering(guardrail)
         else { return [] }
         let organizationID = try await IAMResourceTree.ancestors(of: rendering.node, on: db)
             .first(where: { $0.type == .organization })?.id
 
-        // Bindings beneath the attach node, found by walking each binding's
-        // chain rather than by a subtree query: the tree has no closure table,
-        // and a binding on a node whose chain does not reach here is simply
-        // not covered.
         var shadowed: [ShadowedBinding] = []
-        for candidate in try await RoleBinding.query(on: db).active().all() {
-            // A row naming a custom role maps to no `IAMRole` and is skipped —
-            // shadow reporting over custom roles needs this whole check to
-            // stop being enum-shaped, which is its own piece of work.
+        for candidate in try await LegacyRoleBindingStore.bindings(activeAt: Date(), on: db) {
             guard let role = IAMRole(seededID: candidate.roleID),
                 let nodeType = IAMNodeType(rawValue: candidate.nodeType),
                 let principalType = IAMPrincipalType(rawValue: candidate.principalType)
@@ -289,8 +343,12 @@ enum GuardrailWriteReport {
             else { continue }
             guard
                 try await overlap(
-                    between: binding, and: rendering, analyzer: analyzer,
-                    deadline: deadline, logger: logger) != nil
+                    between: binding,
+                    and: rendering,
+                    analyzer: analyzer,
+                    deadline: deadline,
+                    logger: logger
+                ) != nil
             else { continue }
             shadowed.append(
                 ShadowedBinding(
@@ -299,6 +357,77 @@ enum GuardrailWriteReport {
                     role: role,
                     node: bindingNode
                 ))
+        }
+        return shadowed
+    }
+
+    static func shadowedBindings(
+        by guardrail: IAMGuardrailSnapshot,
+        analyzer: any GuardrailAnalyzer,
+        using iam: IAMPersistence,
+        groups: GroupsPersistence,
+        hierarchy: HierarchyPersistence,
+        projects: ProjectsPersistence,
+        users: UserDirectoryPersistence,
+        logger: Logger
+    ) async throws -> [ShadowedBinding] {
+        let deadline = ContinuousClock.now + analysisBudget
+        guard guardrail.enabled, !guardrail.authored,
+            let rendering = try? GuardrailRendering(guardrail)
+        else { return [] }
+        let organizationID = try await IAMResourceTree.ancestors(
+            of: rendering.node,
+            using: iam
+        ).first(where: { $0.type == .organization })?.id
+
+        let candidates = try await iam.allActiveBindings()
+        let typed = candidates.compactMap { candidate -> (IAMRoleBindingSnapshot, IAMNode)? in
+            guard IAMRole(seededID: candidate.roleID) != nil,
+                let nodeType = IAMNodeType(rawValue: candidate.nodeType),
+                IAMPrincipalType(rawValue: candidate.principalType) != nil
+            else { return nil }
+            return (candidate, IAMNode(type: nodeType, id: candidate.nodeID))
+        }
+        let resolutions = try await IAMResourceTree.resolve(typed.map { $0.1 }, using: iam)
+
+        var shadowed: [ShadowedBinding] = []
+        for (candidate, bindingNode) in typed {
+            guard let role = IAMRole(seededID: candidate.roleID),
+                let principalType = IAMPrincipalType(rawValue: candidate.principalType),
+                resolutions[bindingNode]?.chain.contains(rendering.node) == true
+            else { continue }
+            let binding = ProposedBinding(
+                principalType: principalType,
+                principalID: candidate.principalID,
+                role: role,
+                node: bindingNode
+            )
+            guard
+                try await applies(
+                    rendering,
+                    to: binding,
+                    organizationID: organizationID,
+                    using: iam,
+                    groups: groups
+                )
+            else { continue }
+            guard
+                try await overlap(
+                    between: binding,
+                    and: rendering,
+                    analyzer: analyzer,
+                    deadline: deadline,
+                    logger: logger
+                ) != nil
+            else { continue }
+            shadowed.append(
+                ShadowedBinding(
+                    principalType: principalType,
+                    principalID: candidate.principalID,
+                    role: role,
+                    node: bindingNode
+                )
+            )
         }
         return shadowed
     }
@@ -330,7 +459,49 @@ enum GuardrailWriteReport {
         _ rendering: GuardrailRendering,
         to binding: ProposedBinding,
         organizationID: UUID?,
-        on db: any Database
+        using iam: IAMPersistence,
+        groups: GroupsPersistence
+    ) async throws -> Bool {
+        switch binding.principalType {
+        case .user:
+            return try await rendering.covers(
+                principalType: .user,
+                principalID: binding.principalID,
+                organizationID: organizationID,
+                using: iam,
+                groups: groups
+            )
+        case .group:
+            switch rendering.principalMatch {
+            case .any:
+                return true
+            case .group(let ceilingGroupID):
+                if ceilingGroupID == binding.principalID { return true }
+                return try await groups.groupsShareMember(binding.principalID, ceilingGroupID)
+            case .user(let userID):
+                return try await groups.hasMember(userID: userID, groupID: binding.principalID)
+            case .externalToOrganization:
+                guard let organizationID else { return false }
+                return try await groups.hasMemberOutsideOrganization(
+                    groupID: binding.principalID,
+                    organizationID: organizationID
+                )
+            }
+        case .serviceAccount, .workload:
+            switch rendering.principalMatch {
+            case .any, .externalToOrganization:
+                return true
+            case .user, .group:
+                return false
+            }
+        }
+    }
+
+    private static func applies(
+        _ rendering: GuardrailRendering,
+        to binding: ProposedBinding,
+        organizationID: UUID?,
+        on db: PostgresStoreContext
     ) async throws -> Bool {
         switch binding.principalType {
         case .user:
@@ -349,11 +520,8 @@ enum GuardrailWriteReport {
                 if ceilingGroupID == binding.principalID { return true }
                 return try await sharesMember(binding.principalID, ceilingGroupID, on: db)
             case .user(let userID):
-                let memberships = try await UserGroup.query(on: db)
-                    .filter(\.$user.$id == userID)
-                    .filter(\.$group.$id == binding.principalID)
-                    .count()
-                return memberships > 0
+                return try await LegacyGroupSQLBridge.hasMember(
+                    userID: userID, groupID: binding.principalID, on: db)
             case .externalToOrganization:
                 guard let organizationID else { return false }
                 return try await hasMemberOutside(
@@ -374,28 +542,15 @@ enum GuardrailWriteReport {
         }
     }
 
-    private static func sharesMember(_ a: UUID, _ b: UUID, on db: any Database) async throws -> Bool {
-        let aMembers = try await UserGroup.query(on: db).filter(\.$group.$id == a).all()
-            .map(\.$user.id)
-        guard !aMembers.isEmpty else { return false }
-        let shared = try await UserGroup.query(on: db)
-            .filter(\.$group.$id == b)
-            .filter(\.$user.$id ~~ aMembers)
-            .count()
-        return shared > 0
+    private static func sharesMember(_ a: UUID, _ b: UUID, on db: PostgresStoreContext) async throws -> Bool {
+        try await LegacyGroupSQLBridge.groupsShareMember(a, b, on: db)
     }
 
     private static func hasMemberOutside(
-        _ organizationID: UUID, of groupID: UUID, on db: any Database
+        _ organizationID: UUID, of groupID: UUID, on db: PostgresStoreContext
     ) async throws -> Bool {
-        let members = try await UserGroup.query(on: db).filter(\.$group.$id == groupID).all()
-            .map(\.$user.id)
-        guard !members.isEmpty else { return false }
-        let inside = try await UserOrganization.query(on: db)
-            .filter(\.$organization.$id == organizationID)
-            .filter(\.$user.$id ~~ members)
-            .count()
-        return inside < members.count
+        try await LegacyGroupSQLBridge.hasMemberOutsideOrganization(
+            groupID: groupID, organizationID: organizationID, on: db)
     }
 
     // MARK: - The symbolic side
@@ -555,10 +710,10 @@ enum GuardrailWriteReport {
 
     /// Turn a narrowed grant into the response body the design specifies.
     private static func describe(
-        _ guardrail: Guardrail,
+        _ guardrail: IAMGuardrailSnapshot,
         binding: ProposedBinding,
         overlap: Overlap,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> GrantCeiling {
         let node = guardrail.node
         let path: String
@@ -570,9 +725,41 @@ enum GuardrailWriteReport {
 
         var setBy: String?
         if let createdBy = guardrail.createdBy, let author = try await User.find(createdBy, on: db) {
-            // The authority is derivable rather than stored: writing a
-            // guardrail requires admin on its attach node, so the node type
-            // names the role that must have been held.
+            let authority = node.map { "\($0.type.rawValue) admin" } ?? "admin"
+            setBy = "\(author.email) (\(authority))"
+        }
+
+        return GrantCeiling(
+            guardrail: path,
+            setBy: setBy,
+            explanation: reasonText(guardrail, binding: binding),
+            ceilingedActions: overlap.actions,
+            counterexample: overlap.counterexample
+        )
+    }
+
+    private static func describe(
+        _ guardrail: IAMGuardrailSnapshot,
+        binding: ProposedBinding,
+        overlap: Overlap,
+        hierarchy: HierarchyPersistence,
+        projects: ProjectsPersistence,
+        users: UserDirectoryPersistence
+    ) async throws -> GrantCeiling {
+        let node = guardrail.node
+        let path: String
+        if let node, let name = try await nodeName(
+            node,
+            hierarchy: hierarchy,
+            projects: projects
+        ) {
+            path = "\(node.type.rawValue)/\(name)/\(guardrail.name)"
+        } else {
+            path = guardrail.name
+        }
+
+        var setBy: String?
+        if let createdBy = guardrail.createdBy, let author = try await users.user(id: createdBy) {
             let authority = node.map { "\($0.type.rawValue) admin" } ?? "admin"
             setBy = "\(author.email) (\(authority))"
         }
@@ -589,7 +776,10 @@ enum GuardrailWriteReport {
     /// The prose half of the answer, written in the vocabulary the ceiling was
     /// authored in — the reader has to be able to match it against the
     /// guardrail they can see in the UI.
-    private static func reasonText(_ guardrail: Guardrail, binding: ProposedBinding) -> String {
+    private static func reasonText(
+        _ guardrail: IAMGuardrailSnapshot,
+        binding: ProposedBinding
+    ) -> String {
         var reason = "grants \(binding.roleLabel) on \(binding.node.type.rawValue) resources"
         if let match = try? guardrail.resourceMatch(), case .environment(let environment) = match {
             reason += " tagged \"\(environment)\""
@@ -604,12 +794,11 @@ enum GuardrailWriteReport {
         case .any, .none:
             reason += " to a principal the ceiling covers"
         }
-        let actions = guardrail.actions.joined(separator: ", ")
-        reason += "; the ceiling forbids \(actions) here"
+        reason += "; the ceiling forbids \(guardrail.actions.joined(separator: ", ")) here"
         return reason
     }
 
-    private static func nodeName(_ node: IAMNode, on db: any Database) async throws -> String? {
+    private static func nodeName(_ node: IAMNode, on db: PostgresStoreContext) async throws -> String? {
         switch node.type {
         case .organization:
             return try await Organization.find(node.id, on: db)?.name
@@ -620,6 +809,23 @@ enum GuardrailWriteReport {
         default:
             // Guardrails only attach to containers (`GuardrailStore`), so
             // nothing else should reach here; the id alone still identifies it.
+            return nil
+        }
+    }
+
+    private static func nodeName(
+        _ node: IAMNode,
+        hierarchy: HierarchyPersistence,
+        projects: ProjectsPersistence
+    ) async throws -> String? {
+        switch node.type {
+        case .organization:
+            return try await hierarchy.organization(id: node.id)?.name
+        case .organizationalUnit:
+            return try await hierarchy.organizationalUnit(id: node.id)?.organizationalUnit.name
+        case .project:
+            return try await projects.project(id: node.id)?.name
+        default:
             return nil
         }
     }

@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -19,23 +19,14 @@ import Vapor
 /// offboarding must neither leak into another's grants nor assume they don't
 /// exist.
 enum OffboardingSweep {
-    /// Run inside the same transaction that deletes the `UserOrganization`
+    /// Run inside the same transaction that deletes the organization-membership
     /// membership row.
-    static func userLeftOrganization(userID: UUID, organizationID: UUID, on db: Database) async throws {
-        // Memberships in the org's groups: group-derived grants must not
-        // outlive the org membership. Two steps deliberately — Fluent drops
-        // joins from DELETE statements, so a joined delete emits SQL Postgres
-        // rejects (`missing FROM-clause entry`).
-        let orgGroupIDs = try await Group.query(on: db)
-            .filter(\.$organization.$id == organizationID)
-            .all()
-            .compactMap(\.id)
-        if !orgGroupIDs.isEmpty {
-            try await UserGroup.query(on: db)
-                .filter(\.$user.$id == userID)
-                .filter(\.$group.$id ~~ orgGroupIDs)
-                .delete()
-        }
+    static func userLeftOrganization(userID: UUID, organizationID: UUID, on db: PostgresStoreContext) async throws {
+        // Keep this delete on the caller's existing transaction. Moving it to
+        // the native pool before organization memberships migrate would let
+        // one half commit without the other.
+        try await LegacyGroupSQLBridge.removeMemberships(
+            userID: userID, inOrganization: organizationID, on: db)
 
         try await RoleBindingService.revokeAll(
             principalType: .user,

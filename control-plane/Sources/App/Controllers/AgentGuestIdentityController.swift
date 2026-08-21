@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import SPIREServerAPI
 import StratoShared
@@ -27,6 +27,22 @@ enum GuestIdentityRefusal: String, Sendable {
 /// proving that the authenticated agent currently hosts the named VM.
 struct AgentGuestIdentityController: RouteCollection {
     private static let unavailableReason = "No guest identity is available for this VM"
+    private let hierarchy: HierarchyPersistence
+    private let trustDomains: OrgTrustDomainsPersistence
+    private let workloads: WorkloadsPersistence
+    private let database: PostgresStoreContext
+
+    init(
+        hierarchy: HierarchyPersistence,
+        trustDomains: OrgTrustDomainsPersistence,
+        workloads: WorkloadsPersistence,
+        database: PostgresStoreContext
+    ) {
+        self.hierarchy = hierarchy
+        self.trustDomains = trustDomains
+        self.workloads = workloads
+        self.database = database
+    }
 
     func boot(routes: any RoutesBuilder) throws {
         routes.post("agent", "vms", ":vmID", "jwt-svid", use: mint)
@@ -44,7 +60,8 @@ struct AgentGuestIdentityController: RouteCollection {
 
         let authenticatedAgent: AuthenticatedAgent
         do {
-            authenticatedAgent = try await AgentMTLSAuthenticator.authenticateAgent(req: req)
+            authenticatedAgent = try await AgentMTLSAuthenticator.authenticateAgent(
+                req: req, workloads: workloads)
         } catch {
             Telemetry.recordGuestIdentityMint(outcome: GuestIdentityRefusal.unauthenticated.rawValue)
             throw error
@@ -71,10 +88,10 @@ struct AgentGuestIdentityController: RouteCollection {
         }
 
         guard
-            let agentRow = try await Agent.query(on: req.db)
-                .filter(\.$trustDomain == authenticatedAgent.identity.trustDomain)
-                .filter(\.$name == authenticatedAgent.identity.name)
-                .first(),
+            let agentRow = try await LegacyAgentStore.agents(
+                trustDomain: authenticatedAgent.identity.trustDomain,
+                name: authenticatedAgent.identity.name,
+                on: database).first,
             let agentID = agentRow.id
         else {
             throw await refusal(
@@ -87,7 +104,7 @@ struct AgentGuestIdentityController: RouteCollection {
                 organizationID: authenticatedAgent.organizationID)
         }
         let agentOrganizationID =
-            (try? await agentRow.rootOrganizationID(on: req.db))
+            (try? await agentRow.rootOrganizationID(on: database))
             ?? authenticatedAgent.organizationID
 
         guard let vmID = UUID(uuidString: rawVMID) else {
@@ -160,7 +177,7 @@ struct AgentGuestIdentityController: RouteCollection {
                 ttlSeconds: ttlSeconds)
         }
 
-        guard let vm = try await VM.find(vmID, on: req.db) else {
+        guard let vm = try await VM.find(vmID, on: database) else {
             throw await refusal(
                 .vmNotFound,
                 status: .notFound,
@@ -175,7 +192,7 @@ struct AgentGuestIdentityController: RouteCollection {
         }
 
         let vmOrganizationID =
-            await organizationID(for: vm, on: req.db)
+            await organizationID(for: vm, on: database)
             ?? agentOrganizationID
 
         guard vm.hypervisorId == agentID.uuidString else {
@@ -192,7 +209,7 @@ struct AgentGuestIdentityController: RouteCollection {
                 ttlSeconds: mintRequest.ttlSeconds)
         }
 
-        guard let registeredSPIFFEID = try await GuestIdentity.spiffeID(forVM: vmID, on: req.db)
+        guard let registeredSPIFFEID = try await GuestIdentity.spiffeID(forVM: vmID, on: database)
         else {
             throw await refusal(
                 .identityRevoked,
@@ -227,7 +244,10 @@ struct AgentGuestIdentityController: RouteCollection {
         let ttlSeconds = config.resolvedTTL(requested: mintRequest.ttlSeconds)
         guard
             let identity = SPIFFEIdentity(uri: registeredSPIFFEID),
-            let registry = OrgSPIREClientRegistry.fromApplication(req.application)
+            let registry = OrgSPIREClientRegistry.fromApplication(
+                req.application,
+                hierarchy: hierarchy,
+                trustDomains: trustDomains)
         else {
             throw await refusal(
                 .spireUnconfigured,
@@ -248,7 +268,7 @@ struct AgentGuestIdentityController: RouteCollection {
         do {
             guard
                 let resolved = try await registry.service(
-                    forTrustDomain: identity.trustDomain, on: req.db)
+                    forTrustDomain: identity.trustDomain)
             else {
                 throw Abort(
                     .serviceUnavailable,
@@ -353,8 +373,8 @@ struct AgentGuestIdentityController: RouteCollection {
         return response
     }
 
-    private func organizationID(for vm: VM, on db: any Database) async -> UUID? {
-        guard let project = try? await Project.find(vm.$project.id, on: db) else { return nil }
+    private func organizationID(for vm: VM, on db: PostgresStoreContext) async -> UUID? {
+        guard let project = try? await Project.find(vm.projectID, on: db) else { return nil }
         return try? await project.getRootOrganizationId(on: db)
     }
 

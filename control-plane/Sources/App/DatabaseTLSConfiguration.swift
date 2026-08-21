@@ -1,4 +1,3 @@
-import FluentPostgresDriver
 import NIOSSL
 import PostgresNIO
 import Vapor
@@ -58,18 +57,14 @@ enum DatabaseTLSConfigurationError: Error, CustomStringConvertible {
     }
 }
 
-/// Build the PostgreSQL TLS parameter from `DATABASE_TLS` (mode) and the
-/// optional `DATABASE_TLS_CA_CERT_PATH` (PEM CA bundle used to verify the
-/// server certificate). When no CA path is given, the system default trust
-/// store is used, which is correct for a database presenting a publicly-rooted
-/// or otherwise system-trusted certificate.
-func makeDatabaseTLS(configuration: ControlPlaneConfiguration, logger: Logger) throws
-    -> PostgresConnection.Configuration.TLS
+/// Native PostgresNIO client TLS uses `TLSConfiguration` directly rather than
+/// a driver-specific context.
+func makeNativeDatabaseTLS(configuration: ControlPlaneConfiguration, logger: Logger) throws
+    -> PostgresClient.Configuration.TLS
 {
     let mode = try DatabaseTLSMode.fromConfiguration(configuration)
     switch mode {
     case .disable:
-        logger.warning("Database TLS is disabled; connection credentials and data are sent in plain text")
         return .disable
     case .prefer, .require:
         var tlsConfiguration = TLSConfiguration.makeClientConfiguration()
@@ -79,11 +74,7 @@ func makeDatabaseTLS(configuration: ControlPlaneConfiguration, logger: Logger) t
             } catch {
                 throw DatabaseTLSConfigurationError.caCertificateLoadFailed(path: caPath, underlying: error)
             }
-            logger.info("Database TLS enabled (\(mode.rawValue)) with CA bundle from \(caPath)")
-        } else {
-            logger.info("Database TLS enabled (\(mode.rawValue)) using the system trust store")
         }
-        let sslContext = try NIOSSLContext(configuration: tlsConfiguration)
-        return mode == .prefer ? .prefer(sslContext) : .require(sslContext)
+        return mode == .prefer ? .prefer(tlsConfiguration) : .require(tlsConfiguration)
     }
 }

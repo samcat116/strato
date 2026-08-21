@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -28,9 +27,8 @@ final class AgentManifestQuarantineTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let admin = try await builder.createUser(
                 username: "manifestadmin",
                 email: "manifest@example.com",
@@ -39,8 +37,7 @@ final class AgentManifestQuarantineTests {
             )
             let org = try await builder.createOrganization(name: "Manifest Org")
             try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
-            admin.currentOrganizationId = org.id
-            try await admin.save(on: app.db)
+            try await admin.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
             let project = try await builder.createProject(
                 name: "Manifest Project", description: "STR-138", organization: org)
 
@@ -66,10 +63,10 @@ final class AgentManifestQuarantineTests {
             ),
             architecture: .x86_64,
             lastHeartbeat: Date()
-        )
-        agent.wireProtocolVersion = WireProtocol.currentVersion
-        agent.organizationScope = .organization(try org.requireID())
-        try await agent.save(on: app.db)
+        ).replacing(
+            wireProtocolVersion: .some(WireProtocol.currentVersion)
+        ).replacingOrganizationScope(.organization(try org.requireID()))
+        try await agent.save(on: app.testPostgres)
         return agent
     }
 
@@ -119,19 +116,19 @@ final class AgentManifestQuarantineTests {
             let agent = try await self.makeAgent(app: app, org: org, name: "mq-agent")
             let agentId = try agent.requireID().uuidString
 
-            let vm = try await builder.createVM(name: "deleting-vm", project: project)
+            var vm = try await builder.createVM(name: "deleting-vm", project: project)
             let vmID = try vm.requireID()
             vm.hypervisorId = agentId
             vm.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
             vm.setFixtureDesiredStatus(.absent)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             _ = try await app.observedStateApplier.apply(self.blindReport(agentId: agentId))
 
             // The guest may well still be running: the agent never got far
             // enough to tear anything down. Reaping the row here loses the
             // only record that it exists.
-            let survivor = try #require(try await VM.find(vmID, on: app.db))
+            let survivor = try #require(try await VM.find(vmID, on: app.testPostgres))
             #expect(survivor.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
         }
     }
@@ -142,15 +139,15 @@ final class AgentManifestQuarantineTests {
             let agent = try await self.makeAgent(app: app, org: org, name: "mq-agent")
             let agentId = try agent.requireID().uuidString
 
-            let vm = try await builder.createVM(name: "live-vm", project: project)
+            var vm = try await builder.createVM(name: "live-vm", project: project)
             let vmID = try vm.requireID()
             vm.hypervisorId = agentId
             vm.setStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             _ = try await app.observedStateApplier.apply(self.blindReport(agentId: agentId))
 
-            let unchanged = try #require(try await VM.find(vmID, on: app.db))
+            let unchanged = try #require(try await VM.find(vmID, on: app.testPostgres))
             #expect(unchanged.status == .running)
         }
     }
@@ -166,9 +163,7 @@ final class AgentManifestQuarantineTests {
 
             // No claims either way: a host that cannot see itself cannot tell
             // the control plane that anything is a stray.
-            let claims = try await AgentWorkloadClaim.query(on: app.db)
-                .filter(\.$agentId == agentId)
-                .all()
+            let claims = try await app.workloadsPersistence.claims(agentID: agentId)
             #expect(claims.isEmpty)
         }
     }
@@ -185,7 +180,7 @@ final class AgentManifestQuarantineTests {
                 try MessageEnvelope(message: self.blindReport(agentId: agentId)),
                 fromAgentKey: agent.identity.key)
 
-            var row = try #require(await Agent.find(agent.id, on: app.db))
+            var row = try #require(await Agent.find(agent.id, on: app.testPostgres))
             #expect(row.manifestInventoryComplete == false)
             #expect(row.manifestStatusReason?.contains("not a readable manifest object") == true)
             #expect(row.manifestStatusAt != nil)
@@ -199,7 +194,7 @@ final class AgentManifestQuarantineTests {
                 try MessageEnvelope(message: self.healthyReport(agentId: agentId)),
                 fromAgentKey: agent.identity.key)
 
-            row = try #require(await Agent.find(agent.id, on: app.db))
+            row = try #require(await Agent.find(agent.id, on: app.testPostgres))
             #expect(row.manifestStatusReason == nil)
             #expect(row.manifestStatusAt == nil)
             #expect(row.manifestInventoryComplete == nil)
@@ -212,11 +207,11 @@ final class AgentManifestQuarantineTests {
             let agent = try await self.makeAgent(app: app, org: org, name: "mq-agent")
             let agentId = try agent.requireID().uuidString
 
-            let vm = try await builder.createVM(name: "gone-vm", project: project)
+            var vm = try await builder.createVM(name: "gone-vm", project: project)
             let vmID = try vm.requireID()
             vm.hypervisorId = agentId
             vm.setStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             // The partial case: the manifest read fine, but one entry names a
             // backend this agent build has never heard of. The rest of the host
@@ -232,11 +227,11 @@ final class AgentManifestQuarantineTests {
                     message: self.healthyReport(agentId: agentId, manifestStatus: status)),
                 fromAgentKey: agent.identity.key)
 
-            let row = try #require(await Agent.find(agent.id, on: app.db))
+            let row = try #require(await Agent.find(agent.id, on: app.testPostgres))
             #expect(row.manifestInventoryComplete == true)
             #expect(row.manifestStatusReason?.contains("libvirt") == true)
 
-            let escalated = try #require(try await VM.find(vmID, on: app.db))
+            let escalated = try #require(try await VM.find(vmID, on: app.testPostgres))
             #expect(escalated.status == .error)
         }
     }

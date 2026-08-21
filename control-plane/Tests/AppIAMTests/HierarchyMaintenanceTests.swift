@@ -1,6 +1,5 @@
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import AppTestSupport
 
@@ -24,9 +23,8 @@ final class HierarchyMaintenanceTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let organization = try await builder.createOrganization(name: "Hierarchy Maintenance Org")
             let sysadmin = try await builder.createUser(
                 username: "hm-sysadmin", email: "hm-sysadmin@example.com", isSystemAdmin: true)
@@ -41,7 +39,7 @@ final class HierarchyMaintenanceTests {
                 engineering: engineering,
                 platform: platform,
                 project: project,
-                sysadminToken: try await sysadmin.generateAPIKey(on: app.db)
+                sysadminToken: try await sysadmin.generateAPIKey(on: app)
             )
             try await test(app, builder, fixture)
         } catch {
@@ -70,8 +68,9 @@ final class HierarchyMaintenanceTests {
         try await withApp { app, _, fx in
             // The drift a folder move used to leave behind: the project still
             // names an ancestor it no longer has.
-            fx.project.path = "/\(fx.organization.id!)/\(UUID())/\(fx.project.id!)"
-            try await fx.project.save(on: app.db)
+            try await fx.project.replacingPath(
+                "/\(fx.organization.id!)/\(UUID())/\(fx.project.id!)"
+            ).save(on: app.testPostgres)
 
             try await app.test(.GET, "/api/hierarchy/validate") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fx.sysadminToken)
@@ -95,11 +94,11 @@ final class HierarchyMaintenanceTests {
     @Test("A folder path that disagrees with its parent chain is reported")
     func staleFolderPathIsReported() async throws {
         try await withApp { app, _, fx in
-            fx.platform.path = "/\(fx.organization.id!)/\(fx.platform.id!)"
-            fx.platform.depth = 0
-            try await fx.platform.save(on: app.db)
+            try await fx.platform.replacingPath(
+                "/\(fx.organization.id!)/\(fx.platform.id!)", depth: 0
+            ).save(on: app.testPostgres)
 
-            let issues = try await HierarchyMaintenanceService.findHierarchyIssues(on: app.db)
+            let issues = try await HierarchyMaintenanceService.findHierarchyIssues(on: app.testPostgres)
             // The project beneath it is not reported: expected paths come from
             // the relational chain, not from what the folder happens to store,
             // and the project still extends the folder's derived path.
@@ -117,11 +116,12 @@ final class HierarchyMaintenanceTests {
             let correctFolderPath = fx.platform.path
             let correctProjectPath = fx.project.path
 
-            fx.platform.path = "/\(fx.organization.id!)/\(fx.platform.id!)"
-            fx.platform.depth = 0
-            try await fx.platform.save(on: app.db)
-            fx.project.path = "/\(fx.organization.id!)/\(fx.project.id!)"
-            try await fx.project.save(on: app.db)
+            try await fx.platform.replacingPath(
+                "/\(fx.organization.id!)/\(fx.platform.id!)", depth: 0
+            ).save(on: app.testPostgres)
+            try await fx.project.replacingPath(
+                "/\(fx.organization.id!)/\(fx.project.id!)"
+            ).save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/hierarchy/repair") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fx.sysadminToken)
@@ -138,8 +138,8 @@ final class HierarchyMaintenanceTests {
                 #expect(report.repairedIssues.count == 2)
             }
 
-            let platform = try #require(try await OrganizationalUnit.find(fx.platform.id!, on: app.db))
-            let project = try #require(try await Project.find(fx.project.id!, on: app.db))
+            let platform = try #require(try await OrganizationalUnit.find(fx.platform.id!, on: app.testPostgres))
+            let project = try #require(try await Project.find(fx.project.id!, on: app.testPostgres))
             #expect(platform.path == correctFolderPath)
             #expect(platform.depth == 1)
             #expect(project.path == correctProjectPath)
@@ -150,8 +150,7 @@ final class HierarchyMaintenanceTests {
     func repairRespectsOptions() async throws {
         try await withApp { app, _, fx in
             let drifted = "/\(fx.organization.id!)/\(fx.project.id!)"
-            fx.project.path = drifted
-            try await fx.project.save(on: app.db)
+            try await fx.project.replacingPath(drifted).save(on: app.testPostgres)
 
             // A body naming only `repairAll` decodes: every option defaults off.
             try await app.test(.POST, "/api/hierarchy/repair") { req in
@@ -167,7 +166,7 @@ final class HierarchyMaintenanceTests {
                 #expect(!report.success)
             }
 
-            let project = try #require(try await Project.find(fx.project.id!, on: app.db))
+            let project = try #require(try await Project.find(fx.project.id!, on: app.testPostgres))
             #expect(project.path == drifted)
         }
     }
@@ -178,10 +177,10 @@ final class HierarchyMaintenanceTests {
             let other = try await builder.createProject(
                 name: "other", description: "", ou: fx.engineering)
             let otherDrifted = "/\(fx.organization.id!)/\(other.id!)"
-            other.path = otherDrifted
-            try await other.save(on: app.db)
-            fx.project.path = "/\(fx.organization.id!)/\(fx.project.id!)"
-            try await fx.project.save(on: app.db)
+            try await other.replacingPath(otherDrifted).save(on: app.testPostgres)
+            try await fx.project.replacingPath(
+                "/\(fx.organization.id!)/\(fx.project.id!)"
+            ).save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/hierarchy/repair") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fx.sysadminToken)
@@ -199,7 +198,7 @@ final class HierarchyMaintenanceTests {
                 #expect(!report.success)
             }
 
-            let untouched = try #require(try await Project.find(other.id!, on: app.db))
+            let untouched = try #require(try await Project.find(other.id!, on: app.testPostgres))
             #expect(untouched.path == otherDrifted)
         }
     }
@@ -213,12 +212,17 @@ final class HierarchyMaintenanceTests {
             let left = try await builder.createOU(name: "left", description: "", organization: fx.organization)
             let right = try await builder.createOU(
                 name: "right", description: "", organization: fx.organization, parentOU: left)
-            left.$parentOU.id = right.id
-            try await left.save(on: app.db)
+            try await OrganizationalUnit(
+                id: left.id, name: left.name, description: left.description,
+                organizationID: left.organizationID, parentOUID: right.id,
+                path: left.path, depth: left.depth,
+                createdAt: left.createdAt, updatedAt: left.updatedAt
+            ).save(on: app.testPostgres)
 
             let correct = fx.project.path
-            fx.project.path = "/\(fx.organization.id!)/\(fx.project.id!)"
-            try await fx.project.save(on: app.db)
+            try await fx.project.replacingPath(
+                "/\(fx.organization.id!)/\(fx.project.id!)"
+            ).save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/hierarchy/repair") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fx.sysadminToken)
@@ -234,7 +238,7 @@ final class HierarchyMaintenanceTests {
             }
 
             // The repairable half still got repaired.
-            let project = try #require(try await Project.find(fx.project.id!, on: app.db))
+            let project = try #require(try await Project.find(fx.project.id!, on: app.testPostgres))
             #expect(project.path == correct)
         }
     }
@@ -244,11 +248,11 @@ final class HierarchyMaintenanceTests {
         try await withApp { app, _, fx in
             // Reachable: both columns are nullable and no check constraint
             // forbids the pair, so only `Project.validate()` stands in the way.
-            fx.project.$organizationalUnit.id = nil
-            fx.project.$organization.id = nil
-            try await fx.project.save(on: app.db)
+            try await fx.project.replacingScope(
+                organizationID: nil, organizationalUnitID: nil
+            ).save(on: app.testPostgres)
 
-            let issues = try await HierarchyMaintenanceService.findHierarchyIssues(on: app.db)
+            let issues = try await HierarchyMaintenanceService.findHierarchyIssues(on: app.testPostgres)
             #expect(issues.count == 1)
             let issue = try #require(issues.first)
             #expect(issue.type == "orphaned_resource")
@@ -259,7 +263,7 @@ final class HierarchyMaintenanceTests {
 
             // Nothing to derive a path from, so a full repair leaves it alone.
             let report = try await HierarchyMaintenanceService.performHierarchyRepair(
-                repairRequest: .init(repairAll: true, repairOptions: .init(rebuildPaths: true)), on: app.db)
+                repairRequest: .init(repairAll: true, repairOptions: .init(rebuildPaths: true)), on: app.testPostgres)
             #expect(report.repairedIssues.isEmpty)
             #expect(!report.success)
         }
@@ -271,10 +275,14 @@ final class HierarchyMaintenanceTests {
             // Nothing in the schema forbids this: the foreign key only requires
             // the parent row to exist, so engineering ⇄ platform is storable and
             // the path derivation has to terminate on it.
-            fx.engineering.$parentOU.id = fx.platform.id
-            try await fx.engineering.save(on: app.db)
+            try await OrganizationalUnit(
+                id: fx.engineering.id, name: fx.engineering.name, description: fx.engineering.description,
+                organizationID: fx.engineering.organizationID, parentOUID: fx.platform.id,
+                path: fx.engineering.path, depth: fx.engineering.depth,
+                createdAt: fx.engineering.createdAt, updatedAt: fx.engineering.updatedAt
+            ).save(on: app.testPostgres)
 
-            let issues = try await HierarchyMaintenanceService.findHierarchyIssues(on: app.db)
+            let issues = try await HierarchyMaintenanceService.findHierarchyIssues(on: app.testPostgres)
             #expect(issues.count == 2)
             #expect(issues.allSatisfy { $0.type == "circular_reference" })
             #expect(issues.allSatisfy { $0.severity == "critical" })
@@ -287,21 +295,22 @@ final class HierarchyMaintenanceTests {
     func maintenanceRepairRebuildsDrift() async throws {
         try await withApp { app, _, fx in
             let correct = fx.project.path
-            fx.project.path = "/\(fx.organization.id!)/\(UUID())/\(fx.project.id!)"
-            try await fx.project.save(on: app.db)
+            try await fx.project.replacingPath(
+                "/\(fx.organization.id!)/\(UUID())/\(fx.project.id!)"
+            ).save(on: app.testPostgres)
 
             let request = HierarchyRepairRequest(
                 repairAll: true, repairOptions: .init(rebuildPaths: true))
             let first = try await HierarchyMaintenanceService.performHierarchyRepair(
-                repairRequest: request, on: app.db)
+                repairRequest: request, on: app.testPostgres)
             let second = try await HierarchyMaintenanceService.performHierarchyRepair(
-                repairRequest: request, on: app.db)
+                repairRequest: request, on: app.testPostgres)
             #expect(first.repairedIssues.count == 1)
             #expect(second.repairedIssues.isEmpty)
 
-            let project = try #require(try await Project.find(fx.project.id!, on: app.db))
+            let project = try #require(try await Project.find(fx.project.id!, on: app.testPostgres))
             #expect(project.path == correct)
-            #expect(try await HierarchyMaintenanceService.findHierarchyIssues(on: app.db).isEmpty)
+            #expect(try await HierarchyMaintenanceService.findHierarchyIssues(on: app.testPostgres).isEmpty)
         }
     }
 
@@ -310,7 +319,7 @@ final class HierarchyMaintenanceTests {
         try await withApp { app, builder, fx in
             let member = try await builder.createUser(username: "hm-member", email: "hm-member@example.com")
             try await builder.addUserToOrganization(user: member, organization: fx.organization, role: "admin")
-            let token = try await member.generateAPIKey(on: app.db)
+            let token = try await member.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/hierarchy/validate") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)

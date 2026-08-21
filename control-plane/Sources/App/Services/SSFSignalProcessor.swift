@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import SwiftSSF
 import Vapor
@@ -25,6 +25,9 @@ import Vapor
 /// same SET.
 struct SSFSignalProcessor: SSFEventHandler {
     let app: Application
+    let apiKeys: APIKeysPersistence
+    let streams: SSFStreamsPersistence
+    let userSecurity: UserSecurityPersistence
     let streamID: UUID
     let organizationID: UUID
 
@@ -97,7 +100,7 @@ struct SSFSignalProcessor: SSFEventHandler {
                     metadata: [
                         "jti": token.payload.jti,
                         "eventType": type,
-                        "targetUserID": user.id?.uuidString ?? "",
+                        "targetUserID": user.id.uuidString,
                     ])
             }
         } catch {
@@ -114,41 +117,32 @@ struct SSFSignalProcessor: SSFEventHandler {
 
     // MARK: - Actions
 
-    private func revokeSessions(of user: User, eventType: String) async throws {
-        user.sessionEpoch += 1
-        try await user.save(on: app.db)
-        await audit("ssf.sessions_revoked", user: user, eventType: eventType)
+    private func revokeSessions(of user: UserSecuritySnapshot, eventType: String) async throws {
+        guard let updated = try await userSecurity.revokeSessions(userID: user.id) else { return }
+        await audit("ssf.sessions_revoked", user: updated, eventType: eventType)
     }
 
-    private func deactivateAPIKeys(of user: User, eventType: String) async throws {
-        let keys = try await APIKey.query(on: app.db)
-            .filter(\.$user.$id == user.requireID())
-            .filter(\.$isActive == true)
-            .all()
-        guard !keys.isEmpty else { return }
-        for key in keys {
-            key.isActive = false
-            try await key.save(on: app.db)
-        }
+    private func deactivateAPIKeys(of user: UserSecuritySnapshot, eventType: String) async throws {
+        let count = try await apiKeys.deactivateAll(userID: user.id)
+        guard count > 0 else { return }
         await audit(
             "ssf.api_keys_deactivated", user: user, eventType: eventType,
-            extra: ["deactivatedKeys": "\(keys.count)"])
+            extra: ["deactivatedKeys": "\(count)"])
     }
 
-    private func disable(_ user: User, eventType: String) async throws {
-        if user.disabledAt == nil {
-            user.disabledAt = Date()
-        }
-        user.sessionEpoch += 1
-        try await user.save(on: app.db)
-        await audit("ssf.user_disabled", user: user, eventType: eventType)
+    private func disable(_ user: UserSecuritySnapshot, eventType: String) async throws {
+        guard
+            let updated = try await userSecurity.disable(
+                userID: user.id,
+                disabledAt: Date()
+            )
+        else { return }
+        await audit("ssf.user_disabled", user: updated, eventType: eventType)
     }
 
-    private func enable(_ user: User, eventType: String) async throws {
-        guard user.disabledAt != nil else { return }
-        user.disabledAt = nil
-        try await user.save(on: app.db)
-        await audit("ssf.user_enabled", user: user, eventType: eventType)
+    private func enable(_ user: UserSecuritySnapshot, eventType: String) async throws {
+        guard let updated = try await userSecurity.enable(userID: user.id) else { return }
+        await audit("ssf.user_enabled", user: updated, eventType: eventType)
     }
 
     // MARK: - Subject resolution
@@ -156,7 +150,10 @@ struct SSFSignalProcessor: SSFEventHandler {
     /// Resolve the SET's subject to a user, requiring membership in the
     /// stream's organization: a transmitter configured for one org must never
     /// act on another org's users.
-    private func resolveSubject(for eventType: String, in token: SecurityEventToken) async throws -> User? {
+    private func resolveSubject(
+        for eventType: String,
+        in token: SecurityEventToken
+    ) async throws -> UserSecuritySnapshot? {
         var subject = token.payload.sub_id
         if subject == nil, let claims = token.payload.events[eventType] {
             // RISC-style SETs may carry the subject inside the event payload
@@ -164,28 +161,26 @@ struct SSFSignalProcessor: SSFEventHandler {
             subject = decodeSubject(claims["subject"]) ?? decodeSubject(claims["sub_id"])
         }
         guard let subject else { return nil }
-        guard let user = try await findUser(matching: subject) else { return nil }
-
-        let membership = try await UserOrganization.query(on: app.db)
-            .filter(\.$user.$id == user.requireID())
-            .filter(\.$organization.$id == organizationID)
-            .first()
-        return membership != nil ? user : nil
+        return try await findUser(matching: subject)
     }
 
-    private func findUser(matching subject: SubjectIdentifier) async throws -> User? {
+    private func findUser(matching subject: SubjectIdentifier) async throws -> UserSecuritySnapshot? {
         switch subject.format {
         case "email":
             guard let email = subject.string("email") else { return nil }
-            return try await User.query(on: app.db)
-                .filter(\.$email == email)
-                .first()
+            return try await userSecurity.organizationMember(
+                email: email,
+                organizationID: organizationID
+            )
 
         case "opaque":
             // Opaque ids are only meaningful when the transmitter echoes our
             // own user ids back (e.g. subjects we added to the stream).
             guard let raw = subject.string("id"), let id = UUID(uuidString: raw) else { return nil }
-            return try await User.find(id, on: app.db)
+            return try await userSecurity.organizationMember(
+                id: id,
+                organizationID: organizationID
+            )
 
         case "iss_sub":
             // OIDC subs are only unique per issuer, so the lookup must be
@@ -193,17 +188,14 @@ struct SSFSignalProcessor: SSFEventHandler {
             // organization and be for the subject's issuer. Ambiguity fails
             // safe (no action).
             guard let sub = subject.string("sub"), let iss = subject.string("iss") else { return nil }
-            let candidates = try await User.query(on: app.db)
-                .filter(\.$oidcSubject == sub)
-                .with(\.$oidcProvider)
-                .all()
-            let matches = candidates.filter { user in
-                guard let provider = user.oidcProvider,
-                    provider.$organization.id == organizationID
-                else { return false }
-                return Self.providerMatchesIssuer(provider, issuer: iss)
+            let candidates = try await userSecurity.oidcOrganizationMembers(
+                subject: sub,
+                organizationID: organizationID
+            )
+            let matches = candidates.filter { candidate in
+                Self.providerMatchesIssuer(candidate, issuer: iss)
             }
-            return matches.count == 1 ? matches.first : nil
+            return matches.count == 1 ? matches.first?.user : nil
 
         case "complex":
             guard let userSubject = subject.subject("user") else { return nil }
@@ -227,7 +219,10 @@ struct SSFSignalProcessor: SSFEventHandler {
     /// store the issuer directly, but every configured endpoint lives under
     /// it: the discovery URL is `<issuer>/.well-known/openid-configuration`,
     /// and the authorization/token/JWKS endpoints are issuer-rooted.
-    static func providerMatchesIssuer(_ provider: OIDCProvider, issuer: String) -> Bool {
+    static func providerMatchesIssuer(
+        _ provider: OIDCUserSecurityCandidate,
+        issuer: String
+    ) -> Bool {
         let normalizedIssuer = issuer.hasSuffix("/") ? String(issuer.dropLast()) : issuer
         let endpoints = [
             provider.discoveryURL, provider.authorizationEndpoint,
@@ -256,16 +251,11 @@ struct SSFSignalProcessor: SSFEventHandler {
     // MARK: - Stream row updates
 
     private func touchStream() async {
-        guard let stream = try? await SSFStream.find(streamID, on: app.db) else { return }
-        stream.lastEventAt = Date()
-        stream.lastError = nil
-        try? await stream.save(on: app.db)
+        _ = try? await streams.recordEvent(id: streamID, at: Date())
     }
 
     private func markStreamVerified() async {
-        guard let stream = try? await SSFStream.find(streamID, on: app.db) else { return }
-        stream.verifiedAt = Date()
-        try? await stream.save(on: app.db)
+        guard (try? await streams.markVerified(id: streamID, at: Date())) == true else { return }
         await audit("ssf.stream_verified", metadata: [:])
     }
 
@@ -284,10 +274,15 @@ struct SSFSignalProcessor: SSFEventHandler {
             ))
     }
 
-    private func audit(_ type: String, user: User, eventType: String, extra: [String: String] = [:]) async {
+    private func audit(
+        _ type: String,
+        user: UserSecuritySnapshot,
+        eventType: String,
+        extra: [String: String] = [:]
+    ) async {
         var metadata = extra
         metadata["eventType"] = eventType
-        metadata["targetUserID"] = user.id?.uuidString ?? ""
+        metadata["targetUserID"] = user.id.uuidString
         metadata["targetUsername"] = user.username
         await audit(type, metadata: metadata)
     }

@@ -1,205 +1,78 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
-import Fluent
 
 struct ResourceQuotaController: RouteCollection {
+    let quotas: ResourceQuotasPersistence
+    let hierarchy: HierarchyPersistence
+    let iam: IAMPersistence
+    let projects: ProjectsPersistence
+
     func boot(routes: RoutesBuilder) throws {
-        // Global quota routes
         let quotas = routes.grouped("api", "quotas")
-        quotas.get(use: indexByLevel)  // Add route for /quotas?level=...
+        quotas.get(use: indexByLevel)
         quotas.group(":quotaID") { quota in
             quota.get(use: show)
             quota.put(use: update)
             quota.delete(use: delete)
             quota.get("usage", use: getUsage)
         }
-
-        // Organization context routes
-        let organizations = routes.grouped("api", "organizations")
-        organizations.group(":organizationID") { org in
-            let orgQuotas = org.grouped("quotas")
-            orgQuotas.get(use: indexForOrganization)
-            orgQuotas.post(use: createForOrganization)
-
-            // OU context routes
-            org.group("ous", ":ouID", "quotas") { ouQuotas in
-                ouQuotas.get(use: indexForOU)
-                ouQuotas.post(use: createForOU)
+        routes.grouped("api", "organizations").group(":organizationID") { organization in
+            organization.group("quotas") { scoped in
+                scoped.get(use: indexForOrganization)
+                scoped.post(use: createForOrganization)
+            }
+            organization.group("ous", ":ouID", "quotas") { scoped in
+                scoped.get(use: indexForOU)
+                scoped.post(use: createForOU)
             }
         }
-
-        // Project context routes
-        let projects = routes.grouped("api", "projects")
-        projects.group(":projectID", "quotas") { projQuotas in
-            projQuotas.get(use: indexForProject)
-            projQuotas.post(use: createForProject)
+        routes.grouped("api", "projects").group(":projectID", "quotas") { scoped in
+            scoped.get(use: indexForProject)
+            scoped.post(use: createForProject)
         }
     }
 
-    // MARK: - Resource Quota CRUD Operations
-
-    /// Query params: level (optional),
-    /// limit/offset (optional) — select the page.
     func indexByLevel(req: Request) async throws -> PagedResponse<ResourceQuotaResponse> {
         let paging = try ListPaging.decode(from: req)
-        let quotas = try await visibleQuotas(req: req)
-        return paging.page(quotas)
-    }
-
-    /// Every quota hanging on a scope the caller may read, by name, ready for
-    /// slicing.
-    ///
-    /// `readableQuotas` below is the gate; everything here is only the bound
-    /// that runs before it. Which matters because the two must not be derived
-    /// from the same thing: a bound taken from membership rows silently decides
-    /// too, by never putting a row in front of the evaluator. Project rows are
-    /// therefore bounded by the caller's *grants* (`ProjectVisibility`, as every
-    /// other project-scoped list does), so a caller whose only grant is a
-    /// binding on a project — with no `user_organizations` row for that
-    /// project's organization — still reaches that project's quota. Org and
-    /// folder rows keep the membership bound, because `readableQuotas` decides
-    /// both on `org:read` of the owning organization and no wider bound would
-    /// survive that.
-    func visibleQuotas(req: Request) async throws -> [ResourceQuotaResponse] {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
+        guard let user = req.auth.get(User.self) else { throw Abort(.unauthorized) }
+        let organizations = try await hierarchy.organizations(forUser: user.requireID())
+        let organizationIDs = organizations.map(\.organization.id)
+        let organizationalUnitIDs = try await hierarchy.organizationalUnitIDs(
+            organizationIDs: organizationIDs
+        )
+        let visibility = try await ProjectVisibility.resolve(on: req, using: iam, projects: projects)
+        let candidates = try await quotas.visibleCandidates(
+            organizationIDs: organizationIDs,
+            organizationalUnitIDs: organizationalUnitIDs,
+            projectIDs: visibility.candidateProjectIDs,
+            level: req.query[String.self, at: "level"]
+        )
+        var readable: [ResourceQuotaResponse] = []
+        readable.reserveCapacity(candidates.count)
+        for quota in candidates {
+            guard let node = measuredNode(of: quota), try await req.can("quota:read", on: node) else {
+                continue
+            }
+            readable.append(ResourceQuotaResponse(from: quota))
         }
-
-        let level = req.query[String.self, at: "level"]
-
-        // Get all organizations the user belongs to
-        try await user.$organizations.load(on: req.db)
-        let organizationIDs = user.organizations.compactMap { $0.id }
-
-        let ouIDs =
-            organizationIDs.isEmpty
-            ? []
-            : try await OrganizationalUnit.query(on: req.db)
-                .filter(\.$organization.$id ~~ organizationIDs)
-                .all()
-                .compactMap { $0.id }
-
-        // The projects the caller's own grants reach. Nil means "no bound"
-        // (a system admin, an unbounded authored permit), not "everything is
-        // visible" — those rows are still decided below.
-        let visibility = try await ProjectVisibility.resolve(on: req)
-
-        var query = ResourceQuota.query(on: req.db)
-
-        switch level {
-        case "organization":
-            if organizationIDs.isEmpty {
-                return []
-            }
-            query = query.filter(\.$organization.$id ~~ organizationIDs)
-                .filter(\.$organizationalUnit.$id == nil)
-                .filter(\.$project.$id == nil)
-        case "project":
-            if visibility.reachesNoProject {
-                return []
-            }
-            query = query.filter(\.$project.$id != nil)
-            if let candidates = visibility.candidateProjectIDs {
-                query = query.filter(\.$project.$id ~~ candidates)
-            }
-        case "organizational_unit":
-            if ouIDs.isEmpty {
-                return []
-            }
-            query = query.filter(\.$organizationalUnit.$id ~~ ouIDs)
-                .filter(\.$project.$id == nil)
-        default:
-            // Every level at once. Folder- and project-scoped rows used to be
-            // dropped here (a standing TODO) because nothing decided them; now
-            // that `readableQuotas` decides each one they belong in the
-            // unfiltered list.
-            if organizationIDs.isEmpty, ouIDs.isEmpty, visibility.reachesNoProject {
-                return []
-            }
-            query = query.group(.or) { anyQuota in
-                if !organizationIDs.isEmpty {
-                    anyQuota.filter(\.$organization.$id ~~ organizationIDs)
-                }
-                if !ouIDs.isEmpty {
-                    anyQuota.filter(\.$organizationalUnit.$id ~~ ouIDs)
-                }
-                if let candidates = visibility.candidateProjectIDs {
-                    if !candidates.isEmpty {
-                        anyQuota.filter(\.$project.$id ~~ candidates)
-                    }
-                } else {
-                    anyQuota.filter(\.$project.$id != nil)
-                }
-            }
-        }
-
-        let quotas = try await query.sort(\.$name).sort(\.$id).all()
-        return try await readableQuotas(quotas, on: req).map { ResourceQuotaResponse(from: $0) }
-    }
-
-    /// Drop the quota rows the caller may not read, deciding each through the
-    /// evaluator exactly as the matching item route (`verifyQuotaAccess`) does.
-    ///
-    /// The membership filters above only bound the candidate set to the
-    /// caller's organizations; they are not the item route's gate. Each scope
-    /// goes through its own decision here (STR-116), so a guardrail forbid or a
-    /// revoked binding narrows the list the same way it narrows the object read
-    /// — otherwise the list keeps showing a quota the item route now 403s.
-    ///
-    /// The question is `quota:read` on the node the row hangs on, for every
-    /// scope. It was `org:read` for org- and folder-scoped rows, matching the
-    /// `requireMember` the item route then used; both moved together, because
-    /// the row ships `usage`/`utilization` — the scope's measured consumption —
-    /// and bare membership must not reach it. See ``QuotaVisibility``.
-    ///
-    /// A scopeless row is never in the input — the queries above always filter
-    /// on a scope FK — but is dropped defensively; the item route requires
-    /// system admin for one.
-    private func readableQuotas(_ quotas: [ResourceQuota], on req: Request) async throws
-        -> [ResourceQuota]
-    {
-        try await QuotaVisibility.readable(quotas, on: req)
+        return paging.page(readable)
     }
 
     func show(req: Request) async throws -> ResourceQuotaResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let quotaID = req.parameters.get("quotaID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid quota ID")
-        }
-
-        guard let quota = try await ResourceQuota.find(quotaID, on: req.db) else {
-            throw Abort(.notFound, reason: "Resource quota not found")
-        }
-
-        // Verify user has access to quota
-        try await verifyQuotaAccess(quota: quota, on: req)
-
+        _ = try req.auth.require(User.self)
+        let quota = try await requireQuota(req)
+        try await verifyRead(quota, req: req)
         return ResourceQuotaResponse(from: quota)
     }
 
     func update(req: Request) async throws -> ResourceQuotaResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let quotaID = req.parameters.get("quotaID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid quota ID")
-        }
-
-        let updateRequest = try req.content.decodeValidated(UpdateResourceQuotaRequest.self)
-
-        guard let quota = try await ResourceQuota.find(quotaID, on: req.db) else {
-            throw Abort(.notFound, reason: "Resource quota not found")
-        }
-
-        // Verify user has admin access to quota
-        try await verifyQuotaAdminAccess(quota: quota, on: req)
-
-        if quota.environment != nil,
-            updateRequest.maxNetworks != nil || updateRequest.maxLoadBalancers != nil
+        _ = try req.auth.require(User.self)
+        let existing = try await requireQuota(req)
+        try await verifyAdmin(existing, req: req)
+        let request = try req.content.decodeValidated(UpdateResourceQuotaRequest.self)
+        if existing.environment != nil,
+            request.maxNetworks != nil || request.maxLoadBalancers != nil
         {
             throw Abort(
                 .badRequest,
@@ -208,535 +81,308 @@ struct ResourceQuotaController: RouteCollection {
             )
         }
 
-        // Measure the scope before evaluating the "not below current usage" guards
-        // below. The stored counters are only a cache of the last resync — zero for
-        // any quota row nothing has resynced yet — so reading them let an admin set
-        // a limit under real usage (issue #742). The refreshed figures are persisted
-        // by the `save` at the end, healing the row on the way past. A concurrent
-        // create can land between the measurement and the save, but admission
-        // always resyncs before it checks, so a momentarily low cache can't
-        // over-commit anything.
-        try await QuotaEnforcementService.resyncReservations(quota, on: req.db)
+        let usage = try await quotas.measure(existing)
+        let maxVCPUs = request.maxVCPUs ?? existing.maxVCPUs
+        let maxMemory = request.maxMemoryGB?.gbToBytes ?? existing.maxMemory
+        let maxStorage = request.maxStorageGB?.gbToBytes ?? existing.maxStorage
+        let maxVMs = request.maxVMs ?? existing.maxVMs
+        let maxSandboxes = request.maxSandboxes ?? existing.maxSandboxes
+        let maxVolumes = request.maxVolumes.map { $0 == 0 ? nil : $0 } ?? existing.maxVolumes
+        let maxNetworks = request.maxNetworks ?? existing.maxNetworks
+        let maxLoadBalancers = request.maxLoadBalancers ?? existing.maxLoadBalancers
 
-        // Update fields
-        if let name = updateRequest.name {
-            quota.name = name
+        try validateLimits(
+            maxVCPUs: maxVCPUs, maxMemory: maxMemory, maxStorage: maxStorage,
+            maxVMs: maxVMs, maxSandboxes: maxSandboxes, maxVolumes: maxVolumes,
+            maxNetworks: maxNetworks, maxLoadBalancers: maxLoadBalancers
+        )
+        try requireNotBelowUsage(
+            usage, request: request, maxVCPUs: maxVCPUs, maxMemory: maxMemory,
+            maxStorage: maxStorage, maxVMs: maxVMs, maxSandboxes: maxSandboxes,
+            maxVolumes: maxVolumes, maxNetworks: maxNetworks,
+            maxLoadBalancers: maxLoadBalancers
+        )
+
+        let name = request.name ?? existing.name
+        if try await quotas.nameExists(
+            name: name,
+            organizationID: existing.organizationID,
+            organizationalUnitID: existing.organizationalUnitID,
+            projectID: existing.projectID,
+            environment: existing.environment,
+            excluding: existing.id
+        ) {
+            throw duplicateName(environment: existing.environment)
         }
-
-        if let maxVCPUs = updateRequest.maxVCPUs {
-            // Ensure new limit isn't below current reservation
-            if maxVCPUs < quota.reservedVCPUs {
-                throw Abort(
-                    .badRequest,
-                    reason: "New vCPU limit (\(maxVCPUs)) cannot be below current reservation (\(quota.reservedVCPUs))")
+        let write = ResourceQuotaWrite(
+            id: existing.id, name: name,
+            organizationID: existing.organizationID,
+            organizationalUnitID: existing.organizationalUnitID,
+            projectID: existing.projectID,
+            maxVCPUs: maxVCPUs, maxMemory: maxMemory, maxStorage: maxStorage,
+            maxVMs: maxVMs, maxSandboxes: maxSandboxes, maxVolumes: maxVolumes,
+            maxNetworks: maxNetworks, maxLoadBalancers: maxLoadBalancers,
+            isEnabled: request.isEnabled ?? existing.isEnabled,
+            environment: existing.environment
+        )
+        do {
+            guard let updated = try await quotas.replace(write, usage: usage) else {
+                throw Abort(.notFound, reason: "Resource quota not found")
             }
-            quota.maxVCPUs = maxVCPUs
+            return ResourceQuotaResponse(from: updated)
+        } catch ResourceQuotaPersistenceError.duplicateName {
+            throw duplicateName(environment: existing.environment)
         }
-
-        if let maxMemoryGB = updateRequest.maxMemoryGB {
-            let maxMemoryBytes = maxMemoryGB.gbToBytes
-            if maxMemoryBytes < quota.reservedMemory {
-                let currentReservedGB = Double(quota.reservedMemory) / 1024 / 1024 / 1024
-                throw Abort(
-                    .badRequest,
-                    reason:
-                        "New memory limit (\(String(format: "%.2f", maxMemoryGB))GiB) cannot be below current reservation (\(String(format: "%.2f", currentReservedGB))GiB)"
-                )
-            }
-            quota.maxMemory = maxMemoryBytes
-        }
-
-        if let maxStorageGB = updateRequest.maxStorageGB {
-            let maxStorageBytes = maxStorageGB.gbToBytes
-            if maxStorageBytes < quota.reservedStorage {
-                let currentReservedGB = Double(quota.reservedStorage) / 1024 / 1024 / 1024
-                throw Abort(
-                    .badRequest,
-                    reason:
-                        "New storage limit (\(String(format: "%.2f", maxStorageGB))GiB) cannot be below current reservation (\(String(format: "%.2f", currentReservedGB))GiB)"
-                )
-            }
-            quota.maxStorage = maxStorageBytes
-        }
-
-        if let maxVMs = updateRequest.maxVMs {
-            if maxVMs < quota.vmCount {
-                throw Abort(
-                    .badRequest, reason: "New VM limit (\(maxVMs)) cannot be below current count (\(quota.vmCount))")
-            }
-            quota.maxVMs = maxVMs
-        }
-
-        if let maxSandboxes = updateRequest.maxSandboxes {
-            if maxSandboxes < quota.sandboxCount {
-                throw Abort(
-                    .badRequest,
-                    reason:
-                        "New sandbox limit (\(maxSandboxes)) cannot be below current count (\(quota.sandboxCount))")
-            }
-            quota.maxSandboxes = maxSandboxes
-        }
-
-        // The one limit that can be *removed*, so `0` is the sentinel for that
-        // (STR-181) — omission still means "leave it alone", as everywhere else
-        // here. Setting one is floored at the measured count like the other two.
-        if let maxVolumes = updateRequest.maxVolumes {
-            if maxVolumes == 0 {
-                quota.maxVolumes = nil
-            } else {
-                if maxVolumes < quota.volumeCount {
-                    throw Abort(
-                        .badRequest,
-                        reason:
-                            "New volume limit (\(maxVolumes)) cannot be below current count (\(quota.volumeCount))")
-                }
-                quota.maxVolumes = maxVolumes
-            }
-        }
-
-        if let maxNetworks = updateRequest.maxNetworks {
-            if maxNetworks < quota.networkCount {
-                throw Abort(
-                    .badRequest,
-                    reason:
-                        "New network limit (\(maxNetworks)) cannot be below current count (\(quota.networkCount))")
-            }
-            quota.maxNetworks = maxNetworks
-        }
-
-        if let maxLoadBalancers = updateRequest.maxLoadBalancers {
-            if maxLoadBalancers < quota.loadBalancerCount {
-                throw Abort(
-                    .badRequest,
-                    reason:
-                        "New load balancer limit (\(maxLoadBalancers)) cannot be below current count (\(quota.loadBalancerCount))"
-                )
-            }
-            quota.maxLoadBalancers = maxLoadBalancers
-        }
-
-        if let isEnabled = updateRequest.isEnabled {
-            quota.isEnabled = isEnabled
-        }
-
-        // Scope and limit invariants only. The counters now hold real usage, and a
-        // scope already over a limit this request didn't touch must stay editable —
-        // raising, disabling or renaming such a quota is exactly how an operator
-        // fixes it. Every limit this request *did* change was checked against the
-        // same fresh figures above.
-        try quota.validate()
-        try await quota.save(on: req.db)
-
-        return ResourceQuotaResponse(from: quota)
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let quotaID = req.parameters.get("quotaID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid quota ID")
-        }
-
-        guard let quota = try await ResourceQuota.find(quotaID, on: req.db) else {
+        _ = try req.auth.require(User.self)
+        let quota = try await requireQuota(req)
+        try await verifyAdmin(quota, req: req)
+        do {
+            guard try await quotas.deleteIfUnused(id: quota.id) else {
+                throw Abort(.conflict, reason: "Cannot delete quota with active resource reservations")
+            }
+        } catch ResourceQuotaPersistenceError.notFound {
             throw Abort(.notFound, reason: "Resource quota not found")
         }
-
-        // Verify user has admin access to quota
-        try await verifyQuotaAdminAccess(quota: quota, on: req)
-
-        // Check if the quota's scope holds any workloads, measured now rather than
-        // read from the stored counters: those are a cache of the last enforcement
-        // resync and are still zero for a quota created over an already populated
-        // scope, so the guard used to wave through the deletion of a quota holding
-        // back live VMs and sandboxes (issue #742).
-        //
-        // Measures without writing the figures back, unlike `update`: the row is
-        // either about to be deleted or is being left alone by a rejected request,
-        // so there is nothing here for a healed cache to be read by.
-        let usage = try await QuotaUsageAggregator.measure(quota: quota, on: req.db)
-        if usage.vcpus > 0 || usage.memoryBytes > 0 || usage.storageBytes > 0 || usage.vmCount > 0
-            || usage.sandboxCount > 0 || usage.volumeCount > 0 || usage.networkCount > 0
-            || usage.loadBalancerCount > 0
-        {
-            throw Abort(.conflict, reason: "Cannot delete quota with active resource reservations")
-        }
-
-        try await quota.delete(on: req.db)
         return .noContent
     }
 
-    // MARK: - Organization Context Operations
-
     func indexForOrganization(req: Request) async throws -> [ResourceQuotaResponse] {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
-
-        // Verify user has access to organization
+        _ = try req.auth.require(User.self)
+        let organizationID = try requireID("organizationID", reason: "Invalid organization ID", req: req)
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
-
-        // Get all quotas for the organization
-        let quotas = try await ResourceQuota.query(on: req.db)
-            .filter(\.$organization.$id == organizationID)
-            .sort(\.$name)
-            .all()
-
-        return quotas.map { ResourceQuotaResponse(from: $0) }
+        return try await quotas.quotas(organizationID: organizationID)
+            .map(ResourceQuotaResponse.init(from:))
     }
 
     func createForOrganization(req: Request) async throws -> ResourceQuotaResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
-
-        let createRequest = try req.content.decodeValidated(CreateResourceQuotaRequest.self)
-
-        // Verify user has admin access to organization
+        _ = try req.auth.require(User.self)
+        let organizationID = try requireID("organizationID", reason: "Invalid organization ID", req: req)
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
-
-        // Check for duplicate quota name within organization
-        try await validateQuotaNameUniqueness(
-            name: createRequest.name,
-            organizationID: organizationID,
-            ouID: nil,
-            projectID: nil,
-            environment: createRequest.environment,
-            excludeQuotaID: nil,
-            on: req.db
-        )
-
-        // Create quota
-        let quota = try await createQuota(
-            createRequest: createRequest,
-            organizationID: organizationID,
-            ouID: nil,
-            projectID: nil,
-            on: req.db
-        )
-
-        return ResourceQuotaResponse(from: quota)
+        let request = try req.content.decodeValidated(CreateResourceQuotaRequest.self)
+        return try await create(
+            request, organizationID: organizationID, organizationalUnitID: nil, projectID: nil)
     }
 
     func indexForOU(req: Request) async throws -> [ResourceQuotaResponse] {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let ouID = req.parameters.get("ouID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
-        }
-
-        // Verify user has access to organization
+        _ = try req.auth.require(User.self)
+        let (organizationID, folder) = try await requireFolder(req)
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
-
-        // Verify the OU actually belongs to that organization. Membership in the
-        // path org does not grant visibility into another org's OU — without this
-        // check a member of org A could read org B's OU quotas by supplying B's OU id.
-        guard let ou = try await OrganizationalUnit.find(ouID, on: req.db),
-            ou.$organization.id == organizationID
-        else {
-            throw Abort(.notFound, reason: "Folder not found")
-        }
-
-        // Get all quotas for the OU
-        let quotas = try await ResourceQuota.query(on: req.db)
-            .filter(\.$organizationalUnit.$id == ouID)
-            .sort(\.$name)
-            .all()
-
-        return quotas.map { ResourceQuotaResponse(from: $0) }
+        return try await quotas.quotas(organizationalUnitID: folder.id)
+            .map(ResourceQuotaResponse.init(from:))
     }
 
     func createForOU(req: Request) async throws -> ResourceQuotaResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let ouID = req.parameters.get("ouID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
-        }
-
-        let createRequest = try req.content.decodeValidated(CreateResourceQuotaRequest.self)
-
-        // Verify user has admin access to organization
+        _ = try req.auth.require(User.self)
+        let (organizationID, folder) = try await requireFolder(req)
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
-
-        // Verify OU exists and belongs to organization
-        guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
-            throw Abort(.notFound, reason: "Folder not found")
-        }
-
-        if ou.$organization.id != organizationID {
-            throw Abort(.badRequest, reason: "Folder does not belong to the specified organization")
-        }
-
-        // Check for duplicate quota name within OU
-        try await validateQuotaNameUniqueness(
-            name: createRequest.name,
-            organizationID: nil,
-            ouID: ouID,
-            projectID: nil,
-            environment: createRequest.environment,
-            excludeQuotaID: nil,
-            on: req.db
-        )
-
-        // Create quota
-        let quota = try await createQuota(
-            createRequest: createRequest,
-            organizationID: nil,
-            ouID: ouID,
-            projectID: nil,
-            on: req.db
-        )
-
-        return ResourceQuotaResponse(from: quota)
+        let request = try req.content.decodeValidated(CreateResourceQuotaRequest.self)
+        return try await create(
+            request, organizationID: nil, organizationalUnitID: folder.id, projectID: nil)
     }
 
     func indexForProject(req: Request) async throws -> [ResourceQuotaResponse] {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        let project = try await req.requireProject()
-        let projectID = try project.requireID()
-
-        // Verify user has access to project
-        try await OrganizationAccessService.requireProjectMember(project: project, on: req)
-
-        // Get all quotas for the project
-        let quotas = try await ResourceQuota.query(on: req.db)
-            .filter(\.$project.$id == projectID)
-            .sort(\.$name)
-            .all()
-
-        return quotas.map { ResourceQuotaResponse(from: $0) }
+        _ = try req.auth.require(User.self)
+        let project = try await requireProject(req)
+        try await OrganizationAccessService.requireProjectMember(projectID: project.id, on: req)
+        return try await quotas.quotas(projectID: project.id).map(ResourceQuotaResponse.init(from:))
     }
 
     func createForProject(req: Request) async throws -> ResourceQuotaResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
+        _ = try req.auth.require(User.self)
+        let project = try await requireProject(req)
+        try await OrganizationAccessService.requireProjectQuotaAdmin(projectID: project.id, on: req)
+        let request = try req.content.decodeValidated(CreateResourceQuotaRequest.self)
+        if let environment = request.environment, !project.environments.contains(environment) {
+            throw Abort(
+                .badRequest,
+                reason: "Environment '\(environment)' does not exist in this project"
+            )
         }
-
-        let project = try await req.requireProject()
-        let projectID = try project.requireID()
-
-        let createRequest = try req.content.decodeValidated(CreateResourceQuotaRequest.self)
-
-        // Verify user has admin access to project
-        try await OrganizationAccessService.requireProjectQuotaAdmin(project: project, on: req)
-
-        // Validate environment if specified
-        if let environment = createRequest.environment {
-            if !project.hasEnvironment(environment) {
-                throw Abort(.badRequest, reason: "Environment '\(environment)' does not exist in this project")
-            }
-        }
-
-        // Check for duplicate quota name within project
-        try await validateQuotaNameUniqueness(
-            name: createRequest.name,
-            organizationID: nil,
-            ouID: nil,
-            projectID: projectID,
-            environment: createRequest.environment,
-            excludeQuotaID: nil,
-            on: req.db
-        )
-
-        // Create quota
-        let quota = try await createQuota(
-            createRequest: createRequest,
-            organizationID: nil,
-            ouID: nil,
-            projectID: projectID,
-            on: req.db
-        )
-
-        return ResourceQuotaResponse(from: quota)
+        return try await create(
+            request, organizationID: nil, organizationalUnitID: nil, projectID: project.id)
     }
-
-    // MARK: - Usage Tracking
 
     func getUsage(req: Request) async throws -> QuotaUsageResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
-
-        guard let quotaID = req.parameters.get("quotaID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid quota ID")
-        }
-
-        guard let quota = try await ResourceQuota.find(quotaID, on: req.db) else {
-            throw Abort(.notFound, reason: "Resource quota not found")
-        }
-
-        // Verify user has access to quota
-        try await verifyQuotaAccess(quota: quota, on: req)
-
-        // Measure actual usage over the quota's scope, resolved once and reused
-        // by both the totals and the per-VM breakdown.
-        let scope = try await QuotaUsageAggregator.scope(of: quota, on: req.db)
-        let usage = try await QuotaUsageAggregator.measure(scope, on: req.db)
-        let breakdown = try await QuotaUsageAggregator.vmBreakdown(in: scope, on: req.db)
-
+        _ = try req.auth.require(User.self)
+        let quota = try await requireQuota(req)
+        try await verifyRead(quota, req: req)
         return QuotaUsageService.usageResponse(
-            for: quota, actualUsage: usage.asQuotaUsage, breakdown: breakdown)
+            for: quota,
+            measured: try await quotas.usage(quota)
+        )
     }
 
-    // MARK: - Helper Methods
+    private func create(
+        _ request: CreateResourceQuotaRequest,
+        organizationID: UUID?,
+        organizationalUnitID: UUID?,
+        projectID: UUID?
+    ) async throws -> ResourceQuotaResponse {
+        if request.environment != nil,
+            request.maxNetworks != nil || request.maxLoadBalancers != nil
+        {
+            throw Abort(
+                .badRequest,
+                reason:
+                    "Environment-scoped quotas cannot set network or load-balancer limits because those resources are project-wide"
+            )
+        }
+        let maxSandboxes = request.maxSandboxes ?? request.maxVMs
+        let maxNetworks = request.maxNetworks ?? 10
+        let maxLoadBalancers = request.maxLoadBalancers ?? request.maxVMs
+        try validateLimits(
+            maxVCPUs: request.maxVCPUs, maxMemory: request.maxMemoryGB.gbToBytes,
+            maxStorage: request.maxStorageGB.gbToBytes, maxVMs: request.maxVMs,
+            maxSandboxes: maxSandboxes, maxVolumes: request.maxVolumes,
+            maxNetworks: maxNetworks, maxLoadBalancers: maxLoadBalancers
+        )
+        if try await quotas.nameExists(
+            name: request.name, organizationID: organizationID,
+            organizationalUnitID: organizationalUnitID, projectID: projectID,
+            environment: request.environment
+        ) {
+            throw duplicateName(environment: request.environment)
+        }
+        do {
+            let quota = try await quotas.create(
+                ResourceQuotaWrite(
+                    name: request.name, organizationID: organizationID,
+                    organizationalUnitID: organizationalUnitID, projectID: projectID,
+                    maxVCPUs: request.maxVCPUs, maxMemory: request.maxMemoryGB.gbToBytes,
+                    maxStorage: request.maxStorageGB.gbToBytes, maxVMs: request.maxVMs,
+                    maxSandboxes: maxSandboxes, maxVolumes: request.maxVolumes,
+                    maxNetworks: maxNetworks, maxLoadBalancers: maxLoadBalancers,
+                    isEnabled: request.isEnabled ?? true, environment: request.environment
+                )
+            )
+            return ResourceQuotaResponse(from: quota)
+        } catch ResourceQuotaPersistenceError.duplicateName {
+            throw duplicateName(environment: request.environment)
+        }
+    }
 
-    /// Gate reading a quota — the row itself (`show`) and its freshly measured
-    /// usage (`getUsage`).
-    ///
-    /// One question, `quota:read` on the node the quota hangs on, for every
-    /// scope (``QuotaVisibility``). `getUsage` is the sharpest reason it cannot
-    /// be the `requireMember` it used to be: it measures the scope live and
-    /// returns the per-VM breakdown alongside the totals, so on an
-    /// organization-scoped quota a bare member was handed the organization's
-    /// vCPU/memory/VM consumption and its VMs by environment and status — the
-    /// inventory the hierarchy endpoints filter per row, in scalar form, from
-    /// the one route nothing had narrowed.
-    private func verifyQuotaAccess(quota: ResourceQuota, on req: Request) async throws {
-        guard QuotaVisibility.measuredNode(of: quota) != nil else {
-            // A scopeless row measures nothing and belongs to no organization.
-            try await requireSystemAdminForScopelessQuota(on: req)
+    private func verifyRead(_ quota: ResourceQuotaSnapshot, req: Request) async throws {
+        guard let node = measuredNode(of: quota) else {
+            _ = try await req.requireSystemAdmin("Quota has no scope")
             return
         }
-        guard try await QuotaVisibility.canRead(quota, on: req) else {
+        guard try await req.can("quota:read", on: node) else {
             throw Abort(.forbidden, reason: "Insufficient permissions for this operation")
         }
     }
 
-    private func verifyQuotaAdminAccess(quota: ResourceQuota, on req: Request) async throws {
-        if let orgID = quota.$organization.id {
-            try await OrganizationAccessService.requireAdmin(organizationID: orgID, on: req)
-        } else if let ouID = quota.$organizationalUnit.id {
-            guard let ou = try await OrganizationalUnit.find(ouID, on: req.db) else {
+    private func verifyAdmin(_ quota: ResourceQuotaSnapshot, req: Request) async throws {
+        if let organizationID = quota.organizationID {
+            try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
+        } else if let folderID = quota.organizationalUnitID {
+            guard let folder = try await hierarchy.organizationalUnit(id: folderID)?.organizationalUnit else {
                 throw Abort(.notFound, reason: "Folder not found")
             }
-            try await OrganizationAccessService.requireAdmin(organizationID: ou.$organization.id, on: req)
-        } else if let projectID = quota.$project.id {
-            let project = try await req.requireProject(id: projectID)
-            try await OrganizationAccessService.requireProjectQuotaAdmin(project: project, on: req)
+            try await OrganizationAccessService.requireAdmin(
+                organizationID: folder.organizationID, on: req)
+        } else if let projectID = quota.projectID {
+            try await OrganizationAccessService.requireProjectQuotaAdmin(projectID: projectID, on: req)
         } else {
-            try await requireSystemAdminForScopelessQuota(on: req)
+            _ = try await req.requireSystemAdmin("Quota has no scope")
         }
     }
 
-    /// A quota with no scope is corrupt data, not a shared resource: every
-    /// create path sets exactly one scope FK. Without an explicit branch the
-    /// `if/else if` chains above fell through and *allowed*, so any
-    /// authenticated user could read and mutate such a row (issue #482
-    /// pre-cutover audit). Only system admins may touch it — enough to
-    /// inspect and delete a corrupt row without widening access.
-    private func requireSystemAdminForScopelessQuota(on req: Request) async throws {
-        _ = try await req.requireSystemAdmin("Quota has no scope")
+    private func measuredNode(of quota: ResourceQuotaSnapshot) -> IAMNode? {
+        if let id = quota.projectID { return IAMNode(type: .project, id: id) }
+        if let id = quota.organizationalUnitID { return IAMNode(type: .organizationalUnit, id: id) }
+        if let id = quota.organizationID { return IAMNode(type: .organization, id: id) }
+        return nil
     }
 
-    private func validateQuotaNameUniqueness(
-        name: String,
-        organizationID: UUID?,
-        ouID: UUID?,
-        projectID: UUID?,
-        environment: String?,
-        excludeQuotaID: UUID?,
-        on db: Database
-    ) async throws {
-        let query = ResourceQuota.query(on: db)
-            .filter(\.$name == name)
-
-        if let excludeID = excludeQuotaID {
-            query.filter(\.$id != excludeID)
+    private func requireQuota(_ req: Request) async throws -> ResourceQuotaSnapshot {
+        let id = try requireID("quotaID", reason: "Invalid quota ID", req: req)
+        guard let quota = try await quotas.quota(id: id) else {
+            throw Abort(.notFound, reason: "Resource quota not found")
         }
-
-        if let orgID = organizationID {
-            query.filter(\.$organization.$id == orgID)
-        } else if let ouID = ouID {
-            query.filter(\.$organizationalUnit.$id == ouID)
-        } else if let projID = projectID {
-            query.filter(\.$project.$id == projID)
-        }
-
-        if let env = environment {
-            query.filter(\.$environment == env)
-        } else {
-            query.filter(\.$environment == nil)
-        }
-
-        let existingQuota = try await query.first()
-        if existingQuota != nil {
-            let scope = environment.map { " for environment '\($0)'" } ?? ""
-            throw Abort(.conflict, reason: "Quota name already exists in this scope\(scope)")
-        }
-    }
-
-    private func createQuota(
-        createRequest: CreateResourceQuotaRequest,
-        organizationID: UUID?,
-        ouID: UUID?,
-        projectID: UUID?,
-        on db: Database
-    ) async throws -> ResourceQuota {
-        if createRequest.environment != nil,
-            createRequest.maxNetworks != nil || createRequest.maxLoadBalancers != nil
-        {
-            throw Abort(
-                .badRequest,
-                reason:
-                    "Environment-scoped quotas cannot set network or load-balancer limits because those resources are project-wide"
-            )
-        }
-
-        let maxMemoryBytes = createRequest.maxMemoryGB.gbToBytes
-        let maxStorageBytes = createRequest.maxStorageGB.gbToBytes
-
-        let quota = ResourceQuota(
-            name: createRequest.name,
-            organizationID: organizationID,
-            organizationalUnitID: ouID,
-            projectID: projectID,
-            maxVCPUs: createRequest.maxVCPUs,
-            maxMemory: maxMemoryBytes,
-            maxStorage: maxStorageBytes,
-            maxVMs: createRequest.maxVMs,
-            maxSandboxes: createRequest.maxSandboxes,
-            maxVolumes: createRequest.maxVolumes,
-            maxNetworks: createRequest.maxNetworks ?? 10,
-            maxLoadBalancers: createRequest.maxLoadBalancers,
-            environment: createRequest.environment,
-            isEnabled: createRequest.isEnabled ?? true
-        )
-
-        try quota.validate()
-
-        // Backfill the reservation counters from the workloads the new quota
-        // already governs, so the stored figures are honest from the moment the
-        // row exists instead of reading zero until the next create or delete in
-        // this scope resyncs them (issue #742). The scope is resolved from the
-        // quota's own scope FKs and environment, so this works before the insert.
-        //
-        // Deliberately not a `validate()`: a quota introduced *below* an existing
-        // tenant's usage is legitimate — that's how enforcement starts on a live
-        // tenant, and admission then blocks any further growth.
-        try await QuotaEnforcementService.resyncReservations(quota, on: db)
-        try await quota.save(on: db)
-
         return quota
     }
 
+    private func requireProject(_ req: Request) async throws -> ProjectSnapshot {
+        let id = try requireID("projectID", reason: "Invalid project ID", req: req)
+        guard let project = try await projects.project(id: id) else {
+            throw Abort(.notFound, reason: "Project not found")
+        }
+        return project
+    }
+
+    private func requireFolder(_ req: Request) async throws -> (UUID, OrganizationalUnitSnapshot) {
+        let organizationID = try requireID(
+            "organizationID", reason: "Invalid organization or folder ID", req: req)
+        let folderID = try requireID("ouID", reason: "Invalid organization or folder ID", req: req)
+        guard let folder = try await hierarchy.organizationalUnit(id: folderID)?.organizationalUnit else {
+            throw Abort(.notFound, reason: "Folder not found")
+        }
+        guard folder.organizationID == organizationID else {
+            throw Abort(.badRequest, reason: "Folder does not belong to the specified organization")
+        }
+        return (organizationID, folder)
+    }
+
+    private func requireID(_ name: String, reason: String, req: Request) throws -> UUID {
+        guard let id = req.parameters.get(name, as: UUID.self) else {
+            throw Abort(.badRequest, reason: reason)
+        }
+        return id
+    }
+
+    private func validateLimits(
+        maxVCPUs: Int, maxMemory: Int64, maxStorage: Int64, maxVMs: Int,
+        maxSandboxes: Int, maxVolumes: Int?, maxNetworks: Int,
+        maxLoadBalancers: Int
+    ) throws {
+        guard maxVCPUs > 0, maxMemory > 0, maxStorage > 0, maxVMs > 0,
+            maxSandboxes > 0, maxNetworks > 0, maxLoadBalancers > 0
+        else { throw Abort(.badRequest, reason: "All resource limits must be positive") }
+        if let maxVolumes, maxVolumes <= 0 {
+            throw Abort(.badRequest, reason: "The volume limit must be positive when set")
+        }
+    }
+
+    private func requireNotBelowUsage(
+        _ usage: ResourceQuotaMeasuredUsage,
+        request: UpdateResourceQuotaRequest,
+        maxVCPUs: Int, maxMemory: Int64, maxStorage: Int64, maxVMs: Int,
+        maxSandboxes: Int, maxVolumes: Int?, maxNetworks: Int,
+        maxLoadBalancers: Int
+    ) throws {
+        if request.maxVCPUs != nil, maxVCPUs < usage.vcpus {
+            throw Abort(.badRequest, reason: "New vCPU limit (\(maxVCPUs)) cannot be below current reservation (\(usage.vcpus))")
+        }
+        if let requested = request.maxMemoryGB, maxMemory < usage.memoryBytes {
+            throw Abort(.badRequest, reason: "New memory limit (\(String(format: "%.2f", requested))GiB) cannot be below current reservation (\(String(format: "%.2f", usage.memoryBytes.bytesToGB))GiB)")
+        }
+        if let requested = request.maxStorageGB, maxStorage < usage.storageBytes {
+            throw Abort(.badRequest, reason: "New storage limit (\(String(format: "%.2f", requested))GiB) cannot be below current reservation (\(String(format: "%.2f", usage.storageBytes.bytesToGB))GiB)")
+        }
+        if request.maxVMs != nil, maxVMs < usage.vmCount {
+            throw Abort(.badRequest, reason: "New VM limit (\(maxVMs)) cannot be below current count (\(usage.vmCount))")
+        }
+        if request.maxSandboxes != nil, maxSandboxes < usage.sandboxCount {
+            throw Abort(.badRequest, reason: "New sandbox limit (\(maxSandboxes)) cannot be below current count (\(usage.sandboxCount))")
+        }
+        if let requested = request.maxVolumes, requested != 0,
+            let maxVolumes, maxVolumes < usage.volumeCount
+        {
+            throw Abort(.badRequest, reason: "New volume limit (\(maxVolumes)) cannot be below current count (\(usage.volumeCount))")
+        }
+        if request.maxNetworks != nil, maxNetworks < usage.networkCount {
+            throw Abort(.badRequest, reason: "New network limit (\(maxNetworks)) cannot be below current count (\(usage.networkCount))")
+        }
+        if request.maxLoadBalancers != nil, maxLoadBalancers < usage.loadBalancerCount {
+            throw Abort(.badRequest, reason: "New load balancer limit (\(maxLoadBalancers)) cannot be below current count (\(usage.loadBalancerCount))")
+        }
+    }
+
+    private func duplicateName(environment: String?) -> Abort {
+        let scope = environment.map { " for environment '\($0)'" } ?? ""
+        return Abort(.conflict, reason: "Quota name already exists in this scope\(scope)")
+    }
 }

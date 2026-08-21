@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 extension Request {
@@ -18,17 +18,19 @@ extension Request {
     /// creates. Both take the project from the request body and refuse when it
     /// is absent; neither infers one, since there is no default project
     /// (issue #1059).
-    func requireProject(paramName: String = "projectID") async throws -> Project {
+    func requireProject(
+        paramName: String = "projectID", on database: PostgresStoreContext
+    ) async throws -> Project {
         guard let projectID = parameters.get(paramName, as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid project ID")
         }
-        return try await requireProject(id: projectID)
+        return try await requireProject(id: projectID, on: database)
     }
 
     /// The project with `id`, or a 404 — for callers that already hold the id
     /// (a foreign key on another row, say) rather than reading it from the path.
-    func requireProject(id: UUID) async throws -> Project {
-        guard let project = try await Project.find(id, on: db) else {
+    func requireProject(id: UUID, on database: PostgresStoreContext) async throws -> Project {
+        guard let project = try await Project.find(id, on: database) else {
             throw Abort(.notFound, reason: "Project not found")
         }
         return project

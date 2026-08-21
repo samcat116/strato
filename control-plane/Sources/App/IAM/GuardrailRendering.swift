@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -54,21 +54,11 @@ struct GuardrailRendering: Sendable {
         let reason: String
     }
 
-    /// Parse a matcher-built row into the one representation.
-    ///
-    /// Throws `Unrenderable` for a row with no id or an unknown node type, and
-    /// the row's own `GuardrailError` for unreadable match columns — the same
-    /// error the API's write path would raise, so a caller that propagates it
-    /// (`GuardrailStore.forbidding`) reports the row exactly as the store
-    /// would.
-    init(_ row: Guardrail) throws {
-        guard let id = row.id else {
-            throw Unrenderable(reason: "row has no id")
-        }
+    init(_ row: IAMGuardrailSnapshot) throws {
         guard let node = row.node else {
             throw Unrenderable(reason: "unknown node type '\(row.nodeType)'")
         }
-        self.id = id
+        self.id = row.id
         self.name = row.name
         self.node = node
         self.actions = row.actions
@@ -175,7 +165,7 @@ struct GuardrailRendering: Sendable {
         principalType: IAMPrincipalType,
         principalID: UUID,
         organizationID: UUID?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Bool {
         switch match {
         case .any:
@@ -188,11 +178,8 @@ struct GuardrailRendering: Sendable {
             if principalType == .group { return principalID == id }
             // A ceiling on a group covers its members: the group is how the
             // grant reaches the user, so it has to be how the ceiling does too.
-            let memberships = try await UserGroup.query(on: db)
-                .filter(\.$user.$id == principalID)
-                .filter(\.$group.$id == id)
-                .count()
-            return memberships > 0
+            return try await LegacyGroupSQLBridge.hasMember(
+                userID: principalID, groupID: id, on: db)
 
         case .externalToOrganization:
             // Without a resolvable organization there is no "outside" to be
@@ -200,14 +187,13 @@ struct GuardrailRendering: Sendable {
             guard let organizationID else { return false }
             switch principalType {
             case .user:
-                let memberships = try await UserOrganization.query(on: db)
-                    .filter(\.$user.$id == principalID)
-                    .filter(\.$organization.$id == organizationID)
-                    .count()
-                return memberships == 0
+                return try await OrganizationMembershipStore.membership(
+                    userID: principalID, organizationID: organizationID, on: db) == nil
             case .group:
-                guard let group = try await Group.find(principalID, on: db) else { return false }
-                return group.$organization.id != organizationID
+                guard let group = try await LegacyGroupSQLBridge.group(id: principalID, on: db) else {
+                    return false
+                }
+                return group.organizationID != organizationID
             case .serviceAccount, .workload:
                 // Machine principals are members of nothing (issue #491), so
                 // an external-principal ceiling always covers them — matching
@@ -218,11 +204,41 @@ struct GuardrailRendering: Sendable {
     }
 
     func covers(
-        principalType: IAMPrincipalType, principalID: UUID, organizationID: UUID?, on db: any Database
+        principalType: IAMPrincipalType, principalID: UUID, organizationID: UUID?, on db: PostgresStoreContext
     ) async throws -> Bool {
         try await Self.covers(
             principalMatch, principalType: principalType, principalID: principalID,
             organizationID: organizationID, on: db)
+    }
+
+    func covers(
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        organizationID: UUID?,
+        using iam: IAMPersistence,
+        groups: GroupsPersistence
+    ) async throws -> Bool {
+        switch principalMatch {
+        case .any:
+            return true
+        case .user(let id):
+            return principalType == .user && principalID == id
+        case .group(let id):
+            if principalType == .group { return principalID == id }
+            return try await groups.hasMember(userID: principalID, groupID: id)
+        case .externalToOrganization:
+            guard let organizationID else { return false }
+            switch principalType {
+            case .user, .group:
+                return try await iam.principalIsExternal(
+                    type: principalType.rawValue,
+                    id: principalID,
+                    organizationID: organizationID
+                )
+            case .serviceAccount, .workload:
+                return true
+            }
+        }
     }
 
     // MARK: - The compiled Cedar forbid
@@ -355,18 +371,14 @@ struct GuardrailRendering: Sendable {
     /// deterministic set — rebuilds on two replicas must produce identical
     /// text for the same version.
     static func forbids(
-        for rows: [Guardrail],
+        for rows: [IAMGuardrailSnapshot],
         organizationIDsByGuardrail: [UUID: UUID]
     ) -> RenderedForbids {
         var policies: [CedarPolicySource] = []
         var compiled: [UUID] = []
         var skipped: [SkippedGuardrail] = []
 
-        let ordered = rows.sorted {
-            ($0.id?.uuidString ?? "") < ($1.id?.uuidString ?? "")
-        }
-
-        for row in ordered {
+        for row in rows.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
             let rendering: GuardrailRendering
             do {
                 rendering = try GuardrailRendering(row)
@@ -397,14 +409,33 @@ struct GuardrailRendering: Sendable {
     /// `forbids(for:organizationIDsByGuardrail:)`, resolving each
     /// external-principal ceiling's attach-node organization from the tree
     /// first — the one database read the forbid projection needs.
-    static func forbids(for rows: [Guardrail], on db: any Database) async throws -> RenderedForbids {
+    static func forbids(
+        for rows: [IAMGuardrailSnapshot],
+        on db: PostgresStoreContext
+    ) async throws -> RenderedForbids {
         var organizationIDsByGuardrail: [UUID: UUID] = [:]
         for row in rows
         where row.principalMatchKind == GuardrailPrincipalMatchKind.externalToOrganization.rawValue {
-            guard let id = row.id, let node = row.node else { continue }
+            guard let node = row.node else { continue }
             let chain = try await IAMResourceTree.ancestors(of: node, on: db)
             if let organization = chain.first(where: { $0.type == .organization }) {
-                organizationIDsByGuardrail[id] = organization.id
+                organizationIDsByGuardrail[row.id] = organization.id
+            }
+        }
+        return forbids(for: rows, organizationIDsByGuardrail: organizationIDsByGuardrail)
+    }
+
+    static func forbids(
+        for rows: [IAMGuardrailSnapshot],
+        using iam: IAMPersistence
+    ) async throws -> RenderedForbids {
+        var organizationIDsByGuardrail: [UUID: UUID] = [:]
+        for row in rows
+        where row.principalMatchKind == GuardrailPrincipalMatchKind.externalToOrganization.rawValue {
+            guard let node = row.node else { continue }
+            let chain = try await IAMResourceTree.ancestors(of: node, using: iam)
+            if let organization = chain.first(where: { $0.type == .organization }) {
+                organizationIDsByGuardrail[row.id] = organization.id
             }
         }
         return forbids(for: rows, organizationIDsByGuardrail: organizationIDsByGuardrail)
@@ -420,7 +451,49 @@ struct GuardrailRendering: Sendable {
     /// with it, the cache's null-text fallback regenerates it, and the
     /// controller's DTO renders it — so what is stored, shown, and enforced
     /// cannot drift.
-    static func cedarText(for row: Guardrail, on db: any Database) async throws -> String? {
+    static func cedarText(
+        for row: IAMGuardrailSnapshot,
+        on db: PostgresStoreContext
+    ) async throws -> String? {
         try await forbids(for: [row], on: db).policies.first?.text
+    }
+
+    static func cedarText(
+        for row: IAMGuardrailSnapshot,
+        using iam: IAMPersistence
+    ) async throws -> String? {
+        try await forbids(for: [row], using: iam).policies.first?.text
+    }
+}
+
+extension IAMGuardrailSnapshot {
+    var node: IAMNode? {
+        guard let type = IAMNodeType(rawValue: nodeType) else { return nil }
+        return IAMNode(type: type, id: nodeID)
+    }
+
+    func principalMatch() throws -> GuardrailPrincipalMatch {
+        guard let kind = GuardrailPrincipalMatchKind(rawValue: principalMatchKind) else {
+            throw GuardrailError.missingSubjectID(principalMatchKind)
+        }
+        return try GuardrailPrincipalMatch.from(kind: kind, subjectID: principalMatchID)
+    }
+
+    func resourceMatch() throws -> GuardrailResourceMatch {
+        guard let kind = GuardrailResourceMatchKind(rawValue: resourceMatchKind) else {
+            throw GuardrailError.missingMatchValue(resourceMatchKind)
+        }
+        return try GuardrailResourceMatch.from(kind: kind, value: resourceMatchValue)
+    }
+
+    var shape: String {
+        let principalConstrained = principalMatchKind != GuardrailPrincipalMatchKind.any.rawValue
+        let resourceConstrained = resourceMatchKind != GuardrailResourceMatchKind.any.rawValue
+        switch (principalConstrained, resourceConstrained) {
+        case (true, true): return "principal+resource"
+        case (true, false): return "principal"
+        case (false, true): return "resource"
+        case (false, false): return "unconditional"
+        }
     }
 }

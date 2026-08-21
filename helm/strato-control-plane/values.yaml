@@ -320,6 +320,14 @@ strato:
     username: vapor_username
     # password is stored in secret
 
+    # Native PostgresNIO pool cap per control-plane replica. The minimum stays
+    # zero, so an idle replica does not hold connections only to satisfy a
+    # floor.
+    maxConnections: 20
+
+    # Maximum time to wait for a connection lease before failing the operation.
+    connectionAcquireTimeoutMs: 10000
+
     # PostgreSQL statement_timeout for normal control-plane connections, in
     # milliseconds. It is applied after authentication to each physical pooled
     # connection. Must be a positive integer no greater than 2147483647. Five

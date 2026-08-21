@@ -1,20 +1,29 @@
+import ControlPlanePostgres
 import Crypto
 import Foundation
 import Vapor
 import WebAuthn
-import Fluent
-import SQLKit
 
 struct WebAuthnService {
     private let webAuthnManager: WebAuthnManager
+    private let passkeys: PasskeysPersistence
+    private let users: UserDirectoryPersistence
 
-    init(relyingPartyID: String, relyingPartyName: String, relyingPartyOrigin: String) {
+    init(
+        relyingPartyID: String,
+        relyingPartyName: String,
+        relyingPartyOrigin: String,
+        passkeys: PasskeysPersistence,
+        users: UserDirectoryPersistence
+    ) {
         let config = WebAuthnManager.Configuration(
             relyingPartyID: relyingPartyID,
             relyingPartyName: relyingPartyName,
             relyingPartyOrigin: relyingPartyOrigin
         )
         self.webAuthnManager = WebAuthnManager(configuration: config)
+        self.passkeys = passkeys
+        self.users = users
     }
 
     // MARK: - Registration
@@ -46,8 +55,11 @@ struct WebAuthnService {
         credentialCreationData: RegistrationCredential,
         transports: [String]? = nil,
         operation: String = "registration",
-        on database: Database
-    ) async throws -> UserCredential {
+        expectedUserID: UUID? = nil,
+        maximumCredentialsPerUser: Int? = nil,
+        name: String? = nil,
+        rejectPendingAccountClaim: Bool = false
+    ) async throws -> PasskeySnapshot {
         // Decode base64url challenge back to bytes
         let challengeBytes = try challenge.base64URLDecodedBytes()
 
@@ -57,32 +69,9 @@ struct WebAuthnService {
             confirmCredentialIDNotRegisteredYet: { credentialID in
                 // During registration, credentialID comes as a string, so convert to binary same way we will during auth
                 let credentialIDData = URLEncodedBase64(credentialID).urlDecoded.decoded ?? Data()
-                let existingCredential = try await UserCredential.query(on: database)
-                    .filter(\.$credentialID == credentialIDData)
-                    .first()
-                return existingCredential == nil
+                return try await !passkeys.credentialExists(credentialID: credentialIDData)
             }
         )
-
-        // Find the user by challenge. The operation filter namespaces challenges
-        // so, e.g., an invite-authorized "claim" challenge cannot be redeemed
-        // through the open "registration" finish path (and vice versa). The
-        // expiry filter enforces the stored challenge TTL (mirrors the
-        // authentication path) so a response can't be replayed after the
-        // server-side challenge has expired.
-        let challengeQuery = AuthenticationChallenge.query(on: database)
-            .filter(\.$challenge == challenge)
-            .filter(\.$operation == operation)
-            .group(.or) { group in
-                group.filter(\.$expiresAt > Date())
-                    .filter(\.$expiresAt == nil)
-            }
-        guard
-            let authChallenge = try await challengeQuery.first(),
-            let userID = authChallenge.userID
-        else {
-            throw WebAuthnError.challengeNotFound
-        }
 
         // Create user credential - store the actual binary credential ID, not the string
         let credentialIDData = URLEncodedBase64(credential.id).urlDecoded.decoded ?? Data()
@@ -91,9 +80,49 @@ struct WebAuthnService {
         // hints — we echo them back in `allowCredentials`/`excludeCredentials` so
         // the browser can steer the user to the right authenticator — but they
         // arrive in a request body, so only spec-registered values are kept.
-        let userCredential = UserCredential(
-            userID: userID,
+        let passkey = PasskeyWrite(
             credentialID: credentialIDData,
+            publicKey: Data(credential.publicKey),
+            signCount: Int32(credential.signCount),
+            transports: Self.sanitizedTransports(transports),
+            backupEligible: credential.backupEligible,
+            backupState: credential.isBackedUp,
+            deviceType: Self.deviceType(backupEligible: credential.backupEligible),
+            name: name
+        )
+        do {
+            return try await passkeys.registerCredential(
+                challenge: challenge,
+                operation: operation,
+                expectedUserID: expectedUserID,
+                credential: passkey,
+                maximumCredentialsPerUser: maximumCredentialsPerUser,
+                rejectPendingAccountClaim: rejectPendingAccountClaim
+            )
+        } catch {
+            throw Self.mapPersistenceError(error)
+        }
+    }
+
+    func finishClaimRegistration(
+        claimID: UUID,
+        expectedUserID: UUID,
+        challenge: String,
+        credentialCreationData: RegistrationCredential,
+        transports: [String]? = nil,
+        operation: String
+    ) async throws -> PasskeySnapshot {
+        let challengeBytes = try challenge.base64URLDecodedBytes()
+        let credential = try await webAuthnManager.finishRegistration(
+            challenge: challengeBytes,
+            credentialCreationData: credentialCreationData,
+            confirmCredentialIDNotRegisteredYet: { credentialID in
+                let data = URLEncodedBase64(credentialID).urlDecoded.decoded ?? Data()
+                return try await !passkeys.credentialExists(credentialID: data)
+            }
+        )
+        let write = PasskeyWrite(
+            credentialID: URLEncodedBase64(credential.id).urlDecoded.decoded ?? Data(),
             publicKey: Data(credential.publicKey),
             signCount: Int32(credential.signCount),
             transports: Self.sanitizedTransports(transports),
@@ -101,13 +130,17 @@ struct WebAuthnService {
             backupState: credential.isBackedUp,
             deviceType: Self.deviceType(backupEligible: credential.backupEligible)
         )
-
-        try await userCredential.save(on: database)
-
-        // Clean up challenge
-        try await authChallenge.delete(on: database)
-
-        return userCredential
+        do {
+            return try await passkeys.claimAccountAndRegisterCredential(
+                claimID: claimID,
+                expectedUserID: expectedUserID,
+                challenge: challenge,
+                operation: operation,
+                credential: write
+            )
+        } catch {
+            throw Self.mapPersistenceError(error)
+        }
     }
 
     /// Transport values registered in the WebAuthn spec, plus `cable` (the
@@ -141,8 +174,7 @@ struct WebAuthnService {
 
     func beginAuthentication(
         for username: String? = nil,
-        decoyKey: String,
-        on database: Database
+        decoyKey: String
     ) async throws -> PublicKeyCredentialRequestOptions {
         var allowCredentials: [PublicKeyCredentialDescriptor] = []
 
@@ -152,13 +184,9 @@ struct WebAuthnService {
             // doesn't exist) and compute the decoy HMAC unconditionally, so a
             // nonexistent username is not distinguishable from a registered one
             // by response timing (best-effort; the DB round-trips dominate).
-            let user = try await User.query(on: database)
-                .filter(\.$username == username)
-                .first()
-            let userID = try user?.requireID() ?? UUID()
-            let credentials = try await UserCredential.query(on: database)
-                .filter(\.$user.$id == userID)
-                .all()
+            let user = try await users.user(username: username)
+            let userID = user?.id ?? UUID()
+            let credentials = try await passkeys.credentials(userID: userID)
 
             allowCredentials = credentials.map { credential in
                 PublicKeyCredentialDescriptor(
@@ -215,8 +243,7 @@ struct WebAuthnService {
 
     func finishAuthentication(
         challenge: String,
-        authenticationCredential: AuthenticationCredential,
-        on database: Database
+        authenticationCredential: AuthenticationCredential
     ) async throws -> User {
         // Atomically consume the stored challenge *before* accepting the assertion.
         // This is what provides replay protection: the challenge row must exist, be
@@ -225,16 +252,11 @@ struct WebAuthnService {
         // finds no row and is rejected here. We cannot rely on the authenticator's
         // signature counter for this because platform passkeys commonly report
         // signCount == 0 on every assertion.
-        try await consumeAuthenticationChallenge(challenge, on: database)
+        try await consumeAuthenticationChallenge(challenge)
 
         let credentialID = authenticationCredential.id.urlDecoded.decoded ?? Data()
 
-        guard
-            let credential = try await UserCredential.query(on: database)
-                .filter(\.$credentialID == credentialID)
-                .with(\.$user)
-                .first()
-        else {
+        guard let credential = try await passkeys.credential(credentialID: credentialID) else {
             throw WebAuthnError.credentialNotFound
         }
 
@@ -249,7 +271,6 @@ struct WebAuthnService {
         )
 
         // Update sign count.
-        credential.signCount = Int32(verification.newSignCount)
         // The backed-up flag is the one part of a credential record that
         // legitimately changes after registration: a passkey created on a device
         // can later be synced to a cloud keychain (or stop being synced), and the
@@ -257,12 +278,21 @@ struct WebAuthnService {
         // along with the device type it implies, so the passkey management UI
         // doesn't show a permanently stale "synced" state. Backup *eligibility*
         // is immutable and deliberately left alone.
-        credential.backupState = verification.credentialBackedUp
-        credential.deviceType = verification.credentialDeviceType.rawValue
-        credential.lastUsedAt = Date()
-        try await credential.save(on: database)
-
-        return credential.user
+        guard
+            try await passkeys.updateAfterAuthentication(
+                id: credential.id,
+                update: PasskeyAuthenticationUpdate(
+                    signCount: Int32(verification.newSignCount),
+                    backupState: verification.credentialBackedUp,
+                    deviceType: verification.credentialDeviceType.rawValue,
+                    usedAt: Date()
+                )
+            ) != nil,
+            let user = try await users.user(id: credential.userID).map(User.init(snapshot:))
+        else {
+            throw WebAuthnError.credentialNotFound
+        }
+        return user
     }
 
     /// Atomically claims a stored authentication challenge, enforcing that it
@@ -275,43 +305,12 @@ struct WebAuthnService {
     /// the database serializes the deletes and only the first observes a
     /// returned row.
     func consumeAuthenticationChallenge(
-        _ challenge: String,
-        on database: Database
+        _ challenge: String
     ) async throws {
-        // Look up the candidate row using Fluent so that the expiry comparison
-        // stays portable across database drivers.
-        let query = AuthenticationChallenge.query(on: database)
-            .filter(\.$challenge == challenge)
-            .filter(\.$operation == "authentication")
-            .group(.or) { group in
-                group.filter(\.$expiresAt > Date())
-                    .filter(\.$expiresAt == nil)
-            }
-
-        guard let stored = try await query.first(),
-            let storedID = stored.id
-        else {
-            throw WebAuthnError.challengeNotFound
-        }
-
-        guard let sql = database as? SQLDatabase else {
-            // Non-SQL backends can't perform the atomic RETURNING claim. Fail
-            // closed rather than falling back to a racy read-then-delete.
-            throw WebAuthnError.invalidConfiguration
-        }
-
-        // Atomically remove the row and confirm we were the ones who removed it.
-        let claimed = try await sql.raw(
-            """
-            DELETE FROM authentication_challenges
-            WHERE id = \(bind: storedID)
-            RETURNING id
-            """
-        ).first()
-
-        guard claimed != nil else {
-            // Another request consumed the same challenge first.
-            throw WebAuthnError.challengeNotFound
+        do {
+            try await passkeys.consumeAuthenticationChallenge(challenge)
+        } catch {
+            throw Self.mapPersistenceError(error)
         }
     }
 
@@ -320,15 +319,35 @@ struct WebAuthnService {
     func storeChallenge(
         _ challenge: String,
         for userID: UUID? = nil,
-        operation: String,
-        on database: Database
+        operation: String
     ) async throws {
-        let authChallenge = AuthenticationChallenge(
-            challenge: challenge,
+        _ = try await passkeys.storeChallenge(
+            challenge,
             userID: userID,
             operation: operation
         )
-        try await authChallenge.save(on: database)
+    }
+
+    private static func mapPersistenceError(_ error: any Error) -> any Error {
+        guard let error = error as? PasskeyPersistenceError else { return error }
+        switch error {
+        case .challengeNotFound:
+            return WebAuthnError.challengeNotFound
+        case .challengeOwnerMismatch:
+            return WebAuthnError.challengeOwnerMismatch
+        case .claimUnavailable:
+            return WebAuthnError.claimUnavailable
+        case .credentialAlreadyRegistered:
+            return WebAuthnError.credentialAlreadyRegistered
+        case .credentialLimitReached(let maximum):
+            return WebAuthnError.credentialLimitReached(maximum: maximum)
+        case .credentialNotFound:
+            return WebAuthnError.credentialNotFound
+        case .pendingAccountClaim:
+            return WebAuthnError.enrollmentRequiresInvitation
+        case .userNotFound, .lastCredential, .unexpectedRowCount:
+            return error
+        }
     }
 
 }
@@ -339,6 +358,11 @@ enum WebAuthnError: Error, AbortError, Sendable {
     case registrationFailed
     case authenticationFailed
     case challengeNotFound
+    case challengeOwnerMismatch
+    case claimUnavailable
+    case credentialAlreadyRegistered
+    case credentialLimitReached(maximum: Int)
+    case enrollmentRequiresInvitation
     case credentialNotFound
     case userNotFound
     case invalidConfiguration
@@ -347,8 +371,14 @@ enum WebAuthnError: Error, AbortError, Sendable {
         switch self {
         case .credentialNotFound, .userNotFound:
             return .notFound
-        case .challengeNotFound:
+        case .challengeNotFound, .challengeOwnerMismatch:
             return .badRequest
+        case .claimUnavailable:
+            return .gone
+        case .enrollmentRequiresInvitation:
+            return .forbidden
+        case .credentialAlreadyRegistered, .credentialLimitReached:
+            return .conflict
         default:
             return .internalServerError
         }
@@ -362,6 +392,16 @@ enum WebAuthnError: Error, AbortError, Sendable {
             return "Authentication failed"
         case .challengeNotFound:
             return "Authentication challenge not found or expired"
+        case .challengeOwnerMismatch:
+            return "This passkey request does not belong to your account"
+        case .claimUnavailable:
+            return "This invitation link has expired or was already used"
+        case .credentialAlreadyRegistered:
+            return "This passkey is already registered"
+        case .credentialLimitReached(let maximum):
+            return "You already have the maximum of \(maximum) passkeys"
+        case .enrollmentRequiresInvitation:
+            return "This account must be activated using its invitation link"
         case .credentialNotFound:
             return "User/Passkey not found"
         case .userNotFound:
@@ -400,14 +440,18 @@ extension Application {
     func configureWebAuthn(
         relyingPartyID: String,
         relyingPartyName: String,
-        relyingPartyOrigin: String
+        relyingPartyOrigin: String,
+        passkeys: PasskeysPersistence,
+        users: UserDirectoryPersistence
     ) {
         self.setStorageValue(
             WebAuthnServiceKey.self,
             to: WebAuthnService(
                 relyingPartyID: relyingPartyID,
                 relyingPartyName: relyingPartyName,
-                relyingPartyOrigin: relyingPartyOrigin
+                relyingPartyOrigin: relyingPartyOrigin,
+                passkeys: passkeys,
+                users: users
             ))
     }
 }

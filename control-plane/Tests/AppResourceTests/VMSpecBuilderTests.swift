@@ -8,19 +8,14 @@ import StratoShared
 /// path-only VMSpec helper.
 private extension VMSpecBuilder {
     static func testBootVolume(for vm: VM) -> Volume {
-        if vm.id == nil { vm.id = UUID() }
-        let volume = Volume(
+        let vmID = vm.id ?? UUID()
+        return Volume(
             id: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!,
-            name: "boot", description: "", projectID: vm.$project.id,
+            name: "boot", description: "", projectID: vm.projectID,
             environment: vm.environment, size: vm.disk, format: .qcow2,
-            volumeType: .boot, status: .attached, createdByID: UUID())
-        volume.$vm.id = vm.id!
-        volume.deviceName = VolumeDeviceName.disk(0).rawValue
-        volume.bootOrder = 0
-        volume.readonly = false
-        volume.generation = 1
-        volume.observedGeneration = 1
-        return volume
+            volumeType: .boot, status: .attached, generation: 1, observedGeneration: 1,
+            createdByID: UUID(), vmID: vmID,
+            deviceName: VolumeDeviceName.disk(0).rawValue, bootOrder: 0, readonly: false)
     }
 
     static func buildVMSpec(
@@ -92,7 +87,7 @@ struct VMSpecBuilderTests {
         firmwarePath: String? = nil,
         cmdline: String? = nil
     ) -> VM {
-        let vm = VM(
+        var vm = VM(
             name: "test-vm",
             description: "Test VM",
             image: "test-image",
@@ -124,33 +119,37 @@ struct VMSpecBuilderTests {
         deviceName: String = "net0",
         orderIndex: Int = 0
     ) -> VMNetworkInterface {
-        let interface = VMNetworkInterface(
-            id: UUID(),
-            vmID: UUID(),
-            logicalNetworkID: logicalNetworkID,
-            macAddress: macAddress,
-            mtu: mtu,
-            deviceName: deviceName,
-            orderIndex: orderIndex
-        )
+        let interfaceID = UUID()
         // Addressing lives in per-family child rows now; mirror what the
         // create path persists (an ipv4 row when IPAM allocated one).
+        let addresses: [InterfaceAddressSnapshot]
         if let ipAddress {
             let prefix = netmask.flatMap { StratoShared.IPv4Address($0)?.prefixLength } ?? 24
-            interface.$addresses.value = [
-                VMInterfaceAddress(
-                    interfaceID: interface.id!,
+            addresses = [
+                InterfaceAddressSnapshot(
+                    id: UUID(),
+                    interfaceID: interfaceID,
                     logicalNetworkID: logicalNetworkID,
-                    family: .ipv4,
+                    family: IPFamily.ipv4.rawValue,
                     address: ipAddress,
                     prefixLength: prefix,
-                    gateway: gateway
+                    gateway: gateway,
+                    createdAt: nil,
+                    updatedAt: nil
                 )
             ]
         } else {
-            interface.$addresses.value = []
+            addresses = []
         }
-        return interface
+        return VMNetworkInterface(
+            id: interfaceID,
+            vmID: UUID(),
+            logicalNetworkID: logicalNetworkID,
+            macAddress: macAddress,
+            loadedAddresses: addresses,
+            mtu: mtu,
+            deviceName: deviceName,
+            orderIndex: orderIndex)
     }
 
     /// The network index `networkSpecs` renders a NIC through. Since issue #765
@@ -362,13 +361,11 @@ struct VMSpecBuilderTests {
     /// Filtered on the *desired* attachment since STR-148, so the VM binding —
     /// not the observed status — is what puts it in the spec.
     private func attachedVolume(id: UUID, deviceName: String?, bootOrder: Int?) -> Volume {
-        let volume = Volume(
+        Volume(
             id: id, name: "v-\(id.uuidString.prefix(4))", description: "",
-            projectID: UUID(), environment: "development", size: 1 << 30, status: .attached, createdByID: UUID())
-        volume.$vm.id = UUID()
-        volume.deviceName = deviceName
-        volume.bootOrder = bootOrder
-        return volume
+            projectID: UUID(), environment: "development", size: 1 << 30,
+            status: .attached, createdByID: UUID(), vmID: UUID(),
+            deviceName: deviceName, bootOrder: bootOrder)
     }
 
     private func diskAttachments(for volumes: [Volume]) -> [UUID: DiskAttachment] {
@@ -667,7 +664,7 @@ struct VMSpecBuilderTests {
     @Test("VMSpecBuilder carries cloud-init user data verbatim")
     func testUserDataPassthrough() throws {
         let image = createTestImage()
-        let vm = createTestVM()
+        var vm = createTestVM()
         let payload = "#cloud-config\npackages:\n  - nginx\nruncmd:\n  - systemctl enable --now nginx\n"
         vm.userData = payload
 
@@ -682,7 +679,7 @@ struct VMSpecBuilderTests {
     @Test("VMSpecBuilder carries the VM's guest-bootstrap source")
     func testMetadataSourcePassthrough() throws {
         let image = createTestImage()
-        let vm = createTestVM()
+        var vm = createTestVM()
         vm.metadataSource = .imds
 
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
@@ -698,7 +695,7 @@ struct VMSpecBuilderTests {
     @Test("VMSpecBuilder carries the VM's Secure Boot and TPM intent")
     func testMachineProfilePassthrough() throws {
         let image = createTestImage()
-        let vm = createTestVM()
+        var vm = createTestVM()
         vm.secureBoot = true
         vm.tpmEnabled = true
 
@@ -728,7 +725,7 @@ struct VMSpecBuilderTests {
     @Test("VMSpecBuilder carries the Strato guest-agent opt-in")
     func testGuestAgentPassthrough() throws {
         let image = createTestImage()
-        let vm = createTestVM()
+        var vm = createTestVM()
         vm.guestAgentEnabled = true
 
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
@@ -742,7 +739,7 @@ struct VMSpecBuilderTests {
     @Test("VMSpecBuilder carries the VM's graphics console intent")
     func testGraphicsConsolePassthrough() throws {
         let image = createTestImage()
-        let vm = createTestVM()
+        var vm = createTestVM()
         vm.graphicsConsole = true
 
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])

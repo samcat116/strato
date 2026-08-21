@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -31,18 +30,18 @@ protocol SnapshotArtifactResource: ConvergingResource, FinalizableResource {
     var parentID: UUID { get }
 
     /// The agent holding the bytes.
-    var agentId: String? { get set }
+    var agentId: String? { get }
 
-    var desiredStatus: DesiredSnapshotStatus { get set }
+    var desiredStatus: DesiredSnapshotStatus { get }
 
     /// Settable so the shared SQL writer can refresh the database-assigned
     /// generation and the observed-state applier can advance the observation.
-    var generation: Int64 { get set }
-    var observedGeneration: Int64 { get set }
+    var generation: Int64 { get }
+    var observedGeneration: Int64 { get }
 
     /// When the retention sweep should mark this artifact `.absent`, or nil to
     /// keep it until someone deletes it. See `SnapshotRetentionSweep`.
-    var expiresAt: Date? { get set }
+    var expiresAt: Date? { get }
 
     /// Whether the control plane wants an exported copy in object storage.
     /// False for the families that have no off-node representation.
@@ -70,31 +69,44 @@ protocol SnapshotArtifactResource: ConvergingResource, FinalizableResource {
     /// Records what the capturing agent measured. Called from the observed-state
     /// applier; does not persist.
     /// - Returns: whether anything changed.
-    func applyCapturedFacts(_ facts: ObservedSnapshotFacts) -> Bool
+    func recordingCapturedFacts(
+        _ facts: ObservedSnapshotFacts
+    ) -> (resource: Self, changed: Bool)
 
     /// Records that the agent finished streaming the artifact to object
     /// storage. Does not persist. Returns whether anything changed.
-    func applyExported(_ exported: Bool) -> Bool
+    func recordingExported(_ exported: Bool) -> (resource: Self, changed: Bool)
 
     /// Mirrors the artifact's presence onto the table's own status enum. Does
     /// not persist. Returns whether anything changed.
-    func applyObservedPresence(present: Bool, failed: Bool) -> Bool
+    func recordingObservedPresence(
+        present: Bool, failed: Bool
+    ) -> (resource: Self, changed: Bool)
+
+    func replacingAgentID(_ agentID: String?) -> Self
+    func replacingDesiredStatus(_ status: DesiredSnapshotStatus) -> Self
+    func replacingObservedGeneration(_ generation: Int64) -> Self
+    func replacingExpiration(_ expiresAt: Date?) -> Self
 
     /// Rows this agent holds, for sync assembly.
-    static func placed(onAgent agentId: String, on db: any Database) async throws -> [Self]
+    static func placed(onAgent agentId: String, on db: PostgresStoreContext) async throws -> [Self]
+
+    /// Batch lookup used when one report names unrecognized artifacts. Keeping
+    /// it on the persistence contract avoids exposing a generic query builder.
+    static func matching(ids: [UUID], on db: PostgresStoreContext) async throws -> [Self]
 
     /// Rows whose retention deadline has passed, for the sweep.
-    static func expired(at now: Date, on db: any Database) async throws -> [Self]
+    static func expired(at now: Date, on db: PostgresStoreContext) async throws -> [Self]
 
     /// Rows whose deletion has been accepted, for the orphaned-terminating
     /// backstop. A protocol requirement for `overdueForConvergence`'s reason:
     /// Fluent filters on the model's own field *projection*, which a protocol
     /// cannot name.
-    static func terminating(on db: any Database) async throws -> [Self]
+    static func terminating(on db: PostgresStoreContext) async throws -> [Self]
 }
 
 extension SnapshotArtifactResource {
-    func placementAgentIDs(on db: any Database) async throws -> [String] {
+    func placementAgentIDs(on db: PostgresStoreContext) async throws -> [String] {
         agentId.map { [$0] } ?? []
     }
     var isTerminating: Bool { desiredStatus == .absent }
@@ -105,12 +117,6 @@ extension SnapshotArtifactResource {
 
     /// Most families draw on no storage pool; the two that do override this.
     var storageQuotaScope: (projectID: UUID, environment: String)? { nil }
-
-    /// Records a new desired state in memory. The owning mutation service
-    /// advances the generation in SQL before saving it.
-    func setDesiredStatus(_ newDesired: DesiredSnapshotStatus) {
-        desiredStatus = newDesired
-    }
 
     /// Everything the desired state asks for exists on the agent.
     ///

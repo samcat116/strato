@@ -1,5 +1,4 @@
-import Fluent
-import SQLKit
+import ControlPlanePostgres
 import StratoShared
 import Testing
 
@@ -25,7 +24,7 @@ struct ResourceEventEnumConstraintTests {
 
     /// Inserts one row per raw value, returning the error if any is rejected.
     private func insert(
-        column: String, values: [String], on sql: any SQLDatabase
+        column: String, values: [String], on sql: PostgresStoreContext
     ) async throws {
         for value in values {
             let quoted = "'\(value.replacingOccurrences(of: "'", with: "''"))'"
@@ -48,7 +47,7 @@ struct ResourceEventEnumConstraintTests {
     @Test("The installed CHECK constraints accept every case of the enums they guard")
     func constraintsAcceptEveryCase() async throws {
         try await withTestApp { app in
-            let sql = try #require(app.db as? any SQLDatabase)
+            let sql = try #require(Optional(app.testPostgres))
 
             // If any of these throws, the constraint in the database is
             // narrower than the Swift enum: add a follow-up migration that
@@ -67,7 +66,7 @@ struct ResourceEventEnumConstraintTests {
     @Test("The constraints reject a value outside the enum")
     func constraintsRejectUnknownValues() async throws {
         try await withTestApp { app in
-            let sql = try #require(app.db as? any SQLDatabase)
+            let sql = try #require(Optional(app.testPostgres))
             for column in ["actor_type", "resource_kind", "mutation", "phase"] {
                 await #expect(throws: (any Error).self) {
                     try await self.insert(column: column, values: ["not_a_real_value"], on: sql)
@@ -81,7 +80,7 @@ struct ResourceEventEnumConstraintTests {
     @Test("The database refuses to update or delete an event")
     func appendOnlyEnforcedByDatabase() async throws {
         try await withTestApp { app in
-            let sql = try #require(app.db as? any SQLDatabase)
+            let sql = try #require(Optional(app.testPostgres))
             try await self.insert(column: "mutation", values: ["boot"], on: sql)
 
             // The whole design rests on these rows being immutable; a
@@ -93,7 +92,7 @@ struct ResourceEventEnumConstraintTests {
             await #expect(throws: (any Error).self) {
                 try await sql.raw("DELETE FROM resource_events").run()
             }
-            let remaining = try await ResourceEvent.query(on: app.db).count()
+            let remaining = try await ResourceEvent.count(on: app.testPostgres)
             #expect(remaining == 1)
         }
     }

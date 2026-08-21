@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 /// Read API for the audit trail (issue #39).
@@ -8,6 +8,12 @@ import Vapor
 /// - `GET /api/organizations/:organizationID/audit-events` — organization
 ///   admins (`manage_members`); events scoped to that organization.
 struct AuditEventController: RouteCollection {
+    private let auditEvents: AuditEventsPersistence
+
+    init(auditEvents: AuditEventsPersistence) {
+        self.auditEvents = auditEvents
+    }
+
     func boot(routes: RoutesBuilder) throws {
         routes.grouped("api", "audit-events").get(use: listAll)
         routes.grouped("api", "organizations", ":organizationID", "audit-events")
@@ -50,37 +56,22 @@ struct AuditEventController: RouteCollection {
         let limit = try req.intQuery("limit", default: 50, in: 1...500)
         let offset = try req.intQuery("offset", default: 0, in: 0...Int.max)
 
-        let dbQuery = AuditEvent.query(on: req.db)
-        if let organizationID {
-            dbQuery.filter(\.$organizationID == organizationID)
-        }
-        if let eventType = query.eventType {
-            dbQuery.filter(\.$eventType == eventType)
-        }
-        if let userID = query.userID {
-            dbQuery.filter(\.$userID == userID)
-        }
-        if query.adminOnly == true {
-            dbQuery.filter(\.$adminBypass == true)
-        }
-        if let from = query.from {
-            dbQuery.filter(\.$createdAt >= parseTimestamp(from, parameter: "from"))
-        }
-        if let to = query.to {
-            dbQuery.filter(\.$createdAt <= parseTimestamp(to, parameter: "to"))
-        }
-
-        let total = try await dbQuery.copy().count()
-        let events =
-            try await dbQuery
-            .sort(\.$createdAt, .descending)
-            .sort(\.$id, .descending)
-            .range(offset..<(offset + limit))
-            .all()
+        let page = try await auditEvents.events(
+            matching: AuditEventFilter(
+                organizationID: organizationID,
+                eventType: query.eventType,
+                userID: query.userID,
+                adminOnly: query.adminOnly == true,
+                createdAtOrAfter: query.from.map { parseTimestamp($0, parameter: "from") },
+                createdAtOrBefore: query.to.map { parseTimestamp($0, parameter: "to") }
+            ),
+            limit: limit,
+            offset: offset
+        )
 
         return AuditEventListResponse(
-            events: events.map(AuditEventResponse.init),
-            total: total,
+            events: page.events.map(AuditEventResponse.init),
+            total: page.total,
             limit: limit,
             offset: offset
         )
@@ -125,7 +116,7 @@ struct AuditEventResponse: Content {
     let metadata: [String: String]?
     let createdAt: Date?
 
-    init(from event: AuditEvent) {
+    init(from event: AuditEventSnapshot) {
         self.id = event.id
         self.eventType = event.eventType
         self.userID = event.userID

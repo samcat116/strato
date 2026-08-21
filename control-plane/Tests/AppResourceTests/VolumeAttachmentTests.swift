@@ -1,5 +1,3 @@
-import Fluent
-import SQLKit
 import StratoShared
 import Testing
 import Vapor
@@ -26,17 +24,16 @@ struct VolumeAttachmentTests {
         _ test: (Application, TestDataBuilder, User, Project, VM, String) async throws -> Void
     ) async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let admin = try await builder.createUser(
                 username: "attachment-admin",
                 email: "attachment-admin@example.com",
                 displayName: "Attachment Admin",
                 isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
             let org = try await builder.createOrganization(name: "Attachment Org")
             try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
-            admin.currentOrganizationId = org.id
-            try await admin.save(on: app.db)
+            try await admin.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Attachment Project",
@@ -64,13 +61,11 @@ struct VolumeAttachmentTests {
             projectID: try project.requireID(), environment: "development",
             size: 10 * 1024 * 1024 * 1024,
             status: vm == nil ? .available : .attached,
-            createdByID: try user.requireID())
-        if let vm {
-            volume.$vm.id = try vm.requireID()
-            volume.deviceName = deviceName ?? "disk0"
-            volume.bootOrder = bootOrder
-        }
-        try await volume.save(on: app.db)
+            createdByID: try user.requireID(),
+            vmID: try vm?.requireID(),
+            deviceName: vm == nil ? nil : deviceName ?? "disk0",
+            bootOrder: vm == nil ? nil : bootOrder)
+        try await volume.save(on: app.testPostgres)
         return volume
     }
 
@@ -97,12 +92,13 @@ struct VolumeAttachmentTests {
 
     @Test("Deleting a VM detaches its volumes instead of stranding them")
     func deletingAVMDetachesItsVolumes() async throws {
-        try await withAttachmentApp { app, _, admin, project, vm, _ in
+        try await withAttachmentApp { app, _, admin, project, initialVM, _ in
+            var vm = initialVM
             let volume = try await makeVolume(
                 named: "reaped-vm-volume", attachedTo: vm, deviceName: "disk0", bootOrder: 0,
-                on: app, user: admin, project: project)
-            volume.attachedAgentId = "agent-a"
-            try await volume.save(on: app.db)
+                on: app, user: admin, project: project
+            ).replacing(attachedAgentId: "agent-a")
+            try await volume.save(on: app.testPostgres)
             let vmID = try vm.requireID()
             let generationBefore = volume.generation
 
@@ -110,17 +106,17 @@ struct VolumeAttachmentTests {
             // never reached an agent, so the first clear reaps the row.
             vm.finalizers = []
             vm.setFixtureDesiredStatus(.absent)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             let outcome = try await ResourceFinalizerService.clear(
-                .agentAbsent, from: vm, on: app.db, app: app)
+                .agentAbsent, from: vm, on: app.testPostgres, app: app)
 
             #expect(outcome == .reaped)
-            #expect(try await VM.find(vmID, on: app.db) == nil)
+            #expect(try await VM.find(vmID, on: app.testPostgres) == nil)
 
             // Before the fix the FK cleared `vm_id` and left everything else,
             // so the volume named a device on a VM that no longer existed.
-            let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
-            #expect(reloaded.$vm.id == nil)
+            let reloaded = try #require(try await Volume.find(volume.id, on: app.testPostgres))
+            #expect(reloaded.vmID == nil)
             #expect(reloaded.deviceName == nil)
             #expect(reloaded.bootOrder == nil)
             #expect(reloaded.attachedAgentId == nil)
@@ -138,14 +134,15 @@ struct VolumeAttachmentTests {
 
     @Test("A volume detached from a deleted VM is attachable again")
     func aReleasedVolumeCanBeReattached() async throws {
-        try await withAttachmentApp { app, builder, admin, project, vm, token in
+        try await withAttachmentApp { app, builder, admin, project, initialVM, token in
+            var vm = initialVM
             let volume = try await makeVolume(
                 named: "reusable-volume", attachedTo: vm, on: app, user: admin, project: project)
 
             vm.finalizers = []
             vm.setFixtureDesiredStatus(.absent)
-            try await vm.save(on: app.db)
-            try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: app.db, app: app)
+            try await vm.save(on: app.testPostgres)
+            try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: app.testPostgres, app: app)
 
             // A fresh VM, and the volume goes back to work: the attach is
             // accepted rather than refused as still attached to the VM that no
@@ -167,11 +164,11 @@ struct VolumeAttachmentTests {
             // `vm_id` and left the rest. RESTRICT means a delete path that
             // forgets its volumes fails loudly instead.
             await #expect(throws: (any Error).self) {
-                try await vm.delete(on: app.db)
+                try await vm.delete(on: app.testPostgres)
             }
 
-            let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
-            #expect(reloaded.$vm.id == vm.id)
+            let reloaded = try #require(try await Volume.find(volume.id, on: app.testPostgres))
+            #expect(reloaded.vmID == vm.id)
             #expect(reloaded.status == .attached)
         }
     }
@@ -192,9 +189,9 @@ struct VolumeAttachmentTests {
                 expecting: .conflict, reason: "already in use on this VM")
 
             // Refused before anything was written.
-            let reloaded = try #require(try await Volume.find(second.id, on: app.db))
+            let reloaded = try #require(try await Volume.find(second.id, on: app.testPostgres))
             #expect(reloaded.status == .available)
-            #expect(reloaded.$vm.id == nil)
+            #expect(reloaded.vmID == nil)
         }
     }
 
@@ -210,9 +207,9 @@ struct VolumeAttachmentTests {
                     expecting: .badRequest, reason: "Invalid device name")
             }
 
-            let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
+            let reloaded = try #require(try await Volume.find(volume.id, on: app.testPostgres))
             #expect(reloaded.deviceName == nil)
-            #expect(reloaded.$vm.id == nil)
+            #expect(reloaded.vmID == nil)
         }
     }
 
@@ -229,15 +226,15 @@ struct VolumeAttachmentTests {
             // itself is what is under test: `disk0` is taken, so the generated
             // name must not be it.
             let generationBefore = second.generation
-            let claimed = try await app.db.transaction { tx in
+            let claimed = try await app.testPostgres.transaction { tx in
                 try await VolumeAttachmentService.claim(
                     second, to: vm, deviceName: nil, bootOrder: nil, readonly: false, on: tx)
             }
-            #expect(claimed.rawValue == "disk1")
+            #expect(claimed.deviceName.rawValue == "disk1")
 
-            let reloaded = try #require(try await Volume.find(second.id, on: app.db))
+            let reloaded = try #require(try await Volume.find(second.id, on: app.testPostgres))
             #expect(reloaded.deviceName == "disk1")
-            #expect(reloaded.$vm.id == vm.id)
+            #expect(reloaded.vmID == vm.id)
             // `claim` is deliberately state-only. The HTTP path wraps it in
             // `ResourceMutation.accept`, which owns the single generation
             // advance after the attachment mutation succeeds.
@@ -257,9 +254,9 @@ struct VolumeAttachmentTests {
             // the closure the model the controller fetched, refreshed by
             // `lockAndRefresh` — so the guard is only as good as what that
             // refresh adopts.
-            let stale = try #require(try await Volume.find(volume.id, on: app.db))
+            let stale = try #require(try await Volume.find(volume.id, on: app.testPostgres))
 
-            try await app.db.transaction { tx in
+            try await app.testPostgres.transaction { tx in
                 let winner = try #require(try await Volume.find(volume.id, on: tx))
                 try await VolumeAttachmentService.claim(
                     winner, to: vm, deviceName: nil, bootOrder: nil, readonly: false, on: tx)
@@ -271,15 +268,16 @@ struct VolumeAttachmentTests {
             // `202`, and the unique index could not see it, since the two
             // rows-in-time name different VMs.
             await #expect(throws: (any Error).self) {
-                try await app.db.transaction { tx in
-                    #expect(try await stale.lockAndRefresh(on: tx))
+                try await app.testPostgres.transaction { tx in
+                    let refreshed = try #require(try await stale.lockingAndRefreshing(on: tx))
                     try await VolumeAttachmentService.claim(
-                        stale, to: other, deviceName: nil, bootOrder: nil, readonly: false, on: tx)
+                        refreshed, to: other, deviceName: nil, bootOrder: nil, readonly: false,
+                        on: tx)
                 }
             }
 
-            let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
-            #expect(reloaded.$vm.id == vm.id)
+            let reloaded = try #require(try await Volume.find(volume.id, on: app.testPostgres))
+            #expect(reloaded.vmID == vm.id)
         }
     }
 
@@ -307,11 +305,11 @@ struct VolumeAttachmentTests {
             let volume = Volume(
                 name: "nameless-attachment", description: "",
                 projectID: try project.requireID(), environment: "development", size: 1 << 30, status: .attached,
-                createdByID: try admin.requireID())
-            volume.$vm.id = try vm.requireID()
+                createdByID: try admin.requireID(),
+                vmID: try vm.requireID())
 
             await #expect(throws: (any Error).self) {
-                try await volume.save(on: app.db)
+                try await volume.save(on: app.testPostgres)
             }
         }
     }
@@ -354,17 +352,19 @@ struct VolumeAttachmentTests {
             // an older build can still produce mid-rollout.
             let volume = try await makeVolume(
                 named: "stranded-volume", on: app, user: admin, project: project)
-            volume.status = .attached
-            volume.deviceName = "disk0"
-            volume.bootOrder = 0
-            volume.readonly = true
-            volume.attachedAgentId = "agent-a"
-            try await volume.save(on: app.db)
+                .replacing(
+                    status: .attached,
+                    attachedAgentId: "agent-a",
+                    deviceName: "disk0",
+                    bootOrder: 0,
+                    readonly: true
+                )
+            try await volume.save(on: app.testPostgres)
             let generationBefore = volume.generation
 
             await app.agentService.sweepStrandedVolumeAttachments()
 
-            let swept = try #require(try await Volume.find(volume.id, on: app.db))
+            let swept = try #require(try await Volume.find(volume.id, on: app.testPostgres))
             #expect(swept.deviceName == nil)
             #expect(swept.bootOrder == nil)
             #expect(swept.readonly == false)
@@ -386,9 +386,9 @@ struct VolumeAttachmentTests {
 
             await app.agentService.sweepStrandedVolumeAttachments()
 
-            let swept = try #require(try await Volume.find(volume.id, on: app.db))
+            let swept = try #require(try await Volume.find(volume.id, on: app.testPostgres))
             #expect(swept.deviceName == "disk0")
-            #expect(swept.$vm.id == vm.id)
+            #expect(swept.vmID == vm.id)
             #expect(swept.generation == generationBefore)
         }
     }

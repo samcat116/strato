@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Foundation
 import Testing
 
@@ -175,14 +176,22 @@ struct SwiftCedarEngineTests {
     func guardrailWins() throws {
         let orgID = UUID()
         let guardrailID = UUID()
-        let guardrail = Guardrail(
+        let guardrail = IAMGuardrailSnapshot(
             id: guardrailID,
             name: "no-vm-ops",
-            nodeType: .organization,
+            description: nil,
+            nodeType: IAMNodeType.organization.rawValue,
             nodeID: orgID,
+            effect: GuardrailEffect.forbid.rawValue,
             actions: ["vm:*"],
-            principalMatch: .any,
-            resourceMatch: .any
+            principalMatchKind: GuardrailPrincipalMatchKind.any.rawValue,
+            principalMatchID: nil,
+            resourceMatchKind: GuardrailResourceMatchKind.any.rawValue,
+            resourceMatchValue: nil,
+            enabled: true,
+            createdBy: nil,
+            cedarText: nil,
+            authored: false
         )
         let compiledGuardrails = GuardrailRendering.forbids(
             for: [guardrail], organizationIDsByGuardrail: [:])

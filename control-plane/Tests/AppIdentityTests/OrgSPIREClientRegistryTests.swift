@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import SPIREServerAPI
 import StratoShared
@@ -35,7 +34,6 @@ struct OrgSPIREClientRegistryTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -69,12 +67,14 @@ struct OrgSPIREClientRegistryTests {
             platform: platform,
             platformConfig: platform.registrationConfig,
             logger: app.logger,
+            hierarchy: app.hierarchyPersistence,
+            trustDomains: app.orgTrustDomainsPersistence,
             orgTrustDomainsEnabled: orgTrustDomainsEnabled,
             legacyEnrollmentsAllowed: legacyEnrollmentsAllowed
         )
     }
 
-    private func makeOrg(on db: Database) async throws -> UUID {
+    private func makeOrg(on db: PostgresStoreContext) async throws -> UUID {
         let org = Organization(name: "TD Org", description: "org for trust domain tests")
         try await org.save(on: db)
         return try org.requireID()
@@ -84,16 +84,19 @@ struct OrgSPIREClientRegistryTests {
     /// fully provisioned instance.
     @discardableResult
     private func makeReadyTrustDomain(
-        on db: Database,
+        on db: PostgresStoreContext,
         organizationID: UUID,
         trustDomain: String = OrgSPIREClientRegistryTests.orgTrustDomain
-    ) async throws -> OrgTrustDomain {
-        let row = OrgTrustDomain(organizationID: organizationID, trustDomain: trustDomain, phase: .active)
-        row.nodeAddress = "spire-org.example.com:8081"
-        row.serverAddress = "spire-org.example.com:8085"
-        row.orgBundlePEM = Self.samplePEM
-        try await row.save(on: db)
-        return row
+    ) async throws -> OrgTrustDomainRecord {
+        try await OrgTrustDomainStore.insert(
+            OrgTrustDomainWrite(
+                organizationID: organizationID,
+                trustDomain: trustDomain,
+                phase: .active,
+                serverAddress: "spire-org.example.com:8085",
+                nodeAddress: "spire-org.example.com:8081",
+                orgBundlePEM: Self.samplePEM),
+            on: db)
     }
 
     // MARK: - Platform fallback
@@ -102,13 +105,13 @@ struct OrgSPIREClientRegistryTests {
     func featureOffUsesPlatform() async throws {
         try await withApp { app in
             installPlatformSPIRE(on: app)
-            let org = try await makeOrg(on: app.db)
+            let org = try await makeOrg(on: app.testPostgres)
             // Even with a fully provisioned row present, the flag is what gates
             // the behavior — that is what makes the phase-2 rows ship dark.
-            try await makeReadyTrustDomain(on: app.db, organizationID: org)
+            try await makeReadyTrustDomain(on: app.testPostgres, organizationID: org)
 
             let registry = try makeRegistry(on: app, orgTrustDomainsEnabled: false)
-            let selection = try await registry.resolve(scope: .organization(org), on: app.db)
+            let selection = try await registry.resolve(scope: .organization(org), on: app.testPostgres)
 
             #expect(selection.service.trustDomain == Self.platformTrustDomain)
             #expect(selection.federatesWith.isEmpty)
@@ -120,10 +123,10 @@ struct OrgSPIREClientRegistryTests {
     func noClaimedDomainUsesPlatform() async throws {
         try await withApp { app in
             installPlatformSPIRE(on: app)
-            let org = try await makeOrg(on: app.db)
+            let org = try await makeOrg(on: app.testPostgres)
 
             let registry = try makeRegistry(on: app)
-            let selection = try await registry.resolve(scope: .organization(org), on: app.db)
+            let selection = try await registry.resolve(scope: .organization(org), on: app.testPostgres)
             #expect(selection.service.trustDomain == Self.platformTrustDomain)
             #expect(selection.federatesWith.isEmpty)
             guard case .noTrustDomainClaimed = selection.platformFallback else {
@@ -137,13 +140,15 @@ struct OrgSPIREClientRegistryTests {
     func pendingDomainFallsBack() async throws {
         try await withApp { app in
             installPlatformSPIRE(on: app)
-            let org = try await makeOrg(on: app.db)
+            let org = try await makeOrg(on: app.testPostgres)
             // Claimed by org creation, not yet converged by the reconciler.
-            let row = OrgTrustDomain(organizationID: org, trustDomain: Self.orgTrustDomain)
-            try await row.save(on: app.db)
+            try await OrgTrustDomainStore.insert(
+                OrgTrustDomainWrite(
+                    organizationID: org, trustDomain: Self.orgTrustDomain),
+                on: app.testPostgres)
 
             let registry = try makeRegistry(on: app, legacyEnrollmentsAllowed: true)
-            let selection = try await registry.resolve(scope: .organization(org), on: app.db)
+            let selection = try await registry.resolve(scope: .organization(org), on: app.testPostgres)
             #expect(selection.service.trustDomain == Self.platformTrustDomain)
             guard case .trustDomainNotReady = selection.platformFallback else {
                 Issue.record("expected a trust-domain-not-ready fallback")
@@ -156,13 +161,15 @@ struct OrgSPIREClientRegistryTests {
     func pendingDomainRefusedWithoutLegacy() async throws {
         try await withApp { app in
             installPlatformSPIRE(on: app)
-            let org = try await makeOrg(on: app.db)
-            let row = OrgTrustDomain(organizationID: org, trustDomain: Self.orgTrustDomain)
-            try await row.save(on: app.db)
+            let org = try await makeOrg(on: app.testPostgres)
+            try await OrgTrustDomainStore.insert(
+                OrgTrustDomainWrite(
+                    organizationID: org, trustDomain: Self.orgTrustDomain),
+                on: app.testPostgres)
 
             let registry = try makeRegistry(on: app, legacyEnrollmentsAllowed: false)
             await #expect(throws: (any Error).self) {
-                _ = try await registry.resolve(scope: .organization(org), on: app.db)
+                _ = try await registry.resolve(scope: .organization(org), on: app.testPostgres)
             }
         }
     }
@@ -171,18 +178,22 @@ struct OrgSPIREClientRegistryTests {
     func activeWithoutBundleIsNotReady() async throws {
         try await withApp { app in
             installPlatformSPIRE(on: app)
-            let org = try await makeOrg(on: app.db)
+            let org = try await makeOrg(on: app.testPostgres)
             // Provisioning got as far as `active` but the bundle never landed.
             // Minting an identity here would produce an agent the control plane
             // holds no roots for and refuses on the WebSocket.
-            let row = OrgTrustDomain(organizationID: org, trustDomain: Self.orgTrustDomain, phase: .active)
-            row.nodeAddress = "spire-org.example.com:8081"
-            row.serverAddress = "spire-org.example.com:8085"
-            try await row.save(on: app.db)
+            try await OrgTrustDomainStore.insert(
+                OrgTrustDomainWrite(
+                    organizationID: org,
+                    trustDomain: Self.orgTrustDomain,
+                    phase: .active,
+                    serverAddress: "spire-org.example.com:8085",
+                    nodeAddress: "spire-org.example.com:8081"),
+                on: app.testPostgres)
 
             let registry = try makeRegistry(on: app, legacyEnrollmentsAllowed: false)
             await #expect(throws: (any Error).self) {
-                _ = try await registry.resolve(scope: .organization(org), on: app.db)
+                _ = try await registry.resolve(scope: .organization(org), on: app.testPostgres)
             }
         }
     }
@@ -193,11 +204,11 @@ struct OrgSPIREClientRegistryTests {
     func readyDomainUsesOrgInstance() async throws {
         try await withApp { app in
             installPlatformSPIRE(on: app)
-            let org = try await makeOrg(on: app.db)
-            let row = try await makeReadyTrustDomain(on: app.db, organizationID: org)
+            let org = try await makeOrg(on: app.testPostgres)
+            let row = try await makeReadyTrustDomain(on: app.testPostgres, organizationID: org)
 
             let registry = try makeRegistry(on: app)
-            let selection = try await registry.resolve(scope: .organization(org), on: app.db)
+            let selection = try await registry.resolve(scope: .organization(org), on: app.testPostgres)
 
             #expect(selection.platformFallback == nil)
             #expect(selection.service.trustDomain == row.trustDomain)
@@ -217,8 +228,8 @@ struct OrgSPIREClientRegistryTests {
     func folderScopeResolvesToRootOrg() async throws {
         try await withApp { app in
             installPlatformSPIRE(on: app)
-            let org = try await makeOrg(on: app.db)
-            let row = try await makeReadyTrustDomain(on: app.db, organizationID: org)
+            let org = try await makeOrg(on: app.testPostgres)
+            let row = try await makeReadyTrustDomain(on: app.testPostgres, organizationID: org)
 
             let folder = OrganizationalUnit(
                 name: "capacity",
@@ -227,11 +238,11 @@ struct OrgSPIREClientRegistryTests {
                 path: "/capacity",
                 depth: 0
             )
-            try await folder.save(on: app.db)
+            try await folder.save(on: app.testPostgres)
             let folderID = try folder.requireID()
 
             let registry = try makeRegistry(on: app)
-            let selection = try await registry.resolve(scope: .organizationalUnit(folderID), on: app.db)
+            let selection = try await registry.resolve(scope: .organizationalUnit(folderID), on: app.testPostgres)
             // A folder has no CA of its own — capacity delegated to it is
             // still the organization's tenancy.
             #expect(selection.service.trustDomain == row.trustDomain)
@@ -245,12 +256,12 @@ struct OrgSPIREClientRegistryTests {
             // The compose/unix-socket platform shape: no Workload API socket,
             // so there is no identity to present to a *networked* org server.
             installPlatformSPIRE(on: app, workloadSocket: nil)
-            let org = try await makeOrg(on: app.db)
-            try await makeReadyTrustDomain(on: app.db, organizationID: org)
+            let org = try await makeOrg(on: app.testPostgres)
+            try await makeReadyTrustDomain(on: app.testPostgres, organizationID: org)
 
             let registry = try makeRegistry(on: app)
             await #expect(throws: (any Error).self) {
-                _ = try await registry.resolve(scope: .organization(org), on: app.db)
+                _ = try await registry.resolve(scope: .organization(org), on: app.testPostgres)
             }
         }
     }
@@ -259,16 +270,26 @@ struct OrgSPIREClientRegistryTests {
     func enrollmentRequiresServerAddress() async throws {
         try await withApp { app in
             installPlatformSPIRE(on: app)
-            let org = try await makeOrg(on: app.db)
-            let row = try await makeReadyTrustDomain(on: app.db, organizationID: org)
-            row.serverAddress = nil
-            try await row.save(on: app.db)
+            let org = try await makeOrg(on: app.testPostgres)
+            let row = try await makeReadyTrustDomain(on: app.testPostgres, organizationID: org)
+            _ = try await OrgTrustDomainStore.updateState(
+                id: row.id,
+                phase: row.phase,
+                generation: row.generation,
+                observedGeneration: row.observedGeneration,
+                serverAddress: nil,
+                bundleEndpointURL: row.bundleEndpointURL,
+                nodeAddress: row.nodeAddress,
+                orgBundlePEM: row.orgBundlePEM,
+                lastError: row.lastError,
+                deletedAt: row.deletedAt,
+                on: app.testPostgres)
 
             let registry = try makeRegistry(on: app)
             // Handing back a bootstrap command with no address for the node to
             // attest against would be worse than refusing.
             await #expect(throws: (any Error).self) {
-                _ = try await registry.resolve(scope: .organization(org), on: app.db)
+                _ = try await registry.resolve(scope: .organization(org), on: app.testPostgres)
             }
         }
     }
@@ -279,8 +300,8 @@ struct OrgSPIREClientRegistryTests {
     func deprovisionResolvesByTrustDomain() async throws {
         try await withApp { app in
             installPlatformSPIRE(on: app)
-            let org = try await makeOrg(on: app.db)
-            let row = try await makeReadyTrustDomain(on: app.db, organizationID: org)
+            let org = try await makeOrg(on: app.testPostgres)
+            let row = try await makeReadyTrustDomain(on: app.testPostgres, organizationID: org)
 
             // Note the flags: deprovisioning must not consult them at all —
             // entries issued while the feature was on stay revocable after it
@@ -288,10 +309,10 @@ struct OrgSPIREClientRegistryTests {
             let registry = try makeRegistry(
                 on: app, orgTrustDomainsEnabled: false, legacyEnrollmentsAllowed: false)
 
-            let platform = try await registry.service(forTrustDomain: Self.platformTrustDomain, on: app.db)
+            let platform = try await registry.service(forTrustDomain: Self.platformTrustDomain, on: app.testPostgres)
             #expect(platform?.trustDomain == Self.platformTrustDomain)
 
-            let orgService = try await registry.service(forTrustDomain: row.trustDomain, on: app.db)
+            let orgService = try await registry.service(forTrustDomain: row.trustDomain, on: app.testPostgres)
             #expect(orgService?.trustDomain == row.trustDomain)
         }
     }
@@ -307,7 +328,7 @@ struct OrgSPIREClientRegistryTests {
             // nil is what lets `?skipSpireDeprovision=true` work at all — see
             // AgentControllerDeprovisionTests.
             let service = try await registry.service(
-                forTrustDomain: "org-deadbeefdeadbeef.platform.test", on: app.db)
+                forTrustDomain: "org-deadbeefdeadbeef.platform.test", on: app.testPostgres)
             #expect(service == nil)
         }
     }
@@ -316,15 +337,25 @@ struct OrgSPIREClientRegistryTests {
     func deletingDomainStillRevocable() async throws {
         try await withApp { app in
             installPlatformSPIRE(on: app)
-            let org = try await makeOrg(on: app.db)
-            let row = try await makeReadyTrustDomain(on: app.db, organizationID: org)
-            row.phase = .deleting
-            try await row.save(on: app.db)
+            let org = try await makeOrg(on: app.testPostgres)
+            let row = try await makeReadyTrustDomain(on: app.testPostgres, organizationID: org)
+            _ = try await OrgTrustDomainStore.updateState(
+                id: row.id,
+                phase: .deleting,
+                generation: row.generation,
+                observedGeneration: row.observedGeneration,
+                serverAddress: row.serverAddress,
+                bundleEndpointURL: row.bundleEndpointURL,
+                nodeAddress: row.nodeAddress,
+                orgBundlePEM: row.orgBundlePEM,
+                lastError: row.lastError,
+                deletedAt: row.deletedAt,
+                on: app.testPostgres)
 
             let registry = try makeRegistry(on: app)
             // Teardown is exactly when entries most need removing, so the
             // stricter `acceptsIdentities` gate must not apply here.
-            let service = try await registry.service(forTrustDomain: row.trustDomain, on: app.db)
+            let service = try await registry.service(forTrustDomain: row.trustDomain, on: app.testPostgres)
             #expect(service?.trustDomain == row.trustDomain)
         }
     }
@@ -333,18 +364,27 @@ struct OrgSPIREClientRegistryTests {
     func revocationIgnoresServerAddress() async throws {
         try await withApp { app in
             installPlatformSPIRE(on: app)
-            let org = try await makeOrg(on: app.db)
-            let row = try await makeReadyTrustDomain(on: app.db, organizationID: org)
+            let org = try await makeOrg(on: app.testPostgres)
+            let row = try await makeReadyTrustDomain(on: app.testPostgres, organizationID: org)
             // A half-provisioned or mid-teardown row: the reconciler never set,
             // or has already cleared, the address agents dial. That address only
             // ever feeds bootstrap commands, so demanding it here would fail
             // revocation for exactly the rows that most need it.
-            row.serverAddress = nil
-            row.phase = .deleting
-            try await row.save(on: app.db)
+            _ = try await OrgTrustDomainStore.updateState(
+                id: row.id,
+                phase: .deleting,
+                generation: row.generation,
+                observedGeneration: row.observedGeneration,
+                serverAddress: nil,
+                bundleEndpointURL: row.bundleEndpointURL,
+                nodeAddress: row.nodeAddress,
+                orgBundlePEM: row.orgBundlePEM,
+                lastError: row.lastError,
+                deletedAt: row.deletedAt,
+                on: app.testPostgres)
 
             let registry = try makeRegistry(on: app)
-            let service = try await registry.service(forTrustDomain: row.trustDomain, on: app.db)
+            let service = try await registry.service(forTrustDomain: row.trustDomain, on: app.testPostgres)
             #expect(service?.trustDomain == row.trustDomain)
         }
     }
@@ -372,3 +412,4 @@ struct OrgSPIREClientRegistryTests {
 
         """
 }
+import ControlPlanePostgres

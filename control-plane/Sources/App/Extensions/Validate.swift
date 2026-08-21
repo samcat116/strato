@@ -25,7 +25,7 @@ enum Validate {
 
     /// Names and other short single-line identifiers a caller types once and
     /// then refers to. 128 is the largest of the name-shaped bounds already
-    /// applied by hand (`ServiceAccount.name` and `Site` label keys), so
+    /// applied by hand (service-account names and `Site` label keys), so
     /// adopting it fleet-wide cannot make something that fits today stop
     /// fitting.
     static let nameLength = 128

@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -118,7 +118,9 @@ enum AgentMTLSAuthenticator {
     /// failure. WebSocket callers compose the granular pieces above instead,
     /// because their failures are reported as close codes rather than HTTP
     /// statuses.
-    static func authenticateAgent(req: Request) async throws -> AuthenticatedAgent {
+    static func authenticateAgent(
+        req: Request, workloads: WorkloadsPersistence
+    ) async throws -> AuthenticatedAgent {
         guard let spireService = req.application.spireService, await spireService.isEnabled else {
             req.logger.error(
                 "Refusing agent mTLS request: agent authentication requires SPIRE, which is not configured")
@@ -154,7 +156,7 @@ enum AgentMTLSAuthenticator {
         // The workload registry is authoritative for the *mapping* (issue
         // #491): a URI registered to a different principal is rejected even
         // with a valid agent path, and a first-seen identity is registered.
-        try await WorkloadRegistry.requireAgentRegistration(identity: identity, on: req.db)
+        try await WorkloadRegistry.requireAgentRegistration(identity: identity, using: workloads)
         return AuthenticatedAgent(identity: identity, organizationID: verified.organizationID)
     }
 }

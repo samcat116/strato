@@ -1,8 +1,31 @@
-import Fluent
+import ControlPlanePostgres
 import StratoShared
 import Vapor
 
 struct AgentController: RouteCollection {
+    private let enrollments: AgentEnrollmentsPersistence?
+    private let agents: AgentsPersistence?
+    private let workloads: WorkloadsPersistence?
+    private let hierarchy: HierarchyPersistence?
+    private let sites: SitesPersistence?
+    private let trustDomains: OrgTrustDomainsPersistence?
+
+    init(
+        enrollments: AgentEnrollmentsPersistence? = nil,
+        agents: AgentsPersistence? = nil,
+        workloads: WorkloadsPersistence? = nil,
+        hierarchy: HierarchyPersistence? = nil,
+        sites: SitesPersistence? = nil,
+        trustDomains: OrgTrustDomainsPersistence? = nil
+    ) {
+        self.enrollments = enrollments
+        self.agents = agents
+        self.workloads = workloads
+        self.hierarchy = hierarchy
+        self.sites = sites
+        self.trustDomains = trustDomains
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let agents = routes.grouped("api", "agents")
 
@@ -58,6 +81,30 @@ struct AgentController: RouteCollection {
         }
     }
 
+    private func requireAgentAction(
+        _ action: String,
+        agent: AgentSnapshot,
+        req: Request
+    ) async throws {
+        guard agent.organizationID != nil || agent.organizationalUnitID != nil else {
+            _ = try await req.requireSystemAdmin("This agent has no owning organization")
+            return
+        }
+        guard try await req.can(action, on: IAMNode(type: .agent, id: agent.id)) else {
+            throw Abort(.forbidden, reason: "You don't have '\(action)' access on this agent")
+        }
+    }
+
+    private func rootOrganizationID(
+        for agent: AgentSnapshot,
+        using hierarchy: HierarchyPersistence
+    ) async throws -> UUID? {
+        if let organizationID = agent.organizationID { return organizationID }
+        guard let organizationalUnitID = agent.organizationalUnitID else { return nil }
+        return try await hierarchy.organizationalUnit(id: organizationalUnitID)?
+            .organizationalUnit.organizationID
+    }
+
     /// Whether SPIRE mTLS authentication is enabled but the registration API
     /// is not configured — the state in which agents may hold SPIRE-issued
     /// identities that this control plane cannot revoke. Revocation paths must
@@ -110,10 +157,9 @@ struct AgentController: RouteCollection {
         _ req: Request,
         registry: OrgSPIREClientRegistry,
         trustDomain: String,
-        action: String,
-        on db: any Database
+        action: String
     ) async throws -> SPIRERegistrationService? {
-        if let service = try await registry.service(forTrustDomain: trustDomain, on: db) {
+        if let service = try await registry.service(forTrustDomain: trustDomain) {
             return service
         }
         guard req.query[Bool.self, at: "skipSpireDeprovision"] == true else {
@@ -230,82 +276,81 @@ struct AgentController: RouteCollection {
     /// independent credentials for the same node. The installer persists the
     /// winning response locally for same-host recovery.
     func redeemEnrollment(req: Request) async throws -> Response {
-        guard let bearer = req.headers.bearerAuthorization,
-            let enrollment = try await AgentEnrollment.findByBootstrapToken(bearer.token, on: req.db),
-            enrollment.isValid,
-            let enrollmentID = enrollment.id
+        guard let enrollments, let hierarchy, let trustDomains,
+            let bearer = req.headers.bearerAuthorization,
+            bearer.token.hasPrefix("enroll_v1_")
         else {
             throw Abort(.unauthorized, reason: "Enrollment token is invalid, expired, or already used")
         }
 
-        return try await AgentEnrollment.withOperationLock(
-            enrollmentID: enrollmentID, on: req.db
-        ) { db in
-            guard
-                let lockedEnrollment = try await AgentEnrollment.findByBootstrapToken(
-                    bearer.token, on: db),
-                lockedEnrollment.id == enrollmentID,
-                lockedEnrollment.isValid,
-                let expiresAt = lockedEnrollment.expiresAt
-            else {
-                throw Abort(
-                    .unauthorized, reason: "Enrollment token is invalid, expired, or already used")
-            }
+        do {
+            return try await enrollments.redeemBootstrapToken(
+                tokenHash: AgentEnrollment.hashBootstrapToken(bearer.token),
+                prepare: { lockedEnrollment in
+                    guard let registry = OrgSPIREClientRegistry.fromApplication(
+                        req.application,
+                        hierarchy: hierarchy,
+                        trustDomains: trustDomains)
+                    else {
+                        throw Abort(.serviceUnavailable, reason: "Agent enrollment requires SPIRE")
+                    }
+                    guard
+                        let selection = try await registry.bootstrapSelection(
+                            forTrustDomain: lockedEnrollment.trustDomain)
+                    else {
+                        throw Abort(
+                            .serviceUnavailable,
+                            reason: "The SPIRE instance for this enrollment is no longer available")
+                    }
+                    return selection
+                },
+                operation: { lockedEnrollment, selection in
+                    let expiresAt = lockedEnrollment.expiresAt
+                    let enrollmentID = lockedEnrollment.id
+                    let remainingSeconds = max(1, Int(expiresAt.timeIntervalSinceNow.rounded(.down)))
+                    let ttlSeconds = Int32(min(remainingSeconds, Int(Int32.max)))
+                    let joinToken: SPIREAgentJoinToken
+                    do {
+                        joinToken = try await selection.service.mintAgentJoinToken(
+                            named: lockedEnrollment.agentName, ttlSeconds: ttlSeconds)
+                    } catch {
+                        req.logger.error(
+                            "SPIRE join-token minting failed while redeeming an agent enrollment",
+                            metadata: [
+                                "agentName": .string(lockedEnrollment.agentName),
+                                "enrollmentId": .string(enrollmentID.uuidString),
+                                "error": .string("\(error)"),
+                            ])
+                        throw Abort(
+                            .badGateway,
+                            reason:
+                                "SPIRE could not issue the node attestation token. The one-time enrollment token was consumed; revoke and recreate the enrollment."
+                        )
+                    }
 
-            guard let registry = OrgSPIREClientRegistry.fromApplication(req.application) else {
-                throw Abort(.serviceUnavailable, reason: "Agent enrollment requires SPIRE")
-            }
-            guard
-                let selection = try await registry.bootstrapSelection(
-                    forTrustDomain: lockedEnrollment.trustDomain, on: db)
-            else {
-                throw Abort(
-                    .serviceUnavailable,
-                    reason: "The SPIRE instance for this enrollment is no longer available")
-            }
-
-            guard try await AgentEnrollment.claimBootstrapToken(bearer.token, on: db) else {
-                throw Abort(
-                    .unauthorized, reason: "Enrollment token is invalid, expired, or already used")
-            }
-
-            let remainingSeconds = max(1, Int(expiresAt.timeIntervalSinceNow.rounded(.down)))
-            let ttlSeconds = Int32(min(remainingSeconds, Int(Int32.max)))
-            let joinToken: SPIREAgentJoinToken
-            do {
-                joinToken = try await selection.service.mintAgentJoinToken(
-                    named: lockedEnrollment.agentName, ttlSeconds: ttlSeconds)
-            } catch {
-                req.logger.error(
-                    "SPIRE join-token minting failed while redeeming an agent enrollment",
-                    metadata: [
-                        "agentName": .string(lockedEnrollment.agentName),
-                        "enrollmentId": .string(enrollmentID.uuidString),
-                        "error": .string("\(error)"),
-                    ])
-                throw Abort(
-                    .badGateway,
-                    reason:
-                        "SPIRE could not issue the node attestation token. The one-time enrollment token was consumed; revoke and recreate the enrollment."
-                )
-            }
-
-            let bundle = AgentBootstrapBundle(
-                controlPlaneURL: "\(webSocketBaseURL(req: req))/agent/ws",
-                agentName: lockedEnrollment.agentName,
-                joinToken: joinToken.value,
-                spireServerAddress: selection.service.registrationConfig.serverPublicAddress,
-                trustDomain: lockedEnrollment.trustDomain,
-                controlPlaneSPIFFEID: selection.controlPlaneSPIFFEID
+                    let bundle = AgentBootstrapBundle(
+                        controlPlaneURL: "\(webSocketBaseURL(req: req))/agent/ws",
+                        agentName: lockedEnrollment.agentName,
+                        joinToken: joinToken.value,
+                        spireServerAddress: selection.service.registrationConfig.serverPublicAddress,
+                        trustDomain: lockedEnrollment.trustDomain,
+                        controlPlaneSPIFFEID: selection.controlPlaneSPIFFEID
+                    )
+                    var headers = HTTPHeaders()
+                    headers.replaceOrAdd(name: .contentType, value: AgentBootstrapBundle.mediaType)
+                    headers.replaceOrAdd(name: .cacheControl, value: "no-store")
+                    return Response(status: .ok, headers: headers, body: .init(string: bundle.serialized()))
+                }
             )
-            var headers = HTTPHeaders()
-            headers.replaceOrAdd(name: .contentType, value: AgentBootstrapBundle.mediaType)
-            headers.replaceOrAdd(name: .cacheControl, value: "no-store")
-            return Response(status: .ok, headers: headers, body: .init(string: bundle.serialized()))
+        } catch AgentEnrollmentPersistenceError.invalidBootstrapToken {
+            throw Abort(.unauthorized, reason: "Enrollment token is invalid, expired, or already used")
         }
     }
 
     func createEnrollment(req: Request) async throws -> AgentEnrollmentResponse {
+        guard let enrollments, let agents, let hierarchy, let sites, let trustDomains else {
+            throw Abort(.internalServerError, reason: "Agent enrollment persistence is unavailable")
+        }
         let createRequest = try req.content.decode(CreateAgentEnrollmentRequest.self)
         try createRequest.validate()
 
@@ -313,7 +358,11 @@ struct AgentController: RouteCollection {
         // SPIRE server means there is no way to enroll an agent at all. Fail
         // naming the missing configuration rather than with an opaque 502 out
         // of the provisioning call below.
-        guard let registry = OrgSPIREClientRegistry.fromApplication(req.application) else {
+        guard let registry = OrgSPIREClientRegistry.fromApplication(
+            req.application,
+            hierarchy: hierarchy,
+            trustDomains: trustDomains)
+        else {
             throw Abort(
                 .serviceUnavailable,
                 reason:
@@ -324,14 +373,14 @@ struct AgentController: RouteCollection {
         // Resolve and authorize the owning scope before anything else: the
         // enrollment's org is what the registering agent becomes dedicated to.
         let scope = try createRequest.organizationScope()
-        try await scope.validateExists(on: req.db)
+        try await scope.validateExists(using: hierarchy)
         try await requireManageAgents(req, scope: scope)
 
         // Which SPIRE instance owns this organization's identities. With
         // per-org trust domains (issue #615) that is the organization's own
         // instance; otherwise — and while its domain is still being
         // provisioned, if legacy enrollments are allowed — the platform one.
-        let selection = try await registry.resolve(scope: scope, on: req.db)
+        let selection = try await registry.resolve(scope: scope)
         let spire = selection.service
         if let fallback = selection.platformFallback {
             req.logger.info(
@@ -350,10 +399,9 @@ struct AgentController: RouteCollection {
         let trustDomain = spire.trustDomain
 
         // Check if agent name is already in use by an existing agent
-        let existingAgent = try await Agent.query(on: req.db)
-            .filter(\.$trustDomain == trustDomain)
-            .filter(\.$name == createRequest.agentName)
-            .first()
+        let existingAgent = try await agents.agent(
+            trustDomain: trustDomain,
+            name: createRequest.agentName)
 
         if existingAgent != nil {
             throw Abort(.conflict, reason: "Agent name '\(createRequest.agentName)' is already registered")
@@ -363,12 +411,10 @@ struct AgentController: RouteCollection {
         // Re-enrolling a node means revoking the old one first, so its SPIRE
         // grant is withdrawn rather than orphaned alongside a second grant for
         // the same identity.
-        let existingEnrollment = try await AgentEnrollment.query(on: req.db)
-            .filter(\.$trustDomain == trustDomain)
-            .filter(\.$agentName == createRequest.agentName)
-            .first()
-
-        if existingEnrollment != nil {
+        if try await enrollments.exists(
+            trustDomain: trustDomain,
+            agentName: createRequest.agentName
+        ) {
             throw Abort(
                 .conflict,
                 reason:
@@ -390,11 +436,13 @@ struct AgentController: RouteCollection {
         guard let siteId = createRequest.siteId else {
             throw Abort(.badRequest, reason: "A site is required to enroll an agent")
         }
-        guard let site = try await Site.find(siteId, on: req.db) else {
+        guard let site = try await sites.site(id: siteId) else {
             throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
         }
-        guard let siteScope = site.organizationScope,
-            try await siteScope.contains(scope, on: req.db)
+        guard let siteScope = try OrganizationScope.from(
+            organizationID: site.organizationID,
+            organizationalUnitID: site.organizationalUnitID),
+            try await siteScope.contains(scope, using: hierarchy)
         else {
             throw Abort(
                 .badRequest,
@@ -435,18 +483,20 @@ struct AgentController: RouteCollection {
 
         let bootstrapToken = AgentEnrollment.generateBootstrapToken()
 
-        let enrollment = AgentEnrollment(
+        let enrollmentWrite = AgentEnrollmentWrite(
             agentName: createRequest.agentName,
-            spiffeID: provisioning.spiffeID,
             trustDomain: provisioning.trustDomain,
+            spiffeID: provisioning.spiffeID,
             bootstrapTokenHash: AgentEnrollment.hashBootstrapToken(bootstrapToken),
-            expirationHours: expirationHours,
             siteID: createRequest.siteId,
-            organizationScope: scope
+            organizationID: scope.organizationID,
+            organizationalUnitID: scope.organizationalUnitID,
+            expiresAt: Date().addingTimeInterval(TimeInterval(expirationHours * 3600))
         )
 
+        let enrollment: AgentEnrollmentSnapshot
         do {
-            try await enrollment.save(on: req.db)
+            enrollment = try await enrollments.create(enrollmentWrite)
         } catch {
             // A concurrent create for the same name can pass the pre-check above
             // and provision the same SPIRE entry (provisioning is idempotent by
@@ -460,10 +510,10 @@ struct AgentController: RouteCollection {
             // flatten it so both "query failed" and "no row" read as unclaimed,
             // which keeps the rollback behaviour for a genuine save failure.
             let claimed =
-                ((try? await AgentEnrollment.query(on: req.db)
-                    .filter(\.$trustDomain == trustDomain)
-                    .filter(\.$agentName == createRequest.agentName)
-                    .first()) ?? nil) != nil
+                (try? await enrollments.exists(
+                    trustDomain: trustDomain,
+                    agentName: createRequest.agentName
+                )) == true
 
             if claimed {
                 req.logger.warning(
@@ -484,9 +534,9 @@ struct AgentController: RouteCollection {
             "Created agent enrollment",
             metadata: [
                 "agentName": .string(createRequest.agentName),
-                "enrollmentId": .string(enrollment.id?.uuidString ?? "unknown"),
+                "enrollmentId": .string(enrollment.id.uuidString),
                 "spiffeId": .string(enrollment.spiffeID),
-                "expiresAt": .string(enrollment.expiresAt?.description ?? "no expiration"),
+                "expiresAt": .string(enrollment.expiresAt.description),
             ])
 
         return try AgentEnrollmentResponse(
@@ -508,23 +558,24 @@ struct AgentController: RouteCollection {
 
     /// Every enrollment the caller may read, newest first, ready for slicing.
     func visibleEnrollments(req: Request) async throws -> [AgentEnrollmentListItem] {
-        _ = try req.auth.require(User.self)
-        let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
-
-        // Unlike Site and Agent, an enrollment stores its scope as plain columns
-        // rather than parent relations.
-        var query = AgentEnrollment.query(on: req.db)
-            .sort(\.$createdAt, .descending)
-            .sort(\.$id, .descending)
-        if let orgFilter {
-            query = query.group(.or) { group in
-                group.filter(\.$organizationID == orgFilter.organizationID)
-                if !orgFilter.organizationalUnitIDs.isEmpty {
-                    group.filter(\.$organizationalUnitID ~~ orgFilter.organizationalUnitIDs)
-                }
-            }
+        guard let enrollments else {
+            throw Abort(.internalServerError, reason: "Agent enrollment persistence is unavailable")
         }
-        let enrollments = try await query.all()
+        _ = try req.auth.require(User.self)
+        guard let hierarchy else {
+            throw Abort(.internalServerError, reason: "Hierarchy persistence is unavailable")
+        }
+        let orgFilter = try await OrganizationAccessService.organizationListFilter(
+            on: req, using: hierarchy)
+
+        let enrollmentRows = try await enrollments.list(
+            filter: orgFilter.map {
+                AgentEnrollmentListFilter(
+                    organizationID: $0.organizationID,
+                    organizationalUnitIDs: $0.organizationalUnitIDs
+                )
+            }
+        )
 
         // Every caller is filtered the same way: a scoped enrollment is a
         // `manage_agents` check on its org/OU, which the tier-1
@@ -551,8 +602,8 @@ struct AgentController: RouteCollection {
         // fix the shape but widen who may see enrollments, which is a binding
         // question and not this issue's to answer.
         let manageable = try await req.canFilter(
-            "agent:manage", on: enrollments.compactMap { $0.organizationScope?.checkNode })
-        let visible = enrollments.filter { enrollment in
+            "agent:manage", on: enrollmentRows.compactMap { $0.organizationScope?.checkNode })
+        let visible = enrollmentRows.filter { enrollment in
             guard let scope = enrollment.organizationScope else {
                 return req.allowsScopelessPlatformRow(action: "agent:manage")
             }
@@ -565,11 +616,14 @@ struct AgentController: RouteCollection {
     }
 
     func revokeEnrollment(req: Request) async throws -> HTTPStatus {
+        guard let enrollments, let workloads, let hierarchy, let trustDomains else {
+            throw Abort(.internalServerError, reason: "Agent enrollment persistence is unavailable")
+        }
         guard let enrollmentId = req.parameters.get("enrollmentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid enrollment ID")
         }
 
-        guard let enrollment = try await AgentEnrollment.find(enrollmentId, on: req.db) else {
+        guard let enrollment = try await enrollments.find(id: enrollmentId) else {
             throw Abort(.notFound, reason: "Agent enrollment not found")
         }
 
@@ -580,93 +634,91 @@ struct AgentController: RouteCollection {
             try await requireSystemAdmin(req)
         }
 
-        return try await AgentEnrollment.withOperationLock(
-            enrollmentID: enrollmentId, on: req.db
-        ) { db in
-            guard let enrollment = try await AgentEnrollment.find(enrollmentId, on: db) else {
-                throw Abort(.notFound, reason: "Agent enrollment not found")
-            }
-
-            // Revoking withdraws the SPIRE grant this enrollment created — but only
-            // while it still *owns* that grant. Once an Agent row exists for the
-            // name, the node has attested and registered, and the entries belong to
-            // that live agent: they are withdrawn by deregistering the agent
-            // instead, so deprovisioning here would sever a running node.
-            //
-            // Expiry alone does NOT make a grant inert: the join token may have
-            // been redeemed before it expired (spire-agent attests first; the Agent
-            // row only appears once strato-agent registers), leaving entries and an
-            // attested node that can still mint SVIDs. An expired enrollment with
-            // no registered agent therefore still owns — and must revoke — its grant.
-            //
-            // Fail closed: if SPIRE is unreachable the enrollment stays revocable
-            // later.
-            // Scoped to the enrollment's own trust domain: a same-named agent in
-            // another organization's domain is a different node entirely, and
-            // matching it here would leave this enrollment's SPIRE grant standing.
-            let agentIsRegistered =
-                try await Agent.query(on: db)
-                .filter(\.$trustDomain == enrollment.trustDomain)
-                .filter(\.$name == enrollment.agentName)
-                .first() != nil
-
-            let enrollmentOwnsGrant = !agentIsRegistered
-
-            if enrollmentOwnsGrant {
-                try await requireSPIREDeprovisioningOrOverride(req, action: "agent enrollment", grantKnown: true)
-            }
-
-            // Withdraw the grant from the SPIRE instance that actually issued it —
-            // the enrollment records its trust domain, which with per-org domains
-            // (issue #615) may not be the platform one. Deprovisioning against the
-            // wrong server deletes nothing and reports success, leaving the node
-            // able to keep renewing SVIDs.
-            if enrollmentOwnsGrant, let registry = OrgSPIREClientRegistry.fromApplication(req.application) {
-                // Resolved outside the catch below so an unknown trust domain
-                // reaches the operator as itself — and is overridable — rather than
-                // as a generic "retry when the server is reachable". The remedies
-                // are different, and only one of them can ever succeed.
-                let spire = try await spireServiceForDeprovisioning(
-                    req,
-                    registry: registry,
-                    trustDomain: enrollment.trustDomain,
-                    action: "agent enrollment",
-                    on: db)
-                do {
-                    try await spire?.deprovisionAgent(named: enrollment.agentName)
-                } catch {
-                    req.logger.error(
-                        "SPIRE deprovisioning failed while revoking an agent enrollment",
-                        metadata: [
-                            "agentName": .string(enrollment.agentName),
-                            "error": .string("\(error)"),
-                        ])
-                    throw Abort(
-                        .badGateway,
-                        reason:
-                            "SPIRE deprovisioning failed; the enrollment was not revoked. Retry when the SPIRE server is reachable."
-                    )
+        let agentName: String
+        do {
+            agentName = try await enrollments.revoke(id: enrollmentId) {
+                enrollment, enrollmentOwnsGrant in
+                // Revoking withdraws the SPIRE grant this enrollment created — but only
+                // while it still *owns* that grant. Once an Agent row exists for the
+                // name, the node has attested and registered, and the entries belong to
+                // that live agent: they are withdrawn by deregistering the agent
+                // instead, so deprovisioning here would sever a running node.
+                //
+                // Expiry alone does NOT make a grant inert: the join token may have
+                // been redeemed before it expired (spire-agent attests first; the Agent
+                // row only appears once strato-agent registers), leaving entries and an
+                // attested node that can still mint SVIDs. An expired enrollment with
+                // no registered agent therefore still owns — and must revoke — its grant.
+                //
+                // Fail closed: if SPIRE is unreachable the enrollment stays revocable
+                // later.
+                // Scoped to the enrollment's own trust domain: a same-named agent in
+                // another organization's domain is a different node entirely, and
+                // matching it here would leave this enrollment's SPIRE grant standing.
+                if enrollmentOwnsGrant {
+                    try await requireSPIREDeprovisioningOrOverride(req, action: "agent enrollment", grantKnown: true)
                 }
+
+                // Withdraw the grant from the SPIRE instance that actually issued it —
+                // the enrollment records its trust domain, which with per-org domains
+                // (issue #615) may not be the platform one. Deprovisioning against the
+                // wrong server deletes nothing and reports success, leaving the node
+                // able to keep renewing SVIDs.
+                if enrollmentOwnsGrant,
+                    let registry = OrgSPIREClientRegistry.fromApplication(
+                        req.application,
+                        hierarchy: hierarchy,
+                        trustDomains: trustDomains)
+                {
+                    // Resolved outside the catch below so an unknown trust domain
+                    // reaches the operator as itself — and is overridable — rather than
+                    // as a generic "retry when the server is reachable". The remedies
+                    // are different, and only one of them can ever succeed.
+                    let spire = try await spireServiceForDeprovisioning(
+                        req,
+                        registry: registry,
+                        trustDomain: enrollment.trustDomain,
+                        action: "agent enrollment")
+                    do {
+                        try await spire?.deprovisionAgent(named: enrollment.agentName)
+                    } catch {
+                        req.logger.error(
+                            "SPIRE deprovisioning failed while revoking an agent enrollment",
+                            metadata: [
+                                "agentName": .string(enrollment.agentName),
+                                "error": .string("\(error)"),
+                            ])
+                        throw Abort(
+                            .badGateway,
+                            reason:
+                                "SPIRE deprovisioning failed; the enrollment was not revoked. Retry when the SPIRE server is reachable."
+                        )
+                    }
+                }
+
+                if enrollmentOwnsGrant {
+                    // No agent row exists, so any workload-registry row for the
+                    // identity is an orphan of the just-revoked SPIRE grant (#491).
+                    let identity = AgentIdentity(
+                        trustDomain: enrollment.trustDomain,
+                        name: enrollment.agentName)
+                    if let registration = try await workloads.registration(spiffeID: identity.key) {
+                        _ = try await workloads.deleteRegistration(id: registration.id)
+                    }
+                }
+                return enrollment.agentName
             }
-
-            try await enrollment.delete(on: db)
-            if enrollmentOwnsGrant {
-                // No agent row exists, so any workload-registry row for the
-                // identity is an orphan of the just-revoked SPIRE grant (#491).
-                try await WorkloadRegistry.deregisterAgent(
-                    identity: AgentIdentity(trustDomain: enrollment.trustDomain, name: enrollment.agentName),
-                    on: db)
-            }
-
-            req.logger.info(
-                "Revoked agent enrollment",
-                metadata: [
-                    "enrollmentId": .string(enrollmentId.uuidString),
-                    "agentName": .string(enrollment.agentName),
-                ])
-
-            return .noContent
+        } catch AgentEnrollmentPersistenceError.notFound {
+            throw Abort(.notFound, reason: "Agent enrollment not found")
         }
+
+        req.logger.info(
+            "Revoked agent enrollment",
+            metadata: [
+                "enrollmentId": .string(enrollmentId.uuidString),
+                "agentName": .string(agentName),
+            ])
+        return .noContent
     }
 
     // MARK: - Agent Management
@@ -683,20 +735,22 @@ struct AgentController: RouteCollection {
     /// Every agent the caller may read, newest first, ready for slicing.
     func visibleAgents(req: Request) async throws -> [AgentResponse] {
         _ = try req.auth.require(User.self)
-        let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
-
-        var query = Agent.query(on: req.db)
-            .sort(\.$createdAt, .descending)
-            .sort(\.$id, .descending)
-        if let orgFilter {
-            query = query.group(.or) { group in
-                group.filter(\.$organization.$id == orgFilter.organizationID)
-                if !orgFilter.organizationalUnitIDs.isEmpty {
-                    group.filter(\.$organizationalUnit.$id ~~ orgFilter.organizationalUnitIDs)
-                }
-            }
+        guard let agentsPersistence = agents, let hierarchy else {
+            throw Abort(.internalServerError, reason: "Native agent persistence is unavailable")
         }
-        let agents = try await query.all()
+        let orgFilter = try await OrganizationAccessService.organizationListFilter(
+            on: req,
+            using: hierarchy
+        )
+        let agentRows: [AgentSnapshot]
+        if let orgFilter {
+            agentRows = try await agentsPersistence.agents(
+                organizationID: orgFilter.organizationID,
+                organizationalUnitIDs: orgFilter.organizationalUnitIDs
+            )
+        } else {
+            agentRows = try await agentsPersistence.allAgents()
+        }
 
         // Everyone is filtered the same way: `view` on the agent, resolved
         // through agent#parent (their orgs'/OUs' capacity). An admin's
@@ -709,18 +763,19 @@ struct AgentController: RouteCollection {
         // no node to batch and is answered without the evaluator.
         let readable = try await req.canFilter(
             "agent:read",
-            on: agents.compactMap { agent in
-                guard agent.organizationScope != nil, let id = agent.id else { return nil }
-                return IAMNode(type: .agent, id: id)
+            on: agentRows.compactMap { agent in
+                guard agent.organizationID != nil || agent.organizationalUnitID != nil else {
+                    return nil
+                }
+                return IAMNode(type: .agent, id: agent.id)
             })
-        var visible: [Agent] = []
-        for agent in agents {
-            guard let agentId = agent.id else { continue }
-            guard agent.organizationScope != nil else {
+        var visible: [AgentSnapshot] = []
+        for agent in agentRows {
+            guard agent.organizationID != nil || agent.organizationalUnitID != nil else {
                 if req.allowsScopelessPlatformRow(action: "agent:read") { visible.append(agent) }
                 continue
             }
-            if readable.contains(IAMNode(type: .agent, id: agentId)) { visible.append(agent) }
+            if readable.contains(IAMNode(type: .agent, id: agent.id)) { visible.append(agent) }
         }
 
         let targetVersion = AgentVersionTarget.version(
@@ -733,21 +788,25 @@ struct AgentController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
 
-        guard let agent = try await Agent.find(agentId, on: req.db) else {
+        guard let agents, let workloads else {
+            throw Abort(.internalServerError, reason: "Native agent persistence is unavailable")
+        }
+        guard let agent = try await agents.agent(id: agentId) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
-
-        try await req.requireAgentAction("agent:read", on: agent)
+        if agent.organizationID == nil && agent.organizationalUnitID == nil {
+            _ = try await req.requireSystemAdmin("This agent has no owning organization")
+        } else {
+            guard try await req.can("agent:read", on: IAMNode(type: .agent, id: agentId)) else {
+                throw Abort(.forbidden, reason: "You don't have 'agent:read' access on this agent")
+            }
+        }
 
         // Workloads this agent holds that the control plane refused to
         // authorize tearing down (STR-98). Only on the detail view: the list
         // endpoint shouldn't pay for a claim query per agent, and this is
         // something an operator investigates one host at a time.
-        let held = try await AgentWorkloadClaim.query(on: req.db)
-            .filter(\.$agentId == agentId.uuidString)
-            .filter(\.$disposition == .held)
-            .sort(\.$firstSeenAt)
-            .all()
+        let held = try await workloads.heldClaims(agentID: agentId)
             .map(AgentResponse.HeldWorkloadSummary.init(from:))
 
         return try AgentResponse(
@@ -774,34 +833,6 @@ struct AgentController: RouteCollection {
         let skippedUnclaimed: Int
     }
 
-    /// Move a volume's replica rows from one agent record to another.
-    ///
-    /// `volume_replicas` is unique on `(volume_id, agent_id)`, so a straight
-    /// update collides when the target already has a replica of this volume —
-    /// possible on a replicated pool. There the source row is redundant rather
-    /// than movable: drop it and keep the target's own record of the copy.
-    private static func repointReplicas(
-        volumeID: UUID, from sourceId: String, to targetId: String, on db: Database
-    ) async throws {
-        let targetExists =
-            try await VolumeReplica.query(on: db)
-            .filter(\.$volume.$id == volumeID)
-            .filter(\.$agentId == targetId)
-            .count() > 0
-        if targetExists {
-            try await VolumeReplica.query(on: db)
-                .filter(\.$volume.$id == volumeID)
-                .filter(\.$agentId == sourceId)
-                .delete()
-            return
-        }
-        try await VolumeReplica.query(on: db)
-            .filter(\.$volume.$id == volumeID)
-            .filter(\.$agentId == sourceId)
-            .set(\.$agentId, to: targetId)
-            .update()
-    }
-
     /// Re-point workloads from a superseded agent record onto the agent that
     /// is actually running them.
     ///
@@ -819,13 +850,16 @@ struct AgentController: RouteCollection {
     /// are *currently placed* on `fromAgentId` move. There is no way to use
     /// this to point a workload at a host that isn't running it.
     func adoptWorkloads(req: Request) async throws -> AdoptWorkloadsResponse {
+        guard let agents, let workloads, let hierarchy else {
+            throw Abort(.internalServerError, reason: "Native workload persistence is unavailable")
+        }
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
-        guard let agent = try await Agent.find(agentId, on: req.db) else {
+        guard let agent = try await agents.agent(id: agentId) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
-        try await req.requireAgentAction("agent:manage", on: agent)
+        try await requireAgentAction("agent:manage", agent: agent, req: req)
 
         let body = try req.content.decode(AdoptWorkloadsRequest.self)
         let targetId = agentId.uuidString
@@ -839,16 +873,16 @@ struct AgentController: RouteCollection {
         // refuse to move workloads across an organization boundary — the
         // trust-domain migration this exists for keeps a node in its own org,
         // so a mismatch here is an operator mistake, not a supported case.
-        guard let sourceAgent = try await Agent.find(body.fromAgentId, on: req.db) else {
+        guard let sourceAgent = try await agents.agent(id: body.fromAgentId) else {
             throw Abort(.notFound, reason: "Source agent not found")
         }
-        try await req.requireAgentAction("agent:manage", on: sourceAgent)
+        try await requireAgentAction("agent:manage", agent: sourceAgent, req: req)
         // Compared at the root org, not the exact scope node: re-enrolling a
         // node into a different OU of the same organization is a legitimate
         // move, while landing one tenant's workload rows on another tenant's
         // agent record is not.
-        let sourceOrg = try await sourceAgent.rootOrganizationID(on: req.db)
-        let targetOrg = try await agent.rootOrganizationID(on: req.db)
+        let sourceOrg = try await rootOrganizationID(for: sourceAgent, using: hierarchy)
+        let targetOrg = try await rootOrganizationID(for: agent, using: hierarchy)
         guard sourceOrg == targetOrg else {
             throw Abort(
                 .conflict,
@@ -856,95 +890,22 @@ struct AgentController: RouteCollection {
                     + "\(sourceAgent.name) and \(agent.name) belong to different organizations")
         }
 
-        // Only claims that name this source: the operator is confirming one
-        // specific re-identification, not every stray the host holds.
-        let claims = try await AgentWorkloadClaim.query(on: req.db)
-            .filter(\.$agentId == targetId)
-            .filter(\.$disposition == .held)
-            .all()
-            .filter { $0.placedOnAgentId == sourceId }
-        guard !claims.isEmpty else {
+        // Claim evidence, VM/sandbox placement, volume replicas, and claim
+        // consumption commit together in the native module.
+        let adopted: WorkloadAdoptionResult
+        do {
+            adopted = try await workloads.adoptWorkloads(
+                targetAgentID: targetId, sourceAgentID: sourceId)
+        } catch WorkloadsPersistenceError.noMatchingClaims {
             throw Abort(
                 .conflict,
                 reason: "This agent does not report holding any workloads placed on that agent record")
         }
-
-        let claimedVMIDs = Set(claims.filter { $0.resourceKind == .virtualMachine }.map(\.resourceID))
-        let claimedSandboxIDs = Set(claims.filter { $0.resourceKind == .sandbox }.map(\.resourceID))
-
-        let counts = try await req.db.transaction { db -> AdoptWorkloadsResponse in
-            var adoptedVMs = 0
-            var adoptedSandboxes = 0
-            var adoptedVolumes = 0
-            var skippedUnclaimed = 0
-
-            let sourceVMs = try await VM.query(on: db).filter(\.$hypervisorId == sourceId).all()
-            for vm in sourceVMs {
-                guard let vmID = vm.id, claimedVMIDs.contains(vmID) else {
-                    skippedUnclaimed += 1
-                    continue
-                }
-                vm.hypervisorId = targetId
-                try await vm.save(on: db)
-                adoptedVMs += 1
-            }
-
-            let sourceSandboxes = try await Sandbox.query(on: db).filter(\.$hypervisorId == sourceId).all()
-            for sandbox in sourceSandboxes {
-                guard let sandboxID = sandbox.id, claimedSandboxIDs.contains(sandboxID) else {
-                    skippedUnclaimed += 1
-                    continue
-                }
-                sandbox.hypervisorId = targetId
-                try await sandbox.save(on: db)
-                adoptedSandboxes += 1
-            }
-
-            // Volumes are files on the host, so their authoritative replica
-            // placement moves with it. `attachedAgentId` follows when the VM
-            // attachment moved too.
-            //
-            // Detached volumes move too: their files are on the adopting host
-            // like everything else the source record owned, and leaving them
-            // would point a later attach at a dead record. A volume attached to
-            // a VM that stayed behind is the one case that must not move.
-            let sourceVolumeIDs = try await VolumeReplica.query(on: db)
-                .filter(\.$agentId == sourceId)
-                .all()
-                .map(\.$volume.id)
-            let sourceVolumes =
-                sourceVolumeIDs.isEmpty
-                ? []
-                : try await Volume.query(on: db)
-                    .filter(\.$id ~~ Array(Set(sourceVolumeIDs)))
-                    .all()
-            for volume in sourceVolumes {
-                if let attachedVMID = volume.$vm.id, !claimedVMIDs.contains(attachedVMID) {
-                    continue
-                }
-                guard let volumeID = volume.id else { continue }
-                if volume.attachedAgentId == sourceId {
-                    volume.attachedAgentId = targetId
-                }
-                try await volume.save(on: db)
-                try await Self.repointReplicas(
-                    volumeID: volumeID, from: sourceId, to: targetId, on: db)
-                adoptedVolumes += 1
-            }
-
-            // The claims are consumed: the next report re-derives whatever is
-            // still unaccounted for, and these workloads now appear in the
-            // target's own sync.
-            for claim in claims {
-                try await claim.delete(on: db)
-            }
-
-            return AdoptWorkloadsResponse(
-                adoptedVMs: adoptedVMs,
-                adoptedSandboxes: adoptedSandboxes,
-                adoptedVolumes: adoptedVolumes,
-                skippedUnclaimed: skippedUnclaimed)
-        }
+        let counts = AdoptWorkloadsResponse(
+            adoptedVMs: adopted.adoptedVMs,
+            adoptedSandboxes: adopted.adoptedSandboxes,
+            adoptedVolumes: adopted.adoptedVolumes,
+            skippedUnclaimed: adopted.skippedUnclaimed)
 
         req.logger.notice(
             "Adopted workloads onto a re-enrolled agent record",
@@ -972,11 +933,14 @@ struct AgentController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
 
-        guard let agent = try await Agent.find(agentId, on: req.db) else {
+        guard let agents, let hierarchy, let trustDomains else {
+            throw Abort(.internalServerError, reason: "Native agent persistence is unavailable")
+        }
+        guard let agent = try await agents.agent(id: agentId) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
 
-        try await req.requireAgentAction("agent:manage", on: agent)
+        try await requireAgentAction("agent:manage", agent: agent, req: req)
 
         // Never delete a site's designated network controller while the site
         // still has other members: the controller reference deliberately has
@@ -989,21 +953,12 @@ struct AgentController: RouteCollection {
         // nothing left to reconcile. Its designation is cleared below instead.
         // Checked before SPIRE deprovisioning so the refusal has no side
         // effects.
-        let controlledSites = try await Site.query(on: req.db)
-            .filter(\.$networkControllerAgent.$id == agentId)
-            .all()
-        for site in controlledSites {
-            let remainingMembers = try await Agent.query(on: req.db)
-                .filter(\.$site.$id == site.requireID())
-                .filter(\.$id != agentId)
-                .count()
-            guard remainingMembers == 0 else {
-                throw Abort(
-                    .conflict,
-                    reason:
-                        "Agent is a site's network controller; designate a replacement controller before deregistering it"
-                )
-            }
+        if try await agents.deregistrationBlocker(id: agentId) != nil {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent is a site's network controller; designate a replacement controller before deregistering it"
+            )
         }
 
         // Remove the SPIRE workload entry before anything else, and fail
@@ -1017,7 +972,11 @@ struct AgentController: RouteCollection {
         // Against the SPIRE instance that issued this agent's identity: the
         // agent row records its trust domain, which with per-org domains
         // (issue #615) may not be the platform one.
-        if let registry = OrgSPIREClientRegistry.fromApplication(req.application) {
+        if let registry = OrgSPIREClientRegistry.fromApplication(
+            req.application,
+            hierarchy: hierarchy,
+            trustDomains: trustDomains)
+        {
             // Resolved outside the catch below so an unknown trust domain is
             // reported as itself — and is overridable — rather than as an
             // unreachable server that retrying would fix.
@@ -1025,8 +984,7 @@ struct AgentController: RouteCollection {
                 req,
                 registry: registry,
                 trustDomain: agent.trustDomain,
-                action: "agent",
-                on: req.db)
+                action: "agent")
             do {
                 try await spire?.deprovisionAgent(named: agent.name)
             } catch {
@@ -1045,31 +1003,32 @@ struct AgentController: RouteCollection {
         }
 
         // Remove from in-memory registry if present
-        await req.agentService.forceUnregisterAgent(agent.identity)
+        let identity = AgentIdentity(trustDomain: agent.trustDomain, name: agent.name)
+        await req.agentService.forceUnregisterAgent(identity)
 
-        // Give up the designations the guard above allowed — only sites this
-        // agent was the last member of get here — so none is left pointing at
-        // the row that is about to vanish.
-        for site in controlledSites {
-            site.$networkControllerAgent.id = nil
-            try await site.save(on: req.db)
+        switch try await agents.deregister(id: agentId, spiffeID: identity.key) {
+        case .deleted:
+            break
+        case .notFound:
+            throw Abort(.notFound, reason: "Agent not found")
+        case .controlsPopulatedSite:
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent is a site's network controller; designate a replacement controller before deregistering it")
         }
-
-        // Delete from database, along with the workload-registry rows mapping
-        // the agent's SPIFFE identity to it (issue #491) — the SPIRE entries
-        // behind them were just deprovisioned.
-        try await agent.delete(on: req.db)
-        try await WorkloadRegistry.deregisterAgent(identity: agent.identity, on: req.db)
 
         // Deregistration retires the node: delete its enrollment so the name can
         // be enrolled again. Left behind, the row would block a fresh enrollment
         // through the one-per-name guard and lock the name permanently. SPIRE
         // entries for the name were already deprovisioned above, so the row
         // carries no external grant.
-        try await AgentEnrollment.query(on: req.db)
-            .filter(\.$trustDomain == agent.trustDomain)
-            .filter(\.$agentName == agent.name)
-            .delete()
+        if let enrollments {
+            try await enrollments.delete(
+                trustDomain: agent.trustDomain,
+                agentName: agent.name
+            )
+        }
 
         req.logger.info(
             "Deregistered agent",
@@ -1086,18 +1045,23 @@ struct AgentController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
 
-        guard let agent = try await Agent.find(agentId, on: req.db) else {
+        guard let agents else {
+            throw Abort(.internalServerError, reason: "Native agent persistence is unavailable")
+        }
+        guard let agent = try await agents.agent(id: agentId) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
-
-        try await req.requireAgentAction("agent:manage", on: agent)
+        try await requireAgentAction("agent:manage", agent: agent, req: req)
 
         // Force agent offline in in-memory registry
-        await req.agentService.forceUnregisterAgent(agent.identity)
+        await req.agentService.forceUnregisterAgent(
+            AgentIdentity(trustDomain: agent.trustDomain, name: agent.name)
+        )
 
         // Update database status
-        agent.status = .offline
-        try await agent.save(on: req.db)
+        guard try await agents.forceOffline(id: agentId) != nil else {
+            throw Abort(.notFound, reason: "Agent not found")
+        }
 
         req.logger.info(
             "Forced agent offline",
@@ -1165,7 +1129,10 @@ struct AgentController: RouteCollection {
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
-        guard let agent = try await Agent.find(agentId, on: req.db) else {
+        guard let agents else {
+            throw Abort(.internalServerError, reason: "Native agent persistence is unavailable")
+        }
+        guard let agent = try await agents.agent(id: agentId) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
 
@@ -1173,7 +1140,7 @@ struct AgentController: RouteCollection {
         // workload through re-adoption, so this falls under the same
         // `agent:manage` check — and the same tier-1 foreign-workload forbid —
         // as force-offline and deregister.
-        try await req.requireAgentAction("agent:manage", on: agent)
+        try await requireAgentAction("agent:manage", agent: agent, req: req)
 
         let request: AgentUpdateRequest
         if req.headers.contentType != nil {
@@ -1183,7 +1150,6 @@ struct AgentController: RouteCollection {
         }
         let force = request.force == true
 
-        agent.status = agent.statusBasedOnHeartbeat
         guard agent.isOnline else {
             throw Abort(.conflict, reason: "Agent is offline; it must be connected to receive an update")
         }
@@ -1195,9 +1161,7 @@ struct AgentController: RouteCollection {
         // is unproven — drop this guard only once it re-adopts them the same
         // way. Make the operator acknowledge that explicitly.
         if !force {
-            let sandboxes = try await Sandbox.query(on: req.db)
-                .filter(\.$hypervisorId == agentId.uuidString)
-                .count()
+            let sandboxes = try await agents.hostedSandboxCount(id: agentId)
             guard sandboxes == 0 else {
                 throw Abort(
                     .conflict,
@@ -1267,14 +1231,14 @@ struct AgentController: RouteCollection {
                         "No agent target version is configured (dev build). Set AGENT_TARGET_VERSION, or pass artifactUrl and sha256 explicitly."
                 )
             }
-            guard let os = agent.hostOperatingSystem else {
+            guard let os = agent.operatingSystem.flatMap(OperatingSystem.init(rawValue:)) else {
                 throw Abort(
                     .conflict,
                     reason:
                         "Agent has not reported its operating system; it must re-register with a build that does before its artifact can be resolved. Pass artifactUrl and sha256 to override."
                 )
             }
-            guard let architecture = agent.cpuArchitecture else {
+            guard let architecture = agent.architecture.flatMap(CPUArchitecture.init(rawValue:)) else {
                 throw Abort(
                     .conflict,
                     reason:
@@ -1309,15 +1273,31 @@ struct AgentController: RouteCollection {
         // deliberate — re-issuing the update is how an operator retries past a
         // recorded failure, and it restarts the health budget with a freshly
         // supplied artifact.
-        agent.assignUpdate(version: targetVersion, source: .manual, artifact: artifactOverride)
-        try await agent.save(on: req.db)
+        let artifactJSON: String?
+        if let artifactOverride {
+            artifactJSON = String(
+                data: try JSONEncoder().encode(artifactOverride),
+                encoding: .utf8
+            )
+        } else {
+            artifactJSON = nil
+        }
+        guard
+            let assignedAgent = try await agents.assignManualUpdate(
+                id: agentId,
+                version: targetVersion,
+                artifactOverrideJSON: artifactJSON
+            )
+        else {
+            throw Abort(.notFound, reason: "Agent not found")
+        }
 
         req.logger.notice(
             "Agent update assigned",
             metadata: [
                 "agentId": .string(agentId.uuidString),
-                "agentName": .string(agent.name),
-                "currentVersion": .string(agent.version),
+                "agentName": .string(assignedAgent.name),
+                "currentVersion": .string(assignedAgent.version),
                 "targetVersion": .string(targetVersion),
                 // Redacted: explicit overrides may be presigned URLs whose
                 // query string is a credential.
@@ -1358,34 +1338,32 @@ struct AgentController: RouteCollection {
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
-        guard let agent = try await Agent.find(agentId, on: req.db) else {
+        guard let agents else {
+            throw Abort(.internalServerError, reason: "Native agent persistence is unavailable")
+        }
+        guard let current = try await agents.agent(id: agentId) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
-        try await req.requireAgentAction("agent:manage", on: agent)
+        try await requireAgentAction("agent:manage", agent: current, req: req)
+        guard let result = try await agents.cancelUpdate(id: agentId) else {
+            throw Abort(.notFound, reason: "Agent not found")
+        }
+        if let assigned = result.cancelledVersion {
+            req.logger.notice(
+                "Agent update assignment cancelled",
+                metadata: [
+                    "agentId": .string(agentId.uuidString),
+                    "agentName": .string(result.agent.name),
+                    "targetVersion": .string(assigned),
+                ])
 
-        guard let assigned = agent.updateDesiredVersion else {
-            return try AgentResponse(
-                from: agent,
-                targetVersion: AgentVersionTarget.version(
-                    configuration: req.controlPlaneConfiguration))
+            // Push the sync now so a connected agent stops seeing the desired
+            // update rather than waiting for the periodic backstop.
+            await req.agentService.syncDesiredState(agentId: agentId.uuidString)
         }
 
-        agent.clearUpdateAssignment()
-        try await agent.save(on: req.db)
-        req.logger.notice(
-            "Agent update assignment cancelled",
-            metadata: [
-                "agentId": .string(agentId.uuidString),
-                "agentName": .string(agent.name),
-                "targetVersion": .string(assigned),
-            ])
-
-        // Push the sync now so a connected agent stops seeing the desired
-        // update rather than waiting for the periodic backstop.
-        await req.agentService.syncDesiredState(agentId: agentId.uuidString)
-
         return try AgentResponse(
-            from: agent,
+            from: result.agent,
             targetVersion: AgentVersionTarget.version(configuration: req.controlPlaneConfiguration))
     }
 
@@ -1403,46 +1381,35 @@ struct AgentController: RouteCollection {
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
-        guard let agent = try await Agent.find(agentId, on: req.db) else {
+        guard let agents else {
+            throw Abort(.internalServerError, reason: "Native agent persistence is unavailable")
+        }
+        guard let current = try await agents.agent(id: agentId) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
-        try await req.requireAgentAction("agent:manage", on: agent)
+        try await requireAgentAction("agent:manage", agent: current, req: req)
 
         let patch = try req.content.decode(AgentPatchRequest.self)
-
-        if let autoUpdate = patch.autoUpdate, autoUpdate != agent.autoUpdate {
-            agent.autoUpdate = autoUpdate
-            if autoUpdate {
-                // Fresh enrollment gets a fresh chance: a failure recorded
-                // under a previous enrollment must not keep the fleet rollout
-                // halted at an agent the operator just re-opted in. The budget
-                // clock has to restart with it — leaving the original
-                // `updateAttemptedAt` in place means the next sweep tick
-                // recomputes `age > budget` and re-records the same failure,
-                // which is a retry that never had a chance.
-                agent.updateFailureReason = nil
-                if agent.updateDesiredVersion != nil {
-                    agent.updateAttemptedAt = Date()
-                }
-            } else if agent.updateAssignmentSource != .manual {
-                // Withdrawing clears the rollout's assignment: the next sync
-                // stops carrying the desired update and the agent clears its
-                // blocked status. An operator's own "update now" survives —
-                // that path needs no enrollment in the first place, so
-                // withdrawing from the fleet rollout must not cancel it.
-                agent.clearUpdateAssignment()
+        let agent: AgentSnapshot
+        if let autoUpdate = patch.autoUpdate {
+            guard let updated = try await agents.setAutoUpdate(id: agentId, enabled: autoUpdate) else {
+                throw Abort(.notFound, reason: "Agent not found")
             }
-            try await agent.save(on: req.db)
-            req.logger.info(
-                "Agent auto-update toggled",
-                metadata: [
-                    "agentId": .string(agentId.uuidString),
-                    "agentName": .string(agent.name),
-                    "autoUpdate": .stringConvertible(autoUpdate),
-                ])
-            // Push a sync so a withdrawn agent stops seeing the desired
-            // update now rather than on the next periodic backstop.
-            await req.agentService.syncDesiredState(agentId: agentId.uuidString)
+            agent = updated
+            if autoUpdate != current.autoUpdate {
+                req.logger.info(
+                    "Agent auto-update toggled",
+                    metadata: [
+                        "agentId": .string(agentId.uuidString),
+                        "agentName": .string(agent.name),
+                        "autoUpdate": .stringConvertible(autoUpdate),
+                    ])
+                // Push a sync so a withdrawn agent stops seeing the desired
+                // update now rather than on the next periodic backstop.
+                await req.agentService.syncDesiredState(agentId: agentId.uuidString)
+            }
+        } else {
+            agent = current
         }
 
         return try AgentResponse(

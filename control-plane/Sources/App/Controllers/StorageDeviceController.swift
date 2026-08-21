@@ -1,18 +1,11 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
-enum StorageDeviceEligibilityBlockedReason: String, Codable, Sendable {
-    case missingIdentity
-    case notPresent
-    case inUse
-    case draining
-    case faulted
-    case agentOffline
-    case staleObservation
+typealias StorageDeviceEligibilityBlockedReason = StorageDeviceEligibilityBlocker
 
+extension StorageDeviceEligibilityBlocker {
     var message: String {
         switch self {
         case .missingIdentity: return "The device has no stable WWN or serial identity."
@@ -23,50 +16,6 @@ enum StorageDeviceEligibilityBlockedReason: String, Codable, Sendable {
         case .agentOffline: return "The agent is offline."
         case .staleObservation: return "The device observation is older than 60 seconds."
         }
-    }
-}
-
-struct StorageDeviceEligibility: Sendable {
-    struct Result: Sendable {
-        let osdEligible: Bool
-        let canMarkOsdEligible: Bool
-        let blockedReason: StorageDeviceEligibilityBlockedReason?
-    }
-
-    static func evaluate(_ device: StorageDevice, agent: Agent, now: Date = Date()) -> Result {
-        let agentOnline = agent.lastHeartbeat.map { now.timeIntervalSince($0) < 60 } ?? false
-        return evaluate(device, agentOnline: agentOnline, now: now)
-    }
-
-    static func evaluate(
-        _ device: StorageDevice,
-        agentOnline: Bool,
-        now: Date = Date()
-    ) -> Result {
-        let blocker: StorageDeviceEligibilityBlockedReason?
-        if device.identity == nil {
-            blocker = .missingIdentity
-        } else if !device.present {
-            blocker = .notPresent
-        } else {
-            switch device.state {
-            case .inUse: blocker = .inUse
-            case .draining: blocker = .draining
-            case .faulted: blocker = .faulted
-            case .available:
-                if !agentOnline {
-                    blocker = .agentOffline
-                } else if device.lastSeenAt.map({ now.timeIntervalSince($0) > 60 }) ?? true {
-                    blocker = .staleObservation
-                } else {
-                    blocker = nil
-                }
-            }
-        }
-        return Result(
-            osdEligible: device.role == .osd,
-            canMarkOsdEligible: blocker == nil,
-            blockedReason: blocker)
     }
 }
 
@@ -94,12 +43,21 @@ struct StorageDeviceResponse: Content, Sendable {
     let canMarkOsdEligible: Bool
     let osdEligibilityBlockedReason: StorageDeviceEligibilityBlockedReason?
 
-    init(device: StorageDevice, agent: Agent, now: Date = Date()) throws {
-        let eligibility = StorageDeviceEligibility.evaluate(device, agent: agent, now: now)
-        id = try device.requireID()
-        agentId = try agent.requireID()
-        siteId = agent.$site.id
-        identityKind = device.identityKind
+    init(
+        device: StorageDeviceSnapshot,
+        siteID: UUID,
+        agentLastHeartbeat: Date?,
+        now: Date = Date()
+    ) {
+        let eligibility = StorageDevicesPersistence.eligibility(
+            for: device,
+            agentLastHeartbeat: agentLastHeartbeat,
+            now: now
+        )
+        id = device.id
+        agentId = device.agentID
+        siteId = siteID
+        identityKind = device.identityKind?.rawValue
         identityValue = device.identityValue
         devicePath = device.devicePath
         sizeBytes = device.sizeBytes
@@ -110,14 +68,14 @@ struct StorageDeviceResponse: Content, Sendable {
         uses = device.uses
         role = device.role
         state = device.state
-        osdId = device.osdId
+        osdId = device.osdID
         present = device.present
         lastSeenAt = device.lastSeenAt
         createdAt = device.createdAt
         updatedAt = device.updatedAt
         osdEligible = eligibility.osdEligible
-        canMarkOsdEligible = eligibility.canMarkOsdEligible
-        osdEligibilityBlockedReason = eligibility.blockedReason
+        canMarkOsdEligible = eligibility.canMarkOSDEligible
+        osdEligibilityBlockedReason = eligibility.blocker
     }
 }
 
@@ -146,6 +104,23 @@ struct UpdateStorageDeviceRequest: Content, ValidatedRequestBody, Sendable {
 }
 
 struct StorageDeviceController: RouteCollection {
+    private let storageDevices: StorageDevicesPersistence
+    private let agents: AgentsPersistence
+    private let sites: SitesPersistence
+    private let hierarchy: HierarchyPersistence
+
+    init(
+        storageDevices: StorageDevicesPersistence,
+        agents: AgentsPersistence,
+        sites: SitesPersistence,
+        hierarchy: HierarchyPersistence
+    ) {
+        self.storageDevices = storageDevices
+        self.agents = agents
+        self.sites = sites
+        self.hierarchy = hierarchy
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let devices = routes.grouped("api", "storage-devices")
         devices.get(use: list)
@@ -156,48 +131,44 @@ struct StorageDeviceController: RouteCollection {
         let paging = try ListPaging.decode(from: req)
         let siteFilter = try optionalUUIDQuery("site_id", from: req)
         let agentFilter = try optionalUUIDQuery("agent_id", from: req)
-        let visible = try await AgentController().visibleAgents(req: req)
+        let visible = try await AgentController(
+            agents: agents,
+            hierarchy: hierarchy
+        ).visibleAgents(req: req)
             .filter { siteFilter == nil || $0.siteId == siteFilter }
             .filter { agentFilter == nil || $0.id == agentFilter }
         let visibleIDs = Set(visible.map(\.id))
         guard !visibleIDs.isEmpty else { return paging.page([]) }
 
-        let agents = try await Agent.query(on: req.db)
-            .filter(\.$id ~~ Array(visibleIDs))
-            .all()
-        let agentByID = Dictionary(
-            uniqueKeysWithValues: agents.compactMap { agent in
-                agent.id.map { ($0, agent) }
-            })
+        let agentByID = Dictionary(uniqueKeysWithValues: visible.map { ($0.id, $0) })
         let siteIDs = Set(visible.map(\.siteId))
-        let sites = try await Site.query(on: req.db)
-            .filter(\.$id ~~ Array(siteIDs))
-            .all()
+        let siteRows = try await sites.allSites().filter { siteIDs.contains($0.id) }
         let siteNameByID = Dictionary(
-            uniqueKeysWithValues: sites.compactMap { site in
-                site.id.map { ($0, site.name) }
-            })
+            uniqueKeysWithValues: siteRows.map { ($0.id, $0.name) })
         let agentNameByID = Dictionary(uniqueKeysWithValues: visible.map { ($0.id, $0.name) })
         let now = Date()
-        let devices = try await StorageDevice.query(on: req.db)
-            .filter(\.$agent.$id ~~ Array(visibleIDs))
-            .all()
+        let devices = try await storageDevices.devices(forAgentIDs: Array(visibleIDs))
         let sorted = devices.sorted { lhs, rhs in
-            let lhsAgentID = lhs.$agent.id
-            let rhsAgentID = rhs.$agent.id
-            let lhsSite = agentByID[lhsAgentID].map { siteNameByID[$0.$site.id] ?? "" } ?? ""
-            let rhsSite = agentByID[rhsAgentID].map { siteNameByID[$0.$site.id] ?? "" } ?? ""
+            let lhsAgentID = lhs.agentID
+            let rhsAgentID = rhs.agentID
+            let lhsSite = agentByID[lhsAgentID].map { siteNameByID[$0.siteId] ?? "" } ?? ""
+            let rhsSite = agentByID[rhsAgentID].map { siteNameByID[$0.siteId] ?? "" } ?? ""
             if lhsSite != rhsSite { return lhsSite.localizedStandardCompare(rhsSite) == .orderedAscending }
             let lhsAgent = agentNameByID[lhsAgentID] ?? ""
             let rhsAgent = agentNameByID[rhsAgentID] ?? ""
             if lhsAgent != rhsAgent { return lhsAgent.localizedStandardCompare(rhsAgent) == .orderedAscending }
             if lhs.present != rhs.present { return lhs.present && !rhs.present }
             if lhs.devicePath != rhs.devicePath { return lhs.devicePath < rhs.devicePath }
-            return (lhs.id?.uuidString ?? "") < (rhs.id?.uuidString ?? "")
+            return lhs.id.uuidString < rhs.id.uuidString
         }
-        let responses = try sorted.compactMap { device -> StorageDeviceResponse? in
-            guard let agent = agentByID[device.$agent.id] else { return nil }
-            return try StorageDeviceResponse(device: device, agent: agent, now: now)
+        let responses = sorted.compactMap { device -> StorageDeviceResponse? in
+            guard let agent = agentByID[device.agentID] else { return nil }
+            return StorageDeviceResponse(
+                device: device,
+                siteID: agent.siteId,
+                agentLastHeartbeat: agent.lastHeartbeat,
+                now: now
+            )
         }
         return paging.page(responses)
     }
@@ -207,32 +178,36 @@ struct StorageDeviceController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid storage device ID")
         }
         let update = try req.content.decodeValidated(UpdateStorageDeviceRequest.self)
-        return try await req.db.transaction { transaction in
-            guard let sql = transaction as? any SQLDatabase else {
-                throw Abort(.internalServerError, reason: "Storage device updates require SQL")
+        guard let current = try await storageDevices.device(id: deviceID) else {
+            throw Abort(.notFound, reason: "Storage device not found")
+        }
+        guard let agent = try await agents.agent(id: current.agentID) else {
+            throw Abort(.notFound, reason: "Storage device agent not found")
+        }
+        if agent.organizationID == nil && agent.organizationalUnitID == nil {
+            _ = try await req.requireSystemAdmin("This agent has no owning organization")
+        } else {
+            guard try await req.can("agent:manage", on: IAMNode(type: .agent, id: agent.id)) else {
+                throw Abort(.forbidden, reason: "You don't have 'agent:manage' access on this agent")
             }
-            _ = try await sql.raw(
-                "SELECT id FROM storage_devices WHERE id = \(bind: deviceID) FOR UPDATE"
-            ).all()
-            guard let device = try await StorageDevice.find(deviceID, on: transaction) else {
-                throw Abort(.notFound, reason: "Storage device not found")
-            }
-            guard let agent = try await Agent.find(device.$agent.id, on: transaction) else {
-                throw Abort(.notFound, reason: "Storage device agent not found")
-            }
-            try await req.requireAgentAction("agent:manage", on: agent)
+        }
 
-            if !update.osdEligible {
-                device.role = .unassigned
-            } else if device.role != .osd {
-                let eligibility = StorageDeviceEligibility.evaluate(device, agent: agent)
-                if let blocker = eligibility.blockedReason {
-                    throw Abort(.conflict, reason: blocker.message)
-                }
-                device.role = .osd
-            }
-            try await device.save(on: transaction)
-            return try StorageDeviceResponse(device: device, agent: agent)
+        do {
+            let mutation = try await storageDevices.setOSDEligibility(
+                forDeviceID: deviceID,
+                eligible: update.osdEligible
+            )
+            return StorageDeviceResponse(
+                device: mutation.device,
+                siteID: agent.siteID,
+                agentLastHeartbeat: mutation.agentLastHeartbeat
+            )
+        } catch StorageDevicePersistenceError.notFound {
+            throw Abort(.notFound, reason: "Storage device not found")
+        } catch StorageDevicePersistenceError.agentNotFound {
+            throw Abort(.notFound, reason: "Storage device agent not found")
+        } catch StorageDevicePersistenceError.ineligible(let blocker) {
+            throw Abort(.conflict, reason: blocker.message)
         }
     }
 

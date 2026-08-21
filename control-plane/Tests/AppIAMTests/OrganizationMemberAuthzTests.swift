@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -9,7 +8,7 @@ import AppTestSupport
 /// Pins the issue #482 audit decision for org member management:
 /// `addMember` / `removeMember` / `updateMemberRole` / `getMembers` authorize
 /// through the Cedar evaluator (`org:update` / `org:read`), not through inline
-/// `UserOrganization.role` reads, and system admins bypass like everywhere
+/// organization-role membership reads, and system admins bypass like everywhere
 /// else in the API.
 @Suite("Organization Member Authorization Tests", .serialized)
 final class OrganizationMemberAuthzTests {
@@ -29,9 +28,8 @@ final class OrganizationMemberAuthzTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Authz Org")
 
             let caller = try await builder.createUser(
@@ -41,7 +39,7 @@ final class OrganizationMemberAuthzTests {
                 isSystemAdmin: false
             )
             try await builder.addUserToOrganization(user: caller, organization: org, role: "member")
-            let callerToken = try await caller.generateAPIKey(on: app.db)
+            let callerToken = try await caller.generateAPIKey(on: app)
 
             let target = try await builder.createUser(
                 username: "authztarget",
@@ -91,9 +89,9 @@ final class OrganizationMemberAuthzTests {
         try await withMemberAuthzApp { app, org, _, _, _ in
             // Not a member of the org: no membership-derived org:read, no
             // binding — the evaluator denies the member list.
-            let outsider = try await TestDataBuilder(db: app.db).createUser(
+            let outsider = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "authz-outsider", email: "authz-outsider@example.com")
-            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
+            let outsiderToken = try await outsider.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/organizations/\(org.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
@@ -108,14 +106,14 @@ final class OrganizationMemberAuthzTests {
         // Pins the platform-bypass semantics these routes get from `req.can` —
         // the tier-1 `platform-system-admin` policy.
         try await withMemberAuthzApp { app, org, _, _, target in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let sysAdmin = try await builder.createUser(
                 username: "authzsysadmin",
                 email: "authzsysadmin@example.com",
                 displayName: "Authz Sysadmin",
                 isSystemAdmin: true
             )
-            let sysAdminToken = try await sysAdmin.generateAPIKey(on: app.db)
+            let sysAdminToken = try await sysAdmin.generateAPIKey(on: app)
 
             try await app.test(.POST, "/api/organizations/\(org.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: sysAdminToken)

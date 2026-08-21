@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import StratoShared
 import Testing
 import Vapor
@@ -26,9 +26,8 @@ final class ResourceEventTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "eventuser",
                 email: "event@example.com",
@@ -37,8 +36,7 @@ final class ResourceEventTests {
             )
             let org = try await builder.createOrganization(name: "Event Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Event Project",
@@ -46,7 +44,7 @@ final class ResourceEventTests {
                 organization: org
             )
             let vm = try await builder.createVM(name: "event-vm", project: project)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, org, project, vm, token)
 
@@ -59,12 +57,13 @@ final class ResourceEventTests {
     }
 
     private func events(
-        for resourceID: UUID, on db: any Database
+        for resourceID: UUID, on db: PostgresStoreContext
     ) async throws -> [ResourceEvent] {
-        try await ResourceEvent.query(on: db)
-            .filter(\.$resourceID == resourceID)
-            .sort(\.$createdAt)
-            .all()
+        try await ResourceEvent.matching(
+            resourceID: resourceID,
+            ascending: true,
+            on: db
+        )
     }
 
     // MARK: - Attribution at mutation time
@@ -80,7 +79,7 @@ final class ResourceEventTests {
                 #expect(res.status == .accepted)
             }
 
-            let recorded = try await self.events(for: vmID, on: app.db)
+            let recorded = try await self.events(for: vmID, on: app.testPostgres)
             #expect(recorded.count == 1)
             let event = try #require(recorded.first)
             #expect(event.mutation == .boot)
@@ -101,7 +100,7 @@ final class ResourceEventTests {
     @Test("Create appends an event even though it never goes through the mutation accept path")
     func createAppendsEvent() async throws {
         try await withEventTestApp { app, user, org, project, _, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(project: project, uploadedBy: user)
             let network = try await builder.createNetwork(name: "event-net", project: project)
 
@@ -127,21 +126,20 @@ final class ResourceEventTests {
             }
 
             let created = try #require(
-                try await VM.query(on: app.db).filter(\.$name == "created-vm").first())
+                try await VM.all(on: app.testPostgres).first { $0.name == "created-vm" })
             let createdID = try created.requireID()
-            let bootVolumes = try await Volume.query(on: app.db)
-                .filter(\.$vm.$id == createdID)
-                .filter(\.$volumeType == .boot)
-                .all()
+            let bootVolumes = try await Volume.all(on: app.testPostgres).filter {
+                $0.vmID == createdID && $0.volumeType == .boot
+            }
             let bootVolume = try #require(bootVolumes.first)
             #expect(bootVolumes.count == 1)
             #expect(bootVolume.deviceName == VolumeDeviceName.disk(0).rawValue)
             #expect(bootVolume.bootOrder == 0)
             #expect(!bootVolume.readonly)
             #expect(bootVolume.size == created.disk)
-            #expect(bootVolume.$sourceImage.id == image.id)
+            #expect(bootVolume.sourceImageID == image.id)
 
-            let recorded = try await self.events(for: createdID, on: app.db)
+            let recorded = try await self.events(for: createdID, on: app.testPostgres)
             let create = try #require(recorded.first { $0.mutation == .create })
             #expect(create.actorType == .user)
             #expect(create.actorID == user.id)
@@ -152,7 +150,7 @@ final class ResourceEventTests {
             // distinguishes "never confirmed by any agent" from "confirmed".
             #expect(create.targetGeneration == 1)
 
-            let volumeEvents = try await self.events(for: try bootVolume.requireID(), on: app.db)
+            let volumeEvents = try await self.events(for: try bootVolume.requireID(), on: app.testPostgres)
             #expect(
                 volumeEvents.contains {
                     $0.resourceKind == .volume && $0.mutation == .create
@@ -163,7 +161,7 @@ final class ResourceEventTests {
     @Test("Sandbox create appends its own event, like the VM create path it mirrors")
     func sandboxCreateAppendsEvent() async throws {
         try await withEventTestApp { app, user, org, project, _, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let network = try await builder.createNetwork(name: "event-sandbox-net", project: project)
 
             struct CreateSandboxBody: Content {
@@ -187,9 +185,9 @@ final class ResourceEventTests {
             }
 
             let created = try #require(
-                try await Sandbox.query(on: app.db).filter(\.$name == "created-sandbox").first())
+                try await Sandbox.all(on: app.testPostgres).first { $0.name == "created-sandbox" })
             let event = try #require(
-                try await self.events(for: try created.requireID(), on: app.db)
+                try await self.events(for: try created.requireID(), on: app.testPostgres)
                     .first { $0.mutation == .create })
             #expect(event.actorType == .user)
             #expect(event.actorID == user.id)
@@ -204,7 +202,7 @@ final class ResourceEventTests {
     @Test("An unattended sweep records the system actor, not a user that does not exist")
     func systemActorRecorded() async throws {
         try await withEventTestApp { app, _, _, project, _, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let sandbox = try await builder.createSandbox(name: "expiring", project: project)
             let sandboxID = try sandbox.requireID()
 
@@ -213,15 +211,16 @@ final class ResourceEventTests {
             // which `MutationActor` derived `.system` from; the sentinel went
             // with the operations table (STR-152) and the sweep passes the
             // actor directly.
-            _ = try await app.resourceMutation.accept(
+            _ = try await app.resourceMutation.acceptValue(
                 .delete, on: sandbox, actor: .system, dispatch: .stateSync,
-                on: app.db, app: app
-            ) { db in
-                sandbox.setDesiredStatus(.absent)
-                try await sandbox.save(on: db)
+                on: app.testPostgres, app: app
+            ) { current, _ in
+                var changed = current
+                changed.setDesiredStatus(.absent)
+                return changed
             }
 
-            let event = try #require(try await self.events(for: sandboxID, on: app.db).first)
+            let event = try #require(try await self.events(for: sandboxID, on: app.testPostgres).first)
             #expect(event.actorType == .system)
             #expect(event.actorID == nil)
             #expect(event.mutation == .delete)
@@ -246,14 +245,14 @@ final class ResourceEventTests {
 
             var removed = false
             for _ in 0..<100 {
-                if try await VM.find(vmID, on: app.db) == nil {
+                if try await VM.find(vmID, on: app.testPostgres) == nil {
                     removed = true
                     break
                 }
                 try await Task.sleep(for: .milliseconds(50))
             }
             guard removed else {
-                let conditions = try await VM.find(vmID, on: app.db)?.conditions
+                let conditions = try await VM.find(vmID, on: app.testPostgres)?.conditions
                 Issue.record(
                     """
                     VM \(vmID) was still present after 5s, so the delete never resolved; \
@@ -266,7 +265,7 @@ final class ResourceEventTests {
 
             // Nothing resolves against the VM row any more, so everything the
             // trail needs had to be snapshotted at mutation time.
-            let event = try #require(try await self.events(for: vmID, on: app.db).first)
+            let event = try #require(try await self.events(for: vmID, on: app.testPostgres).first)
             #expect(event.mutation == .delete)
             #expect(event.actorID == user.id)
             #expect(event.resourceName == "event-vm")
@@ -289,7 +288,7 @@ final class ResourceEventTests {
                 #expect(res.status == .badRequest)
             }
 
-            #expect(try await self.events(for: vmID, on: app.db).isEmpty)
+            #expect(try await self.events(for: vmID, on: app.testPostgres).isEmpty)
         }
     }
 
@@ -305,18 +304,19 @@ final class ResourceEventTests {
             // the transaction rolling the generation bump and the event back
             // together.
             await #expect(throws: MutationFailure.self) {
-                _ = try await app.resourceMutation.accept(
+                _ = try await app.resourceMutation.acceptValue(
                     .boot, on: vm, actor: .user(try user.requireID()),
-                    dispatch: .stateSync, on: app.db, app: app
-                ) { db in
-                    vm.setDesiredStatus(.running)
-                    try await vm.save(on: db)
+                    dispatch: .stateSync, on: app.testPostgres, app: app
+                ) { current, db in
+                    var changed = current
+                    changed.setDesiredStatus(.running)
+                    try await changed.save(on: db)
                     throw MutationFailure()
                 }
             }
 
-            #expect(try await self.events(for: vmID, on: app.db).isEmpty)
-            #expect(try await VM.find(vmID, on: app.db)?.generation == 0)
+            #expect(try await self.events(for: vmID, on: app.testPostgres).isEmpty)
+            #expect(try await VM.find(vmID, on: app.testPostgres)?.generation == 0)
         }
     }
 
@@ -333,12 +333,12 @@ final class ResourceEventTests {
             let workloadID = UUID()
             try await ResourceEvent.record(
                 .boot, resourceKind: .virtualMachine, resourceID: vmID,
-                actor: .serviceAccount(serviceAccountID), on: app.db)
+                actor: .serviceAccount(serviceAccountID), on: app.testPostgres)
             try await ResourceEvent.record(
                 .shutdown, resourceKind: .virtualMachine, resourceID: vmID,
-                actor: .workload(workloadID), on: app.db)
+                actor: .workload(workloadID), on: app.testPostgres)
 
-            let recorded = try await self.events(for: vmID, on: app.db)
+            let recorded = try await self.events(for: vmID, on: app.testPostgres)
             #expect(recorded.map(\.actorType) == [.serviceAccount, .workload])
             #expect(recorded.map(\.actorID) == [serviceAccountID, workloadID])
         }

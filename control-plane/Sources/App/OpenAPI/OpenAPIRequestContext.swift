@@ -24,7 +24,7 @@ enum OpenAPIRequestContext {
 /// Bridges Vapor and the generated OpenAPI handlers, in both directions.
 ///
 /// * **Inbound** — publishes the `Request` as a task local so handlers can reach
-///   `req.db` / `req.auth` (see ``OpenAPIRequestContext``).
+///   request authentication (see ``OpenAPIRequestContext``).
 /// * **Outbound** — unwraps `ServerError`. swift-openapi-runtime wraps anything a
 ///   handler throws, which would otherwise hide `Abort` from Vapor's
 ///   `ErrorMiddleware` and turn every deliberate 4xx into a 500. Unwrapping keeps

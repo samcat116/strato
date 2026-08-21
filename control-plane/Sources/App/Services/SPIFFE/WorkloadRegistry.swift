@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -62,11 +62,10 @@ enum WorkloadRegistry {
 
     /// Resolve a SPIFFE URI to the principal it registers, or nil for an
     /// unregistered identity.
-    static func resolve(spiffeID: String, on db: any Database) async throws -> ResolvedWorkload? {
-        guard
-            let row = try await WorkloadRegistration.query(on: db)
-                .filter(\.$spiffeID == spiffeID)
-                .first()
+    static func resolve(
+        spiffeID: String, using workloads: WorkloadsPersistence
+    ) async throws -> ResolvedWorkload? {
+        guard let row = try await workloads.registration(spiffeID: spiffeID)
         else { return nil }
         return resolved(row)
     }
@@ -74,17 +73,18 @@ enum WorkloadRegistry {
     /// The resolution of one registry row; nil when the row is internally
     /// inconsistent (a kind without its reference), which resolves to no
     /// principal rather than to a guess.
-    static func resolved(_ row: WorkloadRegistration) -> ResolvedWorkload? {
-        switch row.kind {
+    static func resolved(_ row: WorkloadRegistrationSnapshot) -> ResolvedWorkload? {
+        switch WorkloadRegistrationKind(rawValue: row.kind) {
         case .agent:
             guard let name = row.agentName else { return nil }
             return .agent(name: name)
         case .serviceAccount:
-            guard let id = row.$serviceAccount.id else { return nil }
+            guard let id = row.serviceAccountID else { return nil }
             return .serviceAccount(id: id)
         case .workload:
-            guard let id = row.id else { return nil }
-            return .workload(id: id)
+            return .workload(id: row.id)
+        case nil:
+            return nil
         }
     }
 
@@ -96,42 +96,59 @@ enum WorkloadRegistry {
     /// trust-domain/path validation passed — the registry row then makes the
     /// mapping first-class for every later connection, which is rejected if
     /// the same URI ever resolves to a different principal.
-    static func registerAgent(identity: AgentIdentity, on db: any Database) async throws {
+    static func registerAgent(
+        identity: AgentIdentity, using workloads: WorkloadsPersistence
+    ) async throws {
         do {
-            try await WorkloadRegistration(spiffeID: identity.key, kind: .agent, agentName: identity.name)
-                .save(on: db)
-        } catch {
-            guard let dbError = error as? any DatabaseError, dbError.isConstraintFailure else { throw error }
-            // A concurrent connection won the insert race; the unique key
-            // guarantees the winner registered the same URI. Verify it names
-            // the same agent rather than adopting it blind.
-            guard
-                let existing = try await resolve(spiffeID: identity.key, on: db),
-                existing == .agent(name: identity.name)
-            else { throw error }
+            try await workloads.requireAgentRegistration(
+                spiffeID: identity.key, agentName: identity.name)
+        } catch WorkloadsPersistenceError.spiffeIDOwnedByDifferentPrincipal {
+            throw Abort(.forbidden, reason: "SPIFFE identity is registered to a different principal")
         }
     }
 
     /// Remove an agent's registration row when the agent is deprovisioned.
     /// Exact-URI deletion, for the same reason registration is URI-keyed.
-    static func deregisterAgent(identity: AgentIdentity, on db: any Database) async throws {
-        try await WorkloadRegistration.query(on: db)
-            .filter(\.$kind == .agent)
-            .filter(\.$spiffeID == identity.key)
-            .delete()
+    static func deregisterAgent(
+        identity: AgentIdentity, using workloads: WorkloadsPersistence
+    ) async throws {
+        _ = try await workloads.deleteAgentRegistration(spiffeID: identity.key)
     }
 
     /// Enforce the registry mapping for a verified agent identity: a URI
     /// registered to a different principal is rejected even with a valid
     /// agent path, and a first-seen identity is registered so every later
     /// connection resolves through the registry (issue #491).
-    static func requireAgentRegistration(identity: AgentIdentity, on db: any Database) async throws {
-        if let registered = try await resolve(spiffeID: identity.key, on: db) {
-            guard case .agent(let registeredName) = registered, registeredName == identity.name else {
-                throw Abort(.forbidden, reason: "SPIFFE identity is registered to a different principal")
-            }
-            return
-        }
-        try await registerAgent(identity: identity, on: db)
+    static func requireAgentRegistration(
+        identity: AgentIdentity, using workloads: WorkloadsPersistence
+    ) async throws {
+        try await registerAgent(identity: identity, using: workloads)
     }
+
+#if DEBUG
+    package static func resolve(
+        spiffeID: String, on database: PostgresStoreContext
+    ) async throws -> ResolvedWorkload? {
+        try await resolve(spiffeID: spiffeID, using: database.testWorkloadsPersistence)
+    }
+
+    package static func registerAgent(
+        identity: AgentIdentity, on database: PostgresStoreContext
+    ) async throws {
+        try await registerAgent(identity: identity, using: database.testWorkloadsPersistence)
+    }
+
+    package static func deregisterAgent(
+        identity: AgentIdentity, on database: PostgresStoreContext
+    ) async throws {
+        try await deregisterAgent(identity: identity, using: database.testWorkloadsPersistence)
+    }
+
+    package static func requireAgentRegistration(
+        identity: AgentIdentity, on database: PostgresStoreContext
+    ) async throws {
+        try await requireAgentRegistration(
+            identity: identity, using: database.testWorkloadsPersistence)
+    }
+#endif
 }

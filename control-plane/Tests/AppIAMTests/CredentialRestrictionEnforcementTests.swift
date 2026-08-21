@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Testing
 import Vapor
@@ -18,7 +18,6 @@ final class CredentialRestrictionEnforcementTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             app.iamDecisionLogConfig.recordDecisions = true
             try await test(app)
         } catch {
@@ -38,7 +37,7 @@ final class CredentialRestrictionEnforcementTests {
     }
 
     private func buildTree(_ app: Application, prefix: String, admin: Bool = false) async throws -> Tree {
-        let builder = TestDataBuilder(db: app.db)
+        let builder = TestDataBuilder(db: app.testPostgres)
         let org = try await builder.createOrganization(name: "\(prefix) Org")
         let project = try await builder.createProject(
             name: "\(prefix) Project", description: "d", organization: org)
@@ -53,7 +52,7 @@ final class CredentialRestrictionEnforcementTests {
         // the *credential*, never about a missing binding.
         try await RoleBindingService.grant(
             principalType: .user, principalID: try user.requireID(), role: .editor,
-            nodeType: .organization, nodeID: try org.requireID(), createdBy: nil, on: app.db)
+            nodeType: .organization, nodeID: try org.requireID(), createdBy: nil, on: app.testPostgres)
         return Tree(
             org: org, project: project, otherProject: otherProject, vm: vm, otherVM: otherVM, user: user)
     }
@@ -75,7 +74,7 @@ final class CredentialRestrictionEnforcementTests {
             context: IAMCheckContext(path: "/api/vms", method: "POST", requestID: nil),
             state: IAMRequestAuthState(restriction: restriction, credential: credential),
             app: app,
-            db: app.db
+            db: app.testPostgres
         )
     }
 
@@ -115,7 +114,7 @@ final class CredentialRestrictionEnforcementTests {
     @Test("A restriction cannot grant what the bindings do not")
     func restrictionCannotGrant() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "No Grant Org")
             let project = try await builder.createProject(
                 name: "No Grant Project", description: "d", organization: org)
@@ -229,7 +228,7 @@ final class CredentialRestrictionEnforcementTests {
                 state: state.membershipProbe(),
                 cache: cache,
                 app: app,
-                db: app.db)
+                db: app.testPostgres)
             #expect(probed.allowed, "the probe asks about the principal, and this one is a member")
 
             let underTheCeiling = try await IAMAuthorizer.authorize(
@@ -240,7 +239,7 @@ final class CredentialRestrictionEnforcementTests {
                 state: state,
                 cache: cache,
                 app: app,
-                db: app.db)
+                db: app.testPostgres)
             #expect(!underTheCeiling.allowed, "the probe's answer must not be reused for the real question")
         }
     }
@@ -262,7 +261,7 @@ final class CredentialRestrictionEnforcementTests {
                 context: IAMCheckContext(path: "/api/vms", method: "GET", requestID: nil),
                 state: IAMRequestAuthState(restriction: try restriction(["vm:*"], node: projectNode)),
                 app: app,
-                db: app.db)
+                db: app.testPostgres)
 
             #expect(decisions[inScope]?.allowed == true)
             #expect(decisions[outOfScope]?.allowed == false)
@@ -289,7 +288,7 @@ final class CredentialRestrictionEnforcementTests {
                 context: IAMCheckContext(path: "/api/vms", method: "GET", requestID: nil),
                 state: IAMRequestAuthState(restriction: try restriction(["volume:read"])),
                 app: app,
-                db: app.db)
+                db: app.testPostgres)
 
             #expect(decisions.count == 2)
             #expect(decisions.values.allSatisfy { !$0.allowed })
@@ -314,9 +313,10 @@ final class CredentialRestrictionEnforcementTests {
                 restriction: try restriction(["vm:read"]), credential: credential)
 
             await app.iamDecisionRecorder.flush()
-            let rows = try await IAMDecisionLog.query(on: app.db)
-                .filter(\.$credentialID == credentialID)
-                .all()
+            let rows = try await app.decisionLogsPersistence.entries(
+                matching: DecisionLogFilter(credentialID: credentialID),
+                limit: 500
+            ).entries
             #expect(rows.count == 2)
             #expect(rows.allSatisfy { $0.credentialType == "cli_session" })
 
@@ -343,9 +343,10 @@ final class CredentialRestrictionEnforcementTests {
             #expect(decision.allowed)
 
             await app.iamDecisionRecorder.flush()
-            let rows = try await IAMDecisionLog.query(on: app.db)
-                .filter(\.$nodeID == vmNode.id)
-                .all()
+            let rows = try await app.decisionLogsPersistence.entries(
+                matching: DecisionLogFilter(nodeID: vmNode.id),
+                limit: 500
+            ).entries
             #expect(!rows.isEmpty)
             #expect(rows.allSatisfy { $0.credentialType == nil && $0.credentialID == nil })
         }
@@ -366,17 +367,20 @@ final class CredentialRestrictionEnforcementTests {
         let request = Request(
             application: app, method: method, url: "/api/audit-events", on: app.eventLoopGroup.next())
         request.auth.login(user)
-        let key = APIKey(
-            id: UUID(), userID: (try? user.requireID()) ?? UUID(), name: "k", keyHash: "h", keyPrefix: "p")
-        key.store(restriction: restriction)
-        request.apiKey = key
+        request.apiKey = APIKeySnapshot(
+            id: UUID(),
+            userID: (try? user.requireID()) ?? UUID(),
+            name: "k",
+            keyPrefix: "p",
+            restriction: restriction.stored
+        )
         return request
     }
 
     @Test("requireSystemAdmin keeps reads for an action-limited credential and refuses its mutations")
     func requireSystemAdminUnderRestriction() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let admin = try await builder.createUser(
                 username: "helper-admin", email: "helper-admin@example.com", isSystemAdmin: true)
             let readOnly = CredentialRestriction.readOnly
@@ -411,7 +415,7 @@ final class CredentialRestrictionEnforcementTests {
     @Test("allowsScopelessPlatformRow honours the action half and refuses node-scoped credentials")
     func scopelessPlatformRowUnderRestriction() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let admin = try await builder.createUser(
                 username: "row-admin", email: "row-admin@example.com", isSystemAdmin: true)
 
@@ -443,7 +447,7 @@ final class CredentialRestrictionEnforcementTests {
     @Test("A state built before authentication does not freeze a credential as unrestricted")
     func authStateIsNotAStaleSnapshot() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "early-user", email: "early-user@example.com")
 
@@ -455,10 +459,13 @@ final class CredentialRestrictionEnforcementTests {
             #expect(request.iamAuthState.restriction.isUnrestricted)
 
             request.auth.login(user)
-            let key = APIKey(
-                id: UUID(), userID: try user.requireID(), name: "k", keyHash: "h", keyPrefix: "p")
-            key.store(restriction: try restriction(["vm:read"]))
-            request.apiKey = key
+            request.apiKey = APIKeySnapshot(
+                id: UUID(),
+                userID: try user.requireID(),
+                name: "k",
+                keyPrefix: "p",
+                restriction: try restriction(["vm:read"]).stored
+            )
 
             #expect(!request.iamAuthState.restriction.isUnrestricted)
             #expect(request.iamAuthState.restriction.permits(action: "vm:read"))
@@ -470,7 +477,7 @@ final class CredentialRestrictionEnforcementTests {
     @Test("A refusal outside the evaluator is still attributable in the decision log")
     func nonEvaluatorRefusalIsRecorded() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "row-user", email: "row-user@example.com")
 
@@ -481,9 +488,10 @@ final class CredentialRestrictionEnforcementTests {
             #expect((thrown as? any AbortError)?.status == .forbidden)
 
             await app.iamDecisionRecorder.flush()
-            let rows = try await IAMDecisionLog.query(on: app.db)
-                .filter(\.$decision == "credential_restricted")
-                .all()
+            let rows = try await app.decisionLogsPersistence.entries(
+                matching: DecisionLogFilter(decision: "credential_restricted"),
+                limit: 500
+            ).entries
             #expect(rows.count == 1)
             let row = try #require(rows.first)
             #expect(row.action == nil)
@@ -511,9 +519,9 @@ final class CredentialRestrictionEnforcementTests {
                 principalMatch: .any,
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db)
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+                on: app.testPostgres)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
             let decision = try await check(
                 app, user: tree.user, action: "vm:delete", node: vmNode,

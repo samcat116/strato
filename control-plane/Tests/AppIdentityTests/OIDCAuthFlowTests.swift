@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import NIOConcurrencyHelpers
 import NIOCore
@@ -291,24 +291,23 @@ final class OIDCAuthFlowTests {
     private func withFlowApp(
         issuer: String? = "https://idp.example.com",
         discoveryURL: String? = nil,
-        _ test: (Application, Organization, OIDCProvider, FakeIdPClient) async throws -> Void
+        _ test: (Application, Organization, OIDCProviderSnapshot, FakeIdPClient) async throws -> Void
     ) async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "SSO Flow Org")
 
-            let provider = OIDCProvider(
+            let provider = try await app.oidcProvidersPersistence.create(OIDCProviderWrite(
                 organizationID: org.id!,
                 name: "Flow IdP",
                 clientID: "client-abc",
-                clientSecret: "s3cret",
+                encryptedClientSecret: "s3cret",
                 discoveryURL: discoveryURL,
                 issuer: issuer,
                 authorizationEndpoint: "https://idp.example.com/authorize",
                 tokenEndpoint: tokenEndpointPath,
                 jwksURI: jwksPath
-            )
-            try await provider.save(on: app.db)
+            ))
 
             let fake = FakeIdPClient(on: app.eventLoopGroup.next())
             app.clients.use { _ in fake }
@@ -328,10 +327,10 @@ final class OIDCAuthFlowTests {
     /// `expectNonce` asserts whether a `nonce` is present on the redirect —
     /// providers with `useNonce == false` must omit it.
     private func startLogin(
-        app: Application, org: Organization, provider: OIDCProvider, expectNonce: Bool = true
+        app: Application, org: Organization, provider: OIDCProviderSnapshot, expectNonce: Bool = true
     ) async throws -> AuthorizeRedirect {
         var redirect: AuthorizeRedirect?
-        try await app.test(.GET, "/auth/oidc/\(org.id!)/\(provider.id!)/authorize") { res in
+        try await app.test(.GET, "/auth/oidc/\(org.id!)/\(provider.id)/authorize") { res in
             #expect(res.status == .seeOther)
 
             let location = res.headers.first(name: .location) ?? ""
@@ -342,7 +341,7 @@ final class OIDCAuthFlowTests {
             #expect(location.hasPrefix("https://idp.example.com/authorize"))
             #expect(value("client_id") == "client-abc")
             #expect(value("response_type") == "code")
-            #expect(value("redirect_uri")?.contains("/auth/oidc/\(org.id!)/\(provider.id!)/callback") == true)
+            #expect(value("redirect_uri")?.contains("/auth/oidc/\(org.id!)/\(provider.id)/callback") == true)
             #expect((value("nonce") != nil) == expectNonce)
 
             guard let state = value("state"),
@@ -359,14 +358,14 @@ final class OIDCAuthFlowTests {
     private func callback(
         app: Application,
         org: Organization,
-        provider: OIDCProvider,
+        provider: OIDCProviderSnapshot,
         code: String = "auth-code-1",
         state: String,
         sessionCookie: String?,
         afterResponse: (TestingHTTPResponse) async throws -> Void
     ) async throws {
         let query = "code=\(code)&state=\(state)"
-        try await app.test(.GET, "/auth/oidc/\(org.id!)/\(provider.id!)/callback?\(query)") { req in
+        try await app.test(.GET, "/auth/oidc/\(org.id!)/\(provider.id)/callback?\(query)") { req in
             if let sessionCookie {
                 var cookies = HTTPCookies()
                 cookies["vapor-session"] = HTTPCookies.Value(string: sessionCookie)
@@ -382,8 +381,22 @@ final class OIDCAuthFlowTests {
         #expect(res.headers.first(name: .location) == "/login?error=oidc_failed")
     }
 
-    private func userCount(on db: Database, subject: String = "sub-123") async throws -> Int {
-        try await User.query(on: db).filter(\.$oidcSubject == subject).count()
+    private func userCount(on db: PostgresStoreContext, subject: String = "sub-123") async throws -> Int {
+        try await LegacyUserStore.users(oidcSubject: subject, on: db).count
+    }
+
+    @discardableResult
+    private func replaceProvider(
+        on app: Application,
+        _ provider: OIDCProviderSnapshot,
+        mutate: (inout OIDCProviderDraft) -> Void
+    ) async throws -> OIDCProviderSnapshot {
+        var draft = OIDCProviderDraft(provider)
+        mutate(&draft)
+        guard let updated = try await app.oidcProvidersPersistence.replace(draft.write) else {
+            throw Abort(.notFound)
+        }
+        return updated
     }
 
     // MARK: Happy path + token exchange request shape
@@ -405,16 +418,15 @@ final class OIDCAuthFlowTests {
             }
 
             // JIT-provisioned user linked to the provider, with org membership.
-            let user = try await User.query(on: app.db)
-                .filter(\.$oidcSubject == "sub-123")
-                .first()
+            let user = try await LegacyUserStore.users(
+                oidcSubject: "sub-123",
+                on: app.testPostgres
+            ).first
             let resolvedUser = try #require(user)
-            #expect(resolvedUser.$oidcProvider.id == provider.id)
+            #expect(resolvedUser.oidcProviderID == provider.id)
             #expect(resolvedUser.email == "sso-user@example.com")
-            let membership = try await UserOrganization.query(on: app.db)
-                .filter(\.$user.$id == resolvedUser.id!)
-                .filter(\.$organization.$id == org.id!)
-                .first()
+            let membership = try await OrganizationMembershipStore.membership(
+                userID: resolvedUser.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(membership?.roleID == nil)
 
             // The token exchange posted the authorization-code grant to the
@@ -452,7 +464,7 @@ final class OIDCAuthFlowTests {
                 }
             }
 
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 1)
         }
     }
@@ -469,7 +481,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 #expect(res.status == .badRequest)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -480,8 +492,9 @@ final class OIDCAuthFlowTests {
             // An org admin points the JWKS URI at an internal service. The
             // login must fail and the control plane must never issue the
             // request — the SSRF allow-list covers more than discovery.
-            provider.jwksURI = "https://internal-admin.svc.example.org/jwks"
-            try await provider.save(on: app.db)
+            _ = try await replaceProvider(on: app, provider) {
+                $0.jwksURI = "https://internal-admin.svc.example.org/jwks"
+            }
 
             let login = try await startLogin(app: app, org: org, provider: provider)
 
@@ -495,7 +508,7 @@ final class OIDCAuthFlowTests {
                 expectLoginFailedRedirect(res)
             }
             #expect(idp.requests(urlContaining: "internal-admin.svc.example.org").isEmpty)
-            #expect(try await userCount(on: app.db) == 0)
+            #expect(try await userCount(on: app.testPostgres) == 0)
         }
     }
 
@@ -506,10 +519,10 @@ final class OIDCAuthFlowTests {
             // the keys are served from a second domain that no operator listed.
             // The discovery document naming it is what authorizes the fetch, so
             // the login must succeed — before per-provider hosts this failed.
-            provider.jwksURI = "https://keys.googleapis.example/jwks"
-            provider.setDiscoveredHosts(
-                from: discoveryDocument(jwksURI: "https://keys.googleapis.example/jwks"))
-            try await provider.save(on: app.db)
+            _ = try await replaceProvider(on: app, provider) {
+                $0.jwksURI = "https://keys.googleapis.example/jwks"
+                $0.discoveredHosts = ["keys.googleapis.example"]
+            }
 
             let login = try await startLogin(app: app, org: org, provider: provider)
 
@@ -523,7 +536,7 @@ final class OIDCAuthFlowTests {
                 #expect(res.status == .seeOther)
             }
             #expect(!idp.requests(urlContaining: "keys.googleapis.example").isEmpty)
-            #expect(try await userCount(on: app.db) == 1)
+            #expect(try await userCount(on: app.testPostgres) == 1)
         }
     }
 
@@ -533,10 +546,10 @@ final class OIDCAuthFlowTests {
             // Discovery vouched for one off-allow-list host; that must not make
             // a DIFFERENT host fetchable. Otherwise an org admin could add a
             // discovery URL and then hand-point JWKS at an internal service.
-            provider.jwksURI = "https://internal-admin.svc.example.org/jwks"
-            provider.setDiscoveredHosts(
-                from: discoveryDocument(jwksURI: "https://keys.googleapis.example/jwks"))
-            try await provider.save(on: app.db)
+            _ = try await replaceProvider(on: app, provider) {
+                $0.jwksURI = "https://internal-admin.svc.example.org/jwks"
+                $0.discoveredHosts = ["keys.googleapis.example"]
+            }
 
             let login = try await startLogin(app: app, org: org, provider: provider)
 
@@ -550,7 +563,7 @@ final class OIDCAuthFlowTests {
                 expectLoginFailedRedirect(res)
             }
             #expect(idp.requests(urlContaining: "internal-admin.svc.example.org").isEmpty)
-            #expect(try await userCount(on: app.db) == 0)
+            #expect(try await userCount(on: app.testPostgres) == 0)
         }
     }
 
@@ -588,16 +601,15 @@ final class OIDCAuthFlowTests {
     @Test("Callback for a different provider than the session initiated is rejected")
     func testProviderMismatchRejected() async throws {
         try await withFlowApp { app, org, provider, _ in
-            let other = OIDCProvider(
+            let other = try await app.oidcProvidersPersistence.create(OIDCProviderWrite(
                 organizationID: org.id!,
                 name: "Other IdP",
                 clientID: "client-other",
-                clientSecret: "s3cret",
+                encryptedClientSecret: "s3cret",
                 authorizationEndpoint: "https://other.example.com/authorize",
                 tokenEndpoint: "https://other.example.com/token",
                 jwksURI: "https://other.example.com/jwks"
-            )
-            try await other.save(on: app.db)
+            ))
 
             let login = try await startLogin(app: app, org: org, provider: provider)
 
@@ -651,7 +663,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -661,8 +673,7 @@ final class OIDCAuthFlowTests {
         try await withFlowApp { app, org, provider, _ in
             let login = try await startLogin(app: app, org: org, provider: provider)
 
-            provider.tokenEndpoint = nil
-            try await provider.save(on: app.db)
+            _ = try await replaceProvider(on: app, provider) { $0.tokenEndpoint = nil }
 
             try await callback(
                 app: app, org: org, provider: provider, state: login.state, sessionCookie: login.sessionCookie
@@ -690,7 +701,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -765,7 +776,7 @@ final class OIDCAuthFlowTests {
                 #expect(res.headers.first(name: .location) == "/")
             }
 
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 1)
         }
     }
@@ -788,7 +799,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -810,7 +821,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -832,7 +843,7 @@ final class OIDCAuthFlowTests {
                 #expect(res.headers.first(name: .location) == "/")
             }
 
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 1)
         }
     }
@@ -852,7 +863,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -873,7 +884,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -894,7 +905,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -904,8 +915,7 @@ final class OIDCAuthFlowTests {
         try await withFlowApp { app, org, provider, idp in
             // Discord accepts but never echoes the nonce; disabling it makes
             // strato neither send nor require one.
-            provider.useNonce = false
-            try await provider.save(on: app.db)
+            _ = try await replaceProvider(on: app, provider) { $0.useNonce = false }
 
             let login = try await startLogin(
                 app: app, org: org, provider: provider, expectNonce: false)
@@ -920,7 +930,7 @@ final class OIDCAuthFlowTests {
                 #expect(res.status == .seeOther)
                 #expect(res.headers.first(name: .location) == "/")
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 1)
         }
     }
@@ -934,11 +944,10 @@ final class OIDCAuthFlowTests {
 
             // 2) Disable nonce, then start a fresh login reusing the SAME
             //    browser session (same cookie).
-            provider.useNonce = false
-            try await provider.save(on: app.db)
+            _ = try await replaceProvider(on: app, provider) { $0.useNonce = false }
 
             var second: AuthorizeRedirect?
-            try await app.test(.GET, "/auth/oidc/\(org.id!)/\(provider.id!)/authorize") { req in
+            try await app.test(.GET, "/auth/oidc/\(org.id!)/\(provider.id)/authorize") { req in
                 var cookies = HTTPCookies()
                 cookies["vapor-session"] = HTTPCookies.Value(string: first.sessionCookie)
                 req.headers.cookie = cookies
@@ -965,7 +974,7 @@ final class OIDCAuthFlowTests {
                 #expect(res.status == .seeOther)
                 #expect(res.headers.first(name: .location) == "/")
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 1)
         }
     }
@@ -984,7 +993,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }

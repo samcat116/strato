@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -52,9 +51,8 @@ final class ProjectResolutionTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "projresuser",
                 email: "projres@example.com",
@@ -63,8 +61,7 @@ final class ProjectResolutionTests {
             )
             let org = try await builder.createOrganization(name: "Project Resolution Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Project Resolution Project",
@@ -74,7 +71,7 @@ final class ProjectResolutionTests {
             let image = try await builder.createImage(
                 name: "Project Resolution Image", project: project, uploadedBy: user)
             let siteID = try await builder.placementSite(for: project).requireID()
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(
                 Fixture(
@@ -277,8 +274,7 @@ final class ProjectResolutionTests {
     @Test("An explicitly named project needs no current organization")
     func explicitProjectNeedsNoCurrentOrganization() async throws {
         try await withProjectResolutionApp { fixture in
-            fixture.user.currentOrganizationId = nil
-            try await fixture.user.save(on: fixture.app.db)
+            try await fixture.user.replacingCurrentOrganization(nil).save(on: fixture.app.testPostgres)
             let projectID = try fixture.project.requireID()
 
             try await fixture.app.test(.POST, "/api/networks") { req in
@@ -397,8 +393,7 @@ final class ProjectResolutionTests {
             )
             try await fixture.builder.addUserToOrganization(
                 user: member, organization: fixture.org, role: "member")
-            member.currentOrganizationId = fixture.org.id
-            try await member.save(on: fixture.app.db)
+            try await member.replacingCurrentOrganization(fixture.org.id).save(on: fixture.app.testPostgres)
 
             // VM create checks image readability before project resolution.
             // Let this caller pass that gate so the VM row exercises the ghost
@@ -410,7 +405,7 @@ final class ProjectResolutionTests {
                 nodeType: .project,
                 nodeID: try fixture.project.requireID(),
                 createdBy: try member.requireID(),
-                on: fixture.app.db
+                on: fixture.app.testPostgres
             )
 
             let ghostProject = UUID()
@@ -421,9 +416,9 @@ final class ProjectResolutionTests {
                 nodeType: .project,
                 nodeID: ghostProject,
                 createdBy: try member.requireID(),
-                on: fixture.app.db
+                on: fixture.app.testPostgres
             )
-            let memberToken = try await member.generateAPIKey(on: fixture.app.db)
+            let memberToken = try await member.generateAPIKey(on: fixture.app)
 
             try await postEachCreate(
                 fixture, projectId: ghostProject, suffix: "ghost", as: memberToken
@@ -452,9 +447,8 @@ final class ProjectResolutionTests {
             )
             try await fixture.builder.addUserToOrganization(
                 user: outsider, organization: fixture.org, role: "member")
-            outsider.currentOrganizationId = fixture.org.id
-            try await outsider.save(on: fixture.app.db)
-            let outsiderToken = try await outsider.generateAPIKey(on: fixture.app.db)
+            try await outsider.replacingCurrentOrganization(fixture.org.id).save(on: fixture.app.testPostgres)
+            let outsiderToken = try await outsider.generateAPIKey(on: fixture.app)
             let projectID = try fixture.project.requireID()
 
             try await fixture.app.test(.POST, "/api/floating-ips") { req in

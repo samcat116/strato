@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -21,9 +20,8 @@ final class SiteTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             // Site topology endpoints are system-admin only.
             let admin = try await builder.createUser(
                 username: "siteadmin",
@@ -33,15 +31,14 @@ final class SiteTests {
             )
             let org = try await builder.createOrganization(name: "Site Org")
             try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
-            admin.currentOrganizationId = org.id
-            try await admin.save(on: app.db)
+            try await admin.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Site Project",
                 description: "Project for site tests",
                 organization: org
             )
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             try await test(app, admin, project, token)
 
@@ -77,7 +74,7 @@ final class SiteTests {
             networkCapability: networkCapability,
             protocolVersion: protocolVersion
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let uuid = try await app.agentService.registerAgent(
             message, agentName: name, siteID: siteID,
             organizationScope: orgID.map { .organization($0) })
@@ -93,10 +90,11 @@ final class SiteTests {
     private func backdateHeartbeat(
         app: Application, agentId: String, bySeconds seconds: TimeInterval
     ) async throws -> Agent {
-        let agent = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.db))
-        agent.lastHeartbeat = Date().addingTimeInterval(-seconds)
-        try await agent.save(on: app.db)
-        return agent
+        let agent = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.testPostgres))
+        let updatedAgent = agent.replacing(
+            lastHeartbeat: .some(Date().addingTimeInterval(-seconds)))
+        try await updatedAgent.save(on: app.testPostgres)
+        return updatedAgent
     }
 
     /// Comfortably past `SiteNetworkAuthority.controllerOfflineGrace` at any
@@ -106,9 +104,9 @@ final class SiteTests {
     /// A site owned by the harness's organization, so the site↔agent same-org
     /// invariant holds for agents registered via `registerAgent`.
     private func makeSite(app: Application, name: String) async throws -> Site {
-        let orgID = try #require(try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id)
+        let orgID = try #require(try await Organization.all(on: app.testPostgres).first?.id)
         let site = Site(name: name, organizationScope: .organization(orgID))
-        try await site.save(on: app.db)
+        try await site.save(on: app.testPostgres)
         return site
     }
 
@@ -116,14 +114,14 @@ final class SiteTests {
         app: Application, project: Project, named name: String, onAgent agentId: String,
         network: LogicalNetwork
     ) async throws {
-        let builder = TestDataBuilder(db: app.db)
-        let vm = try await builder.createVM(name: name, project: project)
+        let builder = TestDataBuilder(db: app.testPostgres)
+        var vm = try await builder.createVM(name: name, project: project)
         vm.hypervisorId = agentId
-        try await vm.save(on: app.db)
+        try await vm.save(on: app.testPostgres)
         let nic = VMNetworkInterface(
             vmID: vm.id!, logicalNetworkID: try network.requireID(),
             macAddress: VMNetworkInterface.generateMACAddress())
-        try await nic.save(on: app.db)
+        try await nic.save(on: app.testPostgres)
     }
 
     /// The project's network of that name, created on first use. Nothing
@@ -133,14 +131,13 @@ final class SiteTests {
         app: Application, project: Project, named name: String = "default",
         subnet: String = "192.168.1.0/24", gateway: String = "192.168.1.1"
     ) async throws -> LogicalNetwork {
-        if let existing = try await LogicalNetwork.query(on: app.db)
-            .filter(\.$project.$id == project.requireID())
-            .filter(\.$name == name)
-            .first()
+        if let existing = try await LegacyLogicalNetworkStore.networks(
+            projectID: project.requireID(), name: name, on: app.testPostgres
+        ).first
         {
             return existing
         }
-        return try await TestDataBuilder(db: app.db).createNetwork(
+        return try await TestDataBuilder(db: app.testPostgres).createNetwork(
             name: name, project: project, subnet: subnet, gateway: gateway)
     }
 
@@ -149,7 +146,7 @@ final class SiteTests {
     @Test("Site CRUD round-trips and rejects duplicate names")
     func siteCRUD() async throws {
         try await withSiteTestApp { app, _, project, token in
-            let orgId = project.$organization.id
+            let orgId = project.organizationID
             var siteId: UUID?
             try await app.test(.POST, "/api/sites") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -200,7 +197,7 @@ final class SiteTests {
     @Test("Site metadata round-trips; status stays put unless explicitly changed")
     func siteMetadataRoundTrips() async throws {
         try await withSiteTestApp { app, _, project, token in
-            let orgId = project.$organization.id
+            let orgId = project.organizationID
             var siteId: UUID?
 
             // Create with a full metadata payload.
@@ -258,7 +255,7 @@ final class SiteTests {
     @Test("Label keys and values are trimmed on the way in")
     func siteLabelsAreTrimmed() async throws {
         try await withSiteTestApp { app, _, project, token in
-            let orgId = project.$organization.id
+            let orgId = project.organizationID
             try await app.test(.POST, "/api/sites") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -276,7 +273,7 @@ final class SiteTests {
     @Test("Invalid site metadata is rejected")
     func siteMetadataValidation() async throws {
         try await withSiteTestApp { app, _, project, token in
-            let orgId = project.$organization.id
+            let orgId = project.organizationID
 
             // Latitude out of range.
             try await app.test(.POST, "/api/sites") { req in
@@ -352,8 +349,8 @@ final class SiteTests {
             let site = try await self.makeSite(app: app, name: "dc-dereg")
             let controllerId = try await self.registerAgent(app: app, named: "dereg-ctl", siteID: site.id)
             let peerId = try await self.registerAgent(app: app, named: "dereg-peer", siteID: site.id)
-            site.$networkControllerAgent.id = UUID(uuidString: controllerId)
-            try await site.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: try site.requireID(), agentID: UUID(uuidString: controllerId), on: app.testPostgres)
 
             // The controller reference has no FK, so deletion would leave the
             // site pointing at a vanished agent and reconciliation would stop
@@ -363,7 +360,7 @@ final class SiteTests {
             } afterResponse: { res in
                 #expect(res.status == .conflict)
             }
-            let survivor = try await Agent.find(UUID(uuidString: controllerId), on: app.db)
+            let survivor = try await Agent.find(UUID(uuidString: controllerId), on: app.testPostgres)
             #expect(survivor != nil)
 
             // Once it is the last member there is no topology left to author,
@@ -380,9 +377,9 @@ final class SiteTests {
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            #expect(try await Agent.find(UUID(uuidString: controllerId), on: app.db) == nil)
-            let emptied = try #require(try await Site.find(site.id, on: app.db))
-            #expect(emptied.$networkControllerAgent.id == nil)
+            #expect(try await Agent.find(UUID(uuidString: controllerId), on: app.testPostgres) == nil)
+            let emptied = try #require(try await LegacySiteStore.site(id: site.id, on: app.testPostgres))
+            #expect(emptied.networkControllerAgentID == nil)
         }
     }
 
@@ -407,8 +404,8 @@ final class SiteTests {
             let siteID = try #require(site.id)
             let controllerId = try await self.registerAgent(app: app, named: "ctl", siteID: siteID)
             let peerId = try await self.registerAgent(app: app, named: "ctl-peer", siteID: siteID)
-            site.$networkControllerAgent.id = UUID(uuidString: controllerId)
-            try await site.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: siteID, agentID: UUID(uuidString: controllerId), on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/sites/\(siteID.uuidString)/agents/\(controllerId)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -429,8 +426,8 @@ final class SiteTests {
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
-            let emptied = try #require(try await Site.find(siteID, on: app.db))
-            #expect(emptied.$networkControllerAgent.id == nil)
+            let emptied = try #require(try await LegacySiteStore.site(id: siteID, on: app.testPostgres))
+            #expect(emptied.networkControllerAgentID == nil)
         }
     }
 
@@ -441,8 +438,8 @@ final class SiteTests {
             let newSite = try await self.makeSite(app: app, name: "dc-new")
 
             let controllerId = try await self.registerAgent(app: app, named: "moving-ctl", siteID: oldSite.id)
-            oldSite.$networkControllerAgent.id = UUID(uuidString: controllerId)
-            try await oldSite.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: try oldSite.requireID(), agentID: UUID(uuidString: controllerId), on: app.testPostgres)
 
             // Moving the old site's controller would leave that site pointing
             // at a non-member and stop its network reconciliation.
@@ -451,14 +448,14 @@ final class SiteTests {
             } afterResponse: { res in
                 #expect(res.status == .conflict)
             }
-            let agent = try #require(try await Agent.find(UUID(uuidString: controllerId), on: app.db))
-            #expect(agent.$site.id == oldSite.id)
+            let agent = try #require(try await Agent.find(UUID(uuidString: controllerId), on: app.testPostgres))
+            #expect(agent.siteID == oldSite.id)
 
             // A registration token targeting the new site must not move it
             // either — the assignment is ignored, not applied.
             _ = try await self.registerAgent(app: app, named: "moving-ctl", siteID: newSite.id)
-            let after = try #require(try await Agent.find(UUID(uuidString: controllerId), on: app.db))
-            #expect(after.$site.id == oldSite.id)
+            let after = try #require(try await Agent.find(UUID(uuidString: controllerId), on: app.testPostgres))
+            #expect(after.siteID == oldSite.id)
         }
     }
 
@@ -483,13 +480,13 @@ final class SiteTests {
 
             // The token path refuses the same move (logged, not fatal).
             _ = try await self.registerAgent(app: app, named: "loaded", siteID: newSite.id)
-            let agent = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.db))
-            #expect(agent.$site.id == oldSite.id)
+            let agent = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.testPostgres))
+            #expect(agent.siteID == oldSite.id)
 
             // Re-registering into the SAME site is a no-op, not a refusal.
             _ = try await self.registerAgent(app: app, named: "loaded", siteID: oldSite.id)
-            let unchanged = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.db))
-            #expect(unchanged.$site.id == oldSite.id)
+            let unchanged = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.testPostgres))
+            #expect(unchanged.siteID == oldSite.id)
         }
     }
 
@@ -498,11 +495,11 @@ final class SiteTests {
         try await withSiteTestApp { app, _, _, _ in
             _ = try await self.makeSite(app: app, name: "dc-scoped")
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "plainuser", email: "plain@example.com",
                 displayName: "Plain", isSystemAdmin: false)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             // The user holds no binding anywhere, so site view resolves to
             // nothing — the list is empty rather than forbidden, since sites
@@ -523,10 +520,10 @@ final class SiteTests {
             let ownSite = try await self.makeSite(app: app, name: "dc-own")
 
             // A site in an organization the admin is not looking at.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let otherOrg = try await builder.createOrganization(name: "Other Org")
             let otherSite = Site(name: "dc-other", organizationScope: .organization(otherOrg.id!))
-            try await otherSite.save(on: app.db)
+            try await otherSite.save(on: app.testPostgres)
 
             // Unfiltered, a system admin still sees the whole fleet.
             try await app.test(.GET, "/api/sites") { req in
@@ -554,13 +551,13 @@ final class SiteTests {
     func sitesListFilterIncludesOUScoped() async throws {
         try await withSiteTestApp { app, admin, _, token in
             let orgID = try #require(admin.currentOrganizationId)
-            let org = try #require(try await Organization.find(orgID, on: app.db))
+            let org = try #require(try await Organization.find(orgID, on: app.testPostgres))
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let ou = try await builder.createOU(
                 name: "Nested OU", description: "delegated capacity", organization: org)
             let ouSite = Site(name: "dc-ou", organizationScope: .organizationalUnit(ou.id!))
-            try await ouSite.save(on: app.db)
+            try await ouSite.save(on: app.testPostgres)
             _ = try await self.makeSite(app: app, name: "dc-org")
 
             // An organization contains every scope rooted in it, so a site
@@ -597,11 +594,11 @@ final class SiteTests {
             _ = try await self.makeSite(app: app, name: "dc-private")
             let orgID = try #require(admin.currentOrganizationId)
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let outsider = try await builder.createUser(
                 username: "outsider", email: "outsider@example.com",
                 displayName: "Outsider", isSystemAdmin: false)
-            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
+            let outsiderToken = try await outsider.generateAPIKey(on: app)
 
             // The outsider holds no binding on the organization, so the
             // org-scoped filter is refused.
@@ -621,14 +618,14 @@ final class SiteTests {
             let site = try await self.makeSite(app: app, name: "dc-d")
 
             let agentId = try await self.registerAgent(app: app, named: "node-1", siteID: site.id)
-            var agent = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.db))
-            #expect(agent.$site.id == site.id)
+            var agent = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.testPostgres))
+            #expect(agent.siteID == site.id)
 
             // Reconnect with a rotated token that carries no site: the
             // assignment is durable on the agent row.
             _ = try await self.registerAgent(app: app, named: "node-1", siteID: nil)
-            agent = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.db))
-            #expect(agent.$site.id == site.id)
+            agent = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.testPostgres))
+            #expect(agent.siteID == site.id)
         }
     }
 
@@ -721,8 +718,8 @@ final class SiteTests {
 
             let controllerId = try await self.registerAgent(app: app, named: "ctl-agent", siteID: site.id)
             let peerId = try await self.registerAgent(app: app, named: "peer-agent", siteID: site.id)
-            site.$networkControllerAgent.id = UUID(uuidString: controllerId)
-            try await site.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: try site.requireID(), agentID: UUID(uuidString: controllerId), on: app.testPostgres)
 
             // One network referenced only by a VM on the peer, one pinned to
             // the site with no VMs at all.
@@ -732,7 +729,7 @@ final class SiteTests {
             let pinnedNet = LogicalNetwork(
                 name: "pinned-net", subnet: "10.31.0.0/24", gateway: "10.31.0.1",
                 projectID: try project.requireID(), siteID: site.id!)
-            try await pinnedNet.save(on: app.db)
+            try await pinnedNet.save(on: app.testPostgres)
             try await self.placeVM(
                 app: app, project: project, named: "peer-vm", onAgent: peerId, network: peerNet)
 
@@ -761,8 +758,8 @@ final class SiteTests {
             // Registration designates the first eligible member (issue #743);
             // clear it to exercise the undesignated state, which an operator
             // can still reach with a `PUT /api/sites/:id` that omits the field.
-            site.$networkControllerAgent.id = nil
-            try await site.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: try site.requireID(), agentID: nil, on: app.testPostgres)
             try await self.placeVM(
                 app: app, project: project, named: "lone-vm", onAgent: agentId,
                 network: try await self.network(app: app, project: project))
@@ -798,19 +795,19 @@ final class SiteTests {
             let siteID = try #require(site.id)
             let firstId = try await self.registerAgent(app: app, named: "auto-first", siteID: siteID)
 
-            var reloaded = try #require(try await Site.find(siteID, on: app.db))
-            #expect(reloaded.$networkControllerAgent.id?.uuidString == firstId)
+            var reloaded = try #require(try await LegacySiteStore.site(id: siteID, on: app.testPostgres))
+            #expect(reloaded.networkControllerAgentID?.uuidString == firstId)
 
             // A second member joining changes nothing: an existing
             // designation is never displaced.
             _ = try await self.registerAgent(app: app, named: "auto-second", siteID: siteID)
-            reloaded = try #require(try await Site.find(siteID, on: app.db))
-            #expect(reloaded.$networkControllerAgent.id?.uuidString == firstId)
+            reloaded = try #require(try await LegacySiteStore.site(id: siteID, on: app.testPostgres))
+            #expect(reloaded.networkControllerAgentID?.uuidString == firstId)
 
             // Nor does the controller itself re-registering after a restart.
             _ = try await self.registerAgent(app: app, named: "auto-first", siteID: siteID)
-            reloaded = try #require(try await Site.find(siteID, on: app.db))
-            #expect(reloaded.$networkControllerAgent.id?.uuidString == firstId)
+            reloaded = try #require(try await LegacySiteStore.site(id: siteID, on: app.testPostgres))
+            #expect(reloaded.networkControllerAgentID?.uuidString == firstId)
         }
     }
 
@@ -824,14 +821,14 @@ final class SiteTests {
             // with.
             _ = try await self.registerAgent(
                 app: app, named: "auto-slirp", siteID: siteID, networkCapability: .userMode)
-            var reloaded = try #require(try await Site.find(siteID, on: app.db))
-            #expect(reloaded.$networkControllerAgent.id == nil)
+            var reloaded = try #require(try await LegacySiteStore.site(id: siteID, on: app.testPostgres))
+            #expect(reloaded.networkControllerAgentID == nil)
 
             // An overlay member enrolled later takes the job.
             let overlayId = try await self.registerAgent(
                 app: app, named: "auto-overlay", siteID: siteID)
-            reloaded = try #require(try await Site.find(siteID, on: app.db))
-            #expect(reloaded.$networkControllerAgent.id?.uuidString == overlayId)
+            reloaded = try #require(try await LegacySiteStore.site(id: siteID, on: app.testPostgres))
+            #expect(reloaded.networkControllerAgentID?.uuidString == overlayId)
         }
     }
 
@@ -850,8 +847,8 @@ final class SiteTests {
                 #expect(res.status == .ok)
             }
 
-            let reloaded = try #require(try await Site.find(siteID, on: app.db))
-            #expect(reloaded.$networkControllerAgent.id?.uuidString == agentId)
+            let reloaded = try #require(try await LegacySiteStore.site(id: siteID, on: app.testPostgres))
+            #expect(reloaded.networkControllerAgentID?.uuidString == agentId)
         }
     }
 
@@ -865,13 +862,14 @@ final class SiteTests {
             let agentId = try await self.registerAgent(app: app, named: "start-guard-node", siteID: siteID)
             // Undo the automatic designation: this is the state an operator
             // reaches by clearing the field on a `PUT /api/sites/:id`.
-            site.$networkControllerAgent.id = nil
-            try await site.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: siteID, agentID: nil, on: app.testPostgres)
 
             try await self.placeVM(
                 app: app, project: project, named: "stalled-vm", onAgent: agentId,
                 network: try await self.network(app: app, project: project))
-            let vm = try #require(try await VM.query(on: app.db).filter(\.$name == "stalled-vm").first())
+            let vm = try #require(
+                try await LegacyVMStore.vms(name: "stalled-vm", on: app.testPostgres).first)
             let vmID = try #require(vm.id)
 
             try await app.test(.POST, "/api/vms/\(vmID.uuidString)/start") { req in
@@ -882,8 +880,8 @@ final class SiteTests {
             }
 
             // Designating one makes the same boot acceptable.
-            site.$networkControllerAgent.id = UUID(uuidString: agentId)
-            try await site.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: siteID, agentID: UUID(uuidString: agentId), on: app.testPostgres)
             try await app.test(.POST, "/api/vms/\(vmID.uuidString)/start") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
@@ -922,8 +920,8 @@ final class SiteTests {
             // topology at all, so a network pinned there would be created and
             // reconciled nowhere.
             _ = try await self.registerAgent(app: app, named: "pin-guard-node", siteID: siteID)
-            site.$networkControllerAgent.id = nil
-            try await site.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: siteID, agentID: nil, on: app.testPostgres)
 
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -944,12 +942,12 @@ final class SiteTests {
             let site = try await self.makeSite(app: app, name: "dc-place-guard")
             let siteID = try #require(site.id)
             let agentId = try await self.registerAgent(app: app, named: "place-guard-node", siteID: siteID)
-            site.$networkControllerAgent.id = nil
-            try await site.save(on: app.db)
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: siteID, agentID: nil, on: app.testPostgres)
 
             // A network pinned to the site confines placement to its agents,
             // so the scheduler can only land on the controllerless host.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let pinned = try await builder.createNetwork(
                 name: "place-guard-net", project: project, subnet: "10.62.0.0/24",
                 gateway: "10.62.0.1", site: site)
@@ -957,19 +955,19 @@ final class SiteTests {
             let nic = VMNetworkInterface(
                 vmID: try vm.requireID(), logicalNetworkID: try pinned.requireID(),
                 macAddress: VMNetworkInterface.generateMACAddress())
-            try await nic.save(on: app.db)
+            try await nic.save(on: app.testPostgres)
 
             await #expect(throws: AgentServiceError.self) {
-                try await app.agentService.createVM(vm: vm, db: app.db)
+                try await app.agentService.createVM(vm: vm, db: app.testPostgres)
             }
-            let unplaced = try #require(try await VM.find(vm.id, on: app.db))
+            let unplaced = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(unplaced.hypervisorId == nil)
 
             // With a controller designated the same placement succeeds.
-            site.$networkControllerAgent.id = UUID(uuidString: agentId)
-            try await site.save(on: app.db)
-            try await app.agentService.createVM(vm: vm, db: app.db)
-            let placed = try #require(try await VM.find(vm.id, on: app.db))
+            _ = try await LegacySiteStore.setNetworkController(
+                siteID: siteID, agentID: UUID(uuidString: agentId), on: app.testPostgres)
+            try await app.agentService.createVM(vm: vm, db: app.testPostgres)
+            let placed = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(placed.hypervisorId == agentId)
         }
     }
@@ -984,10 +982,10 @@ final class SiteTests {
             let controllerId = try await self.registerAgent(
                 app: app, named: "live-ctl", siteID: siteID)
             let peerId = try await self.registerAgent(app: app, named: "live-peer", siteID: siteID)
-            let peer = try #require(try await Agent.find(UUID(uuidString: peerId), on: app.db))
+            let peer = try #require(try await Agent.find(UUID(uuidString: peerId), on: app.testPostgres))
 
             // Healthy to begin with: registration designated the first member.
-            let healthy = try await SiteNetworkAuthority.resolve(forAgent: peer, on: app.db)
+            let healthy = try await SiteNetworkAuthority.resolve(forAgent: peer, on: app.testPostgres)
             guard case .controller(let designated) = healthy else {
                 Issue.record("expected .controller, got \(healthy)")
                 return
@@ -999,7 +997,7 @@ final class SiteTests {
             try await self.backdateHeartbeat(
                 app: app, agentId: controllerId,
                 bySeconds: SiteNetworkAuthority.controllerOfflineGrace / 2)
-            let blip = try await SiteNetworkAuthority.resolve(forAgent: peer, on: app.db)
+            let blip = try await SiteNetworkAuthority.resolve(forAgent: peer, on: app.testPostgres)
             guard case .controller = blip else {
                 Issue.record("a controller inside the grace window must still resolve, got \(blip)")
                 return
@@ -1008,7 +1006,7 @@ final class SiteTests {
             // Past it, the peer's workloads would park forever.
             try await self.backdateHeartbeat(
                 app: app, agentId: controllerId, bySeconds: self.wellPastGrace)
-            let gone = try await SiteNetworkAuthority.resolve(forAgent: peer, on: app.db)
+            let gone = try await SiteNetworkAuthority.resolve(forAgent: peer, on: app.testPostgres)
             guard case .controllerUnavailable(_, let offline, let fault) = gone else {
                 Issue.record("expected .controllerUnavailable, got \(gone)")
                 return
@@ -1044,12 +1042,13 @@ final class SiteTests {
                     protocolVersion: version, networkCapability: capability)
                 // Re-validation hands the job to an eligible peer, so pin the
                 // regressed agent back to isolate what `resolve` reports.
-                let reloaded = try #require(try await Site.find(siteID, on: app.db))
-                reloaded.$networkControllerAgent.id = UUID(uuidString: controllerId)
-                try await reloaded.save(on: app.db)
+                _ = try await LegacySiteStore.setNetworkController(
+                    siteID: siteID,
+                    agentID: UUID(uuidString: controllerId),
+                    on: app.testPostgres)
 
-                let peer = try #require(try await Agent.find(UUID(uuidString: peerId), on: app.db))
-                let authority = try await SiteNetworkAuthority.resolve(forAgent: peer, on: app.db)
+                let peer = try #require(try await Agent.find(UUID(uuidString: peerId), on: app.testPostgres))
+                let authority = try await SiteNetworkAuthority.resolve(forAgent: peer, on: app.testPostgres)
                 guard case .controllerUnavailable(_, _, let fault) = authority else {
                     Issue.record("expected .controllerUnavailable for \(name), got \(authority)")
                     continue
@@ -1104,7 +1103,8 @@ final class SiteTests {
             try await self.placeVM(
                 app: app, project: project, named: "guard-vm", onAgent: peerId,
                 network: try await self.network(app: app, project: project))
-            let vm = try #require(try await VM.query(on: app.db).filter(\.$name == "guard-vm").first())
+            let vm = try #require(
+                try await LegacyVMStore.vms(on: app.testPostgres).first { $0.name == "guard-vm" })
             try await app.test(.POST, "/api/vms/\(try vm.requireID().uuidString)/start") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
@@ -1132,7 +1132,7 @@ final class SiteTests {
             }
 
             // Placement of a new VM onto the site.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let pinned = try await builder.createNetwork(
                 name: "guard-pinned-net", project: project, subnet: "10.64.0.0/24",
                 gateway: "10.64.0.1", site: site)
@@ -1140,15 +1140,15 @@ final class SiteTests {
             try await VMNetworkInterface(
                 vmID: try pending.requireID(), logicalNetworkID: try pinned.requireID(),
                 macAddress: VMNetworkInterface.generateMACAddress()
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
             await #expect(throws: AgentServiceError.self) {
-                try await app.agentService.createVM(vm: pending, db: app.db)
+                try await app.agentService.createVM(vm: pending, db: app.testPostgres)
             }
 
             // A fresh heartbeat from the controller unblocks all of it.
             try await self.backdateHeartbeat(app: app, agentId: controllerId, bySeconds: 0)
-            try await app.agentService.createVM(vm: pending, db: app.db)
-            #expect(try await VM.find(pending.id, on: app.db)?.hypervisorId != nil)
+            try await app.agentService.createVM(vm: pending, db: app.testPostgres)
+            #expect(try await VM.find(pending.id, on: app.testPostgres)?.hypervisorId != nil)
         }
     }
 
@@ -1162,8 +1162,8 @@ final class SiteTests {
             let site = try await self.makeSite(app: app, name: "dc-solo")
             let siteID = try #require(site.id)
             let agentId = try await self.registerAgent(app: app, named: "solo-node", siteID: siteID)
-            let designated = try #require(try await Site.find(siteID, on: app.db))
-            #expect(designated.$networkControllerAgent.id?.uuidString == agentId)
+            let designated = try #require(try await LegacySiteStore.site(id: siteID, on: app.testPostgres))
+            #expect(designated.networkControllerAgentID?.uuidString == agentId)
 
             try await self.placeVM(
                 app: app, project: project, named: "solo-vm", onAgent: agentId,
@@ -1171,7 +1171,8 @@ final class SiteTests {
             try await self.backdateHeartbeat(
                 app: app, agentId: agentId, bySeconds: self.wellPastGrace)
 
-            let vm = try #require(try await VM.query(on: app.db).filter(\.$name == "solo-vm").first())
+            let vm = try #require(
+                try await LegacyVMStore.vms(name: "solo-vm", on: app.testPostgres).first)
             try await app.test(.POST, "/api/vms/\(try vm.requireID().uuidString)/start") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
@@ -1189,17 +1190,23 @@ final class SiteTests {
                 app: app, named: "handover-ctl", siteID: siteID)
             let peerId = try await self.registerAgent(
                 app: app, named: "handover-peer", siteID: siteID)
-            #expect(try await Site.find(siteID, on: app.db)?.$networkControllerAgent.id?.uuidString == controllerId)
+            #expect(
+                try await LegacySiteStore.site(id: siteID, on: app.testPostgres)?
+                    .networkControllerAgentID?.uuidString == controllerId)
 
             // Comes back in user-mode: it has no OVN service to reconcile with.
             _ = try await self.registerAgent(
                 app: app, named: "handover-ctl", siteID: siteID, networkCapability: .userMode)
-            #expect(try await Site.find(siteID, on: app.db)?.$networkControllerAgent.id == nil)
+            #expect(
+                try await LegacySiteStore.site(id: siteID, on: app.testPostgres)?
+                    .networkControllerAgentID == nil)
 
             // The eligible peer claims it on its own next registration, which
             // is the existing `designateIfUnset` path.
             _ = try await self.registerAgent(app: app, named: "handover-peer", siteID: siteID)
-            #expect(try await Site.find(siteID, on: app.db)?.$networkControllerAgent.id?.uuidString == peerId)
+            #expect(
+                try await LegacySiteStore.site(id: siteID, on: app.testPostgres)?
+                    .networkControllerAgentID?.uuidString == peerId)
         }
     }
 
@@ -1217,7 +1224,8 @@ final class SiteTests {
             _ = try await self.registerAgent(
                 app: app, named: "lonely-ctl", siteID: siteID, networkCapability: .userMode)
             #expect(
-                try await Site.find(siteID, on: app.db)?.$networkControllerAgent.id?.uuidString
+                try await LegacySiteStore.site(id: siteID, on: app.testPostgres)?
+                    .networkControllerAgentID?.uuidString
                     == controllerId)
         }
     }

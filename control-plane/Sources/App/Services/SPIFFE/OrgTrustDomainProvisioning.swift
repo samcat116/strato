@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -23,13 +23,12 @@ enum OrgTrustDomainProvisioning {
     static func claim(
         organizationID: UUID,
         configuration: ControlPlaneConfiguration,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         guard configuration.bool(.spireOrgTrustDomainsEnabled) == true else { return }
 
-        let existing = try await OrgTrustDomain.query(on: db)
-            .filter(\.$organizationID == organizationID)
-            .first()
+        let existing = try await OrgTrustDomainStore.find(
+            organizationID: organizationID, on: db)
         if existing != nil { return }
 
         let trustDomain = OrgTrustDomain.trustDomain(
@@ -42,9 +41,8 @@ enum OrgTrustDomainProvisioning {
         // here: otherwise the unique index trips inside the org-create
         // transaction and the caller sees an opaque 500 with no indication that
         // retrying with a fresh organization UUID is the remedy.
-        let collision = try await OrgTrustDomain.query(on: db)
-            .filter(\.$trustDomain == trustDomain)
-            .first()
+        let collision = try await OrgTrustDomainStore.find(
+            trustDomain: trustDomain, on: db)
         if let collision {
             throw OrgTrustDomainError.trustDomainCollision(
                 trustDomain: trustDomain,
@@ -52,8 +50,11 @@ enum OrgTrustDomainProvisioning {
             )
         }
 
-        let row = OrgTrustDomain(organizationID: organizationID, trustDomain: trustDomain)
-        try await row.save(on: db)
+        try await OrgTrustDomainStore.insert(
+            OrgTrustDomainWrite(
+                organizationID: organizationID,
+                trustDomain: trustDomain),
+            on: db)
     }
 
     /// Mark a deleted organization's trust domain for teardown. Bumps the
@@ -69,32 +70,9 @@ enum OrgTrustDomainProvisioning {
     /// records teardown intent — leaving an orphaned row (there is no FK to
     /// `organizations`) whose CA is resurrected if the flag comes back on. No
     /// row means nothing to do, so this is a no-op in the flag-off case anyway.
-    static func markForTeardown(organizationID: UUID, on db: Database) async throws {
-        guard
-            let row = try await OrgTrustDomain.query(on: db)
-                .filter(\.$organizationID == organizationID)
-                .first()
-        else { return }
-
-        row.phase = .deleting
-        row.deletedAt = Date()
-        row.lastError = nil
-        switch try await DesiredStateGenerationWriter.advance(
-            schema: OrgTrustDomain.schema, id: try row.requireID(), on: db)
-        {
-        case .applied(let generation):
-            guard let generation = Int(exactly: generation) else {
-                throw Abort(
-                    .internalServerError,
-                    reason: "Trust-domain generation exceeds the model's integer range")
-            }
-            row.generation = generation
-        case .missing:
-            return
-        case .superseded:
-            throw Abort(.internalServerError, reason: "Trust-domain generation did not advance")
-        }
-        try await row.save(on: db)
+    static func markForTeardown(organizationID: UUID, on db: PostgresStoreContext) async throws {
+        _ = try await OrgTrustDomainStore.markForTeardown(
+            organizationID: organizationID, on: db)
     }
 }
 

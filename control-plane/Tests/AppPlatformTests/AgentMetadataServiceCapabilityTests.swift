@@ -1,7 +1,6 @@
+import ControlPlanePostgres
 import AppTestSupport
-import Fluent
 import Foundation
-import SQLKit
 import StratoShared
 import Testing
 import Vapor
@@ -33,30 +32,4 @@ struct AgentMetadataServiceCapabilityTests {
         #expect(capable.metadataServiceCapable)
     }
 
-    @Test("Migration keeps existing agents ineligible until registration")
-    func migrationDefaultsExistingRowsToFalse() async throws {
-        let app = try await Application.makeForBareDatabaseTesting()
-        do {
-            try await app.db.schema(Agent.schema)
-                .field("id", .uuid, .identifier(auto: false))
-                .field("name", .string, .required)
-                .create()
-            let sql = try #require(app.db as? any SQLDatabase)
-            let agentID = UUID()
-            try await sql.raw(
-                "INSERT INTO agents (id, name) VALUES (\(bind: agentID), 'existing-agent')"
-            ).run()
-
-            try await AddAgentMetadataServiceCapability().prepare(on: app.db)
-
-            let capable = try await sql.raw(
-                "SELECT metadata_service_capable FROM agents WHERE id = \(bind: agentID)"
-            ).first(decodingColumn: "metadata_service_capable", as: Bool.self)
-            #expect(capable == false)
-        } catch {
-            try? await app.shutdownForTesting()
-            throw error
-        }
-        try await app.shutdownForTesting()
-    }
 }

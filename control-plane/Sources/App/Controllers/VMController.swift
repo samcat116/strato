@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 import StratoShared
 
@@ -101,6 +100,26 @@ struct VMRunCommandRequest: Content, ValidatedRequestBody {
 }
 
 struct VMController: RouteCollection {
+    private let workloads: WorkloadsPersistence
+    private let hierarchy: HierarchyPersistence
+    private let storagePools: StoragePoolsPersistence?
+    private let vmCommands: VMCommandExecutionsPersistence?
+    let database: PostgresStoreContext
+
+    init(
+        workloads: WorkloadsPersistence,
+        hierarchy: HierarchyPersistence,
+        storagePools: StoragePoolsPersistence? = nil,
+        vmCommands: VMCommandExecutionsPersistence? = nil,
+        database: PostgresStoreContext
+    ) {
+        self.workloads = workloads
+        self.hierarchy = hierarchy
+        self.storagePools = storagePools
+        self.vmCommands = vmCommands
+        self.database = database
+    }
+
     static func resolvedMetadataSource(
         _ requested: MetadataSource?, for hypervisor: HypervisorType,
         architecture: CPUArchitecture
@@ -154,7 +173,7 @@ struct VMController: RouteCollection {
         for attempt in 1...attempts {
             do {
                 return try await body()
-            } catch let error as any DatabaseError where error.isConstraintFailure && attempt < attempts {
+            } catch let error as any PostgresConstraintError where error.isConstraintFailure && attempt < attempts {
                 continue
             }
         }
@@ -206,13 +225,25 @@ struct VMController: RouteCollection {
         let limit = try req.intQuery("limit", default: 20, in: 1...100)
 
         return try await OperationFacade.history(
-            resourceKind: .virtualMachine, resourceID: vmID, limit: limit, on: req.db)
+            resourceKind: .virtualMachine,
+            resourceID: vmID,
+            limit: limit,
+            vmCommands: vmCommands,
+            on: database)
     }
 
     func listInterfaces(req: Request) async throws -> [NetworkInterfaceResponse] {
         let vm = try await fetchVMWithAction(req: req, action: "vm:read")
-        try await Self.loadInterfaces(for: vm, on: req.db)
-        return vm.networkInterfaces.inDeviceOrder.map { NetworkInterfaceResponse(from: $0, vm: vm) }
+        let observedAddresses = try await loadInterfaces(for: vm, on: database)
+        let securityGroups = try await securityGroupIDsByInterfaceID(
+            vm.networkInterfaces, on: database)
+        return vm.networkInterfaces.inDeviceOrder.map {
+            NetworkInterfaceResponse(
+                from: $0,
+                vm: vm,
+                observedAddresses: $0.id.flatMap { observedAddresses[$0] } ?? [],
+                securityGroupIDs: $0.id.flatMap { securityGroups[$0] } ?? [])
+        }
     }
 
     func attachInterface(req: Request) async throws -> Response {
@@ -223,21 +254,20 @@ struct VMController: RouteCollection {
         }
         let request = try req.content.decode(CreateVMNetworkInterfaceRequest.self)
         try request.validate(path: "interface")
-        let projectID = vm.$project.id
+        let projectID = vm.projectID
         let vmID = try vm.requireID()
         let requestedGroups = try await SecurityGroupService.resolveRequestedGroupIDs(
-            request.securityGroupIds, projectID: projectID, on: req.db)
+            request.securityGroupIds, projectID: projectID, on: database)
         let userID = try user.requireID()
 
-        let accepted = try await Self.retryingOnConstraintFailure {
-            try await req.resourceMutation.accept(
+        let mutation = try await Self.retryingOnConstraintFailure {
+            try await req.resourceMutation.acceptValue(
                 .attach, on: vm, actor: .user(userID), dispatch: .stateSync,
-                on: req.db, app: req.application
-            ) { @Sendable db in
-                let agent = try await Self.requirePlacedAgentForNetworkHotplug(vm, on: db)
-                let existing = try await VMNetworkInterface.query(on: db)
-                    .filter(\.$vm.$id == vmID)
-                    .all()
+                on: database, app: req.application
+            ) { @Sendable current, db in
+                let agent = try await Self.requirePlacedAgentForNetworkHotplug(current, on: db)
+                let existing = try await LegacyVMNetworkInterfaceStore.interfaces(
+                    vmID: vmID, on: db)
                 guard existing.count < VMNetworkInterface.maxInterfacesPerVM else {
                     throw Abort(
                         .conflict,
@@ -255,7 +285,7 @@ struct VMController: RouteCollection {
                     projectID: projectID,
                     on: db)
                 try Self.requireDHCPNetworkForHotplug(network)
-                if agent.$site.id != network.$site.id {
+                if agent.siteID != network.siteID {
                     throw Abort(
                         .conflict,
                         reason: "This network is pinned to a different site than the VM's agent")
@@ -264,7 +294,7 @@ struct VMController: RouteCollection {
                     throw Abort(.badRequest, reason: "interface.mtu must be at least 1280 on an IPv6 network")
                 }
                 let networkID = try network.requireID()
-                if let hostname = vm.hostname {
+                if let hostname = current.hostname {
                     let zones = try await DNSZoneService.registrationZones(networkIDs: [networkID], on: db)
                     _ = try await DNSZoneService.validatedExplicitHostname(
                         hostname, forVM: vmID, in: zones, on: db)
@@ -274,54 +304,60 @@ struct VMController: RouteCollection {
                 // the generation atomically after this closure. Its next value
                 // is therefore stable here and is the generation at which the
                 // agent must report this interface as applied.
-                let targetGeneration = vm.generation + 1
+                let targetGeneration = current.generation + 1
                 let interface = VMNetworkInterface(
                     vmID: vmID,
                     logicalNetworkID: networkID,
                     macAddress: VMNetworkInterface.generateMACAddress(),
                     mtu: request.mtu,
                     deviceName: "net\(orderIndex)",
-                    orderIndex: orderIndex)
-                interface.attachGeneration = targetGeneration
-                try await interface.save(on: db)
-                let interfaceID = try interface.requireID()
+                    orderIndex: orderIndex,
+                    attachGeneration: targetGeneration)
+                let insertedInterface = try await LegacyVMNetworkInterfaceStore.insert(
+                    interface, on: db)
+                let interfaceID = try insertedInterface.requireID()
 
                 let groupIDs: [UUID]
                 if requestedGroups.isEmpty {
                     let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
                         projectID: projectID, on: db)
-                    groupIDs = [try defaultGroup.requireID()]
+                    groupIDs = [defaultGroup.id]
                 } else {
                     groupIDs = requestedGroups
                 }
                 for groupID in groupIDs {
-                    try await VMInterfaceSecurityGroup(
-                        interfaceID: interfaceID, securityGroupID: groupID
-                    ).save(on: db)
+                    try await LegacyInterfaceSecurityGroupStore.insert(
+                        kind: .vm,
+                        interfaceID: interfaceID,
+                        securityGroupID: groupID,
+                        on: db)
                 }
 
                 let allocation = try await IPAMService.allocateIP(for: network, on: db)
-                try await VMInterfaceAddress(
+                try await LegacyInterfaceAddressStore.insert(
+                    kind: .vm,
                     interfaceID: interfaceID,
                     logicalNetworkID: networkID,
                     family: .ipv4,
                     address: allocation.ipAddress,
                     prefixLength: allocation.prefixLength,
-                    gateway: network.gateway
-                ).save(on: db)
+                    gateway: network.gateway,
+                    on: db)
                 if let allocation6 = try await IPAMService.allocateIPv6(for: network, on: db) {
-                    try await VMInterfaceAddress(
+                    try await LegacyInterfaceAddressStore.insert(
+                        kind: .vm,
                         interfaceID: interfaceID,
                         logicalNetworkID: networkID,
                         family: .ipv6,
                         address: allocation6.ipAddress,
                         prefixLength: allocation6.prefixLength,
-                        gateway: network.gateway6
-                    ).save(on: db)
+                        gateway: network.gateway6,
+                        on: db)
                 }
+                return current
             }
         }
-        return try await Self.acceptedResponse(for: vm, accepted, on: req)
+        return try await acceptedResponse(for: mutation.resource, mutation.accepted, on: req)
     }
 
     func detachInterface(req: Request) async throws -> Response {
@@ -343,10 +379,8 @@ struct VMController: RouteCollection {
         }
         let vmID = try vm.requireID()
         guard
-            let initial = try await VMNetworkInterface.query(on: req.db)
-                .filter(\.$id == interfaceID)
-                .filter(\.$vm.$id == vmID)
-                .first()
+            let initial = try await LegacyVMNetworkInterfaceStore.interface(
+                id: interfaceID, vmID: vmID, on: database)
         else {
             throw Abort(.notFound, reason: "Network interface not found")
         }
@@ -367,16 +401,14 @@ struct VMController: RouteCollection {
         }
 
         let userID = try user.requireID()
-        let accepted = try await req.resourceMutation.accept(
+        let mutation = try await req.resourceMutation.acceptValue(
             kind, on: vm, actor: .user(userID), dispatch: .stateSync,
-            on: req.db, app: req.application
-        ) { @Sendable db in
-            _ = try await Self.requirePlacedAgentForNetworkHotplug(vm, on: db)
+            on: database, app: req.application
+        ) { @Sendable current, db in
+            _ = try await Self.requirePlacedAgentForNetworkHotplug(current, on: db)
             guard
-                let interface = try await VMNetworkInterface.query(on: db)
-                    .filter(\.$id == interfaceID)
-                    .filter(\.$vm.$id == vmID)
-                    .first()
+                let interface = try await LegacyVMNetworkInterfaceStore.interface(
+                    id: interfaceID, vmID: vmID, on: db)
             else {
                 throw Abort(.notFound, reason: "Network interface no longer exists")
             }
@@ -384,21 +416,23 @@ struct VMController: RouteCollection {
                 guard interface.detachGeneration == nil else {
                     throw Abort(.conflict, reason: "A detaching interface cannot be retried as an attach")
                 }
-                try await Self.requireDHCPNetworkForHotplug(
-                    interface.$logicalNetwork.get(on: db))
+                guard let network = try await LogicalNetwork.find(interface.logicalNetworkID, on: db) else {
+                    throw Abort(.conflict, reason: "Network interface's network no longer exists")
+                }
+                try Self.requireDHCPNetworkForHotplug(network)
             }
             // The row is locked by `ResourceMutation.accept`; its atomic
             // generation advance immediately after this closure will produce
             // this exact value.
-            let targetGeneration = vm.generation + 1
-            if kind == .detach {
-                interface.detachGeneration = targetGeneration
-            } else {
-                interface.attachGeneration = targetGeneration
-            }
-            try await interface.save(on: db)
+            let targetGeneration = current.generation + 1
+            _ = try await LegacyVMNetworkInterfaceStore.updateGenerations(
+                id: interfaceID,
+                attachGeneration: kind == .attach ? targetGeneration : interface.attachGeneration,
+                detachGeneration: kind == .detach ? targetGeneration : interface.detachGeneration,
+                on: db)
+            return current
         }
-        return try await Self.acceptedResponse(for: vm, accepted, on: req)
+        return try await acceptedResponse(for: mutation.resource, mutation.accepted, on: req)
     }
 
     /// GET /api/vms
@@ -420,28 +454,31 @@ struct VMController: RouteCollection {
         // A VM reaches its organization through its project, so narrowing by org means
         // narrowing to that org's projects. An org with no projects matches no VMs —
         // return early rather than let an empty `~~ []` stand in for "unfiltered".
-        var query = VM.query(on: req.db)
-            .with(\.$networkInterfaces) {
-                $0.with(\.$addresses)
-                $0.with(\.$observedAddresses)
-                // The response reports each NIC's network by name as well as id.
-                $0.with(\.$logicalNetwork)
-                // …and which security groups filter it (STR-34).
-                $0.with(\.$securityGroupMemberships)
-            }
-            .sort(\.$createdAt, .descending)
-            .sort(\.$id, .descending)
-        if let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req) {
-            let projectIDs = try await orgFilter.projectIDs(on: req.db)
-            if projectIDs.isEmpty { return [] }
-            query = query.filter(\.$project.$id ~~ projectIDs)
+        var projectIDs: [UUID]?
+        if let orgFilter = try await OrganizationAccessService.organizationListFilter(
+            on: req, using: hierarchy)
+        {
+            let scopedProjectIDs = try await orgFilter.projectIDs(on: database)
+            if scopedProjectIDs.isEmpty { return [] }
+            projectIDs = scopedProjectIDs
         }
 
         // Scope the page to what the caller may read. One batched decision for
         // the whole page (#687): looping `req.can` per VM cost a full entity
         // slice and a decision-log insert each, so a hundred rows meant
         // hundreds of queries to answer one question a hundred times.
-        let allVMs = try await query.all()
+        let allVMs = try await LegacyVMNetworkInterfaceStore.loadingWithAddresses(
+            LegacyVMStore.vms(projectIDs: projectIDs, on: database), on: database
+        ).sorted {
+            if $0.createdAt != $1.createdAt {
+                return ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast)
+            }
+            return ($0.id?.uuidString ?? "") > ($1.id?.uuidString ?? "")
+        }
+        let observedAddresses = try await observedAddressesByInterfaceID(
+            allVMs.flatMap { $0.networkInterfaces })
+        let securityGroups = try await securityGroupIDsByInterfaceID(
+            allVMs.flatMap { $0.networkInterfaces }, on: database)
         let nodes = allVMs.compactMap { $0.id.map { IAMNode(type: .virtualMachine, id: $0) } }
         let readable = try await req.canFilter("vm:read", on: nodes)
 
@@ -450,7 +487,7 @@ struct VMController: RouteCollection {
         let enforcement = try await SecurityGroupService.enforcementByVM(
             allVMs,
             offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
-            on: req.db)
+            on: database)
 
         let visible = allVMs.filter { vm in
             vm.id.map { readable.contains(IAMNode(type: .virtualMachine, id: $0)) } ?? false
@@ -465,7 +502,7 @@ struct VMController: RouteCollection {
         // be discarded — and resolving an identity for a VM the caller may not
         // read is work with no reader.
         let identities = try await GuestIdentity.registrations(
-            forVMs: visible.compactMap(\.id), on: req.db)
+            forVMs: visible.compactMap(\.id), on: database)
 
         return visible.compactMap { vm in
             guard let id = vm.id else { return nil }
@@ -474,7 +511,9 @@ struct VMController: RouteCollection {
                 securityGroupsEnforced: enforcement[id],
                 spiffeId: identities[id]?.spiffeID,
                 instanceIdentityPrincipalId: identities[id]?.principalID,
-                instanceIdentityStatus: identities[id] == nil ? .revoked : .enabled)
+                instanceIdentityStatus: identities[id] == nil ? .revoked : .enabled,
+                securityGroupIDsByInterfaceID: securityGroups,
+                observedAddressesByInterfaceID: observedAddresses)
         }
     }
 
@@ -488,32 +527,28 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
 
-        return try await req.authorizedVM(vmID, action: action)
+        return try await req.authorizedVM(vmID, action: action, on: database)
     }
 
     func show(req: Request) async throws -> VMDetailResponse {
         let vm = try await fetchVMWithAction(req: req, action: "vm:read")
-        try await vm.$networkInterfaces.load(on: req.db)
-        for interface in vm.networkInterfaces {
-            try await interface.$addresses.load(on: req.db)
-            try await interface.$observedAddresses.load(on: req.db)
-            // The response reports the NIC's network by name as well as id.
-            try await interface.$logicalNetwork.load(on: req.db)
-            // …and which security groups filter it (STR-34).
-            try await interface.$securityGroupMemberships.load(on: req.db)
-        }
+        let observedAddresses = try await loadInterfaces(for: vm, on: database)
+        let securityGroups = try await securityGroupIDsByInterfaceID(
+            vm.networkInterfaces, on: database)
 
-        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
+        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: database)
         let enforcement = try await SecurityGroupService.enforcement(
             for: vm,
             offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
-            on: req.db)
+            on: database)
         return VMDetailResponse(
             from: vm,
             securityGroupsEnforced: enforcement,
             spiffeId: identity?.spiffeID,
             instanceIdentityPrincipalId: identity?.principalID,
-            instanceIdentityStatus: identity == nil ? .revoked : .enabled)
+            instanceIdentityStatus: identity == nil ? .revoked : .enabled,
+            securityGroupIDsByInterfaceID: securityGroups,
+            observedAddressesByInterfaceID: observedAddresses)
     }
 
     /// The one project role held by this VM's instance identity. This follows
@@ -522,7 +557,7 @@ struct VMController: RouteCollection {
     func projectGrant(req: Request) async throws -> VMProjectGrantResponse {
         let vm = try await fetchVMWithAction(req: req, action: "vm:read")
         let vmID = try vm.requireID()
-        guard let identity = try await GuestIdentity.registration(forVM: vmID, on: req.db) else {
+        guard let identity = try await GuestIdentity.registration(forVM: vmID, on: database) else {
             return VMProjectGrantResponse(grant: nil)
         }
 
@@ -530,13 +565,13 @@ struct VMController: RouteCollection {
             principalType: .workload,
             principalID: identity.principalID,
             nodeType: .project,
-            nodeID: vm.$project.id,
-            on: req.db)
+            nodeID: vm.projectID,
+            on: database)
         guard let binding = bindings.first else {
             return VMProjectGrantResponse(grant: nil)
         }
 
-        let displayNames = try await RoleDisplayNames.forRoleIDs([binding.roleID], on: req.db)
+        let displayNames = try await RoleDisplayNames.forRoleIDs([binding.roleID], on: database)
         return VMProjectGrantResponse(
             grant: ProjectMemberController.ProjectWorkloadGrantResponse(
                 registrationId: identity.principalID,
@@ -655,11 +690,11 @@ struct VMController: RouteCollection {
         }
 
         // Find the image
-        guard let foundImage = try await Image.find(imageId, on: req.db) else {
+        guard var foundImage = try await LegacyImageStore.image(id: imageId, on: database) else {
             throw Abort(.badRequest, reason: "Image not found")
         }
         // Load artifacts for the hypervisor-compatibility check below.
-        try await foundImage.$artifacts.load(on: req.db)
+        foundImage = try await LegacyImageArtifactStore.loading(foundImage, on: database)
 
         // Verify image is ready
         guard foundImage.status == .ready else {
@@ -683,7 +718,8 @@ struct VMController: RouteCollection {
             requestedEnvironment: createRequest.environment,
             user: user,
             action: "vm:create",
-            resourceKind: "VMs"
+            resourceKind: "VMs",
+            on: database
         )
         let projectId = try project.requireID()
 
@@ -711,7 +747,7 @@ struct VMController: RouteCollection {
         for interface in requestedInterfaces {
             requestedGroupsByIndex.append(
                 try await SecurityGroupService.resolveRequestedGroupIDs(
-                    interface.securityGroupIds, projectID: projectId, on: req.db))
+                    interface.securityGroupIds, projectID: projectId, on: database))
         }
         let resolvedRequestedGroupsByIndex = requestedGroupsByIndex
 
@@ -807,7 +843,7 @@ struct VMController: RouteCollection {
                 reason: "'metadataSource: imds' is not supported for firecracker VMs; use the qemu hypervisor")
         }
 
-        let vm = VM(
+        var vm = VM(
             name: createRequest.name,
             description: createRequest.description ?? "",
             image: image.name,
@@ -828,7 +864,7 @@ struct VMController: RouteCollection {
         )
         vm.cmdline = cmdlineValue
         // Link VM to source image
-        vm.$sourceImage.id = image.id
+        vm.sourceImageID = image.id
 
         // The typed artifact set must include what the target hypervisor needs:
         // a disk image for QEMU, or an architecture-matched kernel + rootfs for
@@ -887,13 +923,16 @@ struct VMController: RouteCollection {
         // A VM's boot disk is a first-class managed volume from its first
         // committed state. Pool selection is not public yet, so it uses the
         // same seeded local pool as an explicit volume create.
-        let bootPool = try await StoragePool.defaultPool(on: req.db)
+        guard let storagePools else {
+            throw Abort(.internalServerError, reason: "Storage-pool persistence is not configured")
+        }
+        let bootPool = try await storagePools.defaultPool()
         guard bootPool.mode == .local else {
             throw Abort(
                 .conflict,
                 reason: "Storage pool '\(bootPool.name)' is not supported for VM boot volumes")
         }
-        let bootPoolID = try bootPool.requireID()
+        let bootPoolID = bootPool.id
 
         // Reserve quota and persist the VM and its create record in one
         // transaction: enforcement checks, both inserts, creator grants, and
@@ -905,26 +944,21 @@ struct VMController: RouteCollection {
             // poisons the whole Postgres transaction, so the retry wraps the
             // transaction (not the insert): the loser re-reads the used set
             // and allocates the next free address.
-            let initialGeneration = vm.generation
+            let initialVM = vm
             accepted = try await Self.retryingOnConstraintFailure {
-                // A retried attempt reuses this model after its insert was
-                // rolled back: Fluent recorded the generated id and marked the
-                // model as existing, so saving again would UPDATE a row that no
-                // longer exists (and the failed attempt's SQL writer refreshed
-                // its in-memory generation). Reset both so every attempt starts
-                // as a fresh insert.
-                vm.id = nil
-                vm.$id.exists = false
-                vm.generation = initialGeneration
-                return try await req.db.transaction { db in
+                // Each retry starts from the same application-assigned UUID
+                // and pristine value snapshot. A rolled-back attempt cannot
+                // leak its hostname, generation, or timestamps into the next.
+                let result = try await database.transaction { db -> (ResourceMutation.Accepted, VM) in
+                    var candidate = initialVM
                     // Enforce and reserve applicable project/OU/org quotas before the VM row
                     // exists. Throws Abort(.forbidden) naming the quota if it would be exceeded.
                     try await QuotaEnforcementService.reserve(
                         for: project,
                         environment: environment,
-                        vcpus: vm.cpu,
-                        memory: vm.memory,
-                        storage: vm.disk,
+                        vcpus: candidate.cpu,
+                        memory: candidate.memory,
+                        storage: candidate.disk,
                         on: db
                     )
 
@@ -933,14 +967,14 @@ struct VMController: RouteCollection {
                     // Stamped with the insert, so a control-plane crash between
                     // here and placement still leaves a resource the sweep can
                     // judge.
-                    vm.extendConvergenceDeadline(
+                    candidate = candidate.extendingConvergenceDeadline(
                         by: OperationResourceKind.virtualMachine.completionBudgetSeconds(for: .create))
 
                     // Save VM to database first to generate ID
-                    try await vm.save(on: db)
+                    try await candidate.save(on: db)
 
                     // Generate unique paths and configurations using the generated ID
-                    let vmID = try vm.requireID()
+                    let vmID = try candidate.requireID()
 
                     // Resolve every requested network in the VM's project. They
                     // stay as distinct NIC requests even when two select the
@@ -972,8 +1006,8 @@ struct VMController: RouteCollection {
                     // MMDS. Accepting the payload while either policy layer
                     // makes MMDS unreachable would return 202 for data the
                     // guest can never retrieve.
-                    if vm.hypervisorType == .firecracker, vm.userData != nil {
-                        guard vm.metadataEnabled else {
+                    if candidate.hypervisorType == .firecracker, candidate.userData != nil {
+                        guard candidate.metadataEnabled else {
                             throw Abort(
                                 .badRequest,
                                 reason:
@@ -997,7 +1031,7 @@ struct VMController: RouteCollection {
                     // complete. This runs inside the create transaction after
                     // project-scoped resolution; throwing rolls back the VM
                     // row and quota reservation together.
-                    if vm.metadataSource == .imds,
+                    if candidate.metadataSource == .imds,
                         !resolvedInterfaces.contains(where: { $0.network.metadataEnabled })
                     {
                         throw Abort(
@@ -1016,48 +1050,49 @@ struct VMController: RouteCollection {
                     let registrationZones = try await DNSZoneService.registrationZones(
                         networkIDs: Array(Set(resolvedInterfaces.map(\.networkID))), on: db)
                     if let requestedHostname = createRequest.hostname {
-                        vm.hostname = try await DNSZoneService.validatedExplicitHostname(
+                        candidate.hostname = try await DNSZoneService.validatedExplicitHostname(
                             requestedHostname, forVM: vmID, in: registrationZones, on: db)
                     } else {
-                        vm.hostname = try await DNSZoneService.availableHostname(
-                            basedOn: vm.name, forVM: vmID, in: registrationZones, on: db)
+                        candidate.hostname = try await DNSZoneService.availableHostname(
+                            basedOn: candidate.name, forVM: vmID, in: registrationZones, on: db)
                     }
 
                     // Desired state for a fresh VM: exists but not running. The bump
                     // to generation 1 distinguishes "never confirmed by any agent"
                     // (observed_generation 0) from "confirmed" (issue #260).
-                    vm.setDesiredStatus(.shutdown)
-                    guard
-                        case .applied = try await vm.advanceDesiredStateGeneration(
-                            expectedGeneration: 0, on: db)
-                    else {
+                    candidate.setDesiredStatus(.shutdown)
+                    let advance = try await candidate.advancingDesiredStateGeneration(
+                        expectedGeneration: 0, on: db)
+                    guard case .applied = advance.outcome else {
                         throw Abort(
                             .internalServerError,
                             reason: "Failed to initialize the VM desired-state generation")
                     }
+                    candidate = advance.resource
 
                     // Persist the generated hostname and generation.
-                    try await vm.update(on: db)
+                    try await candidate.update(on: db)
 
                     let bootVolume = Volume(
                         name: "boot-\(vmID.uuidString.lowercased())",
-                        description: "Boot volume for VM \(vm.name)",
+                        description: "Boot volume for VM \(candidate.name)",
                         projectID: projectId,
                         environment: environment,
-                        size: vm.disk,
-                        format: vm.hypervisorType == .firecracker ? .raw : .qcow2,
+                        size: candidate.disk,
+                        format: candidate.hypervisorType == .firecracker ? .raw : .qcow2,
                         volumeType: .boot,
                         status: .creating,
+                        desiredStatus: .present,
+                        generation: 1,
+                        convergenceDeadline: Date().addingTimeInterval(
+                            OperationResourceKind.volume.completionBudgetSeconds(for: .create)),
                         createdByID: userID,
                         poolID: bootPoolID,
+                        vmID: vmID,
+                        deviceName: VolumeDeviceName.disk(0).rawValue,
+                        bootOrder: 0,
+                        readonly: false,
                         sourceImageID: imageId)
-                    bootVolume.$vm.id = vmID
-                    bootVolume.deviceName = VolumeDeviceName.disk(0).rawValue
-                    bootVolume.bootOrder = 0
-                    bootVolume.readonly = false
-                    bootVolume.generation = 1
-                    bootVolume.extendConvergenceDeadline(
-                        by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))
                     try await bootVolume.save(on: db)
                     let bootVolumeID = try bootVolume.requireID()
 
@@ -1080,7 +1115,7 @@ struct VMController: RouteCollection {
                     if resolvedInterfaces.contains(where: { $0.securityGroupIDs.isEmpty }) {
                         let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
                             projectID: projectId, on: db)
-                        defaultGroupID = try defaultGroup.requireID()
+                        defaultGroupID = defaultGroup.id
                     } else {
                         defaultGroupID = nil
                     }
@@ -1098,10 +1133,11 @@ struct VMController: RouteCollection {
                             macAddress: VMNetworkInterface.generateMACAddress(),
                             mtu: resolved.request.mtu,
                             deviceName: "net\(orderIndex)",
-                            orderIndex: orderIndex)
-                        networkInterface.attachGeneration = vm.generation
-                        try await networkInterface.save(on: db)
-                        let interfaceID = try networkInterface.requireID()
+                            orderIndex: orderIndex,
+                            attachGeneration: candidate.generation)
+                        let insertedInterface = try await LegacyVMNetworkInterfaceStore.insert(
+                            networkInterface, on: db)
+                        let interfaceID = try insertedInterface.requireID()
 
                         let groupIDs: [UUID]
                         if resolved.securityGroupIDs.isEmpty {
@@ -1113,28 +1149,32 @@ struct VMController: RouteCollection {
                             groupIDs = resolved.securityGroupIDs
                         }
                         for groupID in groupIDs {
-                            try await VMInterfaceSecurityGroup(
-                                interfaceID: interfaceID, securityGroupID: groupID
-                            ).save(on: db)
+                            try await LegacyInterfaceSecurityGroupStore.insert(
+                                kind: .vm,
+                                interfaceID: interfaceID,
+                                securityGroupID: groupID,
+                                on: db)
                         }
 
-                        try await VMInterfaceAddress(
+                        try await LegacyInterfaceAddressStore.insert(
+                            kind: .vm,
                             interfaceID: interfaceID,
                             logicalNetworkID: resolved.networkID,
                             family: .ipv4,
                             address: allocation.ipAddress,
                             prefixLength: allocation.prefixLength,
-                            gateway: resolved.network.gateway
-                        ).save(on: db)
+                            gateway: resolved.network.gateway,
+                            on: db)
                         if let allocation6 {
-                            try await VMInterfaceAddress(
+                            try await LegacyInterfaceAddressStore.insert(
+                                kind: .vm,
                                 interfaceID: interfaceID,
                                 logicalNetworkID: resolved.networkID,
                                 family: .ipv6,
                                 address: allocation6.ipAddress,
                                 prefixLength: allocation6.prefixLength,
-                                gateway: resolved.network.gateway6
-                            ).save(on: db)
+                                gateway: resolved.network.gateway6,
+                                on: db)
                         }
                     }
 
@@ -1159,8 +1199,8 @@ struct VMController: RouteCollection {
                         scope: ResourceEvent.Scope(
                             organizationID: rootOrganizationID,
                             projectID: projectId,
-                            resourceName: vm.name,
-                            generation: vm.generation),
+                            resourceName: candidate.name,
+                            generation: candidate.generation),
                         on: db)
 
                     // The creator's explicit, revocable binding on the VM, in
@@ -1208,15 +1248,19 @@ struct VMController: RouteCollection {
                         on: db
                     )
 
-                    return ResourceMutation.Accepted(
-                        mutationID: try event.requireID(), targetGeneration: vm.generation)
+                    return (
+                        ResourceMutation.Accepted(
+                            mutationID: try event.requireID(), targetGeneration: candidate.generation),
+                        candidate)
                 }
+                vm = result.1
+                return result.0
             }
         } catch let error as IPAMService.IPAMError {
             // The chosen network's subnet is full; the whole transaction rolled
             // back, so no VM was created.
             throw Abort(.conflict, reason: error.errorDescription ?? "No free IP addresses in the selected network")
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             // Every attempt lost the same constraint. A conflict rather than a
             // server fault — the transaction rolled back whole — so `409` is the
             // honest status, where this previously fell through as a `500`.
@@ -1248,11 +1292,13 @@ struct VMController: RouteCollection {
         // and persists hypervisorId, and the desired-state sync carries the
         // VM (spec assembled from the database) to its agent. Observed-state
         // reports — not this request — decide whether it converged.
+        let createdVM = vm
         req.resourceMutation.dispatch(
             .create, resourceType: VM.self, resourceID: vmID,
             targetGeneration: accepted.targetGeneration, agentIDs: [],
             strategy: .placement { @Sendable [app = req.application] db in
-                try await app.agentService.createVM(vm: vm, db: db, image: image)
+                try await app.agentService.createVM(
+                    vm: createdVM, db: db, image: image, storagePool: bootPool)
             }, app: req.application)
 
         req.logger.info(
@@ -1263,7 +1309,7 @@ struct VMController: RouteCollection {
                 "created_from": .string("image"),
             ])
 
-        return try await Self.acceptedResponse(for: vm, accepted, on: req)
+        return try await acceptedResponse(for: vm, accepted, on: req)
     }
 
     /// Updates a VM's metadata and, since issue #568, its vCPU/memory sizing.
@@ -1283,7 +1329,7 @@ struct VMController: RouteCollection {
     /// Metadata-only updates keep their historical `200` + VM body.
     func update(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Mutating a VM")
-        let existingVM = try await fetchVMWithAction(req: req, action: "vm:update")
+        var existingVM = try await fetchVMWithAction(req: req, action: "vm:update")
 
         // Decodable rather than Content: `balloonTarget` needs to tell an
         // absent key from an explicit null, which needs a hand-written decode,
@@ -1342,9 +1388,9 @@ struct VMController: RouteCollection {
         let originalHostname = existingVM.hostname
         if let hostname = updateRequest.hostname {
             let vmID = try existingVM.requireID()
-            let zones = try await DNSZoneService.registrationZones(vmID: vmID, on: req.db)
+            let zones = try await DNSZoneService.registrationZones(vmID: vmID, on: database)
             existingVM.hostname = try await DNSZoneService.validatedExplicitHostname(
-                hostname, forVM: vmID, in: zones, on: req.db)
+                hostname, forVM: vmID, in: zones, on: database)
         }
         // A hostname edit moves this VM's derived records, which are realized
         // by a topology authority that may not be this VM's own agent — and,
@@ -1371,21 +1417,26 @@ struct VMController: RouteCollection {
         let newBalloonTarget = updateRequest.balloonTarget ?? existingVM.balloonTarget
         let balloonChanged = newBalloonTarget != existingVM.balloonTarget
         guard newCPU != existingVM.cpu || newMemory != existingVM.memory || balloonChanged else {
-            let metadataEnabledChanged = try await req.db.transaction { db in
-                guard try await existingVM.lockAndRefresh(on: db) else {
+            let updateSnapshot = existingVM
+            let (committedVM, metadataEnabledChanged) = try await database.transaction { db in
+                guard var current = try await updateSnapshot.lockingAndRefreshing(on: db) else {
                     throw Abort(.notFound, reason: "VM no longer exists")
                 }
-                let changed = try await Self.applyMetadataUpdate(
-                    updateRequest.metadataEnabled, to: existingVM, on: db)
-                try await existingVM.save(on: db)
-                return changed
+                current.name = updateSnapshot.name
+                current.hostname = updateSnapshot.hostname
+                current.description = updateSnapshot.description
+                let metadata = try await Self.applyingMetadataUpdate(
+                    updateRequest.metadataEnabled, to: current, on: db)
+                try await metadata.resource.persist(on: db)
+                return (metadata.resource, metadata.changed)
             }
+            existingVM = committedVM
             await Self.nudgeAfterMetadataOrHostnameUpdate(
                 hostnameChanged: hostnameChanged,
                 metadataEnabledChanged: metadataEnabledChanged,
                 placedAgentId: existingVM.hypervisorId,
                 app: req.application)
-            return try await Self.detailResponse(for: existingVM, on: req)
+            return try await detailResponse(for: existingVM, on: req)
         }
 
         guard newCPU > 0 else { throw Abort(.badRequest, reason: "'cpu' must be positive") }
@@ -1420,7 +1471,7 @@ struct VMController: RouteCollection {
             }
         }
 
-        guard let project = try await Project.find(existingVM.$project.id, on: req.db) else {
+        guard let project = try await Project.find(existingVM.projectID, on: database) else {
             throw Abort(.internalServerError, reason: "VM's project no longer exists")
         }
         let cpuDelta = newCPU - existingVM.cpu
@@ -1438,33 +1489,38 @@ struct VMController: RouteCollection {
                         + "\(existingVM.status.rawValue))")
             }
             try await Self.requirePlacedResizeCapacity(
-                vm: existingVM, newCPU: newCPU, newMemory: newMemory, on: req)
-            try await req.db.transaction { db in
-                guard try await existingVM.lockAndRefresh(on: db) else {
+                vm: existingVM, newCPU: newCPU, newMemory: newMemory, on: req,
+                database: database)
+            let updateSnapshot = existingVM
+            existingVM = try await database.transaction { db in
+                guard var current = try await updateSnapshot.lockingAndRefreshing(on: db) else {
                     throw Abort(.notFound, reason: "VM no longer exists")
                 }
-                _ = try await Self.applyMetadataUpdate(
-                    updateRequest.metadataEnabled, to: existingVM, on: db)
+                current.name = updateSnapshot.name
+                current.hostname = updateSnapshot.hostname
+                current.description = updateSnapshot.description
+                current = try await Self.applyingMetadataUpdate(
+                    updateRequest.metadataEnabled, to: current, on: db).resource
                 try await QuotaEnforcementService.reserveVMResize(
-                    for: project, environment: existingVM.environment,
+                    for: project, environment: current.environment,
                     vcpuDelta: cpuDelta, memoryDelta: memoryDelta, on: db)
-                existingVM.cpu = newCPU
-                existingVM.memory = newMemory
-                existingVM.balloonTarget = newBalloonTarget
-                existingVM.maxCpu = max(existingVM.maxCpu, newCPU)
-                existingVM.maxMemory = max(existingVM.maxMemory, newMemory)
+                current.cpu = newCPU
+                current.memory = newMemory
+                current.balloonTarget = newBalloonTarget
+                current.maxCpu = max(current.maxCpu, newCPU)
+                current.maxMemory = max(current.maxMemory, newMemory)
                 // The stopped VM still has a desired-state entry the agent
                 // syncs on; bump so the new spec isn't dropped as stale.
-                let expectedGeneration = existingVM.generation
-                guard
-                    case .applied = try await existingVM.advanceDesiredStateGeneration(
-                        expectedGeneration: expectedGeneration, on: db)
-                else {
+                let advance = try await current.advancingDesiredStateGeneration(
+                    expectedGeneration: current.generation, on: db)
+                guard case .applied = advance.outcome else {
                     throw Abort(
                         .internalServerError,
                         reason: "Failed to advance the locked VM generation")
                 }
-                try await existingVM.save(on: db)
+                current = advance.resource
+                try await current.persist(on: db)
+                return current
             }
             if let placedAgentId = existingVM.hypervisorId {
                 await req.application.agentService.syncDesiredState(agentId: placedAgentId)
@@ -1476,7 +1532,7 @@ struct VMController: RouteCollection {
                 metadataEnabledChanged: false,
                 placedAgentId: existingVM.hypervisorId,
                 app: req.application)
-            return try await Self.detailResponse(for: existingVM, on: req)
+            return try await detailResponse(for: existingVM, on: req)
         }
 
         // The running-resize contract is online. libvirt deliberately does
@@ -1512,19 +1568,20 @@ struct VMController: RouteCollection {
                     + "restart it to grow beyond that")
         }
         try await Self.requirePlacedResizeCapacity(
-            vm: existingVM, newCPU: newCPU, newMemory: newMemory, on: req)
+            vm: existingVM, newCPU: newCPU, newMemory: newMemory, on: req,
+            database: database)
         let existingVMID = try existingVM.requireID()
         let userID = try user.requireID()
-        let accepted = try await req.resourceMutation.accept(
+        let mutation = try await req.resourceMutation.acceptValue(
             .resize, on: existingVM, actor: .user(userID), dispatch: .stateSync,
-            on: req.db, app: req.application
-        ) { @Sendable db in
+            on: database, app: req.application
+        ) { @Sendable current, db in
             // `accept` took and refreshed the row lock before entering this
             // closure, so a placement that won the race is visible to the
             // capability gate and a placement still waiting must schedule
             // from the value persisted here.
-            _ = try await Self.applyMetadataUpdate(
-                updateRequest.metadataEnabled, to: existingVM, on: db)
+            var updated = try await Self.applyingMetadataUpdate(
+                updateRequest.metadataEnabled, to: current, on: db).resource
             // Lock the row and recompute the deltas against what it says right
             // now. This is the one guard the dropped "operation already
             // pending" mutex was actually load-bearing for (STR-147): the
@@ -1536,20 +1593,21 @@ struct VMController: RouteCollection {
             // than merely refused.
             let committed = try await Self.committedVMSizing(existingVMID, on: db)
             try await QuotaEnforcementService.reserveVMResize(
-                for: project, environment: existingVM.environment,
+                for: project, environment: updated.environment,
                 vcpuDelta: newCPU - committed.cpu, memoryDelta: newMemory - committed.memory, on: db)
-            existingVM.cpu = newCPU
-            existingVM.memory = newMemory
+            updated.cpu = newCPU
+            updated.memory = newMemory
             // Deliberately not a quota movement: ballooning reclaims memory
             // opportunistically, the grant the project is charged for is
             // still committed, and the guest takes it all back the moment the
             // target is cleared.
-            existingVM.balloonTarget = newBalloonTarget
+            updated.balloonTarget = newBalloonTarget
             // Desired status is unchanged — this is a spec change — but the
             // generation must still advance for the agent to apply it. The
             // generation it builds on came from `accept`'s refresh, so the
             // loser of a race lands strictly above the winner rather than
             // reusing its number.
+            return updated
         }
         // The resize's own dispatch reaches this VM's agent and its site
         // controller — which already covers a kill-switch edge riding along,
@@ -1562,7 +1620,7 @@ struct VMController: RouteCollection {
             metadataEnabledChanged: false,
             placedAgentId: existingVM.hypervisorId,
             app: req.application)
-        return try await Self.acceptedResponse(for: existingVM, accepted, on: req)
+        return try await acceptedResponse(for: mutation.resource, mutation.accepted, on: req)
     }
 
     /// Replaces the guest-visible tags and authorized-key list without
@@ -1577,12 +1635,9 @@ struct VMController: RouteCollection {
         _ = try req.requireActingUser("Mutating VM instance metadata")
         let existingVM = try await fetchVMWithAction(req: req, action: "vm:update")
         let patch = try req.content.decodeValidated(PatchVMMetadataRequest.self)
-        let vmID = try existingVM.requireID()
 
-        let (updatedVM, changed) = try await req.db.transaction { db -> (VM, Bool) in
-            guard try await existingVM.lockAndRefresh(on: db),
-                let committed = try await VM.find(vmID, on: db)
-            else {
+        let (updatedVM, changed) = try await database.transaction { db -> (VM, Bool) in
+            guard var committed = try await existingVM.lockingAndRefreshing(on: db) else {
                 throw Abort(.notFound, reason: "VM no longer exists")
             }
 
@@ -1595,23 +1650,22 @@ struct VMController: RouteCollection {
 
             committed.tags = nextTags
             committed.setSSHAuthorizedKeys(nextAuthorizedKeys)
-            let expectedGeneration = committed.generation
-            guard
-                case .applied = try await committed.advanceDesiredStateGeneration(
-                    expectedGeneration: expectedGeneration, on: db)
-            else {
+            let advance = try await committed.advancingDesiredStateGeneration(
+                expectedGeneration: committed.generation, on: db)
+            guard case .applied = advance.outcome else {
                 throw Abort(
                     .internalServerError,
                     reason: "Failed to advance the locked VM generation")
             }
-            try await committed.save(on: db)
-            return (committed, true)
+            let updated = advance.resource
+            try await updated.persist(on: db)
+            return (updated, true)
         }
 
         if changed, let placedAgentId = updatedVM.hypervisorId {
             await req.application.agentService.syncDesiredState(agentId: placedAgentId)
         }
-        return try await Self.detailResponse(for: updatedVM, on: req)
+        return try await detailResponse(for: updatedVM, on: req)
     }
 
     private static func runningVCPUShrinkAbort(from current: Int, to requested: Int) -> Abort {
@@ -1626,7 +1680,8 @@ struct VMController: RouteCollection {
     /// The node repeats this decision authoritatively; this last-reported check
     /// keeps requests that are already impossible out of reconciliation.
     private static func requirePlacedResizeCapacity(
-        vm: VM, newCPU: Int, newMemory: Int64, on req: Request
+        vm: VM, newCPU: Int, newMemory: Int64, on req: Request,
+        database: PostgresStoreContext
     ) async throws {
         guard let agentIDString = vm.hypervisorId else {
             // A stopped, unplaced VM is sized before placement and relies on
@@ -1638,7 +1693,7 @@ struct VMController: RouteCollection {
             return
         }
         guard let agentID = UUID(uuidString: agentIDString),
-            let agent = try await Agent.find(agentID, on: req.db)
+            let agent = try await Agent.find(agentID, on: database)
         else {
             throw Abort(.conflict, reason: "The VM's placed agent is no longer available")
         }
@@ -1699,20 +1754,21 @@ struct VMController: RouteCollection {
     /// whole-model save. Otherwise a request loaded before a competing switch
     /// update could silently write that update back even though it said
     /// nothing about metadata.
-    private static func applyMetadataUpdate(
-        _ requested: Bool?, to vm: VM, on db: any Database
-    ) async throws -> Bool {
+    private static func applyingMetadataUpdate(
+        _ requested: Bool?, to vm: VM, on db: PostgresStoreContext
+    ) async throws -> (resource: VM, changed: Bool) {
         let vmID = try vm.requireID()
         guard let committed = try await VM.find(vmID, on: db) else {
             throw Abort(.notFound, reason: "VM no longer exists")
         }
+        var updated = vm
         guard let requested else {
-            vm.metadataEnabled = committed.metadataEnabled
-            return false
+            updated.metadataEnabled = committed.metadataEnabled
+            return (updated, false)
         }
 
-        vm.metadataEnabled = requested
-        return requested != committed.metadataEnabled
+        updated.metadataEnabled = requested
+        return (updated, requested != committed.metadataEnabled)
     }
 
     private static func nudgeAfterMetadataOrHostnameUpdate(
@@ -1735,8 +1791,8 @@ struct VMController: RouteCollection {
     /// Read here rather than adopted by `accept`'s refresh because `cpu` and
     /// `memory` are *mutation*-owned columns: the refresh deliberately leaves
     /// them alone so this request's new sizing is not overwritten by the old.
-    private static func committedVMSizing(_ id: UUID, on db: any Database) async throws -> CommittedVMSizing {
-        guard let sql = db as? any SQLDatabase else {
+    private static func committedVMSizing(_ id: UUID, on db: PostgresStoreContext) async throws -> CommittedVMSizing {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Resizing a VM requires an SQL database")
         }
         guard
@@ -1769,7 +1825,7 @@ struct VMController: RouteCollection {
     /// The VM detail DTO with its NIC children loaded. The DTO, not the model:
     /// the raw `VM` encoding would expose fields that must stay server-side
     /// (cloud-init user_data can carry secrets).
-    private static func detailResponse(for vm: VM, on req: Request) async throws -> Response {
+    private func detailResponse(for vm: VM, on req: Request) async throws -> Response {
         try await detail(for: vm, on: req).encodeResponse(for: req)
     }
 
@@ -1777,18 +1833,20 @@ struct VMController: RouteCollection {
     ///   security groups are actually enforced. That answer costs its own
     ///   queries and means nothing for a VM being torn down, so the delete path
     ///   skips it and reports `nil` — "unknown", which is the truth there.
-    private static func detail(
+    private func detail(
         for vm: VM, on req: Request, resolvingEnforcement: Bool = true
     ) async throws -> VMDetailResponse {
-        try await loadInterfaces(for: vm, on: req.db)
-        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
+        let observedAddresses = try await loadInterfaces(for: vm, on: database)
+        let securityGroups = try await securityGroupIDsByInterfaceID(
+            vm.networkInterfaces, on: database)
+        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: database)
         let enforcement =
             resolvingEnforcement
             ? try await SecurityGroupService.enforcement(
                 for: vm,
                 offlineGrace: req.controlPlaneConfiguration.double(
                     .siteControllerOfflineGraceSeconds),
-                on: req.db) : nil
+                on: database) : nil
         return VMDetailResponse(
             from: vm,
             securityGroupsEnforced: enforcement,
@@ -1799,7 +1857,9 @@ struct VMController: RouteCollection {
             // identity is going away.
             spiffeId: identity?.spiffeID,
             instanceIdentityPrincipalId: identity?.principalID,
-            instanceIdentityStatus: identity == nil ? .revoked : .enabled)
+            instanceIdentityStatus: identity == nil ? .revoked : .enabled,
+            securityGroupIDsByInterfaceID: securityGroups,
+            observedAddressesByInterfaceID: observedAddresses)
     }
 
     /// The `202` body every accepted VM lifecycle mutation answers with
@@ -1812,7 +1872,7 @@ struct VMController: RouteCollection {
     /// Internal, not private: the checkpoint handlers in
     /// `VMSnapshotController.swift` extend this same type from another file and
     /// answer a restore with the VM's own accepted-mutation shape (STR-151).
-    static func acceptedResponse(
+    func acceptedResponse(
         for vm: VM, _ accepted: ResourceMutation.Accepted, on req: Request,
         resolvingEnforcement: Bool = true
     ) async throws -> Response {
@@ -1843,7 +1903,7 @@ struct VMController: RouteCollection {
         }
         guard let agentIDString = vm.hypervisorId,
             let agentID = UUID(uuidString: agentIDString),
-            let agent = try await Agent.find(agentID, on: req.db)
+            let agent = try await Agent.find(agentID, on: database)
         else {
             throw Abort(.conflict, reason: "VM is not placed on an available agent")
         }
@@ -1853,14 +1913,15 @@ struct VMController: RouteCollection {
                 reason: "Agent '\(agent.name)' does not support VM guest exec for \(vm.hypervisorType.rawValue)")
         }
 
+        guard let vmCommands else {
+            throw Abort(.internalServerError, reason: "VM command persistence was not injected")
+        }
         let execution = VMCommandExecution(
             vmID: vmID,
             actorID: try user.requireID(),
             agentKey: agent.identity.key,
             deadline: Date().addingTimeInterval(VMCommandExecutionService.completionBudget))
-        try await req.db.transaction { db in
-            try await execution.create(command: run.command, on: db)
-        }
+        try await execution.create(command: run.command, using: vmCommands)
         let executionID = try execution.requireID()
 
         do {
@@ -1887,11 +1948,11 @@ struct VMController: RouteCollection {
                 id: executionID, reason: "Could not dispatch command: \(error.localizedDescription)")
         }
 
-        guard let stored = try await VMCommandExecution.find(executionID, on: req.db) else {
+        guard let stored = try await vmCommands.execution(id: executionID) else {
             throw Abort(.internalServerError, reason: "Command execution disappeared after acceptance")
         }
         let response = Response(status: .accepted)
-        try response.content.encode(try await stored.operationResponse(on: req.db))
+        try response.content.encode(try await stored.operationResponse(using: vmCommands))
         return response
     }
 
@@ -1925,7 +1986,7 @@ struct VMController: RouteCollection {
             throw Abort(.conflict, reason: "VM is not placed on any agent")
         }
 
-        guard let agent = try await Agent.find(agentId, on: req.db) else {
+        guard let agent = try await Agent.find(agentId, on: database) else {
             throw Abort(.internalServerError, reason: "Agent not found for VM")
         }
 
@@ -2038,51 +2099,53 @@ struct VMController: RouteCollection {
                 return outcome.isRemoved
             }
 
-        let accepted = try await req.resourceMutation.accept(
+        let mutation = try await req.resourceMutation.acceptValue(
             .delete, on: vm, actor: .user(userID), dispatch: strategy,
-            on: req.db, app: app
-        ) { @Sendable db in
+            on: database, app: app
+        ) { @Sendable current, db in
             // Stamp before the mark: `stampForDeletion` reads whether the VM
             // is already terminating, and re-stamping a second DELETE would
             // resurrect tokens their participants have already cleared.
-            try await ResourceFinalizerService.stampForDeletion(vm, on: db)
-            let bootVolumes = try await Volume.query(on: db)
-                .filter(\.$vm.$id == vmID)
-                .filter(\.$volumeType == .boot)
-                .all()
+            var updated = try await ResourceFinalizerService.stampForDeletion(current, on: db)
+            let bootVolumes = try await LegacyVolumeStore.volumes(
+                attachment: .attachedTo(vmID), volumeType: .boot, on: db)
             guard bootVolumes.count == 1, let bootVolume = bootVolumes.first else {
                 throw Abort(
                     .internalServerError,
                     reason: "VM \(vmID) must have exactly one managed boot volume during deletion")
             }
-            if !vm.finalizers.contains(ResourceFinalizer.bootVolumeAbsent.rawValue) {
-                vm.finalizers.append(ResourceFinalizer.bootVolumeAbsent.rawValue)
+            if !updated.finalizers.contains(ResourceFinalizer.bootVolumeAbsent.rawValue) {
+                updated.finalizers.append(ResourceFinalizer.bootVolumeAbsent.rawValue)
             }
             if !bootVolume.isTerminating {
-                try await ResourceFinalizerService.stampForDeletion(bootVolume, on: db)
-                bootVolume.setDesiredStatus(.absent)
-                let expectedGeneration = bootVolume.generation
+                var terminating = try await ResourceFinalizerService.stampForDeletion(
+                    bootVolume, on: db
+                ).replacingDesiredStatus(.absent)
+                let expectedGeneration = terminating.generation
+                let advance = try await terminating.advancingDesiredStateGeneration(
+                    expectedGeneration: expectedGeneration, on: db)
                 guard
-                    case .applied = try await bootVolume.advanceDesiredStateGeneration(
-                        expectedGeneration: expectedGeneration, on: db)
+                    case .applied = advance.outcome
                 else {
                     throw ConvergenceWriteError.unsupportedDatabase
                 }
-                try await bootVolume.save(on: db)
+                terminating = advance.resource
+                try await terminating.persist(on: db)
                 _ = try await ResourceEvent.record(
                     .delete,
                     resourceKind: .volume,
-                    resourceID: try bootVolume.requireID(),
+                    resourceID: try terminating.requireID(),
                     actor: .user(userID),
                     on: db)
             }
-            vm.setDesiredStatus(.absent)
+            updated.setDesiredStatus(.absent)
+            return updated
         }
         // The delete path skips the enforcement lookup: a client follows a
         // delete through the operations façade with `mutationId`, so nothing
         // reads this body beyond the id, and the VM may already be reaped.
-        return try await Self.acceptedResponse(
-            for: vm, accepted, on: req, resolvingEnforcement: false)
+        return try await acceptedResponse(
+            for: mutation.resource, mutation.accepted, on: req, resolvingEnforcement: false)
     }
 
     func pause(req: Request) async throws -> Response {
@@ -2097,14 +2160,16 @@ struct VMController: RouteCollection {
         // until the agent confirms, and the in-flight state is the gap between
         // `generation` and `observedGeneration` the conditions report.
         let userID = try user.requireID()
-        let accepted = try await req.resourceMutation.accept(
+        let mutation = try await req.resourceMutation.acceptValue(
             .pause, on: vm, actor: .user(userID), dispatch: .stateSync,
-            on: req.db, app: req.application
-        ) { @Sendable _ in
-            vm.setDesiredStatus(.paused)
+            on: database, app: req.application
+        ) { @Sendable current, _ in
+            var updated = current
+            updated.setDesiredStatus(.paused)
+            return updated
         }
 
-        return try await Self.acceptedResponse(for: vm, accepted, on: req)
+        return try await acceptedResponse(for: mutation.resource, mutation.accepted, on: req)
     }
 
     func resume(req: Request) async throws -> Response {
@@ -2117,14 +2182,16 @@ struct VMController: RouteCollection {
 
         // Counterpart of pause: the VM stays `.paused` until the agent confirms.
         let userID = try user.requireID()
-        let accepted = try await req.resourceMutation.accept(
+        let mutation = try await req.resourceMutation.acceptValue(
             .resume, on: vm, actor: .user(userID), dispatch: .stateSync,
-            on: req.db, app: req.application
-        ) { @Sendable _ in
-            vm.setDesiredStatus(.running)
+            on: database, app: req.application
+        ) { @Sendable current, _ in
+            var updated = current
+            updated.setDesiredStatus(.running)
+            return updated
         }
 
-        return try await Self.acceptedResponse(for: vm, accepted, on: req)
+        return try await acceptedResponse(for: mutation.resource, mutation.accepted, on: req)
     }
 
     func status(req: Request) async throws -> VMDetailResponse {
@@ -2136,23 +2203,22 @@ struct VMController: RouteCollection {
         // replica-independent (issue #261). Returned as the DTO, not the
         // model: the raw `VM` encoding would expose fields that must stay
         // server-side (cloud-init user_data can carry secrets).
-        try await vm.$networkInterfaces.load(on: req.db)
-        for interface in vm.networkInterfaces {
-            try await interface.$addresses.load(on: req.db)
-            try await interface.$observedAddresses.load(on: req.db)
-            try await interface.$securityGroupMemberships.load(on: req.db)
-        }
-        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
+        let observedAddresses = try await loadInterfaces(for: vm, on: database)
+        let securityGroups = try await securityGroupIDsByInterfaceID(
+            vm.networkInterfaces, on: database)
+        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: database)
         let enforcement = try await SecurityGroupService.enforcement(
             for: vm,
             offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
-            on: req.db)
+            on: database)
         return VMDetailResponse(
             from: vm,
             securityGroupsEnforced: enforcement,
             spiffeId: identity?.spiffeID,
             instanceIdentityPrincipalId: identity?.principalID,
-            instanceIdentityStatus: identity == nil ? .revoked : .enabled)
+            instanceIdentityStatus: identity == nil ? .revoked : .enabled,
+            securityGroupIDsByInterfaceID: securityGroups,
+            observedAddressesByInterfaceID: observedAddresses)
     }
 
     func start(req: Request) async throws -> Response {
@@ -2175,13 +2241,13 @@ struct VMController: RouteCollection {
         // come back, which is what desired state is for.
         if let hypervisorId = vm.hypervisorId,
             let agentUUID = UUID(uuidString: hypervisorId),
-            let agent = try await Agent.find(agentUUID, on: req.db),
+            let agent = try await Agent.find(agentUUID, on: database),
             agent.supportsInterVMNetworking
         {
             let authority = try await SiteNetworkAuthority.resolve(
                 forAgent: agent,
                 offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
-                on: req.db)
+                on: database)
             if let refusal = SiteNetworkAuthority.refusal(
                 authority, host: agent,
                 consequence: "this VM's network cannot be realized and it would never boot")
@@ -2195,14 +2261,16 @@ struct VMController: RouteCollection {
         // transitional `.starting` is stored — in-flight state is the gap
         // between desired and observed.
         let userID = try user.requireID()
-        let accepted = try await req.resourceMutation.accept(
+        let mutation = try await req.resourceMutation.acceptValue(
             .boot, on: vm, actor: .user(userID), dispatch: .stateSync,
-            on: req.db, app: req.application
-        ) { @Sendable _ in
-            vm.setDesiredStatus(.running)
+            on: database, app: req.application
+        ) { @Sendable current, _ in
+            var updated = current
+            updated.setDesiredStatus(.running)
+            return updated
         }
 
-        return try await Self.acceptedResponse(for: vm, accepted, on: req)
+        return try await acceptedResponse(for: mutation.resource, mutation.accepted, on: req)
     }
 
     func stop(req: Request) async throws -> Response {
@@ -2214,14 +2282,16 @@ struct VMController: RouteCollection {
         }
 
         let userID = try user.requireID()
-        let accepted = try await req.resourceMutation.accept(
+        let mutation = try await req.resourceMutation.acceptValue(
             .shutdown, on: vm, actor: .user(userID), dispatch: .stateSync,
-            on: req.db, app: req.application
-        ) { @Sendable _ in
-            vm.setDesiredStatus(.shutdown)
+            on: database, app: req.application
+        ) { @Sendable current, _ in
+            var updated = current
+            updated.setDesiredStatus(.shutdown)
+            return updated
         }
 
-        return try await Self.acceptedResponse(for: vm, accepted, on: req)
+        return try await acceptedResponse(for: mutation.resource, mutation.accepted, on: req)
     }
 
     func restart(req: Request) async throws -> Response {
@@ -2244,14 +2314,16 @@ struct VMController: RouteCollection {
         try await Self.requireEdgeNonceCapableAgent(vm.hypervisorId, app: req.application)
 
         let userID = try user.requireID()
-        let accepted = try await req.resourceMutation.accept(
+        let mutation = try await req.resourceMutation.acceptValue(
             .reboot, on: vm, actor: .user(userID), dispatch: .stateSync,
-            on: req.db, app: req.application
-        ) { @Sendable _ in
-            vm.requestReboot()
+            on: database, app: req.application
+        ) { @Sendable current, _ in
+            var updated = current
+            updated.requestReboot()
+            return updated
         }
 
-        return try await Self.acceptedResponse(for: vm, accepted, on: req)
+        return try await acceptedResponse(for: mutation.resource, mutation.accepted, on: req)
     }
 
     /// Refuse an edge-nonce mutation whose agent could not converge it
@@ -2294,7 +2366,7 @@ struct VMController: RouteCollection {
         }
     }
 
-    static func requirePlacedAgentForNetworkHotplug(_ vm: VM, on db: any Database) async throws -> Agent {
+    static func requirePlacedAgentForNetworkHotplug(_ vm: VM, on db: PostgresStoreContext) async throws -> Agent {
         guard let agentID = vm.hypervisorId,
             let agentUUID = UUID(uuidString: agentID),
             let agent = try await Agent.find(agentUUID, on: db)
@@ -2319,13 +2391,26 @@ struct VMController: RouteCollection {
         }
     }
 
-    static func loadInterfaces(for vm: VM, on db: any Database) async throws {
-        try await vm.$networkInterfaces.load(on: db)
-        for interface in vm.networkInterfaces {
-            try await interface.$addresses.load(on: db)
-            try await interface.$observedAddresses.load(on: db)
-            try await interface.$logicalNetwork.load(on: db)
-            try await interface.$securityGroupMemberships.load(on: db)
-        }
+    private func loadInterfaces(
+        for vm: VM, on db: PostgresStoreContext
+    ) async throws -> [UUID: [ObservedInterfaceAddressSnapshot]] {
+        let loaded = try await LegacyVMNetworkInterfaceStore.loadingWithAddresses([vm], on: db)
+        return try await observedAddressesByInterfaceID(loaded.first?.networkInterfaces ?? [])
+    }
+
+    private func securityGroupIDsByInterfaceID(
+        _ interfaces: [VMNetworkInterface],
+        on db: PostgresStoreContext
+    ) async throws -> [UUID: [UUID]] {
+        try await LegacyInterfaceSecurityGroupStore.securityGroupIDsByInterface(
+            kind: .vm, interfaceIDs: interfaces.compactMap(\.id), on: db)
+    }
+
+    private func observedAddressesByInterfaceID(
+        _ interfaces: [VMNetworkInterface]
+    ) async throws -> [UUID: [ObservedInterfaceAddressSnapshot]] {
+        let rows = try await workloads.observedInterfaceAddresses(
+            interfaceIDs: interfaces.compactMap(\.id))
+        return Dictionary(grouping: rows, by: \.interfaceID)
     }
 }

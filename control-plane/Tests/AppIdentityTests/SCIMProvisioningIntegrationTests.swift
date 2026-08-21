@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Testing
 import Vapor
@@ -20,20 +20,20 @@ private struct SCIMProvisioningFixture {
 private func makeSCIMFixture(
     _ app: Application, orgName: String = "SCIM Org", username: String = "scimadmin"
 ) async throws -> SCIMProvisioningFixture {
-    let builder = TestDataBuilder(db: app.db)
+    let builder = TestDataBuilder(db: app.testPostgres)
     let user = try await builder.createUser(username: username, email: "\(username)@example.com")
     let org = try await builder.createOrganization(name: orgName)
     try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
 
-    let rawToken = SCIMToken.generateToken()
-    let token = SCIMToken(
-        organizationID: org.id!,
-        name: "IdP provisioning",
-        tokenHash: SCIMToken.hashToken(rawToken),
-        tokenPrefix: SCIMToken.extractPrefix(rawToken),
-        createdByID: user.id!
-    )
-    try await token.save(on: app.db)
+    let rawToken = SCIMTokenCredential.generateToken()
+    _ = try await app.scimTokensPersistence.issue(
+        SCIMTokenWrite(
+            organizationID: org.id!,
+            name: "IdP provisioning",
+            tokenHash: SCIMTokenCredential.hashToken(rawToken),
+            tokenPrefix: SCIMTokenCredential.extractPrefix(rawToken),
+            createdByID: user.id!
+        ))
 
     return SCIMProvisioningFixture(organization: org, rawToken: rawToken)
 }
@@ -95,16 +95,15 @@ struct SCIMProvisioningIntegrationTests {
                 #expect(res.status == .created)
             }
 
-            let created = try await User.query(on: app.db)
-                .filter(\.$username == "provisioned.by.idp")
-                .first()
+            let created = try await LegacyUserStore.users(
+                username: "provisioned.by.idp",
+                on: app.testPostgres
+            ).first
             let createdUser = try #require(created)
             #expect(createdUser.scimProvisioned == true)
 
-            let membership = try await UserOrganization.query(on: app.db)
-                .filter(\.$user.$id == createdUser.id!)
-                .filter(\.$organization.$id == fixture.organization.id!)
-                .first()
+            let membership = try await OrganizationMembershipStore.membership(
+                userID: createdUser.id!, organizationID: fixture.organization.id!, on: app.testPostgres)
             #expect(membership != nil)
         }
     }
@@ -148,12 +147,15 @@ struct SCIMProvisioningIntegrationTests {
             let orgID = fixture.organization.id!.uuidString
 
             let token = try #require(
-                try await SCIMToken.query(on: app.db)
-                    .filter(\.$tokenHash == SCIMToken.hashToken(fixture.rawToken))
-                    .first()
+                try await app.scimTokensPersistence.token(
+                    tokenHash: SCIMTokenCredential.hashToken(fixture.rawToken)
+                )
             )
-            token.isActive = false
-            try await token.save(on: app.db)
+            _ = try await app.scimTokensPersistence.updateOwnedToken(
+                id: token.id,
+                organizationID: token.organizationID,
+                changes: SCIMTokenChanges(isActive: false)
+            )
 
             try await app.test(.GET, "/organizations/\(orgID)/scim/v2/Users") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.rawToken)

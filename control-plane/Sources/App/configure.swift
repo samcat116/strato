@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -9,11 +10,11 @@ public func configure(
     // module owns a cohesive phase; this manifest owns the dependencies between
     // those phases.
     try await app.bootstrapFoundation(environmentVariables: environmentVariables)
-    try app.bootstrapHTTPPipeline()
-    try await app.bootstrapDatabase()
-    try await app.reconcileStartupState()
-    try await app.bootstrapRuntimeModules()
-    app.bootstrapLifecycle()
+    let persistence = try await app.bootstrapDatabase()
+    try app.bootstrapHTTPPipeline(persistence: persistence)
+    try await app.reconcileStartupState(using: persistence)
+    try await app.bootstrapRuntimeModules(using: persistence)
+    app.bootstrapLifecycle(persistence: persistence)
 
     // Open the readiness gate: every migration, schema load, and boot-time
     // backfill above has finished. Vapor binds the port only after `configure`
@@ -22,7 +23,7 @@ public func configure(
     // "ready" has an explicit meaning rather than an implicit one.
     app.readiness.markMigrationsComplete()
 
-    try routes(app)
+    try routes(app, persistence: persistence)
 
     // The structural half of default-deny (#482): every registered route must
     // carry an authorization classification, or the process refuses to start.

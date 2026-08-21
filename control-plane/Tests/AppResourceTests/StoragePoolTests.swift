@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Testing
 import Vapor
@@ -14,16 +14,18 @@ struct StoragePoolTests {
 
     // MARK: - Reachability (pure logic)
 
-    private func makePool(mode: StoragePoolMode, members: [String] = []) -> StoragePool {
-        StoragePool(name: "test", mode: mode, memberAgentIds: members, backing: .filesystem)
+    private func makePool(mode: StoragePoolMode, members: [String] = []) -> StoragePoolSnapshot {
+        StoragePoolSnapshot(
+            id: UUID(), name: "test", mode: mode,
+            memberAgentIDs: members, backing: .filesystem)
     }
 
     @Test("local pool: only the agent holding the replica reaches the volume")
     func localPoolRequiresReplicaAgent() {
         let pool = makePool(mode: .local)
 
-        #expect(StoragePool.agentCanReach(agentId: "agent-a", pool: pool, replicaAgentIds: ["agent-a"]))
-        #expect(!StoragePool.agentCanReach(agentId: "agent-b", pool: pool, replicaAgentIds: ["agent-a"]))
+        #expect(StoragePoolsPersistence.agentCanReach(agentID: "agent-a", pool: pool, replicaAgentIDs: ["agent-a"]))
+        #expect(!StoragePoolsPersistence.agentCanReach(agentID: "agent-b", pool: pool, replicaAgentIDs: ["agent-a"]))
     }
 
     @Test("local pool: a volume with no replicas yet is reachable from anywhere")
@@ -31,23 +33,23 @@ struct StoragePoolTests {
         // Matches the old guard's behavior when no hypervisor was recorded.
         let pool = makePool(mode: .local)
 
-        #expect(StoragePool.agentCanReach(agentId: "agent-a", pool: pool, replicaAgentIds: []))
+        #expect(StoragePoolsPersistence.agentCanReach(agentID: "agent-a", pool: pool, replicaAgentIDs: []))
     }
 
     @Test("no pool behaves like a local pool")
     func nilPoolBehavesLikeLocal() {
-        #expect(StoragePool.agentCanReach(agentId: "agent-a", pool: nil, replicaAgentIds: ["agent-a"]))
-        #expect(!StoragePool.agentCanReach(agentId: "agent-b", pool: nil, replicaAgentIds: ["agent-a"]))
-        #expect(StoragePool.agentCanReach(agentId: "agent-b", pool: nil, replicaAgentIds: []))
+        #expect(StoragePoolsPersistence.agentCanReach(agentID: "agent-a", pool: nil, replicaAgentIDs: ["agent-a"]))
+        #expect(!StoragePoolsPersistence.agentCanReach(agentID: "agent-b", pool: nil, replicaAgentIDs: ["agent-a"]))
+        #expect(StoragePoolsPersistence.agentCanReach(agentID: "agent-b", pool: nil, replicaAgentIDs: []))
     }
 
     @Test("replicated pools fail closed until a coherent backend exists")
     func replicatedPoolIsUnreachable() {
         let pool = makePool(mode: .replicated, members: ["agent-a", "agent-b", "agent-c"])
 
-        #expect(!StoragePool.agentCanReach(agentId: "agent-a", pool: pool, replicaAgentIds: ["agent-a"]))
-        #expect(!StoragePool.agentCanReach(agentId: "agent-d", pool: pool, replicaAgentIds: ["agent-a", "agent-b"]))
-        #expect(!StoragePool.agentCanReach(agentId: "agent-c", pool: pool, replicaAgentIds: ["agent-a", "agent-b"]))
+        #expect(!StoragePoolsPersistence.agentCanReach(agentID: "agent-a", pool: pool, replicaAgentIDs: ["agent-a"]))
+        #expect(!StoragePoolsPersistence.agentCanReach(agentID: "agent-d", pool: pool, replicaAgentIDs: ["agent-a", "agent-b"]))
+        #expect(!StoragePoolsPersistence.agentCanReach(agentID: "agent-c", pool: pool, replicaAgentIDs: ["agent-a", "agent-b"]))
     }
 
     // MARK: - Default pool (baseline-seeded)
@@ -55,12 +57,12 @@ struct StoragePoolTests {
     @Test("the schema baseline seeds the default local pool")
     func defaultPoolExists() async throws {
         try await withTestApp { app in
-            let pool = try await StoragePool.defaultPool(on: app.db)
+            let pool = try await app.storagePoolsPersistence.defaultPool()
 
-            #expect(pool.name == StoragePool.defaultPoolName)
+            #expect(pool.name == StoragePoolsPersistence.defaultPoolName)
             #expect(pool.mode == .local)
             #expect(pool.replicationFactor == 1)
-            #expect(pool.memberAgentIds.isEmpty)
+            #expect(pool.memberAgentIDs.isEmpty)
             #expect(pool.backing == .filesystem)
         }
     }

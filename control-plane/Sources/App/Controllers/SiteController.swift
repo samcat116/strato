@@ -1,10 +1,24 @@
-import Fluent
+import ControlPlanePostgres
 import StratoShared
 import Vapor
 
 /// Sites (availability zones) group agents that share one OVN deployment, so
 /// a logical network pinned to a site can span its nodes (issue #343).
 struct SiteController: RouteCollection {
+    private let sites: SitesPersistence
+    private let agents: AgentsPersistence
+    private let hierarchy: HierarchyPersistence
+
+    init(
+        sites: SitesPersistence,
+        agents: AgentsPersistence,
+        hierarchy: HierarchyPersistence
+    ) {
+        self.sites = sites
+        self.agents = agents
+        self.hierarchy = hierarchy
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let sites = routes.grouped("api", "sites")
         sites.get(use: listSites)
@@ -35,8 +49,8 @@ struct SiteController: RouteCollection {
 
     /// The given canonical action on the site itself (resolved through the site's
     /// parent scope in the IAM tree).
-    private func requireSiteAction(_ req: Request, site: Site, action: String) async throws {
-        let allowed = try await req.can(action, on: IAMNode(type: .site, id: try site.requireID()))
+    private func requireSiteAction(_ req: Request, site: SiteSnapshot, action: String) async throws {
+        let allowed = try await req.can(action, on: IAMNode(type: .site, id: site.id))
         guard allowed else {
             throw Abort(.forbidden, reason: "You don't have '\(action)' access on this site")
         }
@@ -47,32 +61,11 @@ struct SiteController: RouteCollection {
     /// sites delegated to different OUs of one org, a sibling-OU site admin
     /// shares the root org but must not move an agent the evaluator wouldn't
     /// let them manage.
-    private func requireAgentManage(_ req: Request, agent: Agent) async throws {
-        let allowed = try await req.can("agent:manage", on: IAMNode(type: .agent, id: try agent.requireID()))
+    private func requireAgentManage(_ req: Request, agentID: UUID) async throws {
+        let allowed = try await req.can("agent:manage", on: IAMNode(type: .agent, id: agentID))
         guard allowed else {
             throw Abort(.forbidden, reason: "You don't have 'manage' permission on this agent")
         }
-    }
-
-    /// How many floating IPs are attached to NICs of VMs hosted in the site —
-    /// the set whose NAT rules the site's controller realizes.
-    ///
-    /// A VM names its host agent by id string rather than referencing it, so
-    /// the agent ids are still a query of their own; from there the count is
-    /// one join down `floating_ips → NIC → VM` instead of hydrating every VM
-    /// in the site, every NIC on those VMs and the whole `floating_ips` table
-    /// to intersect them in Swift.
-    static func attachedFloatingIPCount(inSite site: Site, on db: Database) async throws -> Int {
-        let siteAgentIDs = try await Agent.query(on: db)
-            .filter(\.$site.$id == site.requireID())
-            .all(\.$id)
-            .map(\.uuidString)
-        guard !siteAgentIDs.isEmpty else { return 0 }
-        return try await FloatingIP.query(on: db)
-            .join(parent: \.$interface)
-            .join(from: VMNetworkInterface.self, parent: \.$vm)
-            .filter(VM.self, \.$hypervisorId ~~ siteAgentIDs)
-            .count()
     }
 
     /// Trim a free-text metadata string, mapping blank input to nil so a
@@ -135,11 +128,11 @@ struct SiteController: RouteCollection {
         }
     }
 
-    private func findSite(_ req: Request) async throws -> Site {
+    private func findSite(_ req: Request) async throws -> SiteSnapshot {
         guard let siteId = req.parameters.get("siteId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid site ID")
         }
-        guard let site = try await Site.find(siteId, on: req.db) else {
+        guard let site = try await sites.site(id: siteId) else {
             throw Abort(.notFound, reason: "Site not found")
         }
         return site
@@ -157,18 +150,19 @@ struct SiteController: RouteCollection {
     /// Every site the caller may read, by name, ready for slicing.
     func visibleSites(req: Request) async throws -> [SiteResponse] {
         _ = try req.auth.require(User.self)
-        let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
-
-        var query = Site.query(on: req.db).sort(\.$name).sort(\.$id)
+        let orgFilter = try await OrganizationAccessService.organizationListFilter(
+            on: req,
+            using: hierarchy
+        )
+        let siteRows: [SiteSnapshot]
         if let orgFilter {
-            query = query.group(.or) { group in
-                group.filter(\.$organization.$id == orgFilter.organizationID)
-                if !orgFilter.organizationalUnitIDs.isEmpty {
-                    group.filter(\.$organizationalUnit.$id ~~ orgFilter.organizationalUnitIDs)
-                }
-            }
+            siteRows = try await sites.sites(
+                organizationID: orgFilter.organizationID,
+                organizationalUnitIDs: orgFilter.organizationalUnitIDs
+            )
+        } else {
+            siteRows = try await sites.allSites()
         }
-        let sites = try await query.all()
 
         // Every caller is filtered the same way, admins included: the
         // `platform-system-admin` tier-1 policy is what lets them see the whole
@@ -179,35 +173,18 @@ struct SiteController: RouteCollection {
         // One batched decision for the page (#687) rather than a full
         // evaluation per site.
         let readable = try await req.canFilter(
-            "site:read", on: sites.compactMap { $0.id.map { IAMNode(type: .site, id: $0) } })
-        let visible = sites.filter { site in
-            site.id.map { readable.contains(IAMNode(type: .site, id: $0)) } ?? false
-        }
-        // One batched read for the page's designated controllers (issue #833
-        // adds their health to the response) rather than a lookup per site.
-        let controllerIDs = Set(visible.compactMap { $0.$networkControllerAgent.id })
-        let controllers =
-            controllerIDs.isEmpty
-            ? []
-            : try await Agent.query(on: req.db).filter(\.$id ~~ Array(controllerIDs)).all()
-        let byID = Dictionary(uniqueKeysWithValues: controllers.compactMap { agent in agent.id.map { ($0, agent) } })
-        return try visible.map { site in
-            try SiteResponse(from: site, controller: site.$networkControllerAgent.id.flatMap { byID[$0] })
-        }
+            "site:read",
+            on: siteRows.map { IAMNode(type: .site, id: $0.id) }
+        )
+        return try siteRows
+            .filter { readable.contains(IAMNode(type: .site, id: $0.id)) }
+            .map { try SiteResponse(from: $0) }
     }
 
     func getSite(req: Request) async throws -> SiteResponse {
         let site = try await findSite(req)
         try await requireSiteAction(req, site: site, action: "site:read")
-        return try await SiteResponse(from: site, controller: Self.controller(of: site, on: req.db))
-    }
-
-    /// The designated controller's row, for the health fields `SiteResponse`
-    /// carries. Nil when the site designates none — or when the designation
-    /// dangles at a deleted agent, which the column allows (no FK).
-    private static func controller(of site: Site, on db: Database) async throws -> Agent? {
-        guard let controllerID = site.$networkControllerAgent.id else { return nil }
-        return try await Agent.find(controllerID, on: db)
+        return try SiteResponse(from: site)
     }
 
     func createSite(req: Request) async throws -> SiteResponse {
@@ -219,7 +196,6 @@ struct SiteController: RouteCollection {
         else {
             throw Abort(.badRequest, reason: "Either organizationId or organizationalUnitId is required")
         }
-        try await scope.validateExists(on: req.db)
         try await requireManageAgents(req, scope: scope)
 
         let labels = Self.normalizedLabels(create.labels)
@@ -227,26 +203,31 @@ struct SiteController: RouteCollection {
             latitude: create.latitude, longitude: create.longitude,
             locationLabel: create.locationLabel, regionCode: create.regionCode, labels: labels)
 
-        let site = Site(
+        let result = try await sites.create(SiteWrite(
             name: create.name,
             description: create.description,
-            status: create.status ?? .active,
+            status: (create.status ?? .active).rawValue,
             latitude: create.latitude,
             longitude: create.longitude,
             locationLabel: Self.normalized(create.locationLabel),
             regionCode: Self.normalized(create.regionCode),
             labels: labels ?? [:],
-            organizationScope: scope)
-        do {
-            try await site.save(on: req.db)
-        } catch {
-            // Surface the unique-name violation as a client error, matching
-            // the registration-token conflict behavior.
+            organizationID: scope.organizationID,
+            organizationalUnitID: scope.organizationalUnitID
+        ))
+        switch result {
+        case .created(let site):
+            return try SiteResponse(from: site)
+        case .scopeNotFound:
+            switch scope {
+            case .organization(let id):
+                throw Abort(.badRequest, reason: "Organization \(id) does not exist")
+            case .organizationalUnit(let id):
+                throw Abort(.badRequest, reason: "Folder \(id) does not exist")
+            }
+        case .duplicateName:
             throw Abort(.conflict, reason: "A site named '\(create.name)' already exists")
         }
-
-        // A freshly created site designates nobody yet.
-        return try SiteResponse(from: site, controller: nil)
     }
 
     func updateSite(req: Request) async throws -> SiteResponse {
@@ -254,48 +235,44 @@ struct SiteController: RouteCollection {
         try await requireSiteAction(req, site: site, action: "site:manage")
         let update = try req.content.decodeValidated(UpdateSiteRequest.self)
 
-        if let controllerId = update.networkControllerAgentId {
-            guard let agent = try await Agent.find(controllerId, on: req.db) else {
-                throw Abort(.badRequest, reason: "Agent \(controllerId) does not exist")
-            }
-            // The controller authors the site's shared NB over its local
-            // socket; an agent outside the site is connected to some other
-            // (or no) OVN deployment and would silently reconcile nothing.
-            guard agent.$site.id == site.id else {
-                throw Abort(
-                    .badRequest,
-                    reason: "Agent '\(agent.name)' is not a member of this site; assign it to the site first")
-            }
-            // A designation the sync path won't honor is a silent outage: a
-            // non-overlay (user-mode/SLIRP) agent has no OVN network service
-            // to reconcile with, so peers stay non-authoritative and the
-            // site's networks are realized nowhere.
-            guard agent.supportsInterVMNetworking else {
-                throw Abort(
-                    .badRequest,
-                    reason:
-                        "Agent '\(agent.name)' has no overlay (OVN) networking capability and cannot author site topology"
-                )
-            }
-        }
-
         let labels = Self.normalizedLabels(update.labels)
         try Self.validateMetadata(
             latitude: update.latitude, longitude: update.longitude,
             locationLabel: update.locationLabel, regionCode: update.regionCode, labels: labels)
 
-        site.description = update.description
-        site.$networkControllerAgent.id = update.networkControllerAgentId
-        // Full-replace for descriptive fields; `status` is the exception — an
-        // omitted status leaves the current lifecycle untouched (see
-        // `UpdateSiteRequest`).
-        if let status = update.status { site.status = status }
-        site.latitude = update.latitude
-        site.longitude = update.longitude
-        site.locationLabel = Self.normalized(update.locationLabel)
-        site.regionCode = Self.normalized(update.regionCode)
-        site.labels = labels ?? [:]
-        try await site.save(on: req.db)
+        let result = try await sites.update(
+            id: site.id,
+            with: SiteUpdate(
+                description: update.description,
+                networkControllerAgentID: update.networkControllerAgentId,
+                status: update.status?.rawValue,
+                latitude: update.latitude,
+                longitude: update.longitude,
+                locationLabel: Self.normalized(update.locationLabel),
+                regionCode: Self.normalized(update.regionCode),
+                labels: labels ?? [:]
+            )
+        )
+        let updated: SiteSnapshot
+        switch result {
+        case .updated(let site):
+            updated = site
+        case .notFound:
+            throw Abort(.notFound, reason: "Site not found")
+        case .controllerNotFound(let id):
+            throw Abort(.badRequest, reason: "Agent \(id) does not exist")
+        case .controllerOutsideSite(let name):
+            throw Abort(
+                .badRequest,
+                reason: "Agent '\(name)' is not a member of this site; assign it to the site first"
+            )
+        case .controllerCannotAuthor(let name):
+            throw Abort(
+                .badRequest,
+                reason:
+                    "Agent '\(name)' has no overlay (OVN) networking capability and cannot author site topology"
+            )
+        }
 
         // Topology authority may have moved: the old controller must stop
         // reconciling (and gets networksAuthoritative=false on its next sync)
@@ -303,37 +280,27 @@ struct SiteController: RouteCollection {
         // handover safe in either order.
         await req.application.agentService.syncDesiredStateToFleet()
 
-        return try await SiteResponse(from: site, controller: Self.controller(of: site, on: req.db))
+        return try SiteResponse(from: updated)
     }
 
     func deleteSite(req: Request) async throws -> HTTPStatus {
         let site = try await findSite(req)
         try await requireSiteAction(req, site: site, action: "site:manage")
-        let siteId = try site.requireID()
-
-        // Refuse while anything references the site: a cascade would silently
-        // flip agents back to the legacy per-node model and unpin networks
-        // that VMs were placed against.
-        let agentCount = try await Agent.query(on: req.db).filter(\.$site.$id == siteId).count()
-        guard agentCount == 0 else {
-            throw Abort(.conflict, reason: "Site has \(agentCount) agent(s); remove them first")
-        }
-        let networkCount = try await LogicalNetwork.query(on: req.db).filter(\.$site.$id == siteId).count()
-        guard networkCount == 0 else {
-            throw Abort(.conflict, reason: "Site has \(networkCount) network(s) pinned to it; delete them first")
-        }
-        // The FK would silently SET NULL the pin, turning a site-scoped pool
-        // into an unpinned one — a scope change that bypasses the pool-overlap
-        // validation (an unpinned pool conflicts with *every* site's pools).
-        let poolCount = try await FloatingIPPool.query(on: req.db).filter(\.$site.$id == siteId).count()
-        guard poolCount == 0 else {
+        switch try await sites.deleteIfEmpty(id: site.id) {
+        case .deleted:
+            return .noContent
+        case .notFound:
+            throw Abort(.notFound, reason: "Site not found")
+        case .hasAgents(let count):
+            throw Abort(.conflict, reason: "Site has \(count) agent(s); remove them first")
+        case .hasNetworks(let count):
+            throw Abort(.conflict, reason: "Site has \(count) network(s) pinned to it; delete them first")
+        case .hasFloatingIPPools(let count):
             throw Abort(
                 .conflict,
-                reason: "Site has \(poolCount) floating IP pool(s) pinned to it; move or delete them first")
+                reason: "Site has \(count) floating IP pool(s) pinned to it; move or delete them first"
+            )
         }
-
-        try await site.delete(on: req.db)
-        return .noContent
     }
 
     func assignAgent(req: Request) async throws -> AgentResponse {
@@ -342,78 +309,56 @@ struct SiteController: RouteCollection {
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
-        guard let agent = try await Agent.find(agentId, on: req.db) else {
+        guard try await agents.agent(id: agentId) != nil else {
             throw Abort(.notFound, reason: "Agent not found")
         }
-        try await requireAgentManage(req, agent: agent)
-        let targetSiteId = try site.requireID()
+        try await requireAgentManage(req, agentID: agentId)
 
-        // A site is one OVN deployment owned by one scope; its members must
-        // live within that scope. Root-org equality is not enough: an OU-B
-        // site admitting a sibling OU-A agent would run OU-B's site-pinned
-        // VMs on capacity managed through OU-A. Rescope the agent first.
-        guard let siteScope = site.organizationScope,
-            let agentScope = agent.organizationScope,
-            try await siteScope.contains(agentScope, on: req.db)
-        else {
+        let assigned: AgentSnapshot
+        switch try await sites.assignAgent(id: agentId, toSite: site.id) {
+        case .assigned(let agent, let newlyDesignatedSiteName):
+            assigned = agent
+            if let siteName = newlyDesignatedSiteName {
+                req.logger.notice(
+                    "Designated the site's network controller automatically (it had none)",
+                    metadata: [
+                        "agentName": .string(agent.name),
+                        "agentId": .string(agent.id.uuidString),
+                        "site": .string(siteName),
+                    ]
+                )
+                Telemetry.recordSiteNetworkControllerUp(site: siteName, up: true)
+            }
+        case .siteNotFound:
+            throw Abort(.notFound, reason: "Site not found")
+        case .agentNotFound:
+            throw Abort(.notFound, reason: "Agent not found")
+        case .outsideScope:
             throw Abort(
                 .conflict,
-                reason: "Agent is not owned by this site's organization scope; reassign the agent first")
-        }
-
-        // A move is a removal from the old site too, so it must honor the same
-        // invariant as removeAgent: never orphan a site's topology authority.
-        // Overwriting site_id while another site still designates this agent as
-        // its network controller would leave that site pointing at a
-        // non-member, silently stopping reconciliation of all its networks.
-        let orphanedControllerships = try await Site.query(on: req.db)
-            .filter(\.$networkControllerAgent.$id == agentId)
-            .filter(\.$id != targetSiteId)
-            .count()
-        guard orphanedControllerships == 0 else {
+                reason: "Agent is not owned by this site's organization scope; reassign the agent first"
+            )
+        case .controlsAnotherSite:
             throw Abort(
                 .conflict,
                 reason:
-                    "Agent is another site's network controller; designate a replacement controller there first")
+                    "Agent is another site's network controller; designate a replacement controller there first"
+            )
+        case .hostsVirtualMachines(let count):
+            throw Abort(
+                .conflict,
+                reason: "Agent hosts \(count) VM(s); migrate or delete them before changing its site"
+            )
+        case .hostsSandboxes(let count):
+            throw Abort(
+                .conflict,
+                reason: "Agent hosts \(count) sandbox(es); delete them before changing its site"
+            )
         }
 
-        // Changing site while the agent hosts VMs is the same hazard the
-        // removal path guards: the old site's controller scopes its networks
-        // by current membership, so networks referenced only by this agent's
-        // still-running VMs would drop out of the old shared NB. (A site-less
-        // agent's VMs live in its private local NB, which the new site's
-        // shared deployment won't contain either.) Require a drain first.
-        if agent.$site.id != targetSiteId {
-            let hostedVMs = try await VM.query(on: req.db)
-                .filter(\.$hypervisorId == agentId.uuidString)
-                .count()
-            guard hostedVMs == 0 else {
-                throw Abort(
-                    .conflict,
-                    reason: "Agent hosts \(hostedVMs) VM(s); migrate or delete them before changing its site")
-            }
-            let hostedSandboxes = try await Sandbox.query(on: req.db)
-                .filter(\.$hypervisorId == agentId.uuidString)
-                .count()
-            guard hostedSandboxes == 0 else {
-                throw Abort(
-                    .conflict,
-                    reason:
-                        "Agent hosts \(hostedSandboxes) sandbox(es); delete them before changing its site")
-            }
-        }
-
-        agent.$site.id = targetSiteId
-        try await agent.save(on: req.db)
-        // The other way an agent joins a site (registration is the first): a
-        // site with no designated controller reconciles no topology, so its
-        // first OVN-capable member takes the job rather than leaving the
-        // operator to discover the requirement from agent logs (issue #743).
-        await SiteNetworkAuthority.designateIfUnset(
-            agent: agent, siteID: targetSiteId, on: req.db, logger: req.logger)
         await req.application.agentService.syncDesiredStateToFleet()
         return try AgentResponse(
-            from: agent,
+            from: assigned,
             targetVersion: AgentVersionTarget.version(configuration: req.controlPlaneConfiguration))
     }
 

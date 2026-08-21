@@ -1,73 +1,206 @@
-import Fluent
+import ControlPlanePostgres
+import Foundation
 import Vapor
 
-/// A NIC attached to a sandbox, the sandbox analogue of `VMNetworkInterface`
-/// (issue #416). Deliberately its own slim table rather than a generalization
-/// of the VM NIC — sandboxes are a parallel resource with their own lifecycle —
-/// but the shape mirrors the VM path so `IPAMService`, MAC generation, and
-/// stable device naming are reused. v1 gives each sandbox exactly one NIC.
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class SandboxNetworkInterface: Model, @unchecked Sendable {
+/// Immutable persistence snapshot for one sandbox NIC.
+///
+/// Address rows are loaded explicitly. `nil` means the caller did not request
+/// them, while an empty array means the NIC has no allocated addresses.
+struct SandboxNetworkInterface: Equatable, Sendable {
     static let schema = "sandbox_network_interfaces"
 
-    @ID(key: .id)
-    var id: UUID?
-
-    @Parent(key: "sandbox_id")
-    var sandbox: Sandbox
-
-    /// The logical network this NIC attaches to. A real FK (issue #765): the
-    /// name is a per-project display label and cannot identify a network.
-    @Parent(key: "logical_network_id")
-    var logicalNetwork: LogicalNetwork
-
-    @Field(key: "mac_address")
-    var macAddress: String
-
-    /// The addresses allocated to this NIC, one row per family (requires
-    /// eager loading with `.with(\.$addresses)`).
-    @Children(for: \.$interface)
-    var addresses: [SandboxInterfaceAddress]
-
-    /// This NIC's security-group memberships (STR-34, STR-102) — see
-    /// `SandboxInterfaceSecurityGroup` for which half of the sync each row
-    /// reaches today. Requires eager loading with
-    /// `.with(\.$securityGroupMemberships)`.
-    @Children(for: \.$interface)
-    var securityGroupMemberships: [SandboxInterfaceSecurityGroup]
-
-    @OptionalField(key: "mtu")
-    var mtu: Int?
-
-    /// Stable device identifier within the sandbox (e.g. "net0"). Single-NIC in
-    /// v1, so always "net0", but kept for parity with the VM path.
-    @Field(key: "device_name")
-    var deviceName: String
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
+    let id: UUID?
+    let sandboxID: UUID
+    let logicalNetworkID: UUID
+    let logicalNetworkName: String?
+    let macAddress: String
+    let loadedAddresses: [InterfaceAddressSnapshot]?
+    let mtu: Int?
+    let deviceName: String
+    let createdAt: Date?
+    let updatedAt: Date?
 
     init(
         id: UUID? = nil,
         sandboxID: UUID,
         logicalNetworkID: UUID,
+        logicalNetworkName: String? = nil,
         macAddress: String,
+        loadedAddresses: [InterfaceAddressSnapshot]? = nil,
         mtu: Int? = nil,
-        deviceName: String = "net0"
+        deviceName: String = "net0",
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
     ) {
-        self.id = id
-        self.$sandbox.id = sandboxID
-        self.$logicalNetwork.id = logicalNetworkID
+        self.id = id ?? UUID()
+        self.sandboxID = sandboxID
+        self.logicalNetworkID = logicalNetworkID
+        self.logicalNetworkName = logicalNetworkName
         self.macAddress = macAddress
+        self.loadedAddresses = loadedAddresses
         self.mtu = mtu
         self.deviceName = deviceName
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    func requireID() throws -> UUID {
+        guard let id else {
+            throw Abort(.internalServerError, reason: "Sandbox interface has no identifier")
+        }
+        return id
+    }
+
+    func loading(addresses: [InterfaceAddressSnapshot]) -> Self {
+        Self(
+            id: id,
+            sandboxID: sandboxID,
+            logicalNetworkID: logicalNetworkID,
+            logicalNetworkName: logicalNetworkName,
+            macAddress: macAddress,
+            loadedAddresses: addresses,
+            mtu: mtu,
+            deviceName: deviceName,
+            createdAt: createdAt,
+            updatedAt: updatedAt)
+    }
+
+    /// Transitional test-builder convenience. Production uses the intent-
+    /// oriented insert operation below and receives the returned snapshot.
+    @discardableResult
+    func save(on db: PostgresStoreContext) async throws -> Self {
+        try await LegacySandboxNetworkInterfaceStore.insert(self, on: db)
     }
 }
 
-extension SandboxNetworkInterface: Content {}
+/// Explicit SQL bridge for sandbox NIC rows while the surrounding sandbox
+/// aggregate is moved to PostgresNIO. Query structure is fixed and every
+/// caller-controlled value remains bound.
+enum LegacySandboxNetworkInterfaceStore {
+    static func interfaces(
+        sandboxIDs: [UUID]? = nil,
+        logicalNetworkID: UUID? = nil,
+        on db: PostgresStoreContext
+    ) async throws -> [SandboxNetworkInterface] {
+        if let sandboxIDs, sandboxIDs.isEmpty { return [] }
+        let sql = try requireSQL(db)
+        var query: PostgresSQLQuery =
+            "SELECT \(unsafeRaw: columns) FROM sandbox_network_interfaces AS sni LEFT JOIN logical_networks AS ln ON ln.id = sni.logical_network_id WHERE TRUE"
+        if let sandboxIDs { query += " AND sni.sandbox_id = ANY(\(bind: sandboxIDs))" }
+        if let logicalNetworkID { query += " AND sni.logical_network_id = \(bind: logicalNetworkID)" }
+        query += " ORDER BY sni.device_name, sni.id"
+        return try await sql.raw(query).all(decoding: Record.self).map(\.snapshot)
+    }
+
+    static func interfaces(sandboxID: UUID, on db: PostgresStoreContext) async throws
+        -> [SandboxNetworkInterface]
+    {
+        try await interfaces(sandboxIDs: [sandboxID], on: db)
+    }
+
+    static func loading(_ sandboxes: [Sandbox], on db: PostgresStoreContext) async throws -> [Sandbox] {
+        let sandboxIDs = sandboxes.compactMap(\.id)
+        let bySandbox = Dictionary(
+            grouping: try await interfaces(sandboxIDs: sandboxIDs, on: db),
+            by: \.sandboxID)
+        return sandboxes.map { sandbox in
+            sandbox.loadingNetworkInterfaces(sandbox.id.flatMap { bySandbox[$0] } ?? [])
+        }
+    }
+
+    static func loadingWithAddresses(_ sandboxes: [Sandbox], on db: PostgresStoreContext) async throws
+        -> [Sandbox]
+    {
+        let loaded = try await loading(sandboxes, on: db)
+        let detailed = try await LegacyInterfaceAddressStore.loading(
+            loaded.flatMap(\.networkInterfaces), on: db)
+        let bySandbox = Dictionary(grouping: detailed, by: \.sandboxID)
+        return loaded.map { sandbox in
+            sandbox.loadingNetworkInterfaces(sandbox.id.flatMap { bySandbox[$0] } ?? [])
+        }
+    }
+
+    @discardableResult
+    static func insert(_ interface: SandboxNetworkInterface, on db: PostgresStoreContext) async throws
+        -> SandboxNetworkInterface
+    {
+        let id = try interface.requireID()
+        guard let record = try await requireSQL(db).raw(
+            """
+            INSERT INTO sandbox_network_interfaces (
+                id, sandbox_id, logical_network_id, mac_address, mtu,
+                device_name, created_at, updated_at
+            ) VALUES (
+                \(bind: id), \(bind: interface.sandboxID),
+                \(bind: interface.logicalNetworkID), \(bind: interface.macAddress),
+                \(bind: interface.mtu), \(bind: interface.deviceName),
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            RETURNING
+                id, sandbox_id AS "sandboxID",
+                logical_network_id AS "logicalNetworkID",
+                NULL::text AS "logicalNetworkName", mac_address AS "macAddress",
+                mtu, device_name AS "deviceName",
+                created_at AS "createdAt", updated_at AS "updatedAt"
+            """
+        ).first(decoding: Record.self) else {
+            throw Abort(.internalServerError, reason: "Could not create sandbox network interface")
+        }
+        return record.snapshot
+    }
+
+    static func count(logicalNetworkID: UUID, on db: PostgresStoreContext) async throws -> Int {
+        struct Count: Decodable { let count: Int }
+        return try await requireSQL(db).raw(
+            """
+            SELECT count(*)::bigint AS count
+            FROM sandbox_network_interfaces
+            WHERE logical_network_id = \(bind: logicalNetworkID)
+            """
+        ).first(decoding: Count.self)?.count ?? 0
+    }
+
+    private struct Record: Decodable, Sendable {
+        let id: UUID
+        let sandboxID: UUID
+        let logicalNetworkID: UUID
+        let logicalNetworkName: String?
+        let macAddress: String
+        let mtu: Int?
+        let deviceName: String
+        let createdAt: Date?
+        let updatedAt: Date?
+
+        var snapshot: SandboxNetworkInterface {
+            SandboxNetworkInterface(
+                id: id,
+                sandboxID: sandboxID,
+                logicalNetworkID: logicalNetworkID,
+                logicalNetworkName: logicalNetworkName,
+                macAddress: macAddress,
+                mtu: mtu,
+                deviceName: deviceName,
+                createdAt: createdAt,
+                updatedAt: updatedAt)
+        }
+    }
+
+    private static let columns = """
+        sni.id,
+        sni.sandbox_id AS "sandboxID",
+        sni.logical_network_id AS "logicalNetworkID",
+        ln.name AS "logicalNetworkName",
+        sni.mac_address AS "macAddress",
+        sni.mtu,
+        sni.device_name AS "deviceName",
+        sni.created_at AS "createdAt",
+        sni.updated_at AS "updatedAt"
+        """
+
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
+            throw Abort(.internalServerError, reason: "Sandbox interfaces require PostgreSQL")
+        }
+        return sql
+    }
+}

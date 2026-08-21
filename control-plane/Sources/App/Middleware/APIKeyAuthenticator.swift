@@ -1,8 +1,16 @@
+import ControlPlanePostgres
 import Vapor
-import Fluent
 
 struct APIKeyAuthenticator: AsyncBearerAuthenticator {
     typealias User = App.User
+
+    private let apiKeys: APIKeysPersistence
+    private let users: UserDirectoryPersistence
+
+    init(apiKeys: APIKeysPersistence, users: UserDirectoryPersistence) {
+        self.apiKeys = apiKeys
+        self.users = users
+    }
 
     func authenticate(bearer: BearerAuthorization, for request: Request) async throws {
         // Check if the bearer token is an API key format (starts with "sk_")
@@ -11,46 +19,74 @@ struct APIKeyAuthenticator: AsyncBearerAuthenticator {
         }
 
         // Hash the provided key
-        let hashedKey = APIKey.hashAPIKey(bearer.token)
+        let hashedKey = APIKeyCredential.hash(bearer.token)
 
         // Find the API key in the database
-        guard
-            let apiKey = try await APIKey.query(on: request.db)
-                .filter(\.$keyHash == hashedKey)
-                .filter(\.$isActive == true)
-                .with(\.$user)
-                .first()
-        else {
+        guard let apiKey = try await apiKeys.activeKey(keyHash: hashedKey) else {
             return  // API key not found or inactive
         }
 
         // Check if the key is expired
-        if apiKey.isExpired {
+        if apiKey.isExpired() {
             return  // Key is expired
         }
+
+        guard let snapshot = try await users.user(id: apiKey.userID) else { return }
+        let user = App.User(snapshot: snapshot)
 
         // Record last-used information (debounced, in the background). Resolved
         // through the shared proxy-trust config: the raw `X-Forwarded-For` this
         // used to read is client-supplied, so a key's recorded `lastUsedIP` was
         // forgeable by whoever presented the key.
-        apiKey.recordUsage(ip: request.trustedClientIP, on: request.application)
+        recordUsage(
+            for: apiKey,
+            sourceIP: request.trustedClientIP,
+            on: request.application
+        )
 
         // Authenticate the user
-        request.auth.login(apiKey.user)
+        request.auth.login(user)
 
         // Store the API key in the request for later use
         request.storage[APIKeyStorageKey.self] = apiKey
+    }
+
+    private func recordUsage(
+        for apiKey: APIKeySnapshot,
+        sourceIP: String?,
+        on app: Application,
+        now: Date = Date()
+    ) {
+        guard APIKeyCredential.lastUsedIsStale(apiKey.lastUsedAt, now: now) else {
+            return
+        }
+
+        let staleBefore = now.addingTimeInterval(-APIKeyCredential.lastUsedDebounceWindow)
+        app.backgroundTasks.spawn {
+            do {
+                _ = try await apiKeys.recordUsage(
+                    id: apiKey.id,
+                    usedAt: now,
+                    sourceIP: sourceIP,
+                    staleBefore: staleBefore
+                )
+            } catch {
+                app.logger.debug(
+                    "Failed to record last-used for api_keys \(apiKey.id): \(String(reflecting: error))"
+                )
+            }
+        }
     }
 }
 
 // Storage key for storing the authenticated API key
 struct APIKeyStorageKey: StorageKey {
-    typealias Value = APIKey
+    typealias Value = APIKeySnapshot
 }
 
 // Extension to easily access the authenticated API key
 extension Request {
-    var apiKey: APIKey? {
+    var apiKey: APIKeySnapshot? {
         get { storage[APIKeyStorageKey.self] }
         set { storage[APIKeyStorageKey.self] = newValue }
     }
@@ -76,8 +112,8 @@ extension Request {
     /// there is no credential to narrow — the authenticators already hold the
     /// full row, so this costs no query.
     var credentialRestriction: CredentialRestriction {
-        if let apiKey { return apiKey.restriction }
-        if let cliSession { return cliSession.restriction }
+        if let apiKey { return CredentialRestriction(apiKey.restriction) }
+        if let cliSession { return CredentialRestriction(cliSession.restriction) }
         return .unrestricted
     }
 }
@@ -85,14 +121,38 @@ extension Request {
 // MARK: - Bearer Authorization Header Authenticator
 
 struct BearerAuthorizationHeaderAuthenticator: AsyncMiddleware {
+    private let apiKeys: APIKeysPersistence
+    private let oauthSessions: OAuthDeviceSessionsPersistence
+    private let users: UserDirectoryPersistence
+    private let workloads: WorkloadsPersistence
+
+    init(
+        apiKeys: APIKeysPersistence,
+        oauthSessions: OAuthDeviceSessionsPersistence,
+        users: UserDirectoryPersistence,
+        workloads: WorkloadsPersistence
+    ) {
+        self.apiKeys = apiKeys
+        self.oauthSessions = oauthSessions
+        self.users = users
+        self.workloads = workloads
+    }
+
     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
         // Check for Authorization header with Bearer token. Each authenticator
         // guards on its own token shape (`sk_` API keys, `st_` CLI access
         // tokens, compact-JWS JWT-SVIDs), so all three can run unconditionally.
         if let authorization = request.headers.bearerAuthorization {
-            try await APIKeyAuthenticator().authenticate(bearer: authorization, for: request)
-            try await OAuthTokenAuthenticator().authenticate(bearer: authorization, for: request)
-            try await JWTSVIDAuthenticator().authenticate(bearer: authorization, for: request)
+            try await APIKeyAuthenticator(apiKeys: apiKeys, users: users).authenticate(
+                bearer: authorization,
+                for: request
+            )
+            try await OAuthTokenAuthenticator(oauth: oauthSessions, users: users).authenticate(
+                bearer: authorization,
+                for: request
+            )
+            try await JWTSVIDAuthenticator(workloads: workloads).authenticate(
+                bearer: authorization, for: request)
         }
 
         return try await next.respond(to: request)

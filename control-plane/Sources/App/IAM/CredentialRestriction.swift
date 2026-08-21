@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -192,6 +192,24 @@ struct CredentialRestriction: Hashable, Sendable {
     }
 }
 
+extension CredentialRestriction {
+    init(_ stored: StoredCredentialRestriction) {
+        self.init(
+            storedActions: stored.actions,
+            nodeType: stored.nodeType,
+            nodeID: stored.nodeID
+        )
+    }
+
+    var stored: StoredCredentialRestriction {
+        StoredCredentialRestriction(
+            actions: actions,
+            nodeType: node?.type.rawValue,
+            nodeID: node?.id
+        )
+    }
+}
+
 // MARK: - Wire shape
 
 /// A restriction as a client states it, on credential creation or device
@@ -238,7 +256,7 @@ extension CredentialRestriction {
     static func resolve(
         _ payload: CredentialRestrictionPayload,
         issuedUnder issuer: CredentialRestriction,
-        on db: any Database
+        using iam: IAMPersistence
     ) async throws -> CredentialRestriction {
         guard payload.role == nil || payload.actions == nil else {
             throw Abort(
@@ -248,7 +266,7 @@ extension CredentialRestriction {
 
         let actions: [String]
         if let roleID = payload.role {
-            guard let role = try await IAMRoleDefinition.find(roleID, on: db) else {
+            guard let role = try await iam.role(id: roleID) else {
                 throw Abort(.badRequest, reason: "Unknown role '\(roleID)' in credential restriction")
             }
             guard !role.actions.isEmpty else {
@@ -268,29 +286,6 @@ extension CredentialRestriction {
                 reason: "This credential is restricted and cannot issue one with broader access than its own")
         }
         return restriction
-    }
-}
-
-// MARK: - The three credential rows that store one
-
-/// A credential row carrying one canonical restriction: `APIKey`,
-/// `CLISession`, or `DeviceAuthorization`.
-protocol CredentialRestrictionStoring: AnyObject {
-    var restrictionActions: [String] { get set }
-    var restrictionNodeType: String? { get set }
-    var restrictionNodeID: UUID? { get set }
-}
-
-extension CredentialRestrictionStoring {
-    var restriction: CredentialRestriction {
-        CredentialRestriction(
-            storedActions: restrictionActions, nodeType: restrictionNodeType, nodeID: restrictionNodeID)
-    }
-
-    func store(restriction: CredentialRestriction) {
-        restrictionActions = restriction.actions
-        restrictionNodeType = restriction.node?.type.rawValue
-        restrictionNodeID = restriction.node?.id
     }
 }
 

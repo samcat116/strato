@@ -28,9 +28,9 @@ enum IAMPrincipalType: String, Codable, Sendable, CaseIterable {
     var table: String {
         switch self {
         case .user: return User.schema
-        case .group: return Group.schema
-        case .serviceAccount: return ServiceAccount.schema
-        case .workload: return WorkloadRegistration.schema
+        case .group: return "groups"
+        case .serviceAccount: return "service_accounts"
+        case .workload: return "workload_registrations"
         }
     }
 }
@@ -145,14 +145,14 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
     /// `ResourceBindingCleanup`'s tests) has to be told where to look.
     var table: String {
         switch self {
-        case .organization: return Organization.schema
+        case .organization: return "organizations"
         case .organizationalUnit: return OrganizationalUnit.schema
         case .project: return Project.schema
         case .virtualMachine: return VM.schema
         case .sandbox: return Sandbox.schema
         case .image: return Image.schema
         case .network: return LogicalNetwork.schema
-        case .floatingIP: return FloatingIP.schema
+        case .floatingIP: return "floating_ips"
         case .loadBalancer: return LoadBalancer.schema
         case .securityGroup: return SecurityGroup.schema
         case .dnsZone: return DNSZone.schema
@@ -163,7 +163,7 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
         case .vmSnapshot: return VMSnapshot.schema
         case .site: return Site.schema
         case .agent: return Agent.schema
-        case .serviceAccount: return ServiceAccount.schema
+        case .serviceAccount: return "service_accounts"
         case .user: return User.schema
         }
     }

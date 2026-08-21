@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Logging
 import StratoShared
 
@@ -9,19 +9,24 @@ import StratoShared
 /// collisions; this startup audit makes the legacy rows actionable instead of
 /// leaving their metadata/resolver ACL exposure silent.
 enum NetworkServiceSpaceAudit {
-    static func collidingNetworks(on database: Database) async throws -> [LogicalNetwork] {
-        try await LogicalNetwork.query(on: database).all().filter { network in
+    static func collidingNetworks(using networks: NetworksPersistence) async throws
+        -> [NetworkSnapshot]
+    {
+        try await networks.allNetworks().map(\.network).filter { network in
             guard let subnet6 = network.subnet6, let cidr = IPv6CIDR(subnet6) else { return false }
             return NetworkResolverEndpoint.v6SpaceCIDR.overlaps(cidr)
         }
     }
 
-    static func warnAboutCollidingNetworks(on database: Database, logger: Logger) async throws {
-        for network in try await collidingNetworks(on: database) {
+    static func warnAboutCollidingNetworks(
+        using networks: NetworksPersistence,
+        logger: Logger
+    ) async throws {
+        for network in try await collidingNetworks(using: networks) {
             logger.warning(
                 "Logical network IPv6 subnet overlaps Strato's reserved service space; renumber the network",
                 metadata: [
-                    "networkId": .string(network.id?.uuidString ?? "unknown"),
+                    "networkId": .string(network.id.uuidString),
                     "networkName": .string(network.name),
                     "subnet6": .string(network.subnet6 ?? "unknown"),
                     "reservedSpace": .string(NetworkResolverEndpoint.v6Space),

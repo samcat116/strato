@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import NIOConcurrencyHelpers
 import Tracing
 import Vapor
@@ -165,8 +165,7 @@ enum IAMAuthorizer {
         context: IAMCheckContext,
         state: IAMRequestAuthState,
         cache: IAMRequestCache? = nil,
-        app: Application,
-        db: any Database
+        app: Application
     ) async throws -> CedarCheckDecision {
         try await authorize(
             principal: .user(userID),
@@ -175,8 +174,7 @@ enum IAMAuthorizer {
             context: context,
             state: state,
             cache: cache,
-            app: app,
-            db: db
+            app: app
         )
     }
 
@@ -206,8 +204,7 @@ enum IAMAuthorizer {
         context: IAMCheckContext,
         state: IAMRequestAuthState,
         cache: IAMRequestCache? = nil,
-        app: Application,
-        db: any Database
+        app: Application
     ) async throws -> CedarCheckDecision {
         let clock = ContinuousClock()
         let start = clock.now
@@ -230,8 +227,7 @@ enum IAMAuthorizer {
                 context: context,
                 state: state,
                 cache: cache,
-                app: app,
-                db: db
+                app: app
             )
             guard let decision = decisions[node] else {
                 // Unreachable: the batch is total over its inputs. Failing
@@ -266,8 +262,7 @@ enum IAMAuthorizer {
         context: IAMCheckContext,
         state: IAMRequestAuthState,
         cache: IAMRequestCache? = nil,
-        app: Application,
-        db: any Database
+        app: Application
     ) async throws -> [IAMNode: CedarCheckDecision] {
         guard !nodes.isEmpty else { return [:] }
         let clock = ContinuousClock()
@@ -299,8 +294,7 @@ enum IAMAuthorizer {
                 context: context,
                 state: state,
                 cache: cache,
-                app: app,
-                db: db
+                app: app
             )
             decisions.merge(evaluated) { _, new in new }
 
@@ -340,16 +334,23 @@ enum IAMAuthorizer {
         context: IAMCheckContext,
         state: IAMRequestAuthState,
         cache: IAMRequestCache?,
-        app: Application,
-        db: any Database
+        app: Application
     ) async throws -> [IAMNode: CedarCheckDecision] {
         let built = try await IAMDecisionEngine.compiledSet(app)
         let targets = nodes.map { IAMCheckTarget(principal: principal, node: $0) }
 
         let outcomes: [IAMCheckTarget: IAMDecisionEngine.Decision]
         do {
-            outcomes = try await IAMDecisionEngine.decide(
-                targets, action: action, built: built, cache: cache, restriction: state.restriction, on: db)
+            outcomes = try await app.policySetVersion.withIAMPersistence { iam in
+                try await IAMDecisionEngine.decide(
+                    targets,
+                    action: action,
+                    built: built,
+                    cache: cache,
+                    restriction: state.restriction,
+                    using: iam
+                )
+            }
         } catch let failure as IAMDecisionEngine.EvaluationFailure {
             app.logger.error(
                 "Cedar evaluation failed; failing closed",
@@ -428,6 +429,40 @@ enum IAMAuthorizer {
         return "\(first.type.rawValue):\(first.id.uuidString)"
     }
 
+#if DEBUG
+    package static func authorize(
+        userID: UUID, action: String, node: IAMNode,
+        context: IAMCheckContext, state: IAMRequestAuthState,
+        cache: IAMRequestCache? = nil, app: Application,
+        db _: PostgresStoreContext
+    ) async throws -> CedarCheckDecision {
+        try await authorize(
+            userID: userID, action: action, node: node, context: context,
+            state: state, cache: cache, app: app)
+    }
+
+    package static func authorize(
+        principal: IAMPrincipal, action: String, node: IAMNode,
+        context: IAMCheckContext, state: IAMRequestAuthState,
+        cache: IAMRequestCache? = nil, app: Application,
+        db _: PostgresStoreContext
+    ) async throws -> CedarCheckDecision {
+        try await authorize(
+            principal: principal, action: action, node: node, context: context,
+            state: state, cache: cache, app: app)
+    }
+
+    package static func authorize(
+        principal: IAMPrincipal, action: String, nodes: [IAMNode],
+        context: IAMCheckContext, state: IAMRequestAuthState,
+        cache: IAMRequestCache? = nil, app: Application,
+        db _: PostgresStoreContext
+    ) async throws -> [IAMNode: CedarCheckDecision] {
+        try await authorize(
+            principal: principal, action: action, nodes: nodes, context: context,
+            state: state, cache: cache, app: app)
+    }
+#endif
 }
 
 extension Request {
@@ -451,7 +486,6 @@ extension Request {
             state: iamAuthState,
             cache: iamCache,
             app: application,
-            db: db
         )
         return decision.allowed
     }
@@ -479,7 +513,6 @@ extension Request {
             state: iamAuthState,
             cache: iamCache,
             app: application,
-            db: db
         )
         return Set(decisions.filter { $0.value.allowed }.keys)
     }
@@ -509,7 +542,6 @@ extension Request {
             state: iamAuthState.membershipProbe(),
             cache: iamCache,
             app: application,
-            db: db
         )
         return decision.allowed
     }

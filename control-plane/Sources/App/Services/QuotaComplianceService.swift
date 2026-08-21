@@ -1,6 +1,6 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
-import Fluent
 
 /// Computes quota scope classification and compliance figures for the hierarchy
 /// resource-summary endpoint. The per-quota math is a pure function of a quota and
@@ -9,11 +9,11 @@ import Fluent
 struct QuotaComplianceService {
     /// Classifies which entity a quota is scoped to.
     static func quotaScope(for quota: ResourceQuota) -> String {
-        if quota.$organization.id != nil {
+        if quota.organizationID != nil {
             return "organization"
-        } else if quota.$organizationalUnit.id != nil {
+        } else if quota.organizationalUnitID != nil {
             return "organizational_unit"
-        } else if quota.$project.id != nil {
+        } else if quota.projectID != nil {
             return "project"
         } else {
             return "unknown"
@@ -57,7 +57,7 @@ struct QuotaComplianceService {
     /// Each quota costs a handful of SQL aggregates (`QuotaUsageAggregator`),
     /// so the cost scales with the number of quotas, not with the size of the
     /// hierarchy beneath them.
-    static func complianceInfos(for quotas: [ResourceQuota], on db: Database) async throws -> [QuotaComplianceInfo] {
+    static func complianceInfos(for quotas: [ResourceQuota], on db: PostgresStoreContext) async throws -> [QuotaComplianceInfo] {
         var result: [QuotaComplianceInfo] = []
         for quota in quotas {
             let actualUsage = try await quota.calculateActualUsage(on: db)

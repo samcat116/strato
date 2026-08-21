@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import Testing
 import Vapor
@@ -21,7 +20,6 @@ final class ProjectVisibilityTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -33,8 +31,8 @@ final class ProjectVisibilityTests {
     /// Recompile the policy set against the current database — the store writes
     /// below do not go through the version bump, so drive the rebuild directly.
     private func rebuild(_ app: Application) async throws {
-        let version = try await PolicySetVersionService.current(on: app.db)
-        await app.cedarPolicySet.rebuild(version: version, on: app.db)
+        let version = try await PolicySetVersionService.current(on: app.testPostgres)
+        await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
     }
 
     private func createVolume(
@@ -47,7 +45,7 @@ final class ProjectVisibilityTests {
             size: 1_073_741_824,
             createdByID: createdBy.id!
         )
-        try await volume.save(on: app.db)
+        try await volume.save(on: app.testPostgres)
         return volume
     }
 
@@ -67,13 +65,13 @@ final class ProjectVisibilityTests {
     @Test("A list shows only the projects the caller's bindings reach")
     func bindingScopedVisibility() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Vis Org")
             let project = try await builder.createProject(
                 name: "Vis Project", description: "d", organization: org)
             let user = try await builder.createUser(username: "vis-user", email: "vis@example.com")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             // A whole second organization the caller has no grant in — the
             // rows the old platform-wide walk would have visited.
@@ -92,7 +90,7 @@ final class ProjectVisibilityTests {
     @Test("A folder binding reaches the projects of nested folders beneath it")
     func folderSubtreeVisibility() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Folder Org")
             let parentFolder = try await builder.createOU(
                 name: "Parent", description: "d", organization: org)
@@ -108,8 +106,8 @@ final class ProjectVisibilityTests {
             try await builder.addUserToOrganization(user: user, organization: org, role: "member")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .organizationalUnit, nodeID: parentFolder.id!, createdBy: nil, on: app.db)
-            let token = try await user.generateAPIKey(on: app.db)
+                nodeType: .organizationalUnit, nodeID: parentFolder.id!, createdBy: nil, on: app.testPostgres)
+            let token = try await user.generateAPIKey(on: app)
 
             _ = try await createVolume(app, name: "nested-vol", project: nested, createdBy: user)
             _ = try await createVolume(app, name: "sibling-vol", project: sibling, createdBy: user)
@@ -122,7 +120,7 @@ final class ProjectVisibilityTests {
     @Test("A caller with no grant anywhere sees nothing")
     func noGrantsSeesNothing() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Empty Org")
             let project = try await builder.createProject(
                 name: "Empty Project", description: "d", organization: org)
@@ -132,7 +130,7 @@ final class ProjectVisibilityTests {
             let member = try await builder.createUser(
                 username: "bare-member", email: "bare@example.com")
             try await builder.addUserToOrganization(user: member, organization: org, role: "member")
-            let token = try await member.generateAPIKey(on: app.db)
+            let token = try await member.generateAPIKey(on: app)
             _ = try await createVolume(app, name: "unreachable", project: project, createdBy: member)
 
             #expect(try await listVolumeNames(app, token: token).isEmpty)
@@ -144,7 +142,7 @@ final class ProjectVisibilityTests {
     @Test("A guardrail forbidding project:read removes the project from the list")
     func guardrailNarrowsAGrantedProject() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Ceiling Org")
             let visible = try await builder.createProject(
                 name: "Ceiling Visible", description: "d", organization: org)
@@ -153,7 +151,7 @@ final class ProjectVisibilityTests {
             let user = try await builder.createUser(
                 username: "ceiling-user", email: "ceiling@example.com")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             _ = try await createVolume(app, name: "visible-vol", project: visible, createdBy: user)
             _ = try await createVolume(app, name: "hidden-vol", project: ceilinged, createdBy: user)
@@ -165,7 +163,7 @@ final class ProjectVisibilityTests {
                 name: "no-project-read", description: nil, effect: nil,
                 node: IAMNode(type: .project, id: ceilinged.id!),
                 actions: ["project:read"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
             try await rebuild(app)
 
             let names = try await listVolumeNames(app, token: token)
@@ -176,7 +174,7 @@ final class ProjectVisibilityTests {
     @Test("An authored permit policy makes a project visible with no binding behind it")
     func authoredPolicyGrantedVisibility() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Authored Org")
             let project = try await builder.createProject(
                 name: "Authored Project", description: "d", organization: org)
@@ -185,7 +183,7 @@ final class ProjectVisibilityTests {
             let user = try await builder.createUser(
                 username: "authored-user", email: "authored@example.com")
             try await builder.addUserToOrganization(user: user, organization: org, role: "member")
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
             _ = try await createVolume(app, name: "policy-vol", project: project, createdBy: user)
 
             #expect(try await listVolumeNames(app, token: token).isEmpty)
@@ -200,10 +198,10 @@ final class ProjectVisibilityTests {
                 """
             let prepared = try await PolicyStore.prepare(
                 id: id, cedarText: cedarText, ownerType: .organization, ownerID: org.id!,
-                engine: app.cedarEngine, on: app.db)
+                engine: app.cedarEngine, on: app.testPostgres)
             _ = try await PolicyStore.create(
                 id: id, name: "read-one-project", description: nil, ownerType: .organization,
-                ownerID: org.id!, prepared: prepared, createdBy: nil, enabled: true, on: app.db)
+                ownerID: org.id!, prepared: prepared, createdBy: nil, enabled: true, on: app.testPostgres)
             try await rebuild(app)
 
             let names = try await listVolumeNames(app, token: token)
@@ -216,7 +214,7 @@ final class ProjectVisibilityTests {
     @Test("A system admin sees every project, and a guardrail still narrows them")
     func systemAdminVisibility() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let orgA = try await builder.createOrganization(name: "Admin Org A")
             let orgB = try await builder.createOrganization(name: "Admin Org B")
             let projectA = try await builder.createProject(
@@ -225,7 +223,7 @@ final class ProjectVisibilityTests {
                 name: "Admin Project B", description: "d", organization: orgB)
             let admin = try await builder.createUser(
                 username: "vis-admin", email: "vis-admin@example.com", isSystemAdmin: true)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
             _ = try await createVolume(app, name: "a-vol", project: projectA, createdBy: admin)
             _ = try await createVolume(app, name: "b-vol", project: projectB, createdBy: admin)
 
@@ -238,7 +236,7 @@ final class ProjectVisibilityTests {
                 name: "admin-no-project-read", description: nil, effect: nil,
                 node: IAMNode(type: .project, id: projectB.id!),
                 actions: ["project:read"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
             try await rebuild(app)
 
             #expect(try await listVolumeNames(app, token: token) == ["a-vol"])
@@ -250,14 +248,14 @@ final class ProjectVisibilityTests {
     @Test("A caller who reaches no project sees no networks at all")
     func networksAreInvisibleWithoutProjectAccess() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Global Net Org")
             let project = try await builder.createProject(
                 name: "Global Net Project", description: "d", organization: org)
             let member = try await builder.createUser(
                 username: "net-bare", email: "net-bare@example.com")
             try await builder.addUserToOrganization(user: member, organization: org, role: "member")
-            let token = try await member.generateAPIKey(on: app.db)
+            let token = try await member.generateAPIKey(on: app)
 
             // Every network belongs to a project (issue #765), so bare org
             // membership — which grants no project read — reaches none of them.
@@ -280,7 +278,7 @@ final class ProjectVisibilityTests {
     @Test("Resolution does not depend on the platform-wide project count")
     func resolutionIgnoresUnreachableProjects() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Cost Org")
             let project = try await builder.createProject(
                 name: "Cost Project", description: "d", organization: org)
@@ -298,7 +296,9 @@ final class ProjectVisibilityTests {
             }
 
             let visibility = try await ProjectVisibility.resolve(
-                on: Request.forVisibilityTesting(app: app, user: user))
+                on: Request.forVisibilityTesting(app: app, user: user),
+                using: app.iamPersistence,
+                projects: app.projectsPersistence)
             #expect(visibility.candidateProjectIDs == [project.id!])
         }
     }

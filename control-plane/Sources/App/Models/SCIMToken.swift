@@ -1,77 +1,14 @@
-import Fluent
-import Vapor
-import Foundation
+import ControlPlanePostgres
 import Crypto
+import Foundation
+import Vapor
 
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class SCIMToken: Model, @unchecked Sendable {
-    static let schema = "scim_tokens"
-
-    @ID(key: .id)
-    var id: UUID?
-
-    @Parent(key: "organization_id")
-    var organization: Organization
-
-    @Field(key: "name")
-    var name: String
-
-    @Field(key: "token_hash")
-    var tokenHash: String
-
-    @Field(key: "token_prefix")
-    var tokenPrefix: String
-
-    @Field(key: "is_active")
-    var isActive: Bool
-
-    @OptionalField(key: "expires_at")
-    var expiresAt: Date?
-
-    @OptionalField(key: "last_used_at")
-    var lastUsedAt: Date?
-
-    @OptionalField(key: "last_used_ip")
-    var lastUsedIP: String?
-
-    @Parent(key: "created_by_id")
-    var createdBy: User
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
-
-    init(
-        id: UUID? = nil,
-        organizationID: UUID,
-        name: String,
-        tokenHash: String,
-        tokenPrefix: String,
-        isActive: Bool = true,
-        expiresAt: Date? = nil,
-        createdByID: UUID
-    ) {
-        self.id = id
-        self.$organization.id = organizationID
-        self.name = name
-        self.tokenHash = tokenHash
-        self.tokenPrefix = tokenPrefix
-        self.isActive = isActive
-        self.expiresAt = expiresAt
-        self.$createdBy.id = createdByID
-    }
-
-    // MARK: - Static Helper Methods
+/// Pure credential helpers kept at the HTTP boundary. Stored SCIM credentials
+/// are immutable snapshots owned by `SCIMTokensPersistence`.
+enum SCIMTokenCredential {
+    static let lastUsedDebounceWindow: TimeInterval = 15 * 60
 
     static func generateToken() -> String {
-        // Generate a secure random SCIM token: scim_[48 base64 chars]
-        // Uses 256 bits of cryptographic randomness, base64 encoded and filtered to 48 alphanumeric chars
-        // This provides approximately 285 bits of entropy (48 chars * ~5.95 bits/char for base64 without +/=)
         let randomBytes = SymmetricKey(size: .bits256)
         let keyData = randomBytes.withUnsafeBytes { Data($0) }
         let keyString = keyData.base64EncodedString()
@@ -90,30 +27,9 @@ final class SCIMToken: Model, @unchecked Sendable {
     }
 
     static func extractPrefix(_ token: String) -> String {
-        // Return first 20 characters for identification (scim_XXXXXXXXXXXXXXX)
-        return String(token.prefix(20))
-    }
-
-    var isExpired: Bool {
-        guard let expiresAt = expiresAt else { return false }
-        return Date() > expiresAt
-    }
-
-    var isValid: Bool {
-        return isActive && !isExpired
-    }
-
-    /// Find a SCIM token by its raw token value
-    static func findByToken(_ token: String, on db: Database) async throws -> SCIMToken? {
-        let hash = hashToken(token)
-        return try await SCIMToken.query(on: db)
-            .filter(\.$tokenHash == hash)
-            .with(\.$organization)
-            .first()
+        String(token.prefix(20))
     }
 }
-
-extension SCIMToken: Content {}
 
 // MARK: - DTOs
 
@@ -129,18 +45,18 @@ struct CreateSCIMTokenRequest: Content, ValidatedRequestBody {
 struct CreateSCIMTokenResponse: Content {
     let id: UUID?
     let name: String
-    let token: String  // Full token - only shown once
+    let token: String
     let tokenPrefix: String
     let organizationId: UUID
     let expiresAt: Date?
     let createdAt: Date?
 
-    init(scimToken: SCIMToken, fullToken: String) {
+    init(scimToken: SCIMTokenSnapshot, fullToken: String) {
         self.id = scimToken.id
         self.name = scimToken.name
         self.token = fullToken
         self.tokenPrefix = scimToken.tokenPrefix
-        self.organizationId = scimToken.$organization.id
+        self.organizationId = scimToken.organizationID
         self.expiresAt = scimToken.expiresAt
         self.createdAt = scimToken.createdAt
     }
@@ -156,11 +72,11 @@ struct SCIMTokenResponse: Content {
     let lastUsedAt: Date?
     let createdAt: Date?
 
-    init(from scimToken: SCIMToken) {
+    init(from scimToken: SCIMTokenSnapshot) {
         self.id = scimToken.id
         self.name = scimToken.name
         self.tokenPrefix = scimToken.tokenPrefix
-        self.organizationId = scimToken.$organization.id
+        self.organizationId = scimToken.organizationID
         self.isActive = scimToken.isActive
         self.expiresAt = scimToken.expiresAt
         self.lastUsedAt = scimToken.lastUsedAt

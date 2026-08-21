@@ -1,12 +1,13 @@
+import ControlPlanePostgres
 import Vapor
 
 extension Application {
     /// Registers background loops and shutdown behavior after their runtime
     /// dependencies have been installed, plus operator commands that are
     /// available for the lifetime of the process.
-    func bootstrapLifecycle() {
+    func bootstrapLifecycle(persistence: ControlPlanePersistence) {
         registerLifecycleHandlers()
-        registerCommands()
+        registerCommands(persistence: persistence)
     }
 
     private func registerLifecycleHandlers() {
@@ -41,11 +42,13 @@ extension Application {
         lifecycle.use(DrainSignalLifecycleHandler())
     }
 
-    private func registerCommands() {
+    private func registerCommands(persistence: ControlPlanePersistence) {
         // `App bootstrap`: seed a first admin + org + project and print an API key
         // once, for deployments that must be driven without a browser (CI, e2e).
         // Registered unconditionally; the command itself refuses if any user exists.
-        asyncCommands.use(BootstrapCommand(), as: "bootstrap")
+        asyncCommands.use(
+            BootstrapCommand(persistence: persistence.bootstrap),
+            as: "bootstrap")
 
         // `App grant-platform-admin`: the break-glass path back in when a
         // deployment has no reachable administrator (STR-178). Seeding the first

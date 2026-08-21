@@ -1,6 +1,5 @@
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import AppTestSupport
 @testable import App
@@ -15,7 +14,6 @@ final class ResourceQuotaTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             // Create test user and organization
             let testUser = User(
@@ -24,41 +22,41 @@ final class ResourceQuotaTests {
                 displayName: "Test User",
                 isSystemAdmin: false
             )
-            try await testUser.save(on: app.db)
+            try await testUser.save(on: app.testPostgres)
 
             let testOrganization = Organization(
                 name: "Test Organization",
                 description: "Test organization for unit tests"
             )
-            try await testOrganization.save(on: app.db)
+            try await testOrganization.save(on: app.testPostgres)
 
             // Create test project
-            let testProject = Project(
+            var testProject = Project(
                 name: "Test Project",
                 description: "Test project",
                 organizationID: testOrganization.id,
                 path: ""
             )
-            try await testProject.save(on: app.db)
-            testProject.path = try await testProject.buildPath(on: app.db)
-            try await testProject.save(on: app.db)
+            try await testProject.save(on: app.testPostgres)
+            testProject = testProject.replacingPath(try await testProject.buildPath(on: app.testPostgres))
+            try await testProject.save(on: app.testPostgres)
 
             // Add user to organization as admin
-            let userOrg = UserOrganization(
+            _ = try await OrganizationMembershipStore.insert(
                 userID: testUser.id!,
                 organizationID: testOrganization.id!,
-                roleID: IAMRole.admin.seededID
+                roleID: IAMRole.admin.seededID,
+                on: app.testPostgres
             )
-            try await userOrg.save(on: app.db)
 
             // The admin role binding the API/backfill would have written
             // alongside the membership row — the Cedar evaluator (#482)
             // answers from `role_bindings`.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: testUser.id!, role: .admin,
-                nodeType: .organization, nodeID: testOrganization.id!, createdBy: nil, on: app.db)
+                nodeType: .organization, nodeID: testOrganization.id!, createdBy: nil, on: app.testPostgres)
 
-            let authToken = try await testUser.generateAPIKey(on: app.db)
+            let authToken = try await testUser.generateAPIKey(on: app)
 
             try await test(app, testUser, testOrganization, testProject, authToken)
         } catch {
@@ -196,7 +194,7 @@ final class ResourceQuotaTests {
                 maxStorage: 200 * 1024 * 1024 * 1024,
                 maxVMs: 10,
                 environment: "production")
-            try await quota.save(on: app.db)
+            try await quota.save(on: app.testPostgres)
 
             try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -235,14 +233,15 @@ final class ResourceQuotaTests {
                 maxStorage: Int64(100.0 * 1024 * 1024 * 1024),
                 maxVMs: 5
             )
-            try await quota.save(on: app.db)
+            try await quota.save(on: app.testPostgres)
 
             // Update usage
-            quota.reservedVCPUs = 4
-            quota.reservedMemory = Int64(8.0 * 1024 * 1024 * 1024)
-            quota.reservedStorage = Int64(40.0 * 1024 * 1024 * 1024)
-            quota.vmCount = 2
-            try await quota.save(on: app.db)
+            let usedQuota = quota.replacingCounters(
+                reservedVCPUs: 4,
+                reservedMemory: Int64(8.0 * 1024 * 1024 * 1024),
+                reservedStorage: Int64(40.0 * 1024 * 1024 * 1024),
+                vmCount: 2)
+            try await usedQuota.save(on: app.testPostgres)
 
             // Get quota with usage
             try await app.test(.GET, "/api/quotas/\(quota.id!)") { req in
@@ -278,7 +277,7 @@ final class ResourceQuotaTests {
                 maxStorage: Int64(10.0 * 1024 * 1024 * 1024),
                 maxVMs: 1
             )
-            try await quota.save(on: app.db)
+            try await quota.save(on: app.testPostgres)
 
             // Try to use more than available
             let canUse = quota.canAccommodateVM(
@@ -294,7 +293,7 @@ final class ResourceQuotaTests {
     @Test("Sandboxes share the vCPU/memory pools but have their own count limit")
     func testSandboxAccommodation() async throws {
         try await withQuotaTestApp { app, _, _, testProject, _ in
-            let quota = ResourceQuota(
+            var quota = ResourceQuota(
                 name: "Sandbox Quota",
                 organizationID: nil,
                 organizationalUnitID: nil,
@@ -305,10 +304,10 @@ final class ResourceQuotaTests {
                 maxVMs: 10,
                 maxSandboxes: 1
             )
-            try await quota.save(on: app.db)
+            try await quota.save(on: app.testPostgres)
 
             // A VM reservation consumes the shared vCPU pool...
-            try quota.reserveResources(
+            quota = try quota.reservingResources(
                 vcpus: 3, memory: Int64(1024 * 1024 * 1024), storage: Int64(1024 * 1024 * 1024))
 
             // ...so a 2-vCPU sandbox no longer fits (3 + 2 > 4).
@@ -316,7 +315,7 @@ final class ResourceQuotaTests {
             #expect(!tooBig.allowed)
 
             // A 1-vCPU sandbox fits and takes the only sandbox slot.
-            try quota.reserveSandboxResources(vcpus: 1, memory: Int64(1024 * 1024 * 1024))
+            quota = try quota.reservingSandboxResources(vcpus: 1, memory: Int64(1024 * 1024 * 1024))
             #expect(quota.sandboxCount == 1)
             #expect(quota.vmCount == 1)
 
@@ -354,7 +353,7 @@ final class ResourceQuotaTests {
                 maxStorage: Int64(1000.0 * 1024 * 1024 * 1024),
                 maxVMs: 50
             )
-            try await orgQuota.save(on: app.db)
+            try await orgQuota.save(on: app.testPostgres)
 
             let projectQuota = ResourceQuota(
                 name: "Project Level",
@@ -366,7 +365,7 @@ final class ResourceQuotaTests {
                 maxStorage: Int64(200.0 * 1024 * 1024 * 1024),
                 maxVMs: 10
             )
-            try await projectQuota.save(on: app.db)
+            try await projectQuota.save(on: app.testPostgres)
 
             // List organization quotas
             try await app.test(.GET, "/api/quotas?level=organization") { req in
@@ -399,7 +398,7 @@ final class ResourceQuotaTests {
                 organizationID: nil, organizationalUnitID: nil, projectID: testProject.id,
                 maxVCPUs: 20, maxMemory: Int64(40.0 * 1024 * 1024 * 1024),
                 maxStorage: Int64(200.0 * 1024 * 1024 * 1024), maxVMs: 10)
-            try await projectQuota.save(on: app.db)
+            try await projectQuota.save(on: app.testPostgres)
 
             // A bare org member: no project binding, so no `project:read` on the
             // project this quota scopes. The item route already refuses it via
@@ -408,11 +407,10 @@ final class ResourceQuotaTests {
             let member = User(
                 username: "quota-bare-member", email: "quota-member@example.com",
                 displayName: "Bare Member", isSystemAdmin: false)
-            try await member.save(on: app.db)
-            try await UserOrganization(
-                userID: member.id!, organizationID: testOrganization.id!, roleID: nil
-            ).save(on: app.db)
-            let memberToken = try await member.generateAPIKey(on: app.db)
+            try await member.save(on: app.testPostgres)
+            _ = try await OrganizationMembershipStore.insert(
+                userID: member.id!, organizationID: testOrganization.id!, on: app.testPostgres)
+            let memberToken = try await member.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/quotas?level=project") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
@@ -439,7 +437,7 @@ final class ResourceQuotaTests {
                 maxStorage: Int64(100.0 * 1024 * 1024 * 1024),
                 maxVMs: 5
             )
-            try await quota.save(on: app.db)
+            try await quota.save(on: app.testPostgres)
 
             try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -472,7 +470,7 @@ final class ResourceQuotaTests {
     @Test("Cannot reduce quota below current usage")
     func testCannotReduceQuotaBelowUsage() async throws {
         try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             // 4 VMs × 2 vCPUs. The quota's own counters are left at zero, as they
             // are for any quota whose scope was already populated when it was
             // created — the guard has to measure, not read them (issue #742).
@@ -490,7 +488,7 @@ final class ResourceQuotaTests {
                 maxStorage: Int64(100.0 * 1024 * 1024 * 1024),
                 maxVMs: 5
             )
-            try await quota.save(on: app.db)
+            try await quota.save(on: app.testPostgres)
 
             try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -541,7 +539,7 @@ final class ResourceQuotaTests {
     @Test("An over-committed quota can still be raised, renamed and disabled")
     func testOverCommittedQuotaStaysEditable() async throws {
         try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             for index in 0..<3 {
                 _ = try await builder.createVM(name: "over-\(index)", project: testProject)
             }
@@ -557,7 +555,7 @@ final class ResourceQuotaTests {
                 maxStorage: Int64(100.0 * 1024 * 1024 * 1024),
                 maxVMs: 2
             )
-            try await quota.save(on: app.db)
+            try await quota.save(on: app.testPostgres)
 
             try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -585,7 +583,7 @@ final class ResourceQuotaTests {
                 #expect(response.usage.vmCount == 3)
             }
 
-            let reloaded = try await ResourceQuota.find(quota.id, on: app.db)
+            let reloaded = try await ResourceQuota.find(quota.id, on: app.testPostgres)
             #expect(reloaded?.reservedVCPUs == 6)
             #expect(reloaded?.vmCount == 3)
         }
@@ -594,7 +592,7 @@ final class ResourceQuotaTests {
     @Test("Network backfill leaves an over-limit quota editable and floors touched limits")
     func testNetworkBackfillPreservesOverLimitRecovery() async throws {
         try await withQuotaTestApp { app, _, testOrganization, testProject, authToken in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             _ = try await builder.createNetwork(
                 name: "existing-a", project: testProject,
                 subnet: "10.220.0.0/24", gateway: "10.220.0.1")
@@ -610,11 +608,19 @@ final class ResourceQuotaTests {
                 maxStorage: 200 * 1024 * 1024 * 1024,
                 maxVMs: 10,
                 maxNetworks: 1)
-            try await quota.save(on: app.db)
+            try await quota.save(on: app.testPostgres)
             #expect(quota.networkCount == 0, "the legacy counter starts stale")
 
-            try await BackfillNetworkQuotaAccounting().backfillQuotaCounters(on: app.db)
-            let backfilled = try #require(try await ResourceQuota.find(quota.id, on: app.db))
+            try await app.testPostgres.raw(
+                """
+                UPDATE resource_quotas AS q
+                SET network_count = (
+                    SELECT COUNT(*) FROM logical_networks AS n
+                    WHERE n.project_id = q.project_id
+                ), updated_at = CURRENT_TIMESTAMP
+                """
+            ).run()
+            let backfilled = try #require(try await ResourceQuota.find(quota.id, on: app.testPostgres))
             #expect(backfilled.networkCount == 2)
 
             // An untouched overage cannot make the row unsaveable: renaming is
@@ -640,7 +646,7 @@ final class ResourceQuotaTests {
             }
 
             let siteID = try #require(
-                try await LogicalNetwork.query(on: app.db).first()?.$site.id)
+                try await LogicalNetwork.all(on: app.testPostgres).first?.siteID)
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(
@@ -694,7 +700,7 @@ final class ResourceQuotaTests {
                 maxStorage: Int64(100.0 * 1024 * 1024 * 1024),
                 maxVMs: 5
             )
-            try await quota.save(on: app.db)
+            try await quota.save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -702,7 +708,7 @@ final class ResourceQuotaTests {
                 #expect(res.status == .noContent)
             }
 
-            let deletedQuota = try await ResourceQuota.find(quota.id, on: app.db)
+            let deletedQuota = try await ResourceQuota.find(quota.id, on: app.testPostgres)
             #expect(deletedQuota == nil)
         }
     }
@@ -710,7 +716,7 @@ final class ResourceQuotaTests {
     @Test("Cannot delete quota with usage")
     func testCannotDeleteQuotaWithUsage() async throws {
         try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             _ = try await builder.createVM(name: "guarded", project: testProject)
 
             // Counters left at zero, as they are for any quota created over an
@@ -725,7 +731,7 @@ final class ResourceQuotaTests {
                 maxStorage: Int64(100.0 * 1024 * 1024 * 1024),
                 maxVMs: 5
             )
-            try await quota.save(on: app.db)
+            try await quota.save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -733,7 +739,7 @@ final class ResourceQuotaTests {
                 #expect(res.status == .conflict)
             }
 
-            let survivor = try await ResourceQuota.find(quota.id, on: app.db)
+            let survivor = try await ResourceQuota.find(quota.id, on: app.testPostgres)
             #expect(survivor != nil)
         }
     }
@@ -744,7 +750,7 @@ final class ResourceQuotaTests {
     @Test("Cannot delete a quota whose scope holds only sandboxes")
     func testCannotDeleteQuotaWithSandboxUsage() async throws {
         try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             _ = try await builder.createSandbox(name: "guarded-sbx", project: testProject)
 
             let quota = try await builder.createResourceQuota(
@@ -767,7 +773,7 @@ final class ResourceQuotaTests {
     @Test("A quota created over live workloads guards its real usage")
     func testQuotaCreatedOverExistingWorkloadsGuardsRealUsage() async throws {
         try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             for index in 0..<5 {
                 _ = try await builder.createVM(name: "existing-\(index)", project: testProject)
             }
@@ -860,9 +866,8 @@ final class ResourceQuotaTests {
                 maxVMs: 5
             )
             // Left over from workloads that no longer exist.
-            quota.reservedVCPUs = 8
-            quota.vmCount = 4
-            try await quota.save(on: app.db)
+            let staleQuota = quota.replacingCounters(reservedVCPUs: 8, vmCount: 4)
+            try await staleQuota.save(on: app.testPostgres)
 
             try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -914,7 +919,7 @@ final class ResourceQuotaTests {
                 maxStorage: Int64(100.0 * 1024 * 1024 * 1024),
                 maxVMs: 5
             )
-            try await quota.save(on: app.db)
+            try await quota.save(on: app.testPostgres)
 
             // The org-admin (but not system-admin) caller is denied everywhere.
             try await app.test(.GET, "/api/quotas/\(quota.id!)") { req in
@@ -953,8 +958,8 @@ final class ResourceQuotaTests {
                 displayName: "Quota Sysadmin",
                 isSystemAdmin: true
             )
-            try await admin.save(on: app.db)
-            let adminToken = try await admin.generateAPIKey(on: app.db)
+            try await admin.save(on: app.testPostgres)
+            let adminToken = try await admin.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/quotas/\(quota.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)

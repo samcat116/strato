@@ -1,9 +1,10 @@
+import ControlPlanePostgres
 import Vapor
 
 extension Application {
     /// Installs runtime modules whose construction depends on the migrated and
     /// reconciled database state.
-    func bootstrapRuntimeModules() async throws {
+    func bootstrapRuntimeModules(using persistence: ControlPlanePersistence) async throws {
         // Configure the scheduler service from the startup-resolved strategy.
         let schedulingStrategy = SchedulingStrategy(
             rawValue: controlPlaneConfiguration.string(.schedulingStrategy)!)!
@@ -11,7 +12,7 @@ extension Application {
         logger.info("Scheduler service initialized with strategy: \(schedulingStrategy.rawValue)")
 
         // Configure SPIFFE/SPIRE authentication when enabled in startup configuration.
-        try await configureSPIRE()
+        try await configureSPIRE(trustDomains: persistence.orgTrustDomains)
 
         // Configure SPIRE join-token provisioning for the agent registration flow
         // (requires SPIRE_ENABLED plus SPIRE_SERVER_API_ADDRESS).
@@ -31,5 +32,22 @@ extension Application {
         // API for the trust domain's JWT authorities. Registered after
         // `configureSPIRERegistration` above, which it reads its source from.
         configureJWTSVIDAuthentication()
+
+        // The agent service and resource mutation coordinator are created only
+        // after the migrated schema and startup reconciliation are complete.
+        agentService = AgentService(
+            app: self,
+            database: persistence.storeContext,
+            storageDevices: persistence.storageDevices,
+            storagePools: persistence.storagePools,
+            agentEnrollments: persistence.agentEnrollments,
+            startImmediately: false
+        )
+        configureResourceMutation(
+            ResourceMutation(
+                agentDispatch: agentService,
+                logger: logger,
+                database: persistence.storeContext
+            ))
     }
 }

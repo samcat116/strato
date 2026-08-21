@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 /// The one authorization evaluator: every concrete "may principal P perform
@@ -89,7 +89,10 @@ enum IAMDecisionEngine {
     /// reporting fail closed identically: a who-can that silently degraded to
     /// a weaker model would be exactly the drift this module exists to end.
     static func compiledSet(_ app: Application) async throws -> CedarPolicySetCache.Built {
-        guard let built = await app.cedarPolicySet.current else {
+        guard
+            let cache = app.configuredCedarPolicySet,
+            let built = await cache.current
+        else {
             app.logger.error("IAM check with no compiled Cedar policy set; failing closed")
             throw Abort(.serviceUnavailable, reason: "Authorization system is not ready")
         }
@@ -121,12 +124,18 @@ enum IAMDecisionEngine {
         built: CedarPolicySetCache.Built,
         cache: IAMRequestCache? = nil,
         restriction: CredentialRestriction? = nil,
-        on db: any Database
+        using iam: IAMPersistence
     ) async throws -> Decision {
         let target = IAMCheckTarget(principal: principal, node: node)
         guard
             let decision = try await decide(
-                [target], action: action, built: built, cache: cache, restriction: restriction, on: db)[target]
+                [target],
+                action: action,
+                built: built,
+                cache: cache,
+                restriction: restriction,
+                using: iam
+            )[target]
         else {
             // Unreachable: the batch is total over its inputs.
             throw Abort(.internalServerError, reason: "Authorization decision unavailable")
@@ -157,9 +166,14 @@ enum IAMDecisionEngine {
         built: CedarPolicySetCache.Built,
         cache: IAMRequestCache? = nil,
         restriction: CredentialRestriction? = nil,
-        on db: any Database
+        using iam: IAMPersistence
     ) async throws -> [IAMCheckTarget: Decision] {
-        let slices = try await EntitySliceLoader.load(targets, action: action, cache: cache, on: db)
+        let slices = try await EntitySliceLoader.load(
+            targets,
+            action: action,
+            cache: cache,
+            using: iam
+        )
         var decisions: [IAMCheckTarget: Decision] = [:]
         decisions.reserveCapacity(slices.count)
         for (target, slice) in slices {

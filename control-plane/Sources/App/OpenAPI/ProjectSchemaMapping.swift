@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -9,13 +10,28 @@ import Vapor
 /// deliberately mirror the shapes the hand-written DTOs produced (issue #583) —
 /// UUIDs render as their lowercase string form, absent optionals are omitted.
 extension Components.Schemas.ProjectSummary {
+    init(project: ProjectSnapshot, vmCount: Int?) {
+        self.init(
+            id: project.id.uuidString,
+            name: project.name,
+            description: project.description,
+            organizationId: project.organizationID?.uuidString,
+            organizationalUnitId: project.organizationalUnitID?.uuidString,
+            path: project.path,
+            defaultEnvironment: project.defaultEnvironment,
+            environments: project.environments,
+            createdAt: project.createdAt,
+            vmCount: vmCount
+        )
+    }
+
     init(project: Project, vmCount: Int?) throws {
         self.init(
             id: try project.requireID().uuidString,
             name: project.name,
             description: project.description,
-            organizationId: project.$organization.id?.uuidString,
-            organizationalUnitId: project.$organizationalUnit.id?.uuidString,
+            organizationId: project.organizationID?.uuidString,
+            organizationalUnitId: project.organizationalUnitID?.uuidString,
             path: project.path,
             defaultEnvironment: project.defaultEnvironment,
             environments: project.environments,
@@ -26,6 +42,17 @@ extension Components.Schemas.ProjectSummary {
 }
 
 extension Components.Schemas.ProjectDetail {
+    init(
+        project: ProjectSnapshot,
+        vmCount: Int?,
+        quotas: [ResourceQuotaSnapshot]? = nil
+    ) {
+        self.init(
+            value1: .init(project: project, vmCount: vmCount),
+            value2: .init(quotas: quotas?.map { Components.Schemas.ResourceQuota(quota: $0) })
+        )
+    }
+
     init(project: Project, vmCount: Int?, quotas: [ResourceQuota]? = nil) throws {
         self.init(
             value1: try .init(project: project, vmCount: vmCount),
@@ -35,10 +62,19 @@ extension Components.Schemas.ProjectDetail {
 }
 
 extension Components.Schemas.ResourceQuota {
+    init(quota: ResourceQuotaSnapshot) {
+        let response = ResourceQuotaResponse(from: quota)
+        self.init(response: response)
+    }
+
     init(quota: ResourceQuota) {
         // Reuse the hand-written response DTO's derivation of the quota's scope
         // and utilization so quota JSON stays identical across the API.
         let response = ResourceQuotaResponse(from: quota)
+        self.init(response: response)
+    }
+
+    private init(response: ResourceQuotaResponse) {
         self.init(
             id: response.id?.uuidString,
             name: response.name,
@@ -75,6 +111,19 @@ extension Components.Schemas.ResourceQuota {
 }
 
 extension Components.Schemas.ProjectStats {
+    init(stats: ProjectStatsSnapshot) {
+        self.init(
+            totalVMs: stats.totalVMs,
+            vmsByEnvironment: .init(additionalProperties: stats.vmsByEnvironment),
+            resourceUsage: .init(
+                totalVCPUs: stats.totalVCPUs,
+                totalMemoryGB: Double(stats.totalMemoryBytes) / 1024 / 1024 / 1024,
+                totalStorageGB: Double(stats.totalStorageBytes) / 1024 / 1024 / 1024,
+                totalVMs: stats.totalVMs
+            )
+        )
+    }
+
     init(stats: ProjectStatsResponse) {
         self.init(
             totalVMs: stats.totalVMs,

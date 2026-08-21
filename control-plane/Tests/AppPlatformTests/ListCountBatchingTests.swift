@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -21,7 +20,6 @@ final class ListCountBatchingTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -48,10 +46,10 @@ final class ListCountBatchingTests {
         for (name, value) in parameters {
             req.parameters.set(name, to: value)
         }
-        req.fluent.history.start()
+        req.application.testPostgres.history.start()
         try await work(req)
-        req.fluent.history.stop()
-        return req.fluent.history.queries.count
+        req.application.testPostgres.history.stop()
+        return req.application.testPostgres.history.count
     }
 
     // MARK: - Projects
@@ -59,7 +57,7 @@ final class ListCountBatchingTests {
     @Test("GET /api/projects costs the same however many projects it summarizes")
     func projectSummariesDoNotCountPerProject() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(username: "projuser", email: "proj@example.com")
             let org = try await builder.createOrganization(name: "Project Count Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
@@ -75,7 +73,13 @@ final class ListCountBatchingTests {
             func queriesToList(expecting expected: Int) async throws -> Int {
                 try await measure(on: app, as: user, path: "/api/projects") { req in
                     try await OpenAPIRequestContext.$current.withValue(req) {
-                        let output = try await ProjectsAPIService().listProjects(.init())
+                        let output = try await ProjectsAPIService(
+                            database: app.testPostgres,
+                            projects: app.projectsPersistence,
+                            quotas: app.resourceQuotasPersistence,
+                            iam: app.iamPersistence,
+                            hierarchy: app.hierarchyPersistence
+                        ).listProjects(.init())
                         guard case .ok(let ok) = output, case .json(let summaries) = ok.body else {
                             Issue.record("listProjects did not return 200 JSON")
                             return
@@ -110,7 +114,7 @@ final class ListCountBatchingTests {
     @Test("GET /api/networks costs the same however many networks it lists")
     func networkListDoesNotCountPerNetwork() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(
                 username: "netuser", email: "net@example.com", isSystemAdmin: true)
             let org = try await builder.createOrganization(name: "Network Count Org")
@@ -127,18 +131,25 @@ final class ListCountBatchingTests {
                     subnet: "10.\(index).0.0/24", gateway: "10.\(index).0.1",
                     externalAccess: false)
                 for nic in 0..<nics {
-                    let vm = try await builder.createVM(name: "nic-holder-\(index)-\(nic)", project: project)
+                    var vm = try await builder.createVM(name: "nic-holder-\(index)-\(nic)", project: project)
                     try await VMNetworkInterface(
                         vmID: vm.id!, logicalNetworkID: try network.requireID(),
                         macAddress: VMNetworkInterface.generateMACAddress()
-                    ).save(on: app.db)
+                    ).save(on: app.testPostgres)
                 }
             }
             try await addNetwork(0, nics: 2)
 
             func queriesToList(expecting expected: Int) async throws -> Int {
                 try await measure(on: app, as: user, path: "/api/networks") { req in
-                    let networks = try await NetworkController().visibleNetworks(req: req)
+                    let networks = try await NetworkController(
+                        iam: app.iamPersistence,
+                        projects: app.projectsPersistence,
+                        networks: app.networksPersistence,
+                        sites: app.sitesPersistence,
+                        hierarchy: app.hierarchyPersistence,
+                        database: app.testPostgres
+                    ).visibleNetworks(req: req)
                         .filter { $0.name.hasPrefix("net-") }
                     #expect(networks.count == expected)
                     #expect(networks.first(where: { $0.name == "net-000" })?.attachedInterfaceCount == 2)
@@ -163,7 +174,7 @@ final class ListCountBatchingTests {
     @Test("GET /api/floating-ip-pools costs the same however many pools it lists")
     func poolListDoesNotCountPerPool() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(
                 username: "pooluser", email: "pool@example.com", isSystemAdmin: true)
             let org = try await builder.createOrganization(name: "Pool Count Org")
@@ -173,24 +184,28 @@ final class ListCountBatchingTests {
             let siteID = try await builder.placementSite(for: project).requireID()
 
             func addPool(_ index: Int, allocations: Int = 0) async throws {
-                let pool = FloatingIPPool(
+                let pool = try await builder.createFloatingIPPool(
                     name: "pool-\(String(format: "%03d", index))",
                     cidr: "203.0.\(index).0/24", gateway: "203.0.\(index).1",
                     siteID: siteID,
-                    organizationScope: .organization(org.id!))
-                try await pool.save(on: app.db)
+                    organizationID: org.id!)
                 for allocation in 0..<allocations {
-                    try await FloatingIP(
-                        poolID: pool.id!, address: "203.0.\(index).\(allocation + 2)",
-                        projectID: project.id!
-                    ).save(on: app.db)
+                    try await LegacyFloatingIPStore.insert(
+                        poolID: pool.id, address: "203.0.\(index).\(allocation + 2)",
+                        projectID: project.id!, on: app.testPostgres)
                 }
             }
             try await addPool(0, allocations: 2)
 
             func queriesToList(expecting expected: Int) async throws -> Int {
                 try await measure(on: app, as: user, path: "/api/floating-ip-pools") { req in
-                    let pools = try await FloatingIPController().visiblePools(req: req)
+                    let pools = try await FloatingIPController(
+                        iam: app.iamPersistence,
+                        projects: app.projectsPersistence,
+                        pools: app.floatingIPPoolsPersistence,
+                        sites: app.sitesPersistence,
+                        database: app.testPostgres
+                    ).visiblePools(req: req)
                     #expect(pools.count == expected)
                     #expect(pools.first(where: { $0.name == "pool-000" })?.allocatedCount == 2)
                     #expect(pools.filter { $0.allocatedCount == 0 }.count == expected - 1)
@@ -214,7 +229,7 @@ final class ListCountBatchingTests {
     @Test("Listing an organization's groups costs the same however many there are")
     func groupListDoesNotCountPerGroup() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(username: "groupuser", email: "group@example.com")
             let org = try await builder.createOrganization(name: "Group Count Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
@@ -224,7 +239,8 @@ final class ListCountBatchingTests {
             for index in 0..<2 {
                 let member = try await builder.createUser(
                     username: "member-\(index)", email: "member-\(index)@example.com")
-                try await first.$users.attach(member, on: app.db)
+                try await builder.addUserToOrganization(user: member, organization: org)
+                try await builder.addUserToGroup(user: member, group: first)
             }
 
             func queriesToList(expecting expected: Int) async throws -> Int {
@@ -232,7 +248,7 @@ final class ListCountBatchingTests {
                     on: app, as: user, path: "/api/organizations/\(org.id!)/groups",
                     parameters: ["organizationID": org.id!.uuidString]
                 ) { req in
-                    let groups = try await GroupController().index(req: req)
+                    let groups = try await GroupController(groups: app.groupsPersistence).index(req: req)
                     #expect(groups.count == expected)
                     #expect(groups.first(where: { $0.name == "group-000" })?.memberCount == 2)
                     #expect(groups.filter { $0.memberCount == 0 }.count == expected - 1)
@@ -262,7 +278,7 @@ final class ListCountBatchingTests {
     @Test("Listing an organization's folders costs the same however many there are")
     func folderListDoesNotCountPerFolder() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(username: "foldruser", email: "foldr@example.com")
             let org = try await builder.createOrganization(name: "Folder Count Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
@@ -280,7 +296,9 @@ final class ListCountBatchingTests {
                     on: app, as: user, path: "/api/organizations/\(org.id!)/ous",
                     parameters: ["organizationID": org.id!.uuidString]
                 ) { req in
-                    let folders = try await OrganizationalUnitController().index(req: req)
+                    let folders = try await OrganizationalUnitController(
+                        hierarchy: app.hierarchyPersistence
+                    ).index(req: req)
                     #expect(folders.count == expected)
                     let populated = folders.first { $0.name == "folder-000" }
                     #expect(populated?.childOuCount == 1)
@@ -310,7 +328,7 @@ final class ListCountBatchingTests {
     @Test("The folder tree costs the same however deep and wide the subtree is")
     func folderTreeDoesNotQueryPerFolder() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(username: "treeuser", email: "tree@example.com")
             let org = try await builder.createOrganization(name: "Folder Tree Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
@@ -336,7 +354,9 @@ final class ListCountBatchingTests {
                         "ouID": root.id!.uuidString,
                     ]
                 ) { req in
-                    let tree = try await OrganizationalUnitController().getTree(req: req)
+                    let tree = try await OrganizationalUnitController(
+                        hierarchy: app.hierarchyPersistence
+                    ).getTree(req: req)
                     #expect(tree.projectCount == 1)
                     #expect(Self.folderCount(in: tree) == expected)
                 }
@@ -364,7 +384,7 @@ final class ListCountBatchingTests {
     @Test("Listing the caller's organizations costs the same however many they belong to")
     func organizationListDoesNotLookUpPerOrganization() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(username: "orguser", email: "org@example.com")
 
             let admin = try await builder.createOrganization(name: "org-000")
@@ -372,7 +392,11 @@ final class ListCountBatchingTests {
 
             func queriesToList(expecting expected: Int) async throws -> Int {
                 try await measure(on: app, as: user, path: "/api/organizations") { req in
-                    let organizations = try await OrganizationController().index(req: req)
+                    let organizations = try await OrganizationController(
+                        hierarchy: app.hierarchyPersistence,
+                        iam: app.iamPersistence,
+                        database: app.testPostgres
+                    ).index(req: req)
                     #expect(organizations.count == expected)
                     #expect(
                         organizations.first { $0.name == "org-000" }?.userRole

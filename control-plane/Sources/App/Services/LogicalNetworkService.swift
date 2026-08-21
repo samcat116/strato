@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -26,21 +25,24 @@ enum LogicalNetworkService {
     /// that an id or a name exists elsewhere would disclose another tenant's
     /// networks.
     static func resolveForWorkloadCreate(
-        requestedID: UUID?, requestedName: String?, projectID: UUID, on db: Database
+        requestedID: UUID?, requestedName: String?, projectID: UUID, on db: PostgresStoreContext
     ) async throws -> LogicalNetwork {
         if requestedID != nil && requestedName != nil {
             throw Abort(.badRequest, reason: "Specify either 'networkId' or 'networkName', not both")
         }
 
-        let query = LogicalNetwork.query(on: db).filter(\.$project.$id == projectID)
         if let requestedID {
-            guard let network = try await query.filter(\.$id == requestedID).first() else {
+            guard let network = try await LegacyLogicalNetworkStore.networks(
+                ids: [requestedID], projectID: projectID, on: db
+            ).first else {
                 throw Abort(.notFound, reason: "Network \(requestedID) not found in this project")
             }
             return network
         }
         if let requestedName {
-            guard let network = try await query.filter(\.$name == requestedName).first() else {
+            guard let network = try await LegacyLogicalNetworkStore.networks(
+                projectID: projectID, name: requestedName, on: db
+            ).first else {
                 throw Abort(.notFound, reason: "No network named '\(requestedName)' in this project")
             }
             return network

@@ -1,6 +1,6 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
-import Fluent
 
 /// Case-insensitive search across OUs, projects, and VMs in the hierarchy.
 /// Extracted from `HierarchyController`; handlers keep authentication and response
@@ -47,23 +47,21 @@ struct HierarchySearchService {
 
     /// Searches OUs, projects, and VMs within a single organization.
     /// - Parameter entityType: optional filter — `"ou"`, `"project"`, or `"vm"`.
-    static func search(organizationID: UUID, query: String, entityType: String?, on db: Database) async throws
+    static func search(organizationID: UUID, query: String, entityType: String?, on db: PostgresStoreContext) async throws
         -> [HierarchySearchResult]
     {
         var results: [HierarchySearchResult] = []
+        let folderIDs = try await LegacyOrganizationalUnitStore.organizationalUnits(
+            organizationIDs: [organizationID], on: db
+        ).compactMap(\.id)
+        let scopedProjectIDs = try await LegacyProjectStore.projects(
+            organizationIDs: [organizationID], organizationalUnitIDs: folderIDs, on: db
+        ).compactMap(\.id)
 
         // Search OUs if not filtered to specific type
         if entityType == nil || entityType == "ou" {
-            let ous = try await OrganizationalUnit.query(on: db)
-                .filter(\.$organization.$id == organizationID)
-                .group(.or) { or in
-                    or.filter(.caseInsensitiveContains(schema: OrganizationalUnit.schema, column: "name", value: query))
-                    or.filter(
-                        .caseInsensitiveContains(schema: OrganizationalUnit.schema, column: "description", value: query)
-                    )
-                }
-                .limit(10)
-                .all()
+            let ous = try await LegacyOrganizationalUnitStore.search(
+                organizationIDs: [organizationID], query: query, on: db)
 
             for ou in ous {
                 results.append(
@@ -73,38 +71,21 @@ struct HierarchySearchService {
                         type: "organizational_unit",
                         path: ou.path,
                         description: ou.description,
-                        parentId: ou.$parentOU.id,
-                        parentType: ou.$parentOU.id != nil ? "organizational_unit" : "organization"
+                        parentId: ou.parentOUID,
+                        parentType: ou.parentOUID != nil ? "organizational_unit" : "organization"
                     ))
             }
         }
 
         // Search Projects
         if entityType == nil || entityType == "project" {
-            // The join belongs on the query, not inside the `or` group: a join
-            // added within the group closure is dropped from the emitted SQL
-            // while its filter survives, and the statement then names a table
-            // it never joined. It is a left join because a project at the
-            // organization's root has no folder.
-            let projects = try await Project.query(on: db)
-                .join(
-                    OrganizationalUnit.self,
-                    on: \Project.$organizationalUnit.$id == \OrganizationalUnit.$id, method: .left
-                )
-                .group(.or) { or in
-                    or.filter(\.$organization.$id == organizationID)
-                    or.filter(OrganizationalUnit.self, \.$organization.$id == organizationID)
-                }
-                .group(.or) { or in
-                    or.filter(.caseInsensitiveContains(schema: Project.schema, column: "name", value: query))
-                    or.filter(.caseInsensitiveContains(schema: Project.schema, column: "description", value: query))
-                }
-                .limit(10)
-                .all()
+            let projects = try await LegacyProjectStore.search(
+                organizationIDs: [organizationID], organizationalUnitIDs: folderIDs,
+                query: query, on: db)
 
             for project in projects {
-                let parentId = project.$organization.id ?? project.$organizationalUnit.id
-                let parentType = project.$organization.id != nil ? "organization" : "organizational_unit"
+                let parentId = project.organizationID ?? project.organizationalUnitID
+                let parentType = project.organizationID != nil ? "organization" : "organizational_unit"
 
                 results.append(
                     HierarchySearchResult(
@@ -121,22 +102,13 @@ struct HierarchySearchService {
 
         // Search VMs
         if entityType == nil || entityType == "vm" {
-            let vms = try await VM.query(on: db)
-                .join(Project.self, on: \VM.$project.$id == \Project.$id)
-                .join(
-                    OrganizationalUnit.self,
-                    on: \Project.$organizationalUnit.$id == \OrganizationalUnit.$id, method: .left
-                )
-                .group(.or) { or in
-                    or.filter(Project.self, \.$organization.$id == organizationID)
-                    or.filter(OrganizationalUnit.self, \.$organization.$id == organizationID)
+            let needle = query.lowercased()
+            let vms = try await LegacyVMStore.vms(projectIDs: scopedProjectIDs, on: db)
+                .filter {
+                    $0.name.lowercased().contains(needle)
+                        || $0.description.lowercased().contains(needle)
                 }
-                .group(.or) { or in
-                    or.filter(.caseInsensitiveContains(schema: VM.schema, column: "name", value: query))
-                    or.filter(.caseInsensitiveContains(schema: VM.schema, column: "description", value: query))
-                }
-                .limit(10)
-                .all()
+                .prefix(10)
 
             for vm in vms {
                 results.append(
@@ -146,7 +118,7 @@ struct HierarchySearchService {
                         type: "vm",
                         path: "",  // VMs don't have paths, but we could build one
                         description: vm.description,
-                        parentId: vm.$project.id,
+                        parentId: vm.projectID,
                         parentType: "project"
                     ))
             }
@@ -156,23 +128,18 @@ struct HierarchySearchService {
     }
 
     /// Searches OUs and projects across all organizations the user belongs to.
-    static func globalSearch(organizationIDs: [UUID], query: String, entityType: String?, on db: Database) async throws
+    static func globalSearch(organizationIDs: [UUID], query: String, entityType: String?, on db: PostgresStoreContext) async throws
         -> [HierarchySearchResult]
     {
         var results: [HierarchySearchResult] = []
+        let folderIDs = try await LegacyOrganizationalUnitStore.organizationalUnits(
+            organizationIDs: organizationIDs, on: db
+        ).compactMap(\.id)
 
         // Search OUs if not filtered to specific type
         if entityType == nil || entityType == "ou" {
-            let ous = try await OrganizationalUnit.query(on: db)
-                .filter(\.$organization.$id ~~ organizationIDs)
-                .group(.or) { or in
-                    or.filter(.caseInsensitiveContains(schema: OrganizationalUnit.schema, column: "name", value: query))
-                    or.filter(
-                        .caseInsensitiveContains(schema: OrganizationalUnit.schema, column: "description", value: query)
-                    )
-                }
-                .limit(10)
-                .all()
+            let ous = try await LegacyOrganizationalUnitStore.search(
+                organizationIDs: organizationIDs, query: query, on: db)
 
             for ou in ous {
                 results.append(
@@ -182,8 +149,8 @@ struct HierarchySearchService {
                         type: "organizational_unit",
                         path: ou.path,
                         description: ou.description,
-                        parentId: ou.$parentOU.id,
-                        parentType: ou.$parentOU.id != nil ? "organizational_unit" : "organization"
+                        parentId: ou.parentOUID,
+                        parentType: ou.parentOUID != nil ? "organizational_unit" : "organization"
                     ))
             }
         }
@@ -191,31 +158,18 @@ struct HierarchySearchService {
         // Search Projects
         if entityType == nil || entityType == "project" {
             // Get projects directly in organizations
-            let directProjects = try await Project.query(on: db)
-                .filter(\.$organization.$id ~~ organizationIDs)
-                .group(.or) { or in
-                    or.filter(.caseInsensitiveContains(schema: Project.schema, column: "name", value: query))
-                    or.filter(.caseInsensitiveContains(schema: Project.schema, column: "description", value: query))
-                }
-                .limit(10)
-                .all()
+            let directProjects = try await LegacyProjectStore.search(
+                organizationIDs: organizationIDs, query: query, on: db)
 
             // Get projects in OUs within user organizations
-            let ouProjects = try await Project.query(on: db)
-                .join(OrganizationalUnit.self, on: \Project.$organizationalUnit.$id == \OrganizationalUnit.$id)
-                .filter(OrganizationalUnit.self, \.$organization.$id ~~ organizationIDs)
-                .group(.or) { or in
-                    or.filter(.caseInsensitiveContains(schema: Project.schema, column: "name", value: query))
-                    or.filter(.caseInsensitiveContains(schema: Project.schema, column: "description", value: query))
-                }
-                .limit(10)
-                .all()
+            let ouProjects = try await LegacyProjectStore.search(
+                organizationalUnitIDs: folderIDs, query: query, on: db)
 
             for project in directProjects + ouProjects {
                 let (parentId, parentType): (UUID?, String) = {
-                    if let ouId = project.$organizationalUnit.id {
+                    if let ouId = project.organizationalUnitID {
                         return (ouId, "organizational_unit")
-                    } else if let orgId = project.$organization.id {
+                    } else if let orgId = project.organizationID {
                         return (orgId, "organization")
                     } else {
                         return (nil, "unknown")

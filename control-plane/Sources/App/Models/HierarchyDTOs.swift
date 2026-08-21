@@ -173,7 +173,7 @@ struct VMResponse: Content {
         self.cpu = vm.cpu
         self.memory = vm.memory
         self.disk = vm.disk
-        self.projectId = vm.$project.id
+        self.projectId = vm.projectID
     }
 }
 

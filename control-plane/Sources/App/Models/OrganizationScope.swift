@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 /// The org-or-OU owner shared by organization-scoped infrastructure resources
@@ -33,12 +33,21 @@ enum OrganizationScope: Equatable, Sendable {
 
     /// The root organization: the org itself, or the OU's owning organization.
     /// Nil only for a dangling OU reference.
-    func rootOrganizationID(on db: Database) async throws -> UUID? {
+    func rootOrganizationID(on db: PostgresStoreContext) async throws -> UUID? {
         switch self {
         case .organization(let id):
             return id
         case .organizationalUnit(let id):
-            return try await OrganizationalUnit.find(id, on: db)?.$organization.id
+            return try await OrganizationalUnit.find(id, on: db)?.organizationID
+        }
+    }
+
+    func rootOrganizationID(using hierarchy: HierarchyPersistence) async throws -> UUID? {
+        switch self {
+        case .organization(let id):
+            return id
+        case .organizationalUnit(let id):
+            return try await hierarchy.organizationalUnit(id: id)?.organizationalUnit.organizationID
         }
     }
 
@@ -71,7 +80,7 @@ enum OrganizationScope: Equatable, Sendable {
     /// scope rooted in it; an OU contains itself and its descendant OUs (an
     /// OU never contains org-level scopes — capacity delegated to an OU must
     /// not absorb org-wide resources without an explicit rescope).
-    func contains(_ other: OrganizationScope, on db: Database) async throws -> Bool {
+    func contains(_ other: OrganizationScope, on db: PostgresStoreContext) async throws -> Bool {
         switch self {
         case .organization(let orgID):
             return try await other.rootOrganizationID(on: db) == orgID
@@ -81,16 +90,31 @@ enum OrganizationScope: Equatable, Sendable {
             var current: UUID? = otherOUID
             while let currentID = current {
                 if currentID == ouID { return true }
-                current = try await OrganizationalUnit.find(currentID, on: db)?.$parentOU.id
+                current = try await OrganizationalUnit.find(currentID, on: db)?.parentOUID
             }
             return false
+        }
+    }
+
+    func contains(
+        _ other: OrganizationScope,
+        using hierarchy: HierarchyPersistence
+    ) async throws -> Bool {
+        switch self {
+        case .organization(let organizationID):
+            return try await other.rootOrganizationID(using: hierarchy) == organizationID
+        case .organizationalUnit(let organizationalUnitID):
+            guard case .organizationalUnit(let otherID) = other else { return false }
+            let ancestors = try await hierarchy.organizationalUnitAncestors(id: otherID)
+            return otherID == organizationalUnitID
+                || ancestors.contains { $0.id == organizationalUnitID }
         }
     }
 
     /// Resolves and validates the referenced parent, failing the request with
     /// a client error when it doesn't exist (a typo'd id must not silently
     /// mint an unowned resource).
-    func validateExists(on db: Database) async throws {
+    func validateExists(on db: PostgresStoreContext) async throws {
         switch self {
         case .organization(let id):
             guard try await Organization.find(id, on: db) != nil else {
@@ -98,6 +122,19 @@ enum OrganizationScope: Equatable, Sendable {
             }
         case .organizationalUnit(let id):
             guard try await OrganizationalUnit.find(id, on: db) != nil else {
+                throw Abort(.badRequest, reason: "Folder \(id) does not exist")
+            }
+        }
+    }
+
+    func validateExists(using hierarchy: HierarchyPersistence) async throws {
+        switch self {
+        case .organization(let id):
+            guard try await hierarchy.organization(id: id) != nil else {
+                throw Abort(.badRequest, reason: "Organization \(id) does not exist")
+            }
+        case .organizationalUnit(let id):
+            guard try await hierarchy.organizationalUnit(id: id) != nil else {
                 throw Abort(.badRequest, reason: "Folder \(id) does not exist")
             }
         }

@@ -1,7 +1,5 @@
 import Testing
 import Vapor
-import Fluent
-import SQLKit
 import VaporTesting
 import StratoShared
 import AppTestSupport
@@ -26,9 +24,8 @@ final class VolumeConvergenceTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "convuser",
                 email: "conv@example.com",
@@ -61,9 +58,9 @@ final class VolumeConvergenceTests {
             ),
             protocolVersion: protocolVersion
         )
-        let project = try #require(try await Project.query(on: app.db).sort(\.$createdAt).first())
-        let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let project = try #require(try await Project.all(on: app.testPostgres).first)
+        let siteID = try await TestDataBuilder(db: app.testPostgres).placementSite(for: project).requireID()
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let uuid = try await app.agentService.registerAgent(
             message, agentName: name, siteID: siteID,
             organizationScope: orgID.map { .organization($0) })
@@ -90,18 +87,18 @@ final class VolumeConvergenceTests {
             projectID: project.id!, environment: "development",
             size: size,
             status: status,
+            desiredStatus: desired,
+            generation: generation,
+            observedGeneration: observedGeneration,
             createdByID: user.id!
         )
-        volume.desiredStatus = desired
-        volume.generation = generation
-        volume.observedGeneration = observedGeneration
-        try await volume.save(on: app.db)
+        try await volume.save(on: app.testPostgres)
         try await placeVolume(
             volume,
             on: agentId,
             at: storagePath,
             state: storagePath == nil ? .provisioning : .healthy,
-            using: app.db
+            using: app.testPostgres
         )
         return volume
     }
@@ -147,29 +144,24 @@ final class VolumeConvergenceTests {
     func attachmentIsProjectedFromTheVMLink() async throws {
         try await withVolumeApp { app, builder, user, project in
             let agentId = try await registerAgent(app: app, named: "attach-agent")
-            let vm = try await builder.createVM(name: "attach-vm", project: project)
+            var vm = try await builder.createVM(name: "attach-vm", project: project)
             vm.hypervisorId = agentId
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let boot = try await makeVolume(
-                on: app, user: user, project: project, agentId: agentId, name: "attach-boot")
-            boot.$vm.id = vm.id
-            boot.volumeType = .boot
-            boot.deviceName = "disk0"
-            boot.bootOrder = 0
-            try await boot.save(on: app.db)
+                on: app, user: user, project: project, agentId: agentId, name: "attach-boot"
+            ).replacing(volumeType: .boot, vmID: vm.id, deviceName: "disk0", bootOrder: 0)
+            try await boot.save(on: app.testPostgres)
 
             let volume = try await makeVolume(
-                on: app, user: user, project: project, agentId: agentId)
-            volume.$vm.id = vm.id
-            volume.deviceName = "disk1"
-            volume.readonly = true
-            volume.bootOrder = 2
+                on: app, user: user, project: project, agentId: agentId
+            ).replacing(
+                status: .available, vmID: vm.id, deviceName: "disk1", bootOrder: 2,
+                readonly: true)
             // Deliberately *not* `.attached`: the projection must read the
             // desired attachment, or the two projections of one fact (this and
             // `VMSpec.volumes`) can disagree.
-            volume.status = .available
-            try await volume.save(on: app.db)
+            try await volume.save(on: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let attachment = try #require(
@@ -186,25 +178,21 @@ final class VolumeConvergenceTests {
         try await withVolumeApp { app, builder, user, project in
             let vmAgentID = try await registerAgent(app: app, named: "attachment-vm-host")
             let storageOnlyAgentID = try await registerAgent(app: app, named: "attachment-storage-only")
-            let vm = try await builder.createVM(name: "attachment-target", project: project)
+            var vm = try await builder.createVM(name: "attachment-target", project: project)
             vm.hypervisorId = vmAgentID
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let boot = try await makeVolume(
                 on: app, user: user, project: project, agentId: vmAgentID,
-                name: "attachment-target-boot")
-            boot.$vm.id = vm.id
-            boot.volumeType = .boot
-            boot.deviceName = "disk0"
-            boot.bootOrder = 0
-            try await boot.save(on: app.db)
+                name: "attachment-target-boot"
+            ).replacing(volumeType: .boot, vmID: vm.id, deviceName: "disk0", bootOrder: 0)
+            try await boot.save(on: app.testPostgres)
 
-            let volume = try await makeVolume(
+            let initialVolume = try await makeVolume(
                 on: app, user: user, project: project, agentId: vmAgentID)
-            try await placeVolume(volume, on: storageOnlyAgentID, using: app.db)
-            volume.$vm.id = vm.id
-            volume.deviceName = "disk1"
-            try await volume.save(on: app.db)
+            let volume = initialVolume.replacing(vmID: vm.id, deviceName: "disk1")
+            try await placeVolume(volume, on: storageOnlyAgentID, using: app.testPostgres)
+            try await volume.save(on: app.testPostgres)
 
             let vmHostMessage = try await app.desiredStateAssembler.assemble(agentId: vmAgentID)
             let vmHostEntry = try #require(vmHostMessage.volumes.first { $0.volumeId == volume.id })
@@ -224,21 +212,21 @@ final class VolumeConvergenceTests {
             let agentId = try await registerAgent(app: app, named: "clone-agent")
             let source = try await makeVolume(
                 on: app, user: user, project: project, agentId: agentId, name: "clone-source",
-                status: .attached)
+                status: .attached
+            ).replacing(vmID: nil, deviceName: "disk1")
             let sourceVM = try await builder.createVM(name: "clone-source-vm", project: project)
-            source.$vm.id = sourceVM.id
-            source.deviceName = "disk1"
-            try await source.save(on: app.db)
+            let attachedSource = source.replacing(vmID: sourceVM.id)
+            try await attachedSource.save(on: app.testPostgres)
             let clone = try await makeVolume(
                 on: app, user: user, project: project, agentId: agentId, name: "clone-target",
-                status: .creating, observedGeneration: 0)
-            clone.$sourceVolume.id = source.id
-            try await clone.save(on: app.db)
+                status: .creating, observedGeneration: 0
+            ).replacing(sourceVolumeID: source.id)
+            try await clone.save(on: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let entry = try #require(message.volumes.first { $0.volumeId == clone.id })
             #expect(entry.source?.kind == DesiredVolumeSource.clone)
-            #expect(entry.source?.sourceVolumeId == source.id)
+            #expect(entry.source?.sourceVolumeId == attachedSource.id)
             #expect(entry.source?.sourceVMId == sourceVM.id)
         }
     }
@@ -264,13 +252,15 @@ final class VolumeConvergenceTests {
                             observedGeneration: 1)
                     ]))
 
-            let settled = try await #require(try await Volume.find(volumeID, on: app.db))
+            let settled = try await #require(try await Volume.find(volumeID, on: app.testPostgres))
             #expect(settled.status == .available)
             #expect(settled.observedGeneration == 1)
             #expect(settled.conditions.converged)
 
-            let replica = try await VolumeReplica.query(on: app.db)
-                .filter(\.$volume.$id == volumeID).first()
+            let replica = try await LegacyVolumeReplicaStore.replicas(
+                volumeIDs: [volumeID],
+                on: app.testPostgres
+            ).first
             #expect(
                 replica?.diskAttachment
                     == .file(path: "/agent/chosen/path.qcow2", format: .qcow2))
@@ -283,19 +273,17 @@ final class VolumeConvergenceTests {
     func typedAttachmentRoundTripsThroughControlPlane() async throws {
         try await withVolumeApp { app, builder, user, project in
             let agentId = try await registerAgent(app: app, named: "typed-attachment-agent")
-            let vm = try await builder.createVM(name: "typed-attachment-vm", project: project)
+            var vm = try await builder.createVM(name: "typed-attachment-vm", project: project)
             vm.hypervisorId = agentId
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let volume = try await makeVolume(
                 on: app, user: user, project: project, agentId: agentId,
                 name: "typed-attachment-root", status: .creating, observedGeneration: 0,
-                storagePath: nil)
-            volume.$vm.id = try vm.requireID()
-            volume.volumeType = .boot
-            volume.deviceName = "disk0"
-            volume.bootOrder = 0
-            try await volume.save(on: app.db)
+                storagePath: nil
+            ).replacing(
+                volumeType: .boot, vmID: try vm.requireID(), deviceName: "disk0", bootOrder: 0)
+            try await volume.save(on: app.testPostgres)
             let volumeID = try volume.requireID()
             let attachment = DiskAttachment.rbd(
                 pool: "volumes", image: volumeID.uuidString, user: "client.project",
@@ -311,38 +299,15 @@ final class VolumeConvergenceTests {
                     ]))
 
             let replica = try #require(
-                try await VolumeReplica.query(on: app.db)
-                    .filter(\.$volume.$id == volumeID).first())
+                try await LegacyVolumeReplicaStore.replicas(
+                    volumeIDs: [volumeID],
+                    on: app.testPostgres
+                ).first)
             #expect(replica.diskAttachment == attachment)
 
             let desired = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let vmEntry = try #require(desired.vms.first { $0.vmId == vm.id })
             #expect(vmEntry.spec.volumes.first?.attachment == attachment)
-        }
-    }
-
-    @Test("The replica migration preserves a legacy file path and infers its format")
-    func legacyDatasetPathMigration() async throws {
-        try await withVolumeApp { app, _, user, project in
-            let agentId = try await registerAgent(app: app, named: "legacy-attachment-agent")
-            let volume = try await makeVolume(
-                on: app, user: user, project: project, agentId: agentId,
-                storagePath: "/var/lib/strato/volumes/legacy/volume.raw")
-            let volumeID = try volume.requireID()
-            let migration = ReplaceVolumeReplicaDatasetPath()
-
-            // Reconstruct the preserved pre-STR-154 schema, then exercise the
-            // forward migration rather than merely testing the new model.
-            try await migration.revert(on: app.db)
-            try await migration.prepare(on: app.db)
-
-            let replica = try #require(
-                try await VolumeReplica.query(on: app.db)
-                    .filter(\.$volume.$id == volumeID).first())
-            #expect(
-                replica.diskAttachment
-                    == .file(
-                        path: "/var/lib/strato/volumes/legacy/volume.raw", format: .raw))
         }
     }
 
@@ -354,7 +319,7 @@ final class VolumeConvergenceTests {
             let volume = try await makeVolume(
                 on: app, user: user, project: project, agentId: firstAgentID,
                 generation: 2, observedGeneration: 1)
-            try await placeVolume(volume, on: secondAgentID, using: app.db)
+            try await placeVolume(volume, on: secondAgentID, using: app.testPostgres)
             let volumeID = try volume.requireID()
 
             _ = try await app.observedStateApplier.apply(
@@ -367,7 +332,7 @@ final class VolumeConvergenceTests {
                             observedGeneration: 2)
                     ]))
 
-            var stored = try #require(try await Volume.find(volumeID, on: app.db))
+            var stored = try #require(try await Volume.find(volumeID, on: app.testPostgres))
             #expect(stored.observedGeneration == 1)
             #expect(!stored.conditions.converged)
             #expect(stored.convergencePhase == "waiting for replicas")
@@ -383,7 +348,7 @@ final class VolumeConvergenceTests {
                             failedGeneration: 2)
                     ]))
 
-            stored = try #require(try await Volume.find(volumeID, on: app.db))
+            stored = try #require(try await Volume.find(volumeID, on: app.testPostgres))
             #expect(stored.observedGeneration == 1)
             #expect(stored.conditions.degraded?.reason == "replica write failed")
 
@@ -398,7 +363,7 @@ final class VolumeConvergenceTests {
                             attachment: .file(path: "/replica-a", format: .qcow2),
                             observedGeneration: 2)
                     ]))
-            stored = try #require(try await Volume.find(volumeID, on: app.db))
+            stored = try #require(try await Volume.find(volumeID, on: app.testPostgres))
             #expect(stored.conditions.degraded?.reason == "replica write failed")
             #expect(!stored.conditions.converged)
 
@@ -411,7 +376,7 @@ final class VolumeConvergenceTests {
                             attachment: .file(path: "/replica-b", format: .qcow2),
                             observedGeneration: 2)
                     ]))
-            stored = try #require(try await Volume.find(volumeID, on: app.db))
+            stored = try #require(try await Volume.find(volumeID, on: app.testPostgres))
             #expect(stored.observedGeneration == 2)
             #expect(stored.conditions.converged)
             #expect(stored.conditions.degraded == nil)
@@ -425,10 +390,9 @@ final class VolumeConvergenceTests {
             let vm = try await builder.createVM(name: "observed-vm", project: project)
             let volume = try await makeVolume(
                 on: app, user: user, project: project, agentId: agentId,
-                status: .available, generation: 2, observedGeneration: 1)
-            volume.$vm.id = vm.id
-            volume.deviceName = "disk1"
-            try await volume.save(on: app.db)
+                status: .available, generation: 2, observedGeneration: 1
+            ).replacing(vmID: vm.id, deviceName: "disk1")
+            try await volume.save(on: app.testPostgres)
             let volumeID = try #require(volume.id)
 
             _ = try await app.observedStateApplier.apply(
@@ -441,7 +405,7 @@ final class VolumeConvergenceTests {
                             attachedVMId: vm.id, observedGeneration: 2)
                     ]))
 
-            let settled = try await #require(try await Volume.find(volumeID, on: app.db))
+            let settled = try await #require(try await Volume.find(volumeID, on: app.testPostgres))
             #expect(settled.status == .attached)
             #expect(settled.attachedAgentId == agentId)
             #expect(settled.conditions.converged)
@@ -466,7 +430,7 @@ final class VolumeConvergenceTests {
                             lastError: "no space left on device", failedGeneration: 3)
                     ]))
 
-            let degraded = try await #require(try await Volume.find(volumeID, on: app.db))
+            let degraded = try await #require(try await Volume.find(volumeID, on: app.testPostgres))
             #expect(degraded.status == .error)
             #expect(degraded.conditions.degraded?.reason == "no space left on device")
             #expect(degraded.conditions.degraded?.sinceGeneration == 3)
@@ -479,28 +443,28 @@ final class VolumeConvergenceTests {
             let agentId = try await registerAgent(app: app, named: "stale-volume-agent")
             let volume = try await makeVolume(
                 on: app, user: user, project: project, agentId: agentId,
-                status: .creating, generation: 10, observedGeneration: 9, storagePath: nil)
-            volume.convergenceDeadline = Date().addingTimeInterval(120)
-            try await volume.save(on: app.db)
+                status: .creating, generation: 10, observedGeneration: 9, storagePath: nil
+            ).replacing(convergenceDeadline: Date().addingTimeInterval(120))
+            try await volume.save(on: app.testPostgres)
             let volumeID = try #require(volume.id)
-            let stale = try #require(try await Volume.find(volumeID, on: app.db))
-            let deleteCopy = try #require(try await Volume.find(volumeID, on: app.db))
+            let stale = try #require(try await Volume.find(volumeID, on: app.testPostgres))
+            let deleteCopy = try #require(try await Volume.find(volumeID, on: app.testPostgres))
 
-            let accepted = try await app.resourceMutation.accept(
+            let result = try await app.resourceMutation.acceptValue(
                 .delete, on: deleteCopy, actor: .user(try user.requireID()),
-                dispatch: .directResolution { _ in false }, on: app.db, app: app
-            ) { db in
-                try await ResourceFinalizerService.stampForDeletion(deleteCopy, on: db)
-                deleteCopy.setDesiredStatus(.absent)
+                dispatch: .directResolution { _ in false }, on: app.testPostgres, app: app
+            ) { current, db in
+                let stamped = try await ResourceFinalizerService.stampForDeletion(current, on: db)
+                return stamped.replacingDesiredStatus(.absent)
             }
-            #expect(accepted.targetGeneration == 11)
+            #expect(result.accepted.targetGeneration == 11)
 
-            let outcome = try await ResourceConvergence.recordFailure(
+            let failure = try await ResourceConvergence.recordValueFailure(
                 stale, mutation: .resize, reason: "obsolete resize failure",
-                telemetryReason: "convergence_failed", on: app.db)
-            #expect(outcome == .superseded(actualGeneration: 11))
+                telemetryReason: "convergence_failed", on: app.testPostgres)
+            #expect(failure.outcome == .superseded(actualGeneration: 11))
 
-            let stored = try #require(try await Volume.find(volumeID, on: app.db))
+            let stored = try #require(try await Volume.find(volumeID, on: app.testPostgres))
             #expect(stored.generation == 11)
             #expect(stored.desiredStatus == .absent)
             #expect(stored.convergenceDeadline != nil)
@@ -536,7 +500,7 @@ final class VolumeConvergenceTests {
                             lastError: "no space left on device", failedGeneration: 3)
                     ]))
 
-            let degraded = try await #require(try await Volume.find(volumeID, on: app.db))
+            let degraded = try await #require(try await Volume.find(volumeID, on: app.testPostgres))
             #expect(!degraded.conditions.converged)
             #expect(degraded.conditions.degraded?.sinceGeneration == 3)
 
@@ -562,10 +526,9 @@ final class VolumeConvergenceTests {
             let vm = try await builder.createVM(name: "slot-vm", project: project)
             let volume = try await makeVolume(
                 on: app, user: user, project: project, agentId: agentId,
-                status: .available, generation: 2, observedGeneration: 1)
-            volume.$vm.id = vm.id
-            volume.deviceName = "disk1"
-            try await volume.save(on: app.db)
+                status: .available, generation: 2, observedGeneration: 1
+            ).replacing(vmID: vm.id, deviceName: "disk1")
+            try await volume.save(on: app.testPostgres)
             let volumeID = try #require(volume.id)
 
             _ = try await app.observedStateApplier.apply(
@@ -578,7 +541,7 @@ final class VolumeConvergenceTests {
                             attachedVMId: vm.id, observedGeneration: 2)
                     ]))
 
-            let after = try await #require(try await Volume.find(volumeID, on: app.db))
+            let after = try await #require(try await Volume.find(volumeID, on: app.testPostgres))
             #expect(after.deviceName == "disk1")
             #expect(after.generation == 2)
         }
@@ -591,18 +554,18 @@ final class VolumeConvergenceTests {
             let agentId = try await registerAgent(app: app, named: "reap-agent")
             let volume = try await makeVolume(
                 on: app, user: user, project: project, agentId: agentId,
-                desired: .absent, generation: 2, observedGeneration: 1)
-            volume.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
-            try await volume.save(on: app.db)
+                desired: .absent, generation: 2, observedGeneration: 1
+            ).replacing(finalizers: [ResourceFinalizer.agentAbsent.rawValue])
+            try await volume.save(on: app.testPostgres)
             let volumeID = try #require(volume.id)
 
             _ = try await app.observedStateApplier.apply(report(agentId: agentId, volumes: []))
 
-            #expect(try await Volume.find(volumeID, on: app.db) == nil)
+            #expect(try await Volume.find(volumeID, on: app.testPostgres) == nil)
             // The reap appends the terminal event a client polling the façade
             // with its `mutationId` is waiting for.
             let terminal = try await ResourceEvent.latest(
-                .completed, resourceKind: .volume, resourceID: volumeID, on: app.db)
+                .completed, resourceKind: .volume, resourceID: volumeID, on: app.testPostgres)
             #expect(terminal != nil)
         }
     }
@@ -614,12 +577,12 @@ final class VolumeConvergenceTests {
             let secondAgentID = try await registerAgent(app: app, named: "reap-replica-b")
             let volume = try await makeVolume(
                 on: app, user: user, project: project, agentId: firstAgentID,
-                desired: .absent, generation: 2, observedGeneration: 1)
+                desired: .absent, generation: 2, observedGeneration: 1
+            ).replacing(finalizers: [ResourceFinalizer.agentAbsent.rawValue])
             try await placeVolume(
                 volume, on: secondAgentID, at: "/volumes/replica-b.qcow2", state: .faulted,
-                using: app.db)
-            volume.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
-            try await volume.save(on: app.db)
+                using: app.testPostgres)
+            try await volume.save(on: app.testPostgres)
             let volumeID = try volume.requireID()
 
             let secondDesiredState = try await app.desiredStateAssembler.assemble(
@@ -629,20 +592,20 @@ final class VolumeConvergenceTests {
                     $0.volumeId == volumeID && $0.desiredStatus == .absent
                 })
             #expect(
-                Set(try await volume.placementAgentIDs(on: app.db))
+                Set(try await volume.placementAgentIDs(on: app.testPostgres))
                     == Set([firstAgentID, secondAgentID]))
 
             _ = try await app.observedStateApplier.apply(
                 report(agentId: firstAgentID, volumes: []))
-            #expect(try await Volume.find(volumeID, on: app.db) != nil)
-            #expect(try await VolumeService.agentIDs(holding: volume, on: app.db).isEmpty)
+            #expect(try await Volume.find(volumeID, on: app.testPostgres) != nil)
+            #expect(try await VolumeService.agentIDs(holding: volume, on: app.testPostgres).isEmpty)
             #expect(
-                try await VolumeService.agentIDsWithPhysicalReplicas(of: volume, on: app.db)
+                try await VolumeService.agentIDsWithPhysicalReplicas(of: volume, on: app.testPostgres)
                     == [secondAgentID])
 
             _ = try await app.observedStateApplier.apply(
                 report(agentId: secondAgentID, volumes: []))
-            #expect(try await Volume.find(volumeID, on: app.db) == nil)
+            #expect(try await Volume.find(volumeID, on: app.testPostgres) == nil)
         }
     }
 
@@ -658,15 +621,15 @@ final class VolumeConvergenceTests {
                 on: app, user: user, project: project, agentId: agentId, name: "live")
             let terminating = try await makeVolume(
                 on: app, user: user, project: project, agentId: agentId, name: "terminating",
-                desired: .absent, generation: 2, observedGeneration: 1)
-            terminating.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
-            try await terminating.save(on: app.db)
+                desired: .absent, generation: 2, observedGeneration: 1
+            ).replacing(finalizers: [ResourceFinalizer.agentAbsent.rawValue])
+            try await terminating.save(on: app.testPostgres)
 
             _ = try await app.observedStateApplier.apply(report(agentId: agentId, volumes: nil))
 
-            let liveAfter = try await #require(try await Volume.find(live.id, on: app.db))
+            let liveAfter = try await #require(try await Volume.find(live.id, on: app.testPostgres))
             #expect(liveAfter.status == .available)
-            #expect(try await Volume.find(terminating.id, on: app.db) != nil)
+            #expect(try await Volume.find(terminating.id, on: app.testPostgres) != nil)
         }
     }
 
@@ -684,7 +647,7 @@ final class VolumeConvergenceTests {
 
             _ = try await app.observedStateApplier.apply(report(agentId: agentId, volumes: []))
 
-            let after = try await #require(try await Volume.find(volumeID, on: app.db))
+            let after = try await #require(try await Volume.find(volumeID, on: app.testPostgres))
             #expect(after.status == .error)
         }
     }
@@ -703,7 +666,7 @@ final class VolumeConvergenceTests {
 
             _ = try await app.observedStateApplier.apply(report(agentId: agentId, volumes: []))
 
-            let after = try await #require(try await Volume.find(volumeID, on: app.db))
+            let after = try await #require(try await Volume.find(volumeID, on: app.testPostgres))
             #expect(after.status == .creating)
         }
     }
@@ -714,27 +677,26 @@ final class VolumeConvergenceTests {
     func attachIsAcceptedAndAttributed() async throws {
         try await withVolumeApp { app, builder, user, project in
             let agentId = try await registerAgent(app: app, named: "mutation-agent")
-            let vm = try await builder.createVM(name: "mutation-vm", project: project)
+            var vm = try await builder.createVM(name: "mutation-vm", project: project)
             vm.hypervisorId = agentId
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             let volume = try await makeVolume(
                 on: app, user: user, project: project, agentId: agentId, generation: 4)
             let volumeID = try #require(volume.id)
             let vmID = try #require(vm.id)
 
-            let accepted = try await app.resourceMutation.accept(
+            let result = try await app.resourceMutation.acceptValue(
                 .attach, on: volume, actor: .user(try user.requireID()), dispatch: .stateSync,
-                on: app.db, app: app
-            ) { @Sendable _ in
-                volume.$vm.id = vmID
-                volume.deviceName = "disk1"
+                on: app.testPostgres, app: app
+            ) { @Sendable current, _ in
+                current.replacing(vmID: vmID, deviceName: "disk1")
             }
 
-            #expect(accepted.targetGeneration == 5)
+            #expect(result.accepted.targetGeneration == 5)
 
-            let stored = try await #require(try await Volume.find(volumeID, on: app.db))
+            let stored = try await #require(try await Volume.find(volumeID, on: app.testPostgres))
             #expect(stored.generation == 5)
-            #expect(stored.$vm.id == vmID)
+            #expect(stored.vmID == vmID)
             // Not converged: the agent has not seen generation 5 yet, which is
             // exactly what a client watching `conditions` should observe.
             #expect(stored.conditions.converged == false)
@@ -744,7 +706,7 @@ final class VolumeConvergenceTests {
 
             let event = try await #require(
                 try await ResourceEvent.latest(
-                    .requested, resourceKind: .volume, resourceID: volumeID, on: app.db))
+                    .requested, resourceKind: .volume, resourceID: volumeID, on: app.testPostgres))
             #expect(event.mutation == .attach)
             #expect(event.targetGeneration == 5)
         }
@@ -758,15 +720,15 @@ final class VolumeConvergenceTests {
                 on: app, user: user, project: project, agentId: agentId, generation: 2)
             let volumeID = try #require(volume.id)
 
-            _ = try await app.resourceMutation.accept(
+            _ = try await app.resourceMutation.acceptValue(
                 .delete, on: volume, actor: .user(try user.requireID()), dispatch: .stateSync,
-                on: app.db, app: app
-            ) { @Sendable db in
-                try await ResourceFinalizerService.stampForDeletion(volume, on: db)
-                volume.setDesiredStatus(.absent)
+                on: app.testPostgres, app: app
+            ) { @Sendable current, db in
+                let stamped = try await ResourceFinalizerService.stampForDeletion(current, on: db)
+                return stamped.replacingDesiredStatus(.absent)
             }
 
-            let stored = try await #require(try await Volume.find(volumeID, on: app.db))
+            let stored = try await #require(try await Volume.find(volumeID, on: app.testPostgres))
             #expect(stored.desiredStatus == .absent)
             #expect(stored.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
             // The row survives the request: only the agent's confirmation of
@@ -778,29 +740,26 @@ final class VolumeConvergenceTests {
     @Test("Reaping a boot volume clears its parent VM finalizer")
     func bootVolumeReapAcknowledgesParent() async throws {
         try await withVolumeApp { app, builder, user, project in
-            let vm = try await builder.createVM(name: "boot-owner", project: project)
+            var vm = try await builder.createVM(name: "boot-owner", project: project)
             let vmID = try vm.requireID()
             vm.setDesiredStatus(.absent)
             vm.finalizers = [
                 ResourceFinalizer.agentAbsent.rawValue,
                 ResourceFinalizer.bootVolumeAbsent.rawValue,
             ]
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let boot = Volume(
                 name: "boot", description: "", projectID: try project.requireID(),
                 environment: vm.environment, size: vm.disk, volumeType: .boot,
-                createdByID: try user.requireID())
-            boot.$vm.id = vmID
-            boot.deviceName = "disk0"
-            boot.bootOrder = 0
-            boot.setDesiredStatus(.absent)
-            try await boot.save(on: app.db)
+                desiredStatus: .absent, createdByID: try user.requireID(), vmID: vmID,
+                deviceName: "disk0", bootOrder: 0)
+            try await boot.save(on: app.testPostgres)
 
-            #expect(try await Volume.reap(boot, on: app.db, app: app))
-            #expect(try await Volume.find(try boot.requireID(), on: app.db) == nil)
+            #expect(try await Volume.reap(boot, on: app.testPostgres, app: app))
+            #expect(try await Volume.find(try boot.requireID(), on: app.testPostgres) == nil)
 
-            let parent = try #require(try await VM.find(vmID, on: app.db))
+            let parent = try #require(try await VM.find(vmID, on: app.testPostgres))
             #expect(parent.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
         }
     }
@@ -821,19 +780,19 @@ final class VolumeConvergenceTests {
                 name: "snap", description: "", volumeID: volumeID,
                 projectID: try project.requireID(), environment: "development", size: 1 << 30,
                 createdByID: try user.requireID())
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
             let snapshotID = try #require(snapshot.id)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: try user.requireID(), role: .admin,
-                nodeType: .volumeSnapshot, nodeID: snapshotID, createdBy: user.id, on: app.db)
+                nodeType: .volumeSnapshot, nodeID: snapshotID, createdBy: user.id, on: app.testPostgres)
 
-            #expect(try await Volume.reap(volume, on: app.db, app: app))
-            #expect(try await Volume.find(volumeID, on: app.db) == nil)
+            #expect(try await Volume.reap(volume, on: app.testPostgres, app: app))
+            #expect(try await Volume.find(volumeID, on: app.testPostgres) == nil)
 
-            let remaining = try await RoleBinding.query(on: app.db)
-                .filter(\.$nodeType == IAMNodeType.volumeSnapshot.rawValue)
-                .filter(\.$nodeID == snapshotID)
-                .count()
+            let remaining = try await LegacyRoleBindingStore.bindings(
+                nodeType: IAMNodeType.volumeSnapshot.rawValue,
+                nodeID: snapshotID,
+                on: app.testPostgres).count
             #expect(remaining == 0)
         }
     }

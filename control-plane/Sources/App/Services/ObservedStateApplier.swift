@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import StratoShared
 import Vapor
@@ -16,6 +16,8 @@ import Vapor
 /// the agent's own send order.
 struct ObservedStateApplier {
     let app: Application
+    let database: PostgresStoreContext
+    let workloads: WorkloadsPersistence
 
     private struct ResourceKey: Hashable {
         let kind: OperationResourceKind
@@ -36,7 +38,7 @@ struct ObservedStateApplier {
         let attachedAgentID: String?
 
         init(_ volume: Volume) throws {
-            guard let attachedVMID = volume.$vm.id else {
+            guard let attachedVMID = volume.vmID else {
                 throw Abort(.internalServerError, reason: "Boot volume is missing its VM relationship")
             }
             id = try volume.requireID()
@@ -79,13 +81,13 @@ struct ObservedStateApplier {
     private func withLockedCurrent<R: ConvergingResource, Result: Sendable>(
         _ resource: R,
         reportedBy agentId: String,
-        on db: any Database,
-        applying body: @escaping @Sendable (R, any Database) async throws -> Result
+        on db: PostgresStoreContext,
+        applying body: @escaping @Sendable (R, PostgresStoreContext) async throws -> Result
     ) async throws -> Result? {
         try await db.transaction { tx -> Result? in
-            guard try await resource.lockAndRefresh(on: tx) else { return nil }
-            let resourceID = try resource.requireID()
-            let placementAgentIDs = try await resource.placementAgentIDs(on: tx)
+            guard let current = try await resource.lockingAndRefreshing(on: tx) else { return nil }
+            let resourceID = try current.requireID()
+            let placementAgentIDs = try await current.placementAgentIDs(on: tx)
             guard placementAgentIDs.contains(agentId) else {
                 app.logger.debug(
                     "Ignoring an observed-state entry after the resource moved to another agent",
@@ -97,7 +99,7 @@ struct ObservedStateApplier {
                     ])
                 return nil
             }
-            return try await body(resource, tx)
+            return try await body(current, tx)
         }
     }
 
@@ -120,7 +122,7 @@ struct ObservedStateApplier {
     /// workloads the agent holds that no sync accounted for.
     @discardableResult
     func apply(_ report: ObservedStateReport) async throws -> UnrecognizedOutcome {
-        let db = app.db
+        let db = database
 
         // Network observations are independent of the workload manifest. A
         // host can fail to enumerate its local VM store while its site's OVN
@@ -161,9 +163,7 @@ struct ObservedStateApplier {
         // workload.
         var unrecognizedOutcome = try await applyUnrecognizedWorkloads(report, on: db)
 
-        let dbVMs = try await VM.query(on: db)
-            .filter(\.$hypervisorId == report.agentId)
-            .all()
+        let dbVMs = try await LegacyVMStore.vms(hypervisorID: report.agentId, on: db)
 
         // Sandboxes apply with the same shape as VMs: settled observations
         // update the row and resolve pending operations; absence either
@@ -173,9 +173,8 @@ struct ObservedStateApplier {
             uniquingKeysWith: { first, _ in first }
         )
 
-        let dbSandboxes = try await Sandbox.query(on: db)
-            .filter(\.$hypervisorId == report.agentId)
-            .all()
+        let dbSandboxes = try await LegacySandboxStore.sandboxes(
+            hypervisorID: report.agentId, on: db)
 
         // Only a workload no agent has ever confirmed can still own a placement
         // reservation, and this report is that confirmation: once it appears
@@ -220,14 +219,18 @@ struct ObservedStateApplier {
             return nil
         }
         let interfacesByVMID: [UUID: [VMNetworkInterface]]
+        let observedAddressesByInterfaceID: [UUID: [ObservedInterfaceAddressSnapshot]]
         if interfaceVMIDs.isEmpty {
             interfacesByVMID = [:]
+            observedAddressesByInterfaceID = [:]
         } else {
-            let interfaces = try await VMNetworkInterface.query(on: db)
-                .filter(\.$vm.$id ~~ interfaceVMIDs)
-                .with(\.$observedAddresses)
-                .all()
-            interfacesByVMID = Dictionary(grouping: interfaces, by: \.$vm.id)
+            let interfaces = try await LegacyVMNetworkInterfaceStore.interfaces(
+                vmIDs: interfaceVMIDs, on: db)
+            interfacesByVMID = Dictionary(grouping: interfaces, by: \.vmID)
+            let observedAddresses = try await workloads.observedInterfaceAddresses(
+                interfaceIDs: interfaces.compactMap(\.id))
+            observedAddressesByInterfaceID = Dictionary(
+                grouping: observedAddresses, by: \.interfaceID)
         }
 
         // Volumes are dependencies of VM convergence (STR-242), so apply this
@@ -277,10 +280,8 @@ struct ObservedStateApplier {
             if vmIDs.isEmpty {
                 bootVolumesByVMID = [:]
             } else {
-                let bootVolumes = try await Volume.query(on: db)
-                    .filter(\.$vm.$id ~~ vmIDs)
-                    .filter(\.$volumeType == .boot)
-                    .all()
+                let bootVolumes = try await LegacyVolumeStore.volumes(
+                    attachment: .attachedToAny(vmIDs), volumeType: .boot, on: db)
                 bootVolumesByVMID = Dictionary(
                     grouping: try bootVolumes.map(BootVolumeDependency.init),
                     by: \.vmID)
@@ -296,6 +297,7 @@ struct ObservedStateApplier {
                 try await withLockedCurrent(vm, reportedBy: report.agentId, on: db) { vm, tx in
                     try await applyObservedVMState(
                         vm: vm, observed: observed, interfaces: interfaces,
+                        observedAddressesByInterfaceID: observedAddressesByInterfaceID,
                         bootVolumes: report.volumes == nil ? nil : bootVolumesByVMID[vmID] ?? [],
                         on: tx)
                 }
@@ -346,11 +348,13 @@ struct ObservedStateApplier {
     }
 
     private func applyObservedLoadBalancers(
-        _ observations: [ObservedLoadBalancerState], on db: any Database
+        _ observations: [ObservedLoadBalancerState], on db: PostgresStoreContext
     ) async throws {
         for observed in observations {
             try await db.transaction { tx in
-                guard let loadBalancer = try await LoadBalancer.find(observed.id, on: tx) else {
+                guard let loadBalancer = try await LegacyLoadBalancerStore.locked(
+                    id: observed.id, on: tx)
+                else {
                     return
                 }
                 // A delayed report may describe a superseded desired row; it
@@ -361,32 +365,33 @@ struct ObservedStateApplier {
                     observed.observedGeneration >= loadBalancer.observedGeneration
                 else { return }
 
-                loadBalancer.observedGeneration = observed.observedGeneration
-                loadBalancer.observedState =
+                let observedState: LoadBalancerObservedState =
                     switch observed.status {
                     case .pending: .pending
                     case .active: .active
                     case .error: .error
                     }
-                loadBalancer.lastError = observed.lastError
-                try await loadBalancer.save(on: tx)
+                _ = try await LegacyLoadBalancerStore.updateObserved(
+                    id: observed.id,
+                    observedGeneration: observed.observedGeneration,
+                    observedState: observedState,
+                    lastError: observed.lastError,
+                    on: tx)
 
                 for backendObservation in observed.backends {
-                    guard
-                        let backend = try await LoadBalancerBackend.query(on: tx)
-                            .filter(\.$id == backendObservation.id)
-                            .filter(\.$loadBalancer.$id == observed.id)
-                            .first()
-                    else { continue }
-                    backend.healthStatus =
+                    let healthStatus: LoadBalancerBackendHealth =
                         switch backendObservation.healthStatus {
                         case .unknown: .unknown
                         case .online: .online
                         case .offline: .offline
                         case .error: .error
                         }
-                    backend.lastHealthCheckAt = backendObservation.lastCheckedAt
-                    try await backend.save(on: tx)
+                    _ = try await LegacyLoadBalancerTargetStore.recordHealth(
+                        id: backendObservation.id,
+                        loadBalancerID: observed.id,
+                        healthStatus: healthStatus,
+                        lastHealthCheckAt: backendObservation.lastCheckedAt,
+                        on: tx)
                 }
             }
         }
@@ -416,11 +421,10 @@ struct ObservedStateApplier {
     /// caller can nudge a sync rather than waiting a full period for it.
     private func applyUnrecognizedWorkloads(
         _ report: ObservedStateReport,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> UnrecognizedOutcome {
-        let existingClaims = try await AgentWorkloadClaim.query(on: db)
-            .filter(\.$agentId == report.agentId)
-            .all()
+        let existingClaims = try await workloads.claims(agentID: report.agentId)
+            .map(AgentWorkloadClaimRecord.init)
 
         // Everything this report mentions at all: an id that has dropped out
         // of both lists is gone from the host, which retires its claim.
@@ -458,14 +462,14 @@ struct ObservedStateApplier {
             var revived: Set<ResourceKey> = []
             let vmCandidates = revivable.keys.filter { $0.kind == .virtualMachine }.map(\.id)
             if !vmCandidates.isEmpty {
-                for id in try await VM.query(on: db).filter(\.$id ~~ vmCandidates).all().compactMap(\.id) {
+                for id in try await LegacyVMStore.vms(ids: vmCandidates, on: db).compactMap(\.id) {
                     revived.insert(ResourceKey(kind: .virtualMachine, id: id))
                 }
             }
             let sandboxCandidates = revivable.keys.filter { $0.kind == .sandbox }.map(\.id)
             if !sandboxCandidates.isEmpty {
-                for id in try await Sandbox.query(on: db).filter(\.$id ~~ sandboxCandidates).all()
-                    .compactMap(\.id)
+                for id in try await LegacySandboxStore.sandboxes(
+                    ids: sandboxCandidates, on: db).compactMap(\.id)
                 {
                     revived.insert(ResourceKey(kind: .sandbox, id: id))
                 }
@@ -479,9 +483,7 @@ struct ObservedStateApplier {
         // a 500-VM host report 500 strays at once, and this runs on every
         // report, ahead of the reconciliation it precedes.
         if !staleClaims.isEmpty {
-            try await AgentWorkloadClaim.query(on: db)
-                .filter(\.$id ~~ staleClaims.values.compactMap(\.id))
-                .delete()
+            _ = try await workloads.deleteClaims(ids: staleClaims.values.map(\.id))
             for (key, claim) in staleClaims {
                 claimsByKey.removeValue(forKey: key)
                 app.logger.info(
@@ -512,14 +514,14 @@ struct ObservedStateApplier {
         let sandboxIDs = report.unrecognized.filter { $0.kind == .sandbox }.map(\.workloadId)
         var vmPlacements: [UUID: WorkloadPlacement] = [:]
         if !vmIDs.isEmpty {
-            for vm in try await VM.query(on: db).filter(\.$id ~~ vmIDs).all() {
+            for vm in try await LegacyVMStore.vms(ids: vmIDs, on: db) {
                 guard let id = vm.id else { continue }
                 vmPlacements[id] = WorkloadPlacement(agentId: vm.hypervisorId)
             }
         }
         var sandboxPlacements: [UUID: WorkloadPlacement] = [:]
         if !sandboxIDs.isEmpty {
-            for sandbox in try await Sandbox.query(on: db).filter(\.$id ~~ sandboxIDs).all() {
+            for sandbox in try await LegacySandboxStore.sandboxes(ids: sandboxIDs, on: db) {
                 guard let id = sandbox.id else { continue }
                 sandboxPlacements[id] = WorkloadPlacement(agentId: sandbox.hypervisorId)
             }
@@ -550,7 +552,7 @@ struct ObservedStateApplier {
         // New claims accumulate for one batched create at the end — see the
         // stale-delete note above for why this path can't afford a round trip
         // per workload.
-        var newClaims: [AgentWorkloadClaim] = []
+        var newClaims: [AgentWorkloadClaimWrite] = []
         for entry in report.unrecognized {
             let key = ResourceKey(kind: entry.kind.resourceKind, id: entry.workloadId)
             // An exhaustive switch, not a ternary: the two-kind ternary this
@@ -583,8 +585,7 @@ struct ObservedStateApplier {
                     tombstoneGeneration: generation,
                     reason: nil,
                     entry: entry,
-                    pendingCreates: &newClaims,
-                    on: db)
+                    pendingCreates: &newClaims)
                 if changed {
                     outcome.authorizedTeardown = true
                     app.logger.notice(
@@ -617,8 +618,7 @@ struct ObservedStateApplier {
                 tombstoneGeneration: nil,
                 reason: reason,
                 entry: entry,
-                pendingCreates: &newClaims,
-                on: db)
+                pendingCreates: &newClaims)
             outcome.heldByReason[
                 onThisAgent
                     ? AgentWorkloadClaim.heldRowPresentReason
@@ -642,7 +642,7 @@ struct ObservedStateApplier {
             }
         }
         if !newClaims.isEmpty {
-            try await newClaims.create(on: db)
+            try await workloads.insertClaims(newClaims.map(\.native))
         }
         return outcome
     }
@@ -656,19 +656,18 @@ struct ObservedStateApplier {
     /// Record one verdict, updating the existing claim in place so its
     /// `first_seen_at` keeps saying how long the situation has persisted.
     private func upsertClaim(
-        _ existing: AgentWorkloadClaim?,
+        _ existing: AgentWorkloadClaimRecord?,
         agentId: String,
         key: ResourceKey,
         disposition: WorkloadClaimDisposition,
         tombstoneGeneration: Int64?,
         reason: String?,
         entry: UnrecognizedWorkload,
-        pendingCreates: inout [AgentWorkloadClaim],
-        on db: Database
+        pendingCreates: inout [AgentWorkloadClaimWrite]
     ) async throws {
         guard let claim = existing else {
             pendingCreates.append(
-                AgentWorkloadClaim(
+                AgentWorkloadClaimWrite(
                     agentId: agentId,
                     resourceKind: key.kind,
                     resourceID: key.id,
@@ -687,12 +686,13 @@ struct ObservedStateApplier {
                 || claim.observedGeneration != entry.observedGeneration
                 || claim.observedStatus != entry.status
         else { return }  // unchanged: don't churn the row on every report
-        claim.disposition = disposition
-        claim.tombstoneGeneration = tombstoneGeneration
-        claim.reason = reason
-        claim.observedGeneration = entry.observedGeneration
-        claim.observedStatus = entry.status
-        try await claim.save(on: db)
+        try await workloads.updateClaim(
+            id: claim.id,
+            disposition: disposition,
+            tombstoneGeneration: tombstoneGeneration,
+            reason: reason,
+            observedGeneration: entry.observedGeneration,
+            observedStatus: entry.status)
     }
 
     /// Apply one settled (or failing) observation to its VM row and record the
@@ -701,11 +701,13 @@ struct ObservedStateApplier {
         vm: VM,
         observed: ObservedVMState,
         interfaces: [VMNetworkInterface],
+        observedAddressesByInterfaceID: [UUID: [ObservedInterfaceAddressSnapshot]],
         bootVolumes: [BootVolumeDependency]?,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
-        let vmID = try vm.requireID()
-        try logSupersededFailureReport(vm, reportedGeneration: observed.failedGeneration)
+        var current = vm
+        let vmID = try current.requireID()
+        try logSupersededFailureReport(current, reportedGeneration: observed.failedGeneration)
 
         // Where the VM stood before this report. Every convergence outcome
         // below is a *transition* out of this state, which is what makes the
@@ -720,8 +722,8 @@ struct ObservedStateApplier {
         // recorded the failure. It must stay in memory until the transition
         // call persists it: committing the mirror on its own would satisfy the
         // guard with nothing recorded, and no later pass would re-enter.
-        let wasConverged = vm.isConverged
-        let failedBefore = vm.failedGeneration
+        let wasConverged = current.isConverged
+        let failedBefore = current.failedGeneration
 
         // The guest-agent view (issue #563) is orthogonal to convergence and
         // operation completion, so record it up front — before the converging
@@ -732,18 +734,23 @@ struct ObservedStateApplier {
         // forever). A nil on a running/paused/transitional/unknown VM is left
         // alone — that's a transient probe miss, and nil-preserves-last-known.
         if let guestInfo = observed.guestInfo {
-            try await persistGuestInfo(vm: vm, guestInfo: guestInfo, interfaces: interfaces, on: db)
+            current = try await persistGuestInfo(
+                vm: current,
+                guestInfo: guestInfo,
+                interfaces: interfaces,
+                observedAddressesByInterfaceID: observedAddressesByInterfaceID,
+                on: db)
         } else if Self.guestInfoClearedByStatus.contains(observed.status) {
-            try await clearGuestInfo(vm: vm, interfaces: interfaces, on: db)
+            current = try await clearGuestInfo(vm: current, interfaces: interfaces, on: db)
         }
 
         // Balloon memory stats (issue #567) follow the same contract as
         // guestInfo, independently: a guest can report balloon stats without
         // qga (and vice versa), so their presence is tracked separately.
         if let memoryStats = observed.memoryStats {
-            try await persistMemoryStats(vm: vm, stats: memoryStats, on: db)
+            current = try await persistMemoryStats(vm: current, stats: memoryStats, on: db)
         } else if Self.guestInfoClearedByStatus.contains(observed.status) {
-            try await clearMemoryStats(vm: vm, on: db)
+            current = try await clearMemoryStats(vm: current, on: db)
         }
 
         // Mirror the report's convergence progress onto the row (STR-142) so
@@ -752,37 +759,39 @@ struct ObservedStateApplier {
         // former, and the error pair has to be *cleared* on the latter.
         let bootVolumePhase: String?
         if let bootVolumes, observed.convergencePhase == nil, observed.lastError == nil,
-            vm.desiredStatus != .absent
+            current.desiredStatus != .absent
         {
-            bootVolumePhase = pendingBootVolumePhase(for: vm, bootVolumes: bootVolumes)
+            bootVolumePhase = pendingBootVolumePhase(for: current, bootVolumes: bootVolumes)
         } else {
             bootVolumePhase = nil
         }
         let effectivePhase = observed.convergencePhase ?? bootVolumePhase
-        var changed = vm.recordTimestampedConvergence(
+        let convergence = current.recordingTimestampedConvergence(
             phase: effectivePhase,
             lastError: observed.lastError,
             failedGeneration: observed.failedGeneration
         )
+        current = convergence.resource
+        var changed = convergence.changed
 
         // Still converging: progress only. The status is not settled, so it
         // must not overwrite the row or complete operations.
         if effectivePhase != nil {
             if changed {
-                try await vm.save(on: db)
+                try await current.persist(on: db)
             }
             app.logger.debug(
                 "VM converging on agent",
                 metadata: [
                     "vmId": .string(vmID.uuidString),
                     "phase": .string(effectivePhase ?? ""),
-                    "targetGeneration": .stringConvertible(vm.generation),
+                    "targetGeneration": .stringConvertible(current.generation),
                 ])
             return
         }
 
-        if observed.observedGeneration > vm.observedGeneration {
-            vm.observedGeneration = observed.observedGeneration
+        if observed.observedGeneration > current.observedGeneration {
+            current.observedGeneration = observed.observedGeneration
             changed = true
         }
 
@@ -798,14 +807,16 @@ struct ObservedStateApplier {
                     let interfaceID = interface.id,
                     !applied.contains(interfaceID)
                 else { continue }
-                try await interface.delete(on: db)
+                _ = try await LegacyVMNetworkInterfaceStore.delete(id: interfaceID, on: db)
             }
         }
 
         var statusTransition: (previous: VMStatus, current: VMStatus)?
-        if vm.status != observed.status, observed.status != .unknown || vm.status.isTransitional {
-            let previous = vm.status
-            vm.setStatus(observed.status)
+        if current.status != observed.status,
+            observed.status != .unknown || current.status.isTransitional
+        {
+            let previous = current.status
+            current.setStatus(observed.status)
             changed = true
             statusTransition = (previous, observed.status)
 
@@ -824,23 +835,23 @@ struct ObservedStateApplier {
                 Telemetry.vmDriftDetected()
             }
         }
-        if vm.desiredSatisfied, vm.divergenceDetectedAt != nil {
-            vm.divergenceDetectedAt = nil
+        if current.desiredSatisfied, current.divergenceDetectedAt != nil {
+            current.divergenceDetectedAt = nil
             changed = true
         }
 
         let failedCurrentGeneration =
-            observed.lastError != nil && observed.failedGeneration == vm.generation
+            observed.lastError != nil && observed.failedGeneration == current.generation
         // No deadline means no user mutation is outstanding. This is a
         // steady-state repair failure: persist exactly what the agent observed,
         // but retain the desired state and generation so the level-triggered
         // loop can heal it later. In particular, do not synthesize a stale
         // mutation outcome from whichever resource event happens to be latest.
-        if failedCurrentGeneration, vm.convergenceDeadline == nil {
+        if failedCurrentGeneration, current.convergenceDeadline == nil {
             if changed {
-                try await vm.save(on: db)
+                try await current.persist(on: db)
             }
-            await emitVMStatusTransition(statusTransition, vm: vm, on: db)
+            await emitVMStatusTransition(statusTransition, vm: current, on: db)
             return
         }
         // Deletions are settled by absence from the report, never by a status.
@@ -851,24 +862,27 @@ struct ObservedStateApplier {
         // mirrored `failedGeneration` that would otherwise suppress every
         // future pass if it committed alone.
         let settlesConvergence =
-            vm.desiredStatus != .absent
-            && ((!wasConverged && vm.isConverged)
-                || (observed.lastError != nil && observed.failedGeneration == vm.generation))
+            current.desiredStatus != .absent
+            && ((!wasConverged && current.isConverged)
+                || (observed.lastError != nil && observed.failedGeneration == current.generation))
         if !settlesConvergence {
             if changed {
-                try await vm.save(on: db)
+                try await current.persist(on: db)
             }
-            await emitVMStatusTransition(statusTransition, vm: vm, on: db)
+            await emitVMStatusTransition(statusTransition, vm: current, on: db)
             return
         }
 
-        if !wasConverged, vm.isConverged {
+        if !wasConverged, current.isConverged {
             // The agent converged to the current generation and the observed
             // status satisfies the desired one: everything outstanding reached
             // its goal.
-            _ = try await ResourceConvergence.recordSuccess(vm, on: db)
-            await emitVMStatusTransition(statusTransition, vm: vm, on: db)
-        } else if let lastError = observed.lastError, observed.failedGeneration == vm.generation {
+            let result = try await ResourceConvergence.recordValueSuccess(current, on: db)
+            current = result.resource
+            await emitVMStatusTransition(statusTransition, vm: current, on: db)
+        } else if let lastError = observed.lastError,
+            observed.failedGeneration == current.generation
+        {
             // The agent tried to converge to *this* generation and failed —
             // the failedGeneration match is what distinguishes that from a
             // stale error still carried on heartbeats while a newer mutation
@@ -892,27 +906,30 @@ struct ObservedStateApplier {
             // performs reads the status. Gated on the same guard
             // `recordFailure` applies, so a repeated report of an
             // already-recorded failure changes nothing.
-            let previousStatus = vm.status
+            let previousStatus = current.status
             var enteredError = false
-            if failedBefore != vm.generation, observed.status == .unknown, vm.status != .error {
-                vm.setStatus(.error)
+            if failedBefore != current.generation,
+                observed.status == .unknown, current.status != .error
+            {
+                current.setStatus(.error)
                 enteredError = true
                 Telemetry.vmEnteredError(reason: "convergence_failed")
             }
 
-            let outcome = try await ResourceConvergence.recordFailure(
-                vm, mutation: mutation, reason: lastError,
+            let result = try await ResourceConvergence.recordValueFailure(
+                current, mutation: mutation, reason: lastError,
                 telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
-            if outcome == .alreadyRecorded, changed {
+            current = result.resource
+            if result.outcome == .alreadyRecorded, changed {
                 // A repeat of an already-recorded failure: nothing was
                 // persisted by the call above, so this report's own changes
                 // (observed generation, status) still need writing.
-                try await vm.save(on: db)
+                try await current.persist(on: db)
             }
-            await emitVMStatusTransition(statusTransition, vm: vm, on: db)
-            if outcome == .recorded, enteredError {
+            await emitVMStatusTransition(statusTransition, vm: current, on: db)
+            if result.outcome == .recorded, enteredError {
                 await WebhookEvents.emitVMStateChanged(
-                    vm: vm, previous: previousStatus, current: .error, on: db, logger: app.logger)
+                    vm: current, previous: previousStatus, current: .error, on: db, logger: app.logger)
             }
         }
     }
@@ -960,7 +977,7 @@ struct ObservedStateApplier {
     /// deliberately outside the convergence transaction: a webhook that cannot
     /// be enqueued must not roll back the observation it describes.
     private func emitVMStatusTransition(
-        _ transition: (previous: VMStatus, current: VMStatus)?, vm: VM, on db: Database
+        _ transition: (previous: VMStatus, current: VMStatus)?, vm: VM, on db: PostgresStoreContext
     ) async {
         guard let transition else { return }
         await WebhookEvents.emitVMStateChanged(
@@ -979,19 +996,21 @@ struct ObservedStateApplier {
         vm: VM,
         guestInfo: GuestInfo,
         interfaces: [VMNetworkInterface],
-        on db: Database
-    ) async throws {
+        observedAddressesByInterfaceID: [UUID: [ObservedInterfaceAddressSnapshot]],
+        on db: PostgresStoreContext
+    ) async throws -> VM {
+        var current = vm
         var vmChanged = false
-        if vm.qgaAvailable != guestInfo.qgaAvailable {
-            vm.qgaAvailable = guestInfo.qgaAvailable
+        if current.qgaAvailable != guestInfo.qgaAvailable {
+            current.qgaAvailable = guestInfo.qgaAvailable
             vmChanged = true
         }
-        if vm.observedHostname != guestInfo.hostname {
-            vm.observedHostname = guestInfo.hostname
+        if current.observedHostname != guestInfo.hostname {
+            current.observedHostname = guestInfo.hostname
             vmChanged = true
         }
         if vmChanged {
-            try await vm.save(on: db)
+            try await current.persist(on: db)
         }
 
         // Group the guest's addresses by MAC (lowercased for case-insensitive
@@ -1012,28 +1031,24 @@ struct ObservedStateApplier {
             }
 
             let storedKeys = Set(
-                nic.observedAddresses.map { "\($0.family)|\($0.address)|\($0.prefixLength.map(String.init) ?? "")" })
+                (observedAddressesByInterfaceID[nicID] ?? []).map {
+                    "\($0.family)|\($0.address)|\($0.prefixLength.map(String.init) ?? "")"
+                })
             let desiredKeys = Set(
                 desired.map { "\($0.family.rawValue)|\($0.address)|\($0.prefixLength.map(String.init) ?? "")" })
             if storedKeys == desiredKeys { continue }
 
-            // The set changed: replace this NIC's observed rows wholesale, in a
-            // transaction so a crash can't leave the NIC with the delete applied
-            // but the re-inserts missing.
-            try await db.transaction { db in
-                try await VMInterfaceObservedAddress.query(on: db)
-                    .filter(\.$interface.$id == nicID)
-                    .delete()
-                for address in desired {
-                    try await VMInterfaceObservedAddress(
-                        interfaceID: nicID,
-                        family: address.family,
-                        address: address.address,
-                        prefixLength: address.prefixLength
-                    ).save(on: db)
-                }
-            }
+            try await workloads.replaceObservedInterfaceAddresses(
+                interfaceID: nicID,
+                addresses: desired.map {
+                    ObservedInterfaceAddressWrite(
+                        family: $0.family.rawValue,
+                        address: $0.address,
+                        prefixLength: $0.prefixLength)
+                },
+                on: db)
         }
+        return current
     }
 
     /// Persists a VM's observed balloon memory stats (issue #567), stamping
@@ -1041,32 +1056,38 @@ struct ObservedStateApplier {
     /// steady state for an idle guest) so the report stream doesn't churn the
     /// row — which means `guestMemoryStatsAt` records when the values last
     /// *changed*, a freshness signal that survives unchanged reports.
-    private func persistMemoryStats(vm: VM, stats: VMMemoryStats, on db: Database) async throws {
+    private func persistMemoryStats(
+        vm: VM, stats: VMMemoryStats, on db: PostgresStoreContext
+    ) async throws -> VM {
         guard
             vm.guestMemoryTotalBytes != stats.totalBytes
                 || vm.guestMemoryAvailableBytes != stats.availableBytes
                 || vm.guestMemoryBalloonActualBytes != stats.balloonActualBytes
-        else { return }
-        vm.guestMemoryTotalBytes = stats.totalBytes
-        vm.guestMemoryAvailableBytes = stats.availableBytes
-        vm.guestMemoryBalloonActualBytes = stats.balloonActualBytes
-        vm.guestMemoryStatsAt = Date()
-        try await vm.save(on: db)
+        else { return vm }
+        var updated = vm
+        updated.guestMemoryTotalBytes = stats.totalBytes
+        updated.guestMemoryAvailableBytes = stats.availableBytes
+        updated.guestMemoryBalloonActualBytes = stats.balloonActualBytes
+        updated.guestMemoryStatsAt = Date()
+        try await updated.persist(on: db)
+        return updated
     }
 
     /// Clears a VM's observed memory stats once the guest is definitively not
     /// running — a stopped guest's last-known usage is stale, and surfacing it
     /// as current would mislead the "committed vs used" view.
-    private func clearMemoryStats(vm: VM, on db: Database) async throws {
+    private func clearMemoryStats(vm: VM, on db: PostgresStoreContext) async throws -> VM {
         guard
             vm.guestMemoryTotalBytes != nil || vm.guestMemoryAvailableBytes != nil
                 || vm.guestMemoryBalloonActualBytes != nil
-        else { return }
-        vm.guestMemoryTotalBytes = nil
-        vm.guestMemoryAvailableBytes = nil
-        vm.guestMemoryBalloonActualBytes = nil
-        vm.guestMemoryStatsAt = nil
-        try await vm.save(on: db)
+        else { return vm }
+        var updated = vm
+        updated.guestMemoryTotalBytes = nil
+        updated.guestMemoryAvailableBytes = nil
+        updated.guestMemoryBalloonActualBytes = nil
+        updated.guestMemoryStatsAt = nil
+        try await updated.persist(on: db)
+        return updated
     }
 
     /// VM statuses for which a nil `guestInfo` should *clear* the stored qga
@@ -1084,19 +1105,20 @@ struct ObservedStateApplier {
     private func clearGuestInfo(
         vm: VM,
         interfaces: [VMNetworkInterface],
-        on db: Database
-    ) async throws {
-        guard vm.qgaAvailable != nil || vm.observedHostname != nil else { return }
-        vm.qgaAvailable = nil
-        vm.observedHostname = nil
-        try await vm.save(on: db)
+        on db: PostgresStoreContext
+    ) async throws -> VM {
+        guard vm.qgaAvailable != nil || vm.observedHostname != nil else { return vm }
+        var updated = vm
+        updated.qgaAvailable = nil
+        updated.observedHostname = nil
+        try await updated.persist(on: db)
 
         let nicIDs = interfaces.compactMap(\.id)
         if !nicIDs.isEmpty {
-            try await VMInterfaceObservedAddress.query(on: db)
-                .filter(\.$interface.$id ~~ nicIDs)
-                .delete()
+            _ = try await workloads.deleteObservedInterfaceAddresses(
+                interfaceIDs: nicIDs, on: db)
         }
+        return updated
     }
 
     /// A VM the database maps to this agent is absent from its full report:
@@ -1104,17 +1126,20 @@ struct ObservedStateApplier {
     private func handleReportedAbsence(
         vm: VM,
         agentId: String,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
-        let vmID = try vm.requireID()
+        var current = vm
+        let vmID = try current.requireID()
 
-        if vm.desiredStatus == .absent {
+        if current.desiredStatus == .absent {
             // Teardown confirmed: this is the `agent.absent` finalizer's
             // participant (ADR 0001). Nothing is recorded *here* — the reap
             // that clearing the last token triggers appends the terminal
             // `resource_events` row, which is what tells a client polling a
             // delete that it finished (STR-147).
-            switch try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: db, app: app) {
+            switch try await ResourceFinalizerService.clear(
+                .agentAbsent, from: current, on: db, app: app)
+            {
             case .reaped:
                 app.logger.info(
                     "VM deletion confirmed by agent report; record removed",
@@ -1141,27 +1166,28 @@ struct ObservedStateApplier {
         // often because the agent restarted and lost its in-memory view. Drop
         // whatever it last said, rather than leave `conditions` claiming a
         // download that nothing is doing (STR-142).
-        let convergenceCleared = vm.recordTimestampedConvergence(
+        let convergence = current.recordingTimestampedConvergence(
             phase: nil, lastError: nil, failedGeneration: nil)
+        current = convergence.resource
 
         // Same established-state rule as the heartbeat reconciliation: only
         // states that assert live agent presence are safe to escalate on
         // absence. (`.created` may be mid-create on an agent that hasn't
         // received the sync yet.) The reconcile loop will re-create the VM on
         // its next sync; if it succeeds, a later report restores the status.
-        guard vm.status.assertsAgentPresence else {
-            if convergenceCleared {
-                try await vm.save(on: db)
+        guard current.status.assertsAgentPresence else {
+            if convergence.changed {
+                try await current.persist(on: db)
             }
             return
         }
 
-        let previous = vm.status
-        vm.setStatus(.error)
-        try await vm.save(on: db)
+        let previous = current.status
+        current.setStatus(.error)
+        try await current.persist(on: db)
         Telemetry.vmEnteredError(reason: "reconciliation")
         await WebhookEvents.emitVMStateChanged(
-            vm: vm, previous: previous, current: .error, on: db, logger: app.logger)
+            vm: current, previous: previous, current: .error, on: db, logger: app.logger)
         app.logger.warning(
             "VM missing from agent observed-state report; marking as error until re-converged",
             metadata: [
@@ -1176,44 +1202,47 @@ struct ObservedStateApplier {
     private func applyObservedSandboxState(
         sandbox: Sandbox,
         observed: ObservedSandboxState,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
-        let sandboxID = try sandbox.requireID()
-        try logSupersededFailureReport(sandbox, reportedGeneration: observed.failedGeneration)
-        let wasConverged = sandbox.isConverged
-        let failedBefore = sandbox.failedGeneration
+        var current = sandbox
+        let sandboxID = try current.requireID()
+        try logSupersededFailureReport(current, reportedGeneration: observed.failedGeneration)
+        let wasConverged = current.isConverged
+        let failedBefore = current.failedGeneration
 
         // Convergence progress for the `conditions` block (STR-142) — same
         // contract as VMs, recorded on both paths for the same reasons.
-        var changed = sandbox.recordTimestampedConvergence(
+        let convergence = current.recordingTimestampedConvergence(
             phase: observed.convergencePhase,
             lastError: observed.lastError,
             failedGeneration: observed.failedGeneration
         )
+        current = convergence.resource
+        var changed = convergence.changed
 
         // Still converging: progress only, never a settled status.
         if observed.convergencePhase != nil {
             if changed {
-                try await sandbox.save(on: db)
+                try await current.persist(on: db)
             }
             app.logger.debug(
                 "Sandbox converging on agent",
                 metadata: [
                     "sandboxId": .string(sandboxID.uuidString),
                     "phase": .string(observed.convergencePhase ?? ""),
-                    "targetGeneration": .stringConvertible(sandbox.generation),
+                    "targetGeneration": .stringConvertible(current.generation),
                 ])
             return
         }
 
-        if observed.observedGeneration > sandbox.observedGeneration {
-            sandbox.observedGeneration = observed.observedGeneration
+        if observed.observedGeneration > current.observedGeneration {
+            current.observedGeneration = observed.observedGeneration
             changed = true
         }
 
-        if sandbox.status != observed.status, observed.status != .unknown || sandbox.status.isTransitional {
-            let previous = sandbox.status
-            sandbox.setStatus(observed.status)
+        if current.status != observed.status, observed.status != .unknown || current.status.isTransitional {
+            let previous = current.status
+            current.setStatus(observed.status)
             changed = true
 
             // A workload finishing on its own (`.exited`) is the normal end
@@ -1229,23 +1258,23 @@ struct ObservedStateApplier {
                     ])
             }
         }
-        if sandbox.exitCode != observed.exitCode {
-            sandbox.exitCode = observed.exitCode
+        if current.exitCode != observed.exitCode {
+            current.exitCode = observed.exitCode
             changed = true
         }
-        if sandbox.desiredSatisfied, sandbox.divergenceDetectedAt != nil {
-            sandbox.divergenceDetectedAt = nil
+        if current.desiredSatisfied, current.divergenceDetectedAt != nil {
+            current.divergenceDetectedAt = nil
             changed = true
         }
 
         let failedCurrentGeneration =
-            observed.lastError != nil && observed.failedGeneration == sandbox.generation
+            observed.lastError != nil && observed.failedGeneration == current.generation
         // A failure with no deadline belongs to steady-state repair, not to a
         // pending mutation. Keep intent and generation intact and emit no
         // operation outcome; a later same-generation retry can still recover.
-        if failedCurrentGeneration, sandbox.convergenceDeadline == nil {
+        if failedCurrentGeneration, current.convergenceDeadline == nil {
             if changed {
-                try await sandbox.save(on: db)
+                try await current.persist(on: db)
             }
             return
         }
@@ -1253,19 +1282,19 @@ struct ObservedStateApplier {
         // The save is deferred to the transition where there is one, for the
         // reason the VM path defers it.
         let settlesConvergence =
-            sandbox.desiredStatus != .absent
-            && ((!wasConverged && sandbox.isConverged)
-                || (observed.lastError != nil && observed.failedGeneration == sandbox.generation))
+            current.desiredStatus != .absent
+            && ((!wasConverged && current.isConverged)
+                || (observed.lastError != nil && observed.failedGeneration == current.generation))
         if !settlesConvergence {
             if changed {
-                try await sandbox.save(on: db)
+                try await current.persist(on: db)
             }
             return
         }
 
-        if !wasConverged, sandbox.isConverged {
-            _ = try await ResourceConvergence.recordSuccess(sandbox, on: db)
-        } else if let lastError = observed.lastError, observed.failedGeneration == sandbox.generation {
+        if !wasConverged, current.isConverged {
+            _ = try await ResourceConvergence.recordValueSuccess(current, on: db)
+        } else if let lastError = observed.lastError, observed.failedGeneration == current.generation {
             // The agent tried to converge to *this* generation and failed —
             // report the real reason instead of waiting out the convergence
             // deadline (same contract as VMs, including the pre-escalation of a
@@ -1274,14 +1303,14 @@ struct ObservedStateApplier {
                 try await ResourceEvent.latest(
                     .requested, resourceKind: .sandbox, resourceID: sandboxID, on: db
                 )?.mutation ?? .boot
-            if failedBefore != sandbox.generation, observed.status == .unknown {
-                sandbox.setStatus(.error)
+            if failedBefore != current.generation, observed.status == .unknown {
+                current.setStatus(.error)
             }
-            let outcome = try await ResourceConvergence.recordFailure(
-                sandbox, mutation: mutation, reason: lastError,
+            let result = try await ResourceConvergence.recordValueFailure(
+                current, mutation: mutation, reason: lastError,
                 telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
-            if outcome == .alreadyRecorded, changed {
-                try await sandbox.save(on: db)
+            if result.outcome == .alreadyRecorded, changed {
+                try await current.persist(on: db)
             }
         }
     }
@@ -1291,15 +1320,16 @@ struct ObservedStateApplier {
     private func handleReportedSandboxAbsence(
         sandbox: Sandbox,
         agentId: String,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
-        let sandboxID = try sandbox.requireID()
+        var current = sandbox
+        let sandboxID = try current.requireID()
 
-        if sandbox.desiredStatus == .absent {
+        if current.desiredStatus == .absent {
             // Teardown confirmed: the `agent.absent` participant. The reap
             // appends the terminal event, same as VMs.
             switch try await ResourceFinalizerService.clear(
-                .agentAbsent, from: sandbox, on: db, app: app)
+                .agentAbsent, from: current, on: db, app: app)
             {
             case .reaped:
                 app.logger.info(
@@ -1320,23 +1350,24 @@ struct ObservedStateApplier {
 
         // Nothing to report means no progress to report — same rationale as
         // the VM path (STR-142).
-        let convergenceCleared = sandbox.recordTimestampedConvergence(
+        let convergence = current.recordingTimestampedConvergence(
             phase: nil, lastError: nil, failedGeneration: nil)
+        current = convergence.resource
 
         // Only escalate established sandboxes: a never-confirmed row
         // (observedGeneration 0) may be mid-create on an agent that hasn't
         // received the sync yet, and non-presence-asserting states are owned
         // by the sweep.
-        guard sandbox.observedGeneration > 0, sandbox.status.assertsAgentPresence else {
-            if convergenceCleared {
-                try await sandbox.save(on: db)
+        guard current.observedGeneration > 0, current.status.assertsAgentPresence else {
+            if convergence.changed {
+                try await current.persist(on: db)
             }
             return
         }
 
-        let previous = sandbox.status
-        sandbox.setStatus(.error)
-        try await sandbox.save(on: db)
+        let previous = current.status
+        current.setStatus(.error)
+        try await current.persist(on: db)
         app.logger.warning(
             "Sandbox missing from agent observed-state report; marking as error until re-converged",
             metadata: [
@@ -1356,37 +1387,39 @@ struct ObservedStateApplier {
         volume: Volume,
         observed: ObservedVolumeState,
         agentId: String,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> Bool {
-        let volumeID = try volume.requireID()
-        try logSupersededFailureReport(volume, reportedGeneration: observed.failedGeneration)
+        var current = volume
+        let volumeID = try current.requireID()
+        try logSupersededFailureReport(current, reportedGeneration: observed.failedGeneration)
         // Captured before anything mutates, for exactly the reasons the VM
         // path documents: `recordConvergence` mirrors the agent's own
         // `failedGeneration` onto the model and would otherwise satisfy the
         // idempotence guard with nothing recorded.
-        let wasConverged = volume.isConverged
-        let failedBefore = volume.failedGeneration
+        let wasConverged = current.isConverged
+        let failedBefore = current.failedGeneration
 
         try await recordReplicaObservation(
             volumeID: volumeID, agentId: agentId, observed: observed,
-            desiredGeneration: volume.generation, on: db)
-        let requiredReplicas = try await VolumeReplica.query(on: db)
-            .filter(\.$volume.$id == volumeID)
-            .filter(\.$state ~~ VolumeService.authoritativeReplicaStates)
-            .all()
+            desiredGeneration: current.generation, on: db)
+        let requiredReplicas = try await LegacyVolumeReplicaStore.replicas(
+            volumeIDs: [volumeID],
+            states: VolumeService.authoritativeReplicaStates,
+            on: db
+        )
         let allReplicasSettled =
             !requiredReplicas.isEmpty
             && requiredReplicas.allSatisfy {
-                $0.state == .healthy && $0.generation >= volume.generation
+                $0.state == .healthy && $0.generation >= current.generation
             }
-        let generationBeforeTarget = max(0, volume.generation - 1)
+        let generationBeforeTarget = max(0, current.generation - 1)
         let aggregateObservedGeneration =
             requiredReplicas.map { replica in
                 replica.state == .healthy
                     ? replica.generation : min(replica.generation, generationBeforeTarget)
             }.min() ?? 0
         let failedAtTarget =
-            observed.lastError != nil && observed.failedGeneration == volume.generation
+            observed.lastError != nil && observed.failedGeneration == current.generation
         let nextPhase: String?
         let nextError: String?
         let nextFailedGeneration: Int64?
@@ -1400,14 +1433,16 @@ struct ObservedStateApplier {
             nextFailedGeneration = nil
         } else {
             nextPhase = observed.convergencePhase ?? "waiting for replicas"
-            nextError = volume.errorMessage
-            nextFailedGeneration = volume.failedGeneration
+            nextError = current.errorMessage
+            nextFailedGeneration = current.failedGeneration
         }
-        var changed = volume.recordConvergence(
+        let convergence = current.recordingConvergence(
             phase: nextPhase,
             lastError: nextError,
             failedGeneration: nextFailedGeneration
         )
+        current = convergence.resource
+        var changed = convergence.changed
 
         // The size the image actually has (STR-199) — recorded here for the same
         // reason the path is, and with the same asymmetry as the applied I/O
@@ -1417,8 +1452,8 @@ struct ObservedStateApplier {
         // the image) leaves the column alone instead of clearing it. Writing nil
         // through would turn a silent agent into "this volume has no size",
         // which is the same wrong answer in the other direction.
-        if let reported = observed.sizeBytes, volume.observedSizeBytes != reported {
-            volume.observedSizeBytes = reported
+        if let reported = observed.sizeBytes, current.observedSizeBytes != reported {
+            current = current.replacing(observedSizeBytes: .some(reported))
             changed = true
         }
 
@@ -1430,13 +1465,13 @@ struct ObservedStateApplier {
         // the generation makes the agent confirm this normalized contract; its
         // exact-size boot gate keeps the guest stopped until that confirmation.
         var normalizedDesiredSize = false
-        if volume.volumeType == .boot,
-            volume.$sourceImage.id != nil || volume.$sourceVolume.id != nil,
+        if current.volumeType == .boot,
+            current.sourceImageID != nil || current.sourceVolumeID != nil,
             observed.present,
             observed.convergencePhase == nil,
             observed.lastError == nil,
             let materializedSize = observed.sizeBytes,
-            materializedSize > volume.size
+            materializedSize > current.size
         {
             let admissionError: String?
             if materializedSize > WorkloadSizeLimits.maxDiskBytes {
@@ -1446,15 +1481,15 @@ struct ObservedStateApplier {
                     + "\(WorkloadSizeLimits.maxDiskBytes) bytes."
             } else {
                 do {
-                    guard let project = try await Project.find(volume.$project.id, on: db) else {
+                    guard let project = try await Project.find(current.projectID, on: db) else {
                         throw Abort(
                             .internalServerError,
                             reason: "The boot volume's project no longer exists")
                     }
                     try await QuotaEnforcementService.reserveVolumeResize(
                         for: project,
-                        environment: volume.environment,
-                        sizeDelta: materializedSize - volume.size,
+                        environment: current.environment,
+                        sizeDelta: materializedSize - current.size,
                         reason: "the materialized boot volume",
                         on: db)
                     admissionError = nil
@@ -1466,21 +1501,20 @@ struct ObservedStateApplier {
             }
 
             if let admissionError {
-                changed =
-                    volume.recordConvergence(
-                        phase: nil,
-                        lastError: admissionError,
-                        failedGeneration: volume.generation) || changed
+                let failed = current.recordingConvergence(
+                    phase: nil, lastError: admissionError,
+                    failedGeneration: current.generation)
+                current = failed.resource
+                changed = failed.changed || changed
             } else {
-                let expectedGeneration = volume.generation
-                volume.size = materializedSize
-                guard
-                    case .applied = try await volume.advanceDesiredStateGeneration(
-                        expectedGeneration: expectedGeneration, on: db)
-                else {
+                let expectedGeneration = current.generation
+                current = current.replacing(size: materializedSize)
+                let advance = try await current.advancingDesiredStateGeneration(
+                    expectedGeneration: expectedGeneration, on: db)
+                guard case .applied = advance.outcome else {
                     throw ConvergenceWriteError.unsupportedDatabase
                 }
-                volume.extendConvergenceDeadline(
+                current = advance.resource.extendingConvergenceDeadline(
                     by: OperationResourceKind.volume.completionBudgetSeconds(for: .resize))
                 changed = true
                 normalizedDesiredSize = true
@@ -1498,25 +1532,25 @@ struct ObservedStateApplier {
         // explicitly uncapped disk sends a present-but-empty value instead, and
         // that one does clear the columns.
         if let applied = observed.ioLimits {
-            if volume.appliedIOPSTotal != applied.iopsTotal {
-                volume.appliedIOPSTotal = applied.iopsTotal
-                changed = true
-            }
-            if volume.appliedBPSTotal != applied.bpsTotal {
-                volume.appliedBPSTotal = applied.bpsTotal
+            if current.appliedIOPSTotal != applied.iopsTotal
+                || current.appliedBPSTotal != applied.bpsTotal
+            {
+                current = current.replacing(
+                    appliedIOPSTotal: .some(applied.iopsTotal),
+                    appliedBPSTotal: .some(applied.bpsTotal))
                 changed = true
             }
         }
 
-        if aggregateObservedGeneration > volume.observedGeneration {
-            volume.observedGeneration = aggregateObservedGeneration
+        if aggregateObservedGeneration > current.observedGeneration {
+            current = current.replacing(observedGeneration: aggregateObservedGeneration)
             changed = true
         }
 
         // Still converging: progress only, never a settled status.
         if observed.convergencePhase != nil {
             if changed {
-                try await volume.save(on: db)
+                try await current.save(on: db)
             }
             return normalizedDesiredSize
         }
@@ -1525,12 +1559,12 @@ struct ObservedStateApplier {
         // this reporter's own attachment; a storage-only replica must not erase
         // the VM host's observation.
         if observed.attachedVMId != nil {
-            if volume.attachedAgentId != agentId {
-                volume.attachedAgentId = agentId
+            if current.attachedAgentId != agentId {
+                current = current.replacing(attachedAgentId: .some(agentId))
                 changed = true
             }
-        } else if volume.attachedAgentId == agentId {
-            volume.attachedAgentId = nil
+        } else if current.attachedAgentId == agentId {
+            current = current.replacing(attachedAgentId: .some(nil))
             changed = true
         }
 
@@ -1543,7 +1577,7 @@ struct ObservedStateApplier {
             // create that has not started from one that failed is the
             // `lastError` check below; `.creating` is the honest reading here.
             derived = observed.lastError == nil ? .creating : .error
-        } else if volume.attachedAgentId != nil {
+        } else if current.attachedAgentId != nil {
             derived = .attached
         } else {
             derived = .available
@@ -1551,33 +1585,33 @@ struct ObservedStateApplier {
         // `.snapshotting` is no longer written by anything (STR-150 made a
         // volume snapshot its own converging resource), so there is nothing
         // left to protect it from: the report is authoritative.
-        if volume.status != derived {
-            volume.status = derived
+        if current.status != derived {
+            current = current.replacing(status: derived)
             changed = true
         }
         let settlesConvergence =
-            volume.desiredStatus != .absent
-            && ((!wasConverged && volume.isConverged)
-                || (observed.lastError != nil && observed.failedGeneration == volume.generation))
+            current.desiredStatus != .absent
+            && ((!wasConverged && current.isConverged)
+                || (observed.lastError != nil && observed.failedGeneration == current.generation))
         if !settlesConvergence {
             if changed {
-                try await volume.save(on: db)
+                try await current.save(on: db)
             }
             return normalizedDesiredSize
         }
 
-        if !wasConverged, volume.isConverged {
-            _ = try await ResourceConvergence.recordSuccess(volume, on: db)
-        } else if let lastError = observed.lastError, observed.failedGeneration == volume.generation {
+        if !wasConverged, current.isConverged {
+            _ = try await ResourceConvergence.recordValueSuccess(current, on: db)
+        } else if let lastError = observed.lastError, observed.failedGeneration == current.generation {
             let mutation =
                 try await ResourceEvent.latest(
                     .requested, resourceKind: .volume, resourceID: volumeID, on: db
                 )?.mutation ?? .create
-            let outcome = try await ResourceConvergence.recordFailure(
-                volume, mutation: mutation, reason: lastError,
+            let outcome = try await ResourceConvergence.recordValueFailure(
+                current, mutation: mutation, reason: lastError,
                 telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
-            if outcome == .alreadyRecorded, changed {
-                try await volume.save(on: db)
+            if outcome.outcome == .alreadyRecorded, changed {
+                try await current.save(on: db)
             }
         }
         return normalizedDesiredSize
@@ -1590,11 +1624,11 @@ struct ObservedStateApplier {
         kind: WorkloadKind,
         from report: ObservedStateReport,
         into placements: inout [UUID: WorkloadPlacement],
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         let ids = report.unrecognized.filter { $0.kind == kind }.map(\.workloadId)
         guard !ids.isEmpty else { return }
-        for artifact in try await A.query(on: db).filter(\._$id ~~ ids).all() {
+        for artifact in try await A.matching(ids: ids, on: db) {
             guard let id = artifact.id else { continue }
             placements[id] = WorkloadPlacement(agentId: artifact.agentId)
         }
@@ -1611,7 +1645,7 @@ struct ObservedStateApplier {
         _ type: A.Type,
         reported: [UUID: ObservedSnapshotState],
         agentId: String,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         for artifact in try await A.placed(onAgent: agentId, on: db) {
             guard let artifactID = artifact.id else { continue }
@@ -1637,10 +1671,11 @@ struct ObservedStateApplier {
     /// Snapshot counterpart of `applyObservedVolumeState`, with the same
     /// transition rules and the same reasons for the order they run in.
     private func applyObservedSnapshotState<A: SnapshotArtifactResource>(
-        artifact: A,
+        artifact initialArtifact: A,
         observed: ObservedSnapshotState,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
+        var artifact = initialArtifact
         let artifactID = try artifact.requireID()
         try logSupersededFailureReport(artifact, reportedGeneration: observed.failedGeneration)
         // Captured before anything mutates, for the reasons the VM path
@@ -1650,11 +1685,13 @@ struct ObservedStateApplier {
         let wasConverged = artifact.isConverged
         let failedBefore = artifact.failedGeneration
 
-        var changed = artifact.recordConvergence(
+        let convergence = artifact.recordingConvergence(
             phase: observed.convergencePhase,
             lastError: observed.lastError,
             failedGeneration: observed.failedGeneration
         )
+        artifact = convergence.resource
+        var changed = convergence.changed
 
         // The captured facts — footprint, hypervisor version, fork layout,
         // architecture — are recorded before the converging early-return, and
@@ -1664,24 +1701,30 @@ struct ObservedStateApplier {
         // checkpoint that in fact existed `.error`. A report is re-sent on every
         // heartbeat, so they simply arrive again.
         var footprintChanged = false
-        if let facts = observed.facts, artifact.applyCapturedFacts(facts) {
-            changed = true
-            footprintChanged = true
+        if let facts = observed.facts {
+            let capture = artifact.recordingCapturedFacts(facts)
+            artifact = capture.resource
+            if capture.changed {
+                changed = true
+                footprintChanged = true
+            }
         }
-        if artifact.applyExported(observed.exported) {
+        let export = artifact.recordingExported(observed.exported)
+        artifact = export.resource
+        if export.changed {
             changed = true
         }
 
         // Still converging: progress only, never a settled status.
         if observed.convergencePhase != nil {
             if changed {
-                try await artifact.save(on: db)
+                try await artifact.persist(on: db)
             }
             return
         }
 
         if observed.observedGeneration > artifact.observedGeneration {
-            artifact.observedGeneration = observed.observedGeneration
+            artifact = artifact.replacingObservedGeneration(observed.observedGeneration)
             changed = true
         }
 
@@ -1689,7 +1732,9 @@ struct ObservedStateApplier {
         // that fact plus the desired state is the whole status vocabulary an
         // artifact has.
         let failed = observed.lastError != nil
-        if artifact.applyObservedPresence(present: observed.present, failed: failed) {
+        let presence = artifact.recordingObservedPresence(present: observed.present, failed: failed)
+        artifact = presence.resource
+        if presence.changed {
             changed = true
         }
 
@@ -1699,23 +1744,24 @@ struct ObservedStateApplier {
                 || (observed.lastError != nil && observed.failedGeneration == artifact.generation))
         if !settlesConvergence {
             if changed {
-                try await artifact.save(on: db)
+                try await artifact.persist(on: db)
             }
             return
         }
 
         if !wasConverged, artifact.isConverged {
-            _ = try await ResourceConvergence.recordSuccess(artifact, on: db)
+            _ = try await ResourceConvergence.recordValueSuccess(artifact, on: db)
         } else if let lastError = observed.lastError, observed.failedGeneration == artifact.generation {
             let mutation =
                 try await ResourceEvent.latest(
                     .requested, resourceKind: A.operationResourceKind, resourceID: artifactID, on: db
                 )?.mutation ?? .create
-            let outcome = try await ResourceConvergence.recordFailure(
+            let result = try await ResourceConvergence.recordValueFailure(
                 artifact, mutation: mutation, reason: lastError,
                 telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
-            if outcome == .alreadyRecorded, changed {
-                try await artifact.save(on: db)
+            artifact = result.resource
+            if result.outcome == .alreadyRecorded, changed {
+                try await artifact.persist(on: db)
             }
         }
 
@@ -1748,7 +1794,7 @@ struct ObservedStateApplier {
     /// than thrown: an observed report that could not enforce a quota must
     /// still apply everything else it carried.
     private func enforceStorageQuota<A: SnapshotArtifactResource>(
-        on artifact: A, on db: Database
+        on artifact: A, on db: PostgresStoreContext
     ) async throws {
         guard let scope = artifact.storageQuotaScope, artifact.desiredStatus == .present else { return }
         do {
@@ -1757,11 +1803,13 @@ struct ObservedStateApplier {
                     projectID: scope.projectID, environment: scope.environment, on: db)
             else { return }
 
-            artifact.lastError =
-                "Snapshot's actual size exceeded storage quota '\(violated)' and was deleted"
-            try await artifact.save(on: db)
+            let updated = artifact.replacingConvergence(
+                phase: artifact.convergencePhase,
+                lastError: "Snapshot's actual size exceeded storage quota '\(violated)' and was deleted",
+                failedGeneration: artifact.failedGeneration)
+            try await updated.persist(on: db)
             _ = try await SnapshotArtifactMutation.delete(
-                artifact, actor: .system, on: db, app: app)
+                updated, actor: .system, on: db, app: app)
 
             let artifactID = try artifact.requireID()
             app.logger.notice(
@@ -1787,10 +1835,11 @@ struct ObservedStateApplier {
     /// bytes are gone — the same contract VMs, sandboxes and volumes have, and
     /// the reason a snapshot delete survives a control-plane restart at all.
     private func handleReportedSnapshotAbsence<A: SnapshotArtifactResource>(
-        artifact: A,
+        artifact initialArtifact: A,
         agentId: String,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
+        var artifact = initialArtifact
         let artifactID = try artifact.requireID()
 
         if artifact.desiredStatus == .absent {
@@ -1808,22 +1857,26 @@ struct ObservedStateApplier {
             return
         }
 
-        let convergenceCleared = artifact.recordConvergence(
+        let convergence = artifact.recordingConvergence(
             phase: nil, lastError: artifact.lastError, failedGeneration: artifact.failedGeneration)
+        artifact = convergence.resource
 
         // Only escalate an artifact some agent has actually confirmed. A row at
         // `observedGeneration == 0` is mid-capture — the agent has not written
         // it yet, and its absence is expected rather than a loss.
         guard artifact.observedGeneration > 0, artifact.isPresentOnAgent else {
-            if convergenceCleared {
-                try await artifact.save(on: db)
+            if convergence.changed {
+                try await artifact.persist(on: db)
             }
             return
         }
 
-        _ = artifact.applyObservedPresence(present: false, failed: true)
-        artifact.lastError = "snapshot artifacts are missing from their agent"
-        try await artifact.save(on: db)
+        artifact = artifact.recordingObservedPresence(present: false, failed: true).resource
+        artifact = artifact.replacingConvergence(
+            phase: artifact.convergencePhase,
+            lastError: "snapshot artifacts are missing from their agent",
+            failedGeneration: artifact.failedGeneration)
+        try await artifact.persist(on: db)
         app.logger.warning(
             "Snapshot missing from agent observed-state report; marking as error until re-converged",
             metadata: [
@@ -1843,19 +1896,21 @@ struct ObservedStateApplier {
     private func handleReportedVolumeAbsence(
         volume: Volume,
         agentId: String,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
-        let volumeID = try volume.requireID()
+        var current = volume
+        let volumeID = try current.requireID()
 
         if volume.desiredStatus == .absent {
             // One report only confirms one physical copy is gone. Remove that
             // replica and keep the shared finalizer until every physical copy,
             // including degraded, resyncing, and faulted copies, has
             // independently disappeared.
-            try await VolumeReplica.query(on: db)
-                .filter(\.$volume.$id == volumeID)
-                .filter(\.$agentId == agentId)
-                .delete()
+            try await LegacyVolumeReplicaStore.delete(
+                volumeID: volumeID,
+                agentId: agentId,
+                on: db
+            )
             let remainingAgentIDs = try await VolumeService.agentIDsWithPhysicalReplicas(
                 of: volume, on: db)
             guard remainingAgentIDs.isEmpty else {
@@ -1890,24 +1945,26 @@ struct ObservedStateApplier {
 
         // Nothing to report means no progress to report — same rationale as the
         // VM and sandbox paths.
-        let convergenceCleared = volume.recordConvergence(
+        let convergence = current.recordingConvergence(
             phase: nil, lastError: nil, failedGeneration: nil)
+        current = convergence.resource
 
         // Only escalate a volume some agent has actually confirmed. A row at
         // `observedGeneration == 0` may simply be waiting for its first sync to
         // reach the agent, and calling that an error would make every create
         // flash red before it went green.
-        guard volume.observedGeneration > 0, volume.status != .error else {
-            if convergenceCleared {
-                try await volume.save(on: db)
+        guard current.observedGeneration > 0, current.status != .error else {
+            if convergence.changed {
+                try await current.save(on: db)
             }
             return
         }
 
-        let previous = volume.status
-        volume.status = .error
-        volume.errorMessage = "volume data is missing from its agent"
-        try await volume.save(on: db)
+        let previous = current.status
+        current = current.replacing(
+            status: .error,
+            errorMessage: .some("volume data is missing from its agent"))
+        try await current.save(on: db)
         app.logger.warning(
             "Volume missing from agent observed-state report; marking as error until re-converged",
             metadata: [
@@ -1929,54 +1986,42 @@ struct ObservedStateApplier {
         agentId: String,
         observed: ObservedVolumeState,
         desiredGeneration: Int64,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         let failedAtTarget =
             observed.lastError != nil && observed.failedGeneration == desiredGeneration
         let state: VolumeReplicaState =
             observed.present && observed.convergencePhase == nil && !failedAtTarget
             ? .healthy : .provisioning
-        if let existing = try await VolumeReplica.query(on: db)
-            .filter(\.$volume.$id == volumeID)
-            .filter(\.$agentId == agentId)
-            .first()
-        {
-            var changed = false
-            if let diskAttachment = observed.attachment,
-                existing.diskAttachment != diskAttachment
-            {
-                existing.diskAttachment = diskAttachment
-                changed = true
-            }
-            if existing.state != state {
-                existing.state = state
-                changed = true
-            }
-            if observed.observedGeneration > existing.generation {
-                existing.generation = observed.observedGeneration
-                changed = true
-            }
-            if changed {
-                try await existing.save(on: db)
-            }
-            return
-        }
-        guard observed.present else { return }
-        try await VolumeReplica(
+        let existing = try await LegacyVolumeReplicaStore.replica(
+            volumeID: volumeID,
+            agentId: agentId,
+            on: db
+        )
+        guard existing != nil || observed.present else { return }
+        _ = try await LegacyVolumeReplicaStore.recordObservation(
             volumeID: volumeID,
             agentId: agentId,
             diskAttachment: observed.attachment,
             state: state,
-            generation: observed.observedGeneration
-        ).create(on: db)
+            generation: observed.observedGeneration,
+            on: db
+        )
     }
 }
 
 extension Application {
-    /// The observed-state report applier. Stateless and cheap to construct
-    /// (it holds a reference), so it is materialized per access rather than
-    /// stored — the same idiom as `resourceOperationCoordinator`.
+    private struct ObservedStateApplierKey: StorageKey {
+        typealias Value = ObservedStateApplier
+    }
+
     var observedStateApplier: ObservedStateApplier {
-        ObservedStateApplier(app: self)
+        get {
+            guard let applier = storage[ObservedStateApplierKey.self] else {
+                preconditionFailure("Observed-state applier has not been configured")
+            }
+            return applier
+        }
+        set { storage[ObservedStateApplierKey.self] = newValue }
     }
 }

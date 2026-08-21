@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -29,9 +28,8 @@ final class RoleEndpointTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "roleuser",
                 email: "role@example.com",
@@ -40,12 +38,11 @@ final class RoleEndpointTests {
             )
             let org = try await builder.createOrganization(name: "Role Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
             let project = try await builder.createProject(
                 name: "Role Project", description: "d", organization: org)
 
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
             try await test(app, Fixture(user: user, token: token, org: org, project: project))
         } catch {
             try await app.shutdownForTesting()
@@ -104,7 +101,7 @@ final class RoleEndpointTests {
     @Test("Creating a role from an action list generates the canonical permit and bumps the version")
     func createFromActionsGeneratesPermit() async throws {
         try await withApp { app, fixture in
-            let before = try await PolicySetVersionService.current(on: app.db)
+            let before = try await PolicySetVersionService.current(on: app.testPostgres)
 
             let role = try await createRole(
                 createBody(name: "vm-reader", org: fixture.org), token: fixture.token, on: app)
@@ -115,7 +112,7 @@ final class RoleEndpointTests {
             #expect(role.cedarText == RoleDescriptor.canonicalPermitText(id: role.id, actions: role.actions))
             #expect(role.cedarText.contains("\(role.id.uuidString.lowercased())Users"))
 
-            let after = try await PolicySetVersionService.current(on: app.db)
+            let after = try await PolicySetVersionService.current(on: app.testPostgres)
             #expect(after == before + 1)
         }
     }
@@ -174,7 +171,7 @@ final class RoleEndpointTests {
                         #expect(res.status == .badRequest)
                     })
             }
-            let stored = try await IAMRoleDefinition.query(on: app.db).filter(\.$managed == false).count()
+            let stored = try await RoleStore.legacyRoleCount(managed: false, on: app.testPostgres)
             #expect(stored == 0)
         }
     }
@@ -182,7 +179,7 @@ final class RoleEndpointTests {
     @Test("An action the registry does not know is a 400 and writes nothing")
     func unknownActionIsRejected() async throws {
         try await withApp { app, fixture in
-            let before = try await PolicySetVersionService.current(on: app.db)
+            let before = try await PolicySetVersionService.current(on: app.testPostgres)
 
             try await app.test(
                 .POST, "/api/iam/roles",
@@ -196,8 +193,8 @@ final class RoleEndpointTests {
                     #expect(res.body.string.contains("vm:raed"))
                 })
 
-            let stored = try await IAMRoleDefinition.query(on: app.db).filter(\.$managed == false).count()
-            let after = try await PolicySetVersionService.current(on: app.db)
+            let stored = try await RoleStore.legacyRoleCount(managed: false, on: app.testPostgres)
+            let after = try await PolicySetVersionService.current(on: app.testPostgres)
             #expect(stored == 0)
             #expect(after == before)
         }
@@ -235,7 +232,7 @@ final class RoleEndpointTests {
                     #expect(res.body.string.contains(group))
                 })
 
-            let stored = try await IAMRoleDefinition.query(on: app.db).filter(\.$managed == false).count()
+            let stored = try await RoleStore.legacyRoleCount(managed: false, on: app.testPostgres)
             #expect(stored == 0)
         }
     }
@@ -325,7 +322,7 @@ final class RoleEndpointTests {
                 afterResponse: { res in
                     #expect(res.status == .badRequest)
                 })
-            let stored = try await IAMRoleDefinition.query(on: app.db).filter(\.$managed == false).count()
+            let stored = try await RoleStore.legacyRoleCount(managed: false, on: app.testPostgres)
             #expect(stored == 0)
         }
     }
@@ -363,7 +360,7 @@ final class RoleEndpointTests {
                             name: "fake-default",
                             description: nil,
                             ownerType: .platform,
-                            ownerId: IAMRoleDefinition.platformOwnerID,
+                            ownerId: IAMRoleOwnerType.platformOwnerID,
                             actions: ["vm:read"],
                             cedarText: nil,
                             id: nil
@@ -402,7 +399,7 @@ final class RoleEndpointTests {
     @Test("Writing a role in an organization the caller does not administer is a 403")
     func foreignOwnerIsForbidden() async throws {
         try await withApp { app, fixture in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let otherOrg = try await builder.createOrganization(name: "Someone Else's Org")
 
             try await app.test(
@@ -428,7 +425,7 @@ final class RoleEndpointTests {
     func listRejectsUnusableOwners() async throws {
         try await withApp { app, fixture in
             try await app.test(
-                .GET, "/api/iam/roles?ownerType=platform&ownerId=\(IAMRoleDefinition.platformOwnerID)",
+                .GET, "/api/iam/roles?ownerType=platform&ownerId=\(IAMRoleOwnerType.platformOwnerID)",
                 beforeRequest: { req in
                     req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
                 },
@@ -455,7 +452,7 @@ final class RoleEndpointTests {
     func managedRolesAreImmutable() async throws {
         try await withApp(systemAdmin: true) { app, fixture in
             let adminRole = IAMRole.admin.seededID
-            let before = try await PolicySetVersionService.current(on: app.db)
+            let before = try await PolicySetVersionService.current(on: app.testPostgres)
 
             try await app.test(
                 .PATCH, "/api/iam/roles/\(adminRole)",
@@ -477,9 +474,9 @@ final class RoleEndpointTests {
                     #expect(res.status == .forbidden)
                 })
 
-            let stored = try await IAMRoleDefinition.find(adminRole, on: app.db)
+            let stored = try await RoleStore.legacyRole(id: adminRole, on: app.testPostgres)
             #expect(stored?.actions.contains("iam:setPolicy") == true)
-            #expect(try await PolicySetVersionService.current(on: app.db) == before)
+            #expect(try await PolicySetVersionService.current(on: app.testPostgres) == before)
         }
     }
 
@@ -490,7 +487,7 @@ final class RoleEndpointTests {
         try await withApp { app, fixture in
             let role = try await createRole(
                 createBody(name: "editable", org: fixture.org), token: fixture.token, on: app)
-            let before = try await PolicySetVersionService.current(on: app.db)
+            let before = try await PolicySetVersionService.current(on: app.testPostgres)
 
             try await app.test(
                 .PATCH, "/api/iam/roles/\(role.id)",
@@ -508,7 +505,7 @@ final class RoleEndpointTests {
                     #expect(updated.cedarText.contains("vm:start"))
                 })
 
-            #expect(try await PolicySetVersionService.current(on: app.db) == before + 1)
+            #expect(try await PolicySetVersionService.current(on: app.testPostgres) == before + 1)
         }
     }
 
@@ -524,7 +521,7 @@ final class RoleEndpointTests {
                 nodeType: .project,
                 nodeID: fixture.project.id!,
                 createdBy: fixture.user.id,
-                on: app.db
+                on: app.testPostgres
             )
 
             try await app.test(
@@ -536,7 +533,7 @@ final class RoleEndpointTests {
                     #expect(res.status == .conflict)
                     #expect(res.body.string.contains("1 active binding"))
                 })
-            #expect(try await IAMRoleDefinition.find(role.id, on: app.db) != nil)
+            #expect(try await RoleStore.legacyRole(id: role.id, on: app.testPostgres) != nil)
 
             try await RoleBindingService.revoke(
                 principalType: .user,
@@ -544,9 +541,9 @@ final class RoleEndpointTests {
                 roleID: role.id,
                 nodeType: .project,
                 nodeID: fixture.project.id!,
-                on: app.db
+                on: app.testPostgres
             )
-            let before = try await PolicySetVersionService.current(on: app.db)
+            let before = try await PolicySetVersionService.current(on: app.testPostgres)
 
             try await app.test(
                 .DELETE, "/api/iam/roles/\(role.id)",
@@ -556,8 +553,8 @@ final class RoleEndpointTests {
                 afterResponse: { res in
                     #expect(res.status == .noContent)
                 })
-            #expect(try await IAMRoleDefinition.find(role.id, on: app.db) == nil)
-            #expect(try await PolicySetVersionService.current(on: app.db) == before + 1)
+            #expect(try await RoleStore.legacyRole(id: role.id, on: app.testPostgres) == nil)
+            #expect(try await PolicySetVersionService.current(on: app.testPostgres) == before + 1)
         }
     }
 
@@ -566,16 +563,16 @@ final class RoleEndpointTests {
         try await withApp { app, fixture in
             let role = try await createRole(
                 createBody(name: "bindable-role", org: fixture.org), token: fixture.token, on: app)
-            let before = try await PolicySetVersionService.current(on: app.db)
+            let before = try await PolicySetVersionService.current(on: app.testPostgres)
 
             try await RoleBindingService.grant(
                 principalType: .user, principalID: fixture.user.id!, roleID: role.id,
-                nodeType: .project, nodeID: fixture.project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: fixture.project.id!, createdBy: nil, on: app.testPostgres)
             try await RoleBindingService.revoke(
                 principalType: .user, principalID: fixture.user.id!, roleID: role.id,
-                nodeType: .project, nodeID: fixture.project.id!, on: app.db)
+                nodeType: .project, nodeID: fixture.project.id!, on: app.testPostgres)
 
-            #expect(try await PolicySetVersionService.current(on: app.db) == before)
+            #expect(try await PolicySetVersionService.current(on: app.testPostgres) == before)
         }
     }
 
@@ -672,7 +669,7 @@ final class RoleEndpointTests {
     @Test("Validate compiles without saving and hands back the generated permit")
     func validateSavesNothing() async throws {
         try await withApp { app, fixture in
-            let before = try await PolicySetVersionService.current(on: app.db)
+            let before = try await PolicySetVersionService.current(on: app.testPostgres)
 
             try await app.test(
                 .POST, "/api/iam/roles/validate",
@@ -701,9 +698,9 @@ final class RoleEndpointTests {
                     #expect(res.status == .badRequest)
                 })
 
-            let stored = try await IAMRoleDefinition.query(on: app.db).filter(\.$managed == false).count()
+            let stored = try await RoleStore.legacyRoleCount(managed: false, on: app.testPostgres)
             #expect(stored == 0)
-            #expect(try await PolicySetVersionService.current(on: app.db) == before)
+            #expect(try await PolicySetVersionService.current(on: app.testPostgres) == before)
         }
     }
 
@@ -752,7 +749,7 @@ final class RoleEndpointTests {
                     cedarText: nil,
                     id: nil
                 ), token: fixture.token, on: app)
-            let before = try await PolicySetVersionService.current(on: app.db)
+            let before = try await PolicySetVersionService.current(on: app.testPostgres)
 
             try await app.test(
                 .DELETE, "/api/projects/\(fixture.project.id!)",
@@ -763,8 +760,8 @@ final class RoleEndpointTests {
                     #expect(res.status == .noContent)
                 })
 
-            #expect(try await IAMRoleDefinition.find(role.id, on: app.db) == nil)
-            #expect(try await PolicySetVersionService.current(on: app.db) == before + 1)
+            #expect(try await RoleStore.legacyRole(id: role.id, on: app.testPostgres) == nil)
+            #expect(try await PolicySetVersionService.current(on: app.testPostgres) == before + 1)
         }
     }
 }

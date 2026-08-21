@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -66,7 +65,7 @@ extension SandboxController {
         try await SnapshotArtifactMutation.requireCaptureCapableAgent(
             agentId, kind: .sandboxSnapshot, app: req.application)
 
-        guard let project = try await Project.find(sandbox.$project.id, on: req.db) else {
+        guard let project = try await Project.find(sandbox.projectID, on: database) else {
             throw Abort(.internalServerError, reason: "Sandbox project not found")
         }
 
@@ -76,34 +75,27 @@ extension SandboxController {
             : "snapshot-\(Int(Date().timeIntervalSince1970))"
 
         let userID = try user.requireID()
+        let sourceCPUModel =
+            (await req.application.agentService.getAgentInfo(agentId))?
+            .hostInfo?.cpuModel
         let snapshot = SandboxSnapshot(
             name: name,
             sandboxID: sandboxID,
-            projectID: sandbox.$project.id,
+            projectID: sandbox.projectID,
             environment: sandbox.environment,
+            size: sandbox.memory,
             agentId: agentId,
+            sourceCPUModel: sourceCPUModel,
+            convergenceDeadline: Date().addingTimeInterval(
+                OperationResourceKind.sandboxSnapshot.completionBudgetSeconds(for: .create)),
             captureMode: stopAfterSnapshot ? .stop : .resume,
             expiresAt: try SnapshotRetention.expiry(
                 requested: request.ttlSeconds,
                 defaultTTLSeconds: req.controlPlaneConfiguration.int(.snapshotDefaultTTLSeconds)),
             createdByID: userID)
-        // Admission estimate: the memory file dominates and is bounded by
-        // guest RAM. Replaced by the agent's actual sizes once its observed
-        // report carries them.
-        snapshot.size = sandbox.memory
-        // The source host's CPU model, recorded now rather than on completion:
-        // it is a fact about the *agent*, which the agent's own report has no
-        // reason to carry, and an un-templated snapshot needs it to be mobile
-        // at all (issue #428).
-        snapshot.sourceCPUModel =
-            (await req.application.agentService.getAgentInfo(agentId))?
-            .hostInfo?.cpuModel
-        snapshot.extendConvergenceDeadline(
-            by: OperationResourceKind.sandboxSnapshot.completionBudgetSeconds(for: .create))
-
         let environment = sandbox.environment
         let memory = sandbox.memory
-        let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+        let accepted = try await database.transaction { db -> ResourceMutation.Accepted in
             // Snapshot storage draws from the shared storage quota pool
             // (issue #415 enforcement points).
             try await QuotaEnforcementService.reserveSnapshotStorage(
@@ -128,20 +120,22 @@ extension SandboxController {
                 // the reconciler does not resume it on the next sync. Writing
                 // only the first would make "and stop" last exactly until the
                 // next level-triggered pass.
-                guard try await sandbox.lockAndRefresh(on: db) else {
+                guard var current = try await sandbox.lockingAndRefreshing(on: db) else {
                     throw Abort(.notFound, reason: "Sandbox no longer exists")
                 }
-                let expectedGeneration = sandbox.generation
-                sandbox.setDesiredStatus(.stopped)
+                let expectedGeneration = current.generation
+                current.setDesiredStatus(.stopped)
+                let advance = try await current.advancingDesiredStateGeneration(
+                    expectedGeneration: expectedGeneration, on: db)
                 guard
-                    case .applied = try await sandbox.advanceDesiredStateGeneration(
-                        expectedGeneration: expectedGeneration, on: db)
+                    case .applied = advance.outcome
                 else {
                     throw Abort(
                         .internalServerError,
                         reason: "Failed to advance the locked sandbox generation")
                 }
-                try await sandbox.save(on: db)
+                current = advance.resource
+                try await current.persist(on: db)
             }
             return try await SnapshotArtifactMutation.recordCapture(
                 snapshot, actor: .user(userID), on: db)
@@ -172,11 +166,8 @@ extension SandboxController {
         let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:read")
         let sandboxID = try sandbox.requireID()
 
-        let snapshots = try await SandboxSnapshot.query(on: req.db)
-            .filter(\.$sandbox.$id == sandboxID)
-            .sort(\.$createdAt, .descending)
-            .sort(\.$id, .descending)
-            .all()
+        let snapshots = try await LegacySandboxSnapshotStore.snapshots(
+            sandboxID: sandboxID, orderByCreatedDescending: true, on: database)
         return paging.page(snapshots.map { SandboxSnapshotResponse(from: $0) })
     }
 
@@ -205,13 +196,13 @@ extension SandboxController {
         // them. Checked here and again under the lineage lock inside the
         // mutation, and shared with the retention sweep so a clock is refused
         // for exactly the reasons a human is.
-        try await Self.lockSnapshotLineage([snapshotID], on: req.db)
-        if let blocker = try await SnapshotDeletionGuard.blocker(for: snapshot, on: req.db) {
+        try await Self.lockSnapshotLineage([snapshotID], on: database)
+        if let blocker = try await SnapshotDeletionGuard.blocker(for: snapshot, on: database) {
             throw Abort(.conflict, reason: blocker)
         }
 
         let accepted = try await SnapshotArtifactMutation.delete(
-            snapshot, actor: .user(try user.requireID()), on: req.db, app: req.application)
+            snapshot, actor: .user(try user.requireID()), on: database, app: req.application)
 
         req.logger.info(
             "Sandbox snapshot deletion requested",
@@ -253,7 +244,7 @@ extension SandboxController {
         }
         // Preserve the specific clone-safety error during request preflight;
         // the locked transaction below repeats this check authoritatively.
-        guard try await Self.liveForkCount(from: snapshotID, on: req.db) == 0 else {
+        guard try await Self.liveForkCount(from: snapshotID, on: database) == 0 else {
             throw Abort(
                 .conflict,
                 reason: "Snapshot cannot be restored in place while live forks of it exist")
@@ -301,10 +292,10 @@ extension SandboxController {
         }
 
         let userID = try user.requireID()
-        let accepted = try await req.resourceMutation.accept(
+        let mutation = try await req.resourceMutation.acceptValue(
             .restore, on: sandbox, actor: .user(userID), dispatch: .stateSync,
-            on: req.db, app: req.application
-        ) { @Sendable db in
+            on: database, app: req.application
+        ) { @Sendable currentSandbox, db in
             try await Self.lockSnapshotLineage([snapshotID], on: db)
             guard let current = try await SandboxSnapshot.find(snapshotID, on: db), current.canRestore
             else {
@@ -330,7 +321,9 @@ extension SandboxController {
             // Bumps the restore nonce and sets desired `.running` — the restored
             // guest resumes, so desired state has to agree or the next sync
             // would stop it right back.
-            sandbox.requestRestore(snapshotID: snapshotID)
+            var updated = currentSandbox
+            updated.requestRestore(snapshotID: snapshotID)
+            return updated
         }
 
         req.logger.info(
@@ -339,22 +332,22 @@ extension SandboxController {
                 "sandbox_id": .string(sandboxID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
             ])
-        return try await SandboxController.acceptedResponse(for: sandbox, accepted, on: req)
+        return try await SandboxController.acceptedResponse(
+            for: mutation.resource, mutation.accepted, on: req, database: database)
     }
 
     // MARK: - Shared
 
-    static func liveForkCount(from snapshotID: UUID, on db: any Database) async throws -> Int {
-        try await Sandbox.query(on: db)
-            .filter(\.$restoredFromSnapshotId == snapshotID)
-            .count()
+    static func liveForkCount(from snapshotID: UUID, on db: PostgresStoreContext) async throws -> Int {
+        try await LegacySandboxStore.sandboxes(
+            restoredFromSnapshotID: snapshotID, on: db).count
     }
 
     /// Serialize every fork admission and destructive lineage transition on
     /// the snapshot IDs they touch. Postgres advisory locks span replicas and
     /// live until the enclosing transaction commits.
-    static func lockSnapshotLineage(_ snapshotIDs: [UUID], on db: any Database) async throws {
-        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
+    static func lockSnapshotLineage(_ snapshotIDs: [UUID], on db: PostgresStoreContext) async throws {
+        guard let sql = db as? PostgresStoreContext, sql.dialect.name == "postgresql" else { return }
         for snapshotID in Set(snapshotIDs).sorted(by: { $0.uuidString < $1.uuidString }) {
             try await sql.raw(
                 "SELECT pg_advisory_xact_lock(hashtext(\(bind: "sandbox-snapshot-lineage:\(snapshotID.uuidString)")))"
@@ -367,15 +360,14 @@ extension SandboxController {
     /// *before* the delete, because the snapshot rows cascade with the
     /// sandbox and take the export records with them. Best-effort by the
     /// same rationale as `deleteExportedObjects`.
-    static func cleanUpExportedSnapshotObjects(for sandboxID: UUID, app: Application) async {
-        // Best-effort cleanup runs on the delete completion paths, which may
-        // reach here after shutdown's drain cancelled the task; `try?` does not
-        // catch the fatal unwrap a torn-down `app.db` produces, so guard first.
-        guard let db = app.liveDB else { return }
+    static func cleanUpExportedSnapshotObjects(
+        for sandboxID: UUID,
+        app: Application,
+        on db: PostgresStoreContext
+    ) async {
         guard
-            let snapshots = try? await SandboxSnapshot.query(on: db)
-                .filter(\.$sandbox.$id == sandboxID)
-                .all()
+            let snapshots = try? await LegacySandboxSnapshotStore.snapshots(
+                sandboxID: sandboxID, on: db)
         else { return }
         for snapshot in snapshots {
             await snapshot.deleteExportedObjects(app: app)
@@ -386,17 +378,15 @@ extension SandboxController {
     /// requests and automated TTL/retention expiry. The caller must invoke it
     /// in the same transaction that marks the source absent.
     static func requireSnapshotLineageDeletable(
-        for sandboxID: UUID, on db: any Database
+        for sandboxID: UUID, on db: PostgresStoreContext
     ) async throws {
-        let snapshotIDs = try await SandboxSnapshot.query(on: db)
-            .filter(\.$sandbox.$id == sandboxID)
-            .all()
-            .compactMap(\.id)
+        let snapshotIDs = try await LegacySandboxSnapshotStore.snapshots(
+            sandboxID: sandboxID, on: db
+        ).compactMap(\.id)
         try await lockSnapshotLineage(snapshotIDs, on: db)
         guard !snapshotIDs.isEmpty else { return }
-        let descendants = try await Sandbox.query(on: db)
-            .filter(\.$restoredFromSnapshotId ~~ snapshotIDs)
-            .count()
+        let descendants = try await LegacySandboxStore.sandboxes(
+            restoredFromSnapshotIDs: snapshotIDs, on: db).count
         guard descendants == 0 else {
             throw Abort(
                 .conflict,
@@ -409,7 +399,7 @@ extension SandboxController {
     /// gives specific authorization/compatibility errors; this closes races
     /// with snapshot delete, source delete, and in-place restore.
     static func requireSnapshotAvailableForFork(
-        _ snapshotID: UUID, on db: any Database
+        _ snapshotID: UUID, on db: PostgresStoreContext
     ) async throws {
         try await lockSnapshotLineage([snapshotID], on: db)
         guard let snapshot = try await SandboxSnapshot.find(snapshotID, on: db), snapshot.isReady else {
@@ -425,7 +415,7 @@ extension SandboxController {
                 .conflict,
                 reason: unsupportedGuestProtocolReason(snapshot.guestControlProtocolVersion))
         }
-        let sourceID = snapshot.$sandbox.id
+        let sourceID = snapshot.sandboxID
         guard let source = try await Sandbox.find(sourceID, on: db), source.desiredStatus != .absent else {
             throw Abort(.conflict, reason: "Snapshot source sandbox is being deleted")
         }
@@ -460,16 +450,17 @@ extension SandboxController {
     /// derivation that closes it also refuses forks of any sandbox that was
     /// restored and later stopped.
     private static func requireNoRestoreInFlight(
-        on source: Sandbox, on db: any Database
+        on source: Sandbox, on db: PostgresStoreContext
     ) async throws {
         let sourceID = try source.requireID()
-        let restore = try await ResourceEvent.query(on: db)
-            .filter(\.$resourceKind == .sandbox)
-            .filter(\.$resourceID == sourceID)
-            .filter(\.$phase == .requested)
-            .filter(\.$mutation == .restore)
-            .sort(\.$createdAt, .descending)
-            .first()
+        let restore = try await ResourceEvent.matching(
+            resourceKind: .sandbox,
+            resourceID: sourceID,
+            mutation: .restore,
+            phase: .requested,
+            limit: 1,
+            on: db
+        ).first
         guard let restore else { return }
         // `requestRestore` bumps the sandbox's generation alongside its
         // `restoreGeneration` (via `setDesiredStatus(.running)`), so the
@@ -495,8 +486,8 @@ extension SandboxController {
         guard let snapshotID = req.parameters.get("snapshotID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid snapshot ID")
         }
-        guard let snapshot = try await SandboxSnapshot.find(snapshotID, on: req.db),
-            snapshot.$sandbox.id == (try sandbox.requireID())
+        guard let snapshot = try await SandboxSnapshot.find(snapshotID, on: database),
+            snapshot.sandboxID == (try sandbox.requireID())
         else {
             throw Abort(.notFound, reason: "Snapshot not found")
         }

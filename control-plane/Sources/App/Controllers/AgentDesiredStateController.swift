@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import StratoShared
 import Vapor
@@ -23,6 +23,14 @@ import Vapor
 /// enters the agent's ordinary message-routing and desired-state serialization
 /// lane.
 struct AgentDesiredStateController: RouteCollection {
+    private let agents: AgentsPersistence
+    private let workloads: WorkloadsPersistence
+
+    init(agents: AgentsPersistence, workloads: WorkloadsPersistence) {
+        self.agents = agents
+        self.workloads = workloads
+    }
+
     /// How long a poll parks before answering `304`.
     ///
     /// Bounded above by what sits between the agent and the handler: Envoy's
@@ -68,23 +76,22 @@ struct AgentDesiredStateController: RouteCollection {
         guard AgentMTLSAuthenticator.hasClientCertificate(req) else {
             throw Abort(.unauthorized, reason: "Desired state requires an agent client certificate")
         }
-        let agent = try await AgentMTLSAuthenticator.authenticateAgent(req: req)
+        let agent = try await AgentMTLSAuthenticator.authenticateAgent(
+            req: req, workloads: workloads)
 
         // Resolved by the SVID's full identity, not its bare name: two
         // organizations may each enroll an `agent-1` (issue #613), and one
         // must never be served the other's desired state.
-        guard
-            let agentRow = try await Agent.query(on: req.db)
-                .filter(\.$trustDomain == agent.identity.trustDomain)
-                .filter(\.$name == agent.identity.name)
-                .first(),
-            let agentId = agentRow.id?.uuidString
-        else {
+        guard let agentRow = try await agents.agent(
+            trustDomain: agent.identity.trustDomain,
+            name: agent.identity.name
+        ) else {
             req.logger.warning(
                 "Desired-state poll from an agent identity with no registered agent",
                 metadata: ["agent": .string(agent.identity.key)])
             throw Abort(.forbidden, reason: "No agent is registered for this identity")
         }
+        let agentId = agentRow.id.uuidString
 
         let agentKey = agent.identity.key
         // An absent `If-None-Match` is not a cache miss to be worked around —

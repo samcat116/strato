@@ -1,5 +1,5 @@
 import Crypto
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import NIOConcurrencyHelpers
 import StratoShared
@@ -23,13 +23,13 @@ private struct WebhookFixture {
 private func makeFixture(
     _ app: Application, role: String = "admin"
 ) async throws -> WebhookFixture {
-    let builder = TestDataBuilder(db: app.db)
+    let builder = TestDataBuilder(db: app.testPostgres)
     let user = try await builder.createUser(username: "hookuser", email: "hooks@example.com")
     let org = try await builder.createOrganization(name: "Webhook Org")
     try await builder.addUserToOrganization(user: user, organization: org, role: role)
     let project = try await builder.createProject(
         name: "Hook Project", description: "", organization: org)
-    let apiToken = try await user.generateAPIKey(on: app.db)
+    let apiToken = try await user.generateAPIKey(on: app)
     return WebhookFixture(user: user, organization: org, project: project, apiToken: apiToken)
 }
 
@@ -42,18 +42,93 @@ private func makeSubscription(
     eventTypes: [WebhookEventType] = [],
     projectID: UUID? = nil,
     secret: String = "whsec_test_secret"
-) async throws -> WebhookSubscription {
-    let subscription = WebhookSubscription(
+) async throws -> WebhookSubscriptionSnapshot {
+    try await app.webhookSubscriptionsPersistence.create(
+        WebhookSubscriptionWrite(
+            id: UUID(),
         organizationID: fixture.organization.id!,
         projectID: projectID,
         name: "test hook",
         url: url,
-        eventTypes: eventTypes,
-        signingSecret: try app.secretsEncryption.encrypt(secret),
+            eventTypesJSON: try webhookEventTypesJSON(eventTypes),
+            encryptedSigningSecret: try app.secretsEncryption.encrypt(secret),
+            isActive: true,
+            disabledReason: nil,
+            failingSince: nil,
         createdByID: fixture.user.id!
-    )
-    try await subscription.save(on: app.db)
-    return subscription
+        ))
+}
+
+private func replaceSubscriptionState(
+    _ app: Application,
+    subscription: WebhookSubscriptionSnapshot,
+    isActive: Bool,
+    disabledReason: String?,
+    failingSince: Date?
+) async throws -> WebhookSubscriptionSnapshot {
+    try #require(
+        try await app.webhookSubscriptionsPersistence.replace(
+            WebhookSubscriptionWrite(
+                id: subscription.id,
+                organizationID: subscription.organizationID,
+                projectID: subscription.projectID,
+                name: subscription.name,
+                url: subscription.url,
+                eventTypesJSON: subscription.eventTypesJSON,
+                encryptedSigningSecret: subscription.encryptedSigningSecret,
+                isActive: isActive,
+                disabledReason: disabledReason,
+                failingSince: failingSince,
+                createdByID: subscription.createdByID
+            )))
+}
+
+private func makeDelivery(
+    _ app: Application,
+    subscriptionID: UUID,
+    eventID: UUID = UUID(),
+    eventType: WebhookEventType = .webhookTest,
+    payload: String = "{}",
+    status: WebhookDeliveryStatus = .pending,
+    attempts: Int = 0,
+    nextAttemptAt: Date = Date(),
+    lastError: String? = nil
+) async throws -> WebhookDeliverySnapshot {
+    try await app.webhookDeliveriesPersistence.create(
+        WebhookDeliveryWrite(
+            subscriptionID: subscriptionID,
+            eventID: eventID,
+            eventType: eventType.rawValue,
+            payload: payload,
+            status: status,
+            attempts: attempts,
+            nextAttemptAt: nextAttemptAt,
+            lastError: lastError))
+}
+
+private func replaceDelivery(
+    _ app: Application,
+    delivery: WebhookDeliverySnapshot,
+    status: WebhookDeliveryStatus,
+    attempts: Int,
+    nextAttemptAt: Date,
+    lastError: String?
+) async throws -> WebhookDeliverySnapshot {
+    try #require(
+        try await app.webhookDeliveriesPersistence.replace(
+            WebhookDeliveryWrite(
+                id: delivery.id,
+                subscriptionID: delivery.subscriptionID,
+                eventID: delivery.eventID,
+                eventType: delivery.eventType,
+                payload: delivery.payload,
+                status: status,
+                attempts: attempts,
+                nextAttemptAt: nextAttemptAt,
+                lastAttemptAt: delivery.lastAttemptAt,
+                responseStatus: delivery.responseStatus,
+                lastError: lastError,
+                deliveredAt: delivery.deliveredAt)))
 }
 
 // MARK: - Subscription CRUD API
@@ -143,7 +218,7 @@ struct WebhookSubscriptionAPITests {
             }
 
             // A project from another organization.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let otherOrg = try await builder.createOrganization(name: "Other Org")
             let foreignProject = try await builder.createProject(
                 name: "Foreign", description: "", organization: otherOrg)
@@ -185,7 +260,7 @@ struct WebhookSubscriptionAPITests {
             // detail from any project in the organization.
             let subscription = try await makeSubscription(app, fixture: fixture)
             try await app.test(
-                .GET, "\(base)/\(subscription.id!.uuidString)/deliveries"
+                .GET, "\(base)/\(subscription.id.uuidString)/deliveries"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.apiToken)
             } afterResponse: { res in
@@ -198,15 +273,17 @@ struct WebhookSubscriptionAPITests {
     func reactivationClearsFailureState() async throws {
         try await withTestApp { app in
             let fixture = try await makeFixture(app)
-            let subscription = try await makeSubscription(app, fixture: fixture)
-            subscription.isActive = false
-            subscription.disabledReason = "Automatically disabled after 3 day(s) of failed deliveries"
-            subscription.failingSince = Date().addingTimeInterval(-86_400 * 4)
-            try await subscription.save(on: app.db)
+            var subscription = try await makeSubscription(app, fixture: fixture)
+            subscription = try await replaceSubscriptionState(
+                app,
+                subscription: subscription,
+                isActive: false,
+                disabledReason: "Automatically disabled after 3 day(s) of failed deliveries",
+                failingSince: Date().addingTimeInterval(-86_400 * 4))
 
             let path =
                 "/api/organizations/\(fixture.organization.id!.uuidString)"
-                + "/webhooks/\(subscription.id!.uuidString)"
+                + "/webhooks/\(subscription.id.uuidString)"
             try await app.test(.PUT, path) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.apiToken)
                 try req.content.encode(
@@ -230,7 +307,7 @@ struct WebhookSubscriptionAPITests {
 
             let path =
                 "/api/organizations/\(fixture.organization.id!.uuidString)"
-                + "/webhooks/\(subscription.id!.uuidString)/rotate-secret"
+                + "/webhooks/\(subscription.id.uuidString)/rotate-secret"
             try await app.test(.POST, path) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.apiToken)
             } afterResponse: { res in
@@ -247,25 +324,21 @@ struct WebhookSubscriptionAPITests {
         try await withTestApp { app in
             let fixture = try await makeFixture(app)
             let subscription = try await makeSubscription(app, fixture: fixture)
-            let delivery = WebhookDelivery(
-                subscriptionID: subscription.id!,
-                eventID: UUID(),
-                eventType: .webhookTest,
-                payload: "{}")
-            try await delivery.save(on: app.db)
+            _ = try await makeDelivery(app, subscriptionID: subscription.id)
 
             let path =
                 "/api/organizations/\(fixture.organization.id!.uuidString)"
-                + "/webhooks/\(subscription.id!.uuidString)"
+                + "/webhooks/\(subscription.id.uuidString)"
             try await app.test(.DELETE, path) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.apiToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
 
-            let remainingSubscriptions = try await WebhookSubscription.query(on: app.db).count()
+            let remainingSubscriptions = try await app.webhookSubscriptionsPersistence
+                .subscriptions(organizationID: fixture.organization.id!).count
             #expect(remainingSubscriptions == 0)
-            let remainingDeliveries = try await WebhookDelivery.query(on: app.db).count()
+            let remainingDeliveries = try await app.webhookDeliveriesPersistence.count()
             #expect(remainingDeliveries == 0)
         }
     }
@@ -279,7 +352,7 @@ struct WebhookSubscriptionAPITests {
 
             let path =
                 "/api/organizations/\(fixture.organization.id!.uuidString)"
-                + "/webhooks/\(subscription.id!.uuidString)/test"
+                + "/webhooks/\(subscription.id.uuidString)/test"
             try await app.test(.POST, path) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.apiToken)
             } afterResponse: { res in
@@ -297,17 +370,12 @@ struct WebhookSubscriptionAPITests {
         try await withTestApp { app in
             let fixture = try await makeFixture(app)
             let subscription = try await makeSubscription(app, fixture: fixture)
-            let delivery = WebhookDelivery(
-                subscriptionID: subscription.id!,
-                eventID: UUID(),
-                eventType: .webhookTest,
-                payload: "{}")
-            try await delivery.save(on: app.db)
+            var delivery = try await makeDelivery(app, subscriptionID: subscription.id)
 
             let path =
                 "/api/organizations/\(fixture.organization.id!.uuidString)"
-                + "/webhooks/\(subscription.id!.uuidString)"
-                + "/deliveries/\(delivery.id!.uuidString)/redeliver"
+                + "/webhooks/\(subscription.id.uuidString)"
+                + "/deliveries/\(delivery.id.uuidString)/redeliver"
 
             // Still pending: nothing to redeliver.
             try await app.test(.POST, path) { req in
@@ -316,10 +384,13 @@ struct WebhookSubscriptionAPITests {
                 #expect(res.status == .conflict)
             }
 
-            delivery.status = WebhookDeliveryStatus.dead.rawValue
-            delivery.attempts = 8
-            delivery.lastError = "gave up"
-            try await delivery.save(on: app.db)
+            delivery = try await replaceDelivery(
+                app,
+                delivery: delivery,
+                status: .dead,
+                attempts: 8,
+                nextAttemptAt: delivery.nextAttemptAt,
+                lastError: "gave up")
 
             try await app.test(.POST, path) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.apiToken)
@@ -339,17 +410,15 @@ struct WebhookSubscriptionAPITests {
             let fixture = try await makeFixture(app)
             let subscription = try await makeSubscription(app, fixture: fixture)
             for index in 0..<3 {
-                let delivery = WebhookDelivery(
-                    subscriptionID: subscription.id!,
-                    eventID: UUID(),
-                    eventType: .webhookTest,
+                _ = try await makeDelivery(
+                    app,
+                    subscriptionID: subscription.id,
                     payload: "{\"n\":\(index)}")
-                try await delivery.save(on: app.db)
             }
 
             let path =
                 "/api/organizations/\(fixture.organization.id!.uuidString)"
-                + "/webhooks/\(subscription.id!.uuidString)/deliveries?limit=2"
+                + "/webhooks/\(subscription.id.uuidString)/deliveries?limit=2"
             try await app.test(.GET, path) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.apiToken)
             } afterResponse: { res in
@@ -372,23 +441,23 @@ struct WebhookOutboxTests {
         try await withTestApp { app in
             let fixture = try await makeFixture(app)
             _ = try await makeSubscription(app, fixture: fixture)
-            let builder = TestDataBuilder(db: app.db)
-            let vm = try await builder.createVM(name: "converging-vm", project: fixture.project)
+            let builder = TestDataBuilder(db: app.testPostgres)
+            var vm = try await builder.createVM(name: "converging-vm", project: fixture.project)
 
             // A lifecycle mutation as `ResourceMutation.accept` leaves it: the
             // desired-state change, the deadline, and the attribution event.
             vm.setFixtureDesiredStatus(.running)
-            vm.extendConvergenceDeadline(by: 180)
-            try await vm.save(on: app.db)
+            vm = vm.extendingConvergenceDeadline(by: 180)
+            try await vm.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .boot, resourceKind: .virtualMachine, resourceID: vm.requireID(),
-                actor: .user(fixture.user.requireID()), on: app.db)
+                actor: .user(fixture.user.requireID()), on: app.testPostgres)
 
             vm.observedGeneration = vm.generation
             vm.setStatus(.running)
-            _ = try await ResourceConvergence.recordSuccess(vm, on: app.db)
+            vm = try await ResourceConvergence.recordValueSuccess(vm, on: app.testPostgres).resource
 
-            let deliveries = try await WebhookDelivery.query(on: app.db).all()
+            let deliveries = try await app.webhookDeliveriesPersistence.all()
             #expect(deliveries.count == 1)
             let delivery = try #require(deliveries.first)
             #expect(delivery.eventType == "operation.completed")
@@ -397,8 +466,8 @@ struct WebhookOutboxTests {
 
             // The transition is what fires, not the state: the deadline is
             // cleared, so a repeat is a no-op rather than a second delivery.
-            _ = try await ResourceConvergence.recordSuccess(vm, on: app.db)
-            #expect(try await WebhookDelivery.query(on: app.db).count() == 1)
+            vm = try await ResourceConvergence.recordValueSuccess(vm, on: app.testPostgres).resource
+            #expect(try await app.webhookDeliveriesPersistence.count() == 1)
         }
     }
 
@@ -407,21 +476,23 @@ struct WebhookOutboxTests {
         try await withTestApp { app in
             let fixture = try await makeFixture(app)
             _ = try await makeSubscription(app, fixture: fixture)
-            let builder = TestDataBuilder(db: app.db)
-            let vm = try await builder.createVM(name: "failing-vm", project: fixture.project)
+            let builder = TestDataBuilder(db: app.testPostgres)
+            var vm = try await builder.createVM(name: "failing-vm", project: fixture.project)
 
             vm.setFixtureDesiredStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .boot, resourceKind: .virtualMachine, resourceID: vm.requireID(),
-                actor: .user(fixture.user.requireID()), on: app.db)
+                actor: .user(fixture.user.requireID()), on: app.testPostgres)
 
-            let recorded = try await ResourceConvergence.recordFailure(
+            let failure = try await ResourceConvergence.recordValueFailure(
                 vm, mutation: .boot, reason: "no bootable device",
-                telemetryReason: "convergence_failed", on: app.db)
-            #expect(recorded == .recorded)
+                telemetryReason: "convergence_failed", on: app.testPostgres)
+            vm = failure.resource
+            #expect(failure.outcome == .recorded)
 
-            let delivery = try #require(try await WebhookDelivery.query(on: app.db).first())
+            let delivery = try #require(
+                try await app.webhookDeliveriesPersistence.all().first)
             #expect(delivery.eventType == "operation.failed")
             #expect(delivery.payload.contains("no bootable device"))
             #expect(delivery.payload.contains("\"operationKind\":\"boot\""))
@@ -433,23 +504,24 @@ struct WebhookOutboxTests {
         try await withTestApp { app in
             let fixture = try await makeFixture(app)
             _ = try await makeSubscription(app, fixture: fixture)
-            let builder = TestDataBuilder(db: app.db)
-            let vm = try await builder.createVM(name: "reaped-vm", project: fixture.project)
+            let builder = TestDataBuilder(db: app.testPostgres)
+            var vm = try await builder.createVM(name: "reaped-vm", project: fixture.project)
             let vmID = try vm.requireID()
 
-            try await ResourceFinalizerService.stampForDeletion(vm, on: app.db)
+            vm = try await ResourceFinalizerService.stampForDeletion(vm, on: app.testPostgres)
             vm.setFixtureDesiredStatus(.absent)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             // The request event is where the reap reads its delivery context —
             // by the time it runs there is no resource left to resolve one.
             _ = try await ResourceEvent.record(
                 .delete, resourceKind: .virtualMachine, resourceID: vmID,
-                actor: .user(fixture.user.requireID()), on: app.db)
+                actor: .user(fixture.user.requireID()), on: app.testPostgres)
 
-            _ = try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: app.db, app: app)
-            #expect(try await VM.find(vmID, on: app.db) == nil)
+            _ = try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: app.testPostgres, app: app)
+            #expect(try await VM.find(vmID, on: app.testPostgres) == nil)
 
-            let delivery = try #require(try await WebhookDelivery.query(on: app.db).first())
+            let delivery = try #require(
+                try await app.webhookDeliveriesPersistence.all().first)
             #expect(delivery.eventType == "operation.completed")
             #expect(delivery.payload.contains("\"operationKind\":\"delete\""))
             #expect(delivery.payload.contains("reaped-vm"))
@@ -461,7 +533,7 @@ struct WebhookOutboxTests {
     func fanOutFilters() async throws {
         try await withTestApp { app in
             let fixture = try await makeFixture(app)
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let otherProject = try await builder.createProject(
                 name: "Other Project", description: "", organization: fixture.organization)
 
@@ -471,8 +543,9 @@ struct WebhookOutboxTests {
             _ = try await makeSubscription(
                 app, fixture: fixture, projectID: otherProject.id)
             let disabled = try await makeSubscription(app, fixture: fixture)
-            disabled.isActive = false
-            try await disabled.save(on: app.db)
+            _ = try await replaceSubscriptionState(
+                app, subscription: disabled, isActive: false,
+                disabledReason: nil, failingSince: nil)
 
             // Right type and right project scope — both should match.
             let byType = try await makeSubscription(
@@ -480,20 +553,20 @@ struct WebhookOutboxTests {
             let byProject = try await makeSubscription(
                 app, fixture: fixture, projectID: fixture.project.id)
 
-            let vm = try await builder.createVM(name: "hook-vm", project: fixture.project)
+            var vm = try await builder.createVM(name: "hook-vm", project: fixture.project)
             vm.setFixtureDesiredStatus(.running)
-            vm.extendConvergenceDeadline(by: 180)
-            try await vm.save(on: app.db)
+            vm = vm.extendingConvergenceDeadline(by: 180)
+            try await vm.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .boot, resourceKind: .virtualMachine, resourceID: vm.requireID(),
-                actor: .user(fixture.user.requireID()), on: app.db)
+                actor: .user(fixture.user.requireID()), on: app.testPostgres)
             vm.observedGeneration = vm.generation
             vm.setStatus(.running)
-            _ = try await ResourceConvergence.recordSuccess(vm, on: app.db)
+            vm = try await ResourceConvergence.recordValueSuccess(vm, on: app.testPostgres).resource
 
-            let deliveries = try await WebhookDelivery.query(on: app.db).all()
-            let recipients = Set(deliveries.map { $0.$subscription.id })
-            #expect(recipients == Set([byType.id!, byProject.id!]))
+            let deliveries = try await app.webhookDeliveriesPersistence.all()
+            let recipients = Set(deliveries.map(\.subscriptionID))
+            #expect(recipients == Set([byType.id, byProject.id]))
 
             // The fan-out shares one event id so consumers can dedupe.
             let eventIDs = Set(deliveries.map(\.eventID))
@@ -506,13 +579,14 @@ struct WebhookOutboxTests {
         try await withTestApp { app in
             let fixture = try await makeFixture(app)
             _ = try await makeSubscription(app, fixture: fixture, eventTypes: [.vmStateChanged])
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let vm = try await builder.createVM(name: "hook-vm", project: fixture.project)
 
             await WebhookEvents.emitVMStateChanged(
-                vm: vm, previous: .running, current: .shutdown, on: app.db, logger: app.logger)
+                vm: vm, previous: .running, current: .shutdown, on: app.testPostgres, logger: app.logger)
 
-            let delivery = try #require(try await WebhookDelivery.query(on: app.db).first())
+            let delivery = try #require(
+                try await app.webhookDeliveriesPersistence.all().first)
             #expect(delivery.eventType == "vm.state_changed")
             #expect(delivery.payload.contains("\"previousStatus\":\"Running\""))
             #expect(delivery.payload.contains("\"newStatus\":\"Shutdown\""))
@@ -525,39 +599,37 @@ struct WebhookOutboxTests {
             let fixture = try await makeFixture(app)
             _ = try await makeSubscription(
                 app, fixture: fixture, eventTypes: [.quotaThresholdExceeded])
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let quota = try await builder.createResourceQuota(
                 name: "hook-quota", maxVCPUs: 10, organization: fixture.organization)
 
             // 70% -> 90% crosses 80 only.
-            quota.reservedVCPUs = 7
-            let baseline = QuotaUsageSnapshot(of: quota)
-            quota.reservedVCPUs = 9
+            let quotaAt70 = quota.replacingCounters(reservedVCPUs: 7)
+            let baseline = QuotaUsageSnapshot(of: quotaAt70)
+            let quotaAt90 = quota.replacingCounters(reservedVCPUs: 9)
             try await WebhookEvents.enqueueQuotaThresholds(
-                quota: quota, baseline: baseline, project: fixture.project, on: app.db)
+                quota: quotaAt90, baseline: baseline, project: fixture.project, on: app.testPostgres)
 
-            var deliveries = try await WebhookDelivery.query(on: app.db).all()
+            var deliveries = try await app.webhookDeliveriesPersistence.all()
             #expect(deliveries.count == 1)
             #expect(deliveries[0].payload.contains("\"threshold\":80"))
             #expect(deliveries[0].payload.contains("\"pool\":\"vcpus\""))
 
             // 70% -> 100% crosses both; only the 100 event fires.
-            try await WebhookDelivery.query(on: app.db).delete()
-            quota.reservedVCPUs = 10
+            try await app.webhookDeliveriesPersistence.deleteAll()
+            let quotaAt100 = quota.replacingCounters(reservedVCPUs: 10)
             try await WebhookEvents.enqueueQuotaThresholds(
-                quota: quota, baseline: baseline, project: fixture.project, on: app.db)
-            deliveries = try await WebhookDelivery.query(on: app.db).all()
+                quota: quotaAt100, baseline: baseline, project: fixture.project, on: app.testPostgres)
+            deliveries = try await app.webhookDeliveriesPersistence.all()
             #expect(deliveries.count == 1)
             #expect(deliveries[0].payload.contains("\"threshold\":100"))
 
             // Already past the threshold at baseline: no re-fire.
-            try await WebhookDelivery.query(on: app.db).delete()
-            quota.reservedVCPUs = 9
-            let highBaseline = QuotaUsageSnapshot(of: quota)
-            quota.reservedVCPUs = 10  // 90% -> 100% crosses 100 but not 80
+            try await app.webhookDeliveriesPersistence.deleteAll()
+            let highBaseline = QuotaUsageSnapshot(of: quotaAt90)
             try await WebhookEvents.enqueueQuotaThresholds(
-                quota: quota, baseline: highBaseline, project: fixture.project, on: app.db)
-            deliveries = try await WebhookDelivery.query(on: app.db).all()
+                quota: quotaAt100, baseline: highBaseline, project: fixture.project, on: app.testPostgres)
+            deliveries = try await app.webhookDeliveriesPersistence.all()
             #expect(deliveries.count == 1)
             #expect(deliveries[0].payload.contains("\"threshold\":100"))
         }
@@ -653,17 +725,18 @@ struct WebhookDeliverySweepTests {
                 let event = WebhookEvent(
                     type: .webhookTest, organizationID: fixture.organization.id!,
                     data: ["message": .string("hello")])
-                let delivery = WebhookDelivery(
-                    subscriptionID: subscription.id!,
+                let delivery = try await makeDelivery(
+                    app,
+                    subscriptionID: subscription.id,
                     eventID: event.id,
                     eventType: event.type,
                     payload: try event.encodedPayload())
-                try await delivery.save(on: app.db)
 
                 await app.webhookDelivery.sweepOnce(acquiringLock: false)
 
-                let reloaded = try #require(try await WebhookDelivery.find(delivery.id, on: app.db))
-                #expect(reloaded.statusValue == .succeeded)
+                let reloaded = try #require(
+                    try await app.webhookDeliveriesPersistence.delivery(id: delivery.id))
+                #expect(reloaded.status == .succeeded)
                 #expect(reloaded.responseStatus == 200)
                 #expect(reloaded.attempts == 1)
                 #expect(reloaded.deliveredAt != nil)
@@ -703,45 +776,48 @@ struct WebhookDeliverySweepTests {
                 let fixture = try await makeFixture(app)
                 let subscription = try await makeSubscription(
                     app, fixture: fixture, url: "http://127.0.0.1:\(origin.port)/hook")
-                let delivery = WebhookDelivery(
-                    subscriptionID: subscription.id!,
-                    eventID: UUID(),
-                    eventType: .webhookTest,
-                    payload: "{}")
-                try await delivery.save(on: app.db)
+                let delivery = try await makeDelivery(app, subscriptionID: subscription.id)
 
                 origin.responseStatus.withLockedValue { $0 = .internalServerError }
                 await app.webhookDelivery.sweepOnce(acquiringLock: false)
 
-                var reloaded = try #require(try await WebhookDelivery.find(delivery.id, on: app.db))
-                #expect(reloaded.statusValue == .pending)
+                var reloaded = try #require(
+                    try await app.webhookDeliveriesPersistence.delivery(id: delivery.id))
+                #expect(reloaded.status == .pending)
                 #expect(reloaded.attempts == 1)
                 #expect(reloaded.responseStatus == 500)
                 #expect(reloaded.lastError?.contains("500") == true)
                 #expect(reloaded.nextAttemptAt > Date())
 
                 let failingSubscription = try #require(
-                    try await WebhookSubscription.find(subscription.id, on: app.db))
+                    try await app.webhookSubscriptionsPersistence.subscription(id: subscription.id))
                 #expect(failingSubscription.failingSince != nil)
 
                 // Not due yet: an immediate pass must not retry.
                 await app.webhookDelivery.sweepOnce(acquiringLock: false)
-                reloaded = try #require(try await WebhookDelivery.find(delivery.id, on: app.db))
+                reloaded = try #require(
+                    try await app.webhookDeliveriesPersistence.delivery(id: delivery.id))
                 #expect(reloaded.attempts == 1)
 
                 // Force it due and let the endpoint recover.
                 origin.responseStatus.withLockedValue { $0 = .ok }
-                reloaded.nextAttemptAt = Date()
-                try await reloaded.save(on: app.db)
+                reloaded = try await replaceDelivery(
+                    app,
+                    delivery: reloaded,
+                    status: reloaded.status,
+                    attempts: reloaded.attempts,
+                    nextAttemptAt: Date(),
+                    lastError: reloaded.lastError)
                 await app.webhookDelivery.sweepOnce(acquiringLock: false)
 
-                reloaded = try #require(try await WebhookDelivery.find(delivery.id, on: app.db))
-                #expect(reloaded.statusValue == .succeeded)
+                reloaded = try #require(
+                    try await app.webhookDeliveriesPersistence.delivery(id: delivery.id))
+                #expect(reloaded.status == .succeeded)
                 #expect(reloaded.attempts == 2)
 
                 // A success clears the failure streak.
                 let recovered = try #require(
-                    try await WebhookSubscription.find(subscription.id, on: app.db))
+                    try await app.webhookSubscriptionsPersistence.subscription(id: subscription.id))
                 #expect(recovered.failingSince == nil)
             }
         } catch {
@@ -759,19 +835,17 @@ struct WebhookDeliverySweepTests {
                 let fixture = try await makeFixture(app)
                 let subscription = try await makeSubscription(
                     app, fixture: fixture, url: "http://127.0.0.1:\(origin.port)/hook")
-                let delivery = WebhookDelivery(
-                    subscriptionID: subscription.id!,
-                    eventID: UUID(),
-                    eventType: .webhookTest,
-                    payload: "{}")
-                delivery.attempts = WebhookDeliveryService.maxAttempts - 1
-                try await delivery.save(on: app.db)
+                let delivery = try await makeDelivery(
+                    app,
+                    subscriptionID: subscription.id,
+                    attempts: WebhookDeliveryService.maxAttempts - 1)
 
                 origin.responseStatus.withLockedValue { $0 = .badGateway }
                 await app.webhookDelivery.sweepOnce(acquiringLock: false)
 
-                let reloaded = try #require(try await WebhookDelivery.find(delivery.id, on: app.db))
-                #expect(reloaded.statusValue == .dead)
+                let reloaded = try #require(
+                    try await app.webhookDeliveriesPersistence.delivery(id: delivery.id))
+                #expect(reloaded.status == .dead)
                 #expect(reloaded.attempts == WebhookDeliveryService.maxAttempts)
             }
         } catch {
@@ -787,24 +861,23 @@ struct WebhookDeliverySweepTests {
         do {
             try await withTestApp { app in
                 let fixture = try await makeFixture(app)
-                let subscription = try await makeSubscription(
+                var subscription = try await makeSubscription(
                     app, fixture: fixture, url: "http://127.0.0.1:\(origin.port)/hook")
-                subscription.failingSince = Date().addingTimeInterval(
-                    -Double(app.webhookDelivery.autoDisableDays + 1) * 86_400)
-                try await subscription.save(on: app.db)
+                subscription = try await replaceSubscriptionState(
+                    app,
+                    subscription: subscription,
+                    isActive: true,
+                    disabledReason: nil,
+                    failingSince: Date().addingTimeInterval(
+                        -Double(app.webhookDelivery.autoDisableDays + 1) * 86_400))
 
-                let delivery = WebhookDelivery(
-                    subscriptionID: subscription.id!,
-                    eventID: UUID(),
-                    eventType: .webhookTest,
-                    payload: "{}")
-                try await delivery.save(on: app.db)
+                _ = try await makeDelivery(app, subscriptionID: subscription.id)
 
                 origin.responseStatus.withLockedValue { $0 = .internalServerError }
                 await app.webhookDelivery.sweepOnce(acquiringLock: false)
 
                 let disabled = try #require(
-                    try await WebhookSubscription.find(subscription.id, on: app.db))
+                    try await app.webhookSubscriptionsPersistence.subscription(id: subscription.id))
                 #expect(!disabled.isActive)
                 #expect(disabled.disabledReason?.contains("Automatically disabled") == true)
             }
@@ -830,17 +903,21 @@ struct WebhookDeliverySweepTests {
         do {
             try await withTestApp { app in
                 let fixture = try await makeFixture(app)
-                let subscription = try await makeSubscription(
+                var subscription = try await makeSubscription(
                     app, fixture: fixture, url: "http://127.0.0.1:\(origin.port)/hook")
-                subscription.failingSince = Date().addingTimeInterval(
-                    -Double(app.webhookDelivery.autoDisableDays + 1) * 86_400)
-                try await subscription.save(on: app.db)
+                subscription = try await replaceSubscriptionState(
+                    app,
+                    subscription: subscription,
+                    isActive: true,
+                    disabledReason: nil,
+                    failingSince: Date().addingTimeInterval(
+                        -Double(app.webhookDelivery.autoDisableDays + 1) * 86_400))
 
-                let failure = WebhookDelivery(
-                    subscriptionID: subscription.id!, eventID: UUID(),
-                    eventType: .webhookTest, payload: "{\"outcome\":\"fails\"}")
-                failure.nextAttemptAt = Date().addingTimeInterval(-2)
-                try await failure.save(on: app.db)
+                _ = try await makeDelivery(
+                    app,
+                    subscriptionID: subscription.id,
+                    payload: "{\"outcome\":\"fails\"}",
+                    nextAttemptAt: Date().addingTimeInterval(-2))
 
                 // Start one pass with the failing request held at the origin.
                 // A second pass then claims the success row for the same
@@ -857,16 +934,16 @@ struct WebhookDeliverySweepTests {
                 }
                 #expect(!origin.captured.withLockedValue { $0.isEmpty })
 
-                let success = WebhookDelivery(
-                    subscriptionID: subscription.id!, eventID: UUID(),
-                    eventType: .webhookTest, payload: "{\"outcome\":\"succeeds\"}")
-                success.nextAttemptAt = Date().addingTimeInterval(-1)
-                try await success.save(on: app.db)
+                _ = try await makeDelivery(
+                    app,
+                    subscriptionID: subscription.id,
+                    payload: "{\"outcome\":\"succeeds\"}",
+                    nextAttemptAt: Date().addingTimeInterval(-1))
                 await app.webhookDelivery.sweepOnce(acquiringLock: false)
                 await failingSweep.value
 
                 let reloaded = try #require(
-                    try await WebhookSubscription.find(subscription.id, on: app.db))
+                    try await app.webhookSubscriptionsPersistence.subscription(id: subscription.id))
                 #expect(reloaded.isActive)
                 #expect(reloaded.disabledReason == nil)
                 let failingSince = try #require(reloaded.failingSince)
@@ -889,29 +966,29 @@ struct WebhookDeliverySweepTests {
                     app, fixture: fixture, url: "http://127.0.0.1:\(origin.port)/hook")
                 let deliveryCount = WebhookDeliveryService.maxConcurrentDeliveries + 1
                 for index in 0..<deliveryCount {
-                    let delivery = WebhookDelivery(
-                        subscriptionID: subscription.id!, eventID: UUID(),
-                        eventType: .webhookTest, payload: "{\"index\":\(index)}")
-                    delivery.nextAttemptAt = Date().addingTimeInterval(-1)
-                    try await delivery.save(on: app.db)
+                    _ = try await makeDelivery(
+                        app,
+                        subscriptionID: subscription.id,
+                        payload: "{\"index\":\(index)}",
+                        nextAttemptAt: Date().addingTimeInterval(-1))
                 }
 
                 await app.webhookDelivery.sweepOnce(acquiringLock: false)
 
-                let afterFirstPass = try await WebhookDelivery.query(on: app.db).all()
+                let afterFirstPass = try await app.webhookDeliveriesPersistence.all()
                 #expect(
                     origin.captured.withLockedValue { $0.count }
                         == WebhookDeliveryService.maxConcurrentDeliveries)
                 #expect(
-                    afterFirstPass.filter { $0.statusValue == .succeeded }.count
+                    afterFirstPass.filter { $0.status == .succeeded }.count
                         == WebhookDeliveryService.maxConcurrentDeliveries)
-                let unclaimed = try #require(afterFirstPass.first { $0.statusValue == .pending })
+                let unclaimed = try #require(afterFirstPass.first { $0.status == .pending })
                 #expect(unclaimed.attempts == 0)
                 #expect(unclaimed.nextAttemptAt <= Date())
 
                 await app.webhookDelivery.sweepOnce(acquiringLock: false)
-                let afterSecondPass = try await WebhookDelivery.query(on: app.db).all()
-                #expect(afterSecondPass.allSatisfy { $0.statusValue == .succeeded })
+                let afterSecondPass = try await app.webhookDeliveriesPersistence.all()
+                #expect(afterSecondPass.allSatisfy { $0.status == .succeeded })
             }
         } catch {
             await origin.shutdown()
@@ -925,20 +1002,17 @@ struct WebhookDeliverySweepTests {
         try await withTestApp { app in
             let fixture = try await makeFixture(app)
             let subscription = try await makeSubscription(app, fixture: fixture)
-            subscription.isActive = false
-            try await subscription.save(on: app.db)
+            _ = try await replaceSubscriptionState(
+                app, subscription: subscription, isActive: false,
+                disabledReason: nil, failingSince: nil)
 
-            let delivery = WebhookDelivery(
-                subscriptionID: subscription.id!,
-                eventID: UUID(),
-                eventType: .webhookTest,
-                payload: "{}")
-            try await delivery.save(on: app.db)
+            let delivery = try await makeDelivery(app, subscriptionID: subscription.id)
 
             await app.webhookDelivery.sweepOnce(acquiringLock: false)
 
-            let reloaded = try #require(try await WebhookDelivery.find(delivery.id, on: app.db))
-            #expect(reloaded.statusValue == .dead)
+            let reloaded = try #require(
+                try await app.webhookDeliveriesPersistence.delivery(id: delivery.id))
+            #expect(reloaded.status == .dead)
             #expect(reloaded.lastError == "Subscription is disabled")
             // No attempt was made — the endpoint was never contacted.
             #expect(reloaded.attempts == 0)

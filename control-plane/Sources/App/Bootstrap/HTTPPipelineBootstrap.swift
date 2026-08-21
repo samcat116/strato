@@ -1,10 +1,11 @@
+import ControlPlanePostgres
 import Vapor
 
 extension Application {
     /// Installs the complete HTTP middleware pipeline. Statement order in this
     /// method is significant: authentication, tracing, auditing, and default-
     /// deny authorization depend on the effective middleware order.
-    func bootstrapHTTPPipeline() throws {
+    func bootstrapHTTPPipeline(persistence: ControlPlanePersistence) throws {
         // Request logging: one structured line per HTTP request (method/path/status/
         // duration). Registered first so it's the outermost middleware and times the
         // full request. Default on outside production; override with REQUEST_LOGGING.
@@ -29,8 +30,8 @@ extension Application {
 
         configureBrowserTransportSecurity()
         try bootstrapStateStores()
-        installAuthenticationAndAuthorizationMiddleware()
-        configureBrowserIdentity()
+        installAuthenticationAndAuthorizationMiddleware(persistence: persistence)
+        configureBrowserIdentity(persistence: persistence)
     }
 
     private func configureBrowserTransportSecurity() {
@@ -65,7 +66,9 @@ extension Application {
         }
     }
 
-    private func installAuthenticationAndAuthorizationMiddleware() {
+    private func installAuthenticationAndAuthorizationMiddleware(
+        persistence: ControlPlanePersistence
+    ) {
         // Authenticate bearer credentials before installing the session
         // authenticator. Vapor's SessionAuthenticator persists any User that a
         // downstream middleware authenticated into the session on the response
@@ -73,21 +76,24 @@ extension Application {
         // browser session and therefore depended on the session Valkey even when
         // it arrived without a cookie (STR-206). A bearer credential is already
         // self-contained; it must never be promoted into a browser session.
-        middleware.use(BearerAuthorizationHeaderAuthenticator())
+        middleware.use(
+            BearerAuthorizationHeaderAuthenticator(
+                apiKeys: persistence.apiKeys,
+                oauthSessions: persistence.oauthDeviceSessions,
+                users: persistence.userDirectory,
+                workloads: persistence.workloads
+            )
+        )
 
         // Configure browser-session authentication after bearer auth. Cookie-only
         // requests still restore and refresh their session exactly as before.
-        middleware.use(User.sessionAuthenticator())
+        middleware.use(UserSessionAuthenticator(users: persistence.userDirectory))
 
         // Put the task-local `ServiceContext` back after the last future-based
-        // middleware in the stack. Vapor's `SessionsMiddleware` and
-        // `User.sessionAuthenticator()` chain downstream from inside an
-        // `EventLoopFuture` callback, which severs the Swift task the middleware
-        // above was running on and with it the context `TracingMiddleware` bound —
-        // so without this every span opened below (`iam.authorize`, the rate
-        // limiter's Valkey command, every controller's `fluent.query`) would start
-        // its own trace. Anything future-based added after this point needs another
-        // one of these behind it; see the middleware's own doc comment.
+        // middleware in the stack. SessionsMiddleware still chains downstream
+        // from inside an EventLoopFuture callback, which severs the Swift task
+        // and the tracing context bound above. Anything future-based added after
+        // this point needs another restoring middleware.
         middleware.use(ServiceContextRestoringMiddleware())
 
         installRateLimitingMiddleware()
@@ -153,7 +159,7 @@ extension Application {
         }
     }
 
-    private func configureBrowserIdentity() {
+    private func configureBrowserIdentity(persistence: ControlPlanePersistence) {
         let relyingPartyID = controlPlaneConfiguration.string(.webauthnRelyingPartyID)!
         let relyingPartyName = controlPlaneConfiguration.string(.webauthnRelyingPartyName)!
         let relyingPartyOrigin = controlPlaneConfiguration.string(.webauthnRelyingPartyOrigin)!
@@ -161,7 +167,9 @@ extension Application {
         configureWebAuthn(
             relyingPartyID: relyingPartyID,
             relyingPartyName: relyingPartyName,
-            relyingPartyOrigin: relyingPartyOrigin
+            relyingPartyOrigin: relyingPartyOrigin,
+            passkeys: persistence.passkeys,
+            users: persistence.userDirectory
         )
 
         // Whether visitors may create their own accounts. Read once at boot: the
@@ -181,6 +189,12 @@ extension Application {
         // in-process Cedar policy set against real `role_bindings` rows, so tests
         // exercise the exact production decision path — there is no permissive mock
         // in front of it.
-        middleware.use(AuthorizationMiddleware())
+        middleware.use(
+            AuthorizationMiddleware(
+                workloads: persistence.workloads,
+                serviceAccounts: persistence.serviceAccounts,
+                projects: persistence.projects
+            )
+        )
     }
 }

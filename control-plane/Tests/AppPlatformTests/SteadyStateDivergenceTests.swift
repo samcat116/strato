@@ -1,5 +1,4 @@
 import AppTestSupport
-import Fluent
 import Foundation
 import StratoShared
 import Testing
@@ -11,7 +10,7 @@ struct SteadyStateDivergenceTests {
     @Test("The sweep honors grace and exclusions, detects both kinds, and deduplicates episodes")
     func detectsSustainedDivergence() async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let organization = try await builder.createOrganization(name: "Divergence Org")
             let project = try await builder.createProject(
                 name: "Divergence Project", description: "sweep fixtures",
@@ -29,18 +28,18 @@ struct SteadyStateDivergenceTests {
                 changedAt: Date,
                 deadline: Date? = nil
             ) async throws -> VM {
-                let vm = try await builder.createVM(name: name, project: project)
+                var vm = try await builder.createVM(name: name, project: project)
                 vm.desiredStatus = desired
                 vm.setStatus(status, at: changedAt)
                 vm.generation = generation
                 vm.observedGeneration = observedGeneration
                 vm.convergenceDeadline = deadline
-                try await vm.save(on: app.db)
+                try await vm.save(on: app.testPostgres)
                 return vm
             }
 
-            let divergedVM = try await vm("diverged-vm", changedAt: cutoff)
-            let recentVM = try await vm(
+            var divergedVM = try await vm("diverged-vm", changedAt: cutoff)
+            var recentVM = try await vm(
                 "recent-vm", changedAt: cutoff.addingTimeInterval(1))
             _ = try await vm(
                 "pending-vm", changedAt: cutoff,
@@ -50,19 +49,19 @@ struct SteadyStateDivergenceTests {
             _ = try await vm("absent-vm", desired: .absent, changedAt: cutoff)
             _ = try await vm("satisfied-vm", status: .running, changedAt: cutoff)
 
-            let divergedSandbox = try await builder.createSandbox(
+            var divergedSandbox = try await builder.createSandbox(
                 name: "diverged-sandbox", project: project)
             divergedSandbox.desiredStatus = .running
             divergedSandbox.setStatus(.stopped, at: cutoff)
             divergedSandbox.generation = 7
             divergedSandbox.observedGeneration = 7
-            try await divergedSandbox.save(on: app.db)
+            try await divergedSandbox.save(on: app.testPostgres)
 
             let first = await app.agentService.sweepSteadyStateDivergence(now: now)
             #expect(first == .init(vms: 1, sandboxes: 1, newlyDetected: 2))
-            #expect(try #require(await VM.find(divergedVM.id, on: app.db)).divergenceDetectedAt == now)
+            #expect(try #require(await VM.find(divergedVM.id, on: app.testPostgres)).divergenceDetectedAt == now)
             #expect(
-                try #require(await Sandbox.find(divergedSandbox.id, on: app.db))
+                try #require(await Sandbox.find(divergedSandbox.id, on: app.testPostgres))
                     .divergenceDetectedAt == now)
 
             // The standing gauge counts remain, while the per-episode claims
@@ -72,19 +71,19 @@ struct SteadyStateDivergenceTests {
 
             // A recovered status starts a fresh episode and clears the claim.
             divergedVM.setStatus(.running, at: now)
-            try await divergedVM.save(on: app.db)
+            try await divergedVM.save(on: app.testPostgres)
             divergedSandbox.setStatus(.running, at: now)
-            try await divergedSandbox.save(on: app.db)
-            #expect(try #require(await VM.find(divergedVM.id, on: app.db)).divergenceDetectedAt == nil)
+            try await divergedSandbox.save(on: app.testPostgres)
+            #expect(try #require(await VM.find(divergedVM.id, on: app.testPostgres)).divergenceDetectedAt == nil)
             #expect(
-                try #require(await Sandbox.find(divergedSandbox.id, on: app.db))
+                try #require(await Sandbox.find(divergedSandbox.id, on: app.testPostgres))
                     .divergenceDetectedAt == nil)
             let recovered = await app.agentService.sweepSteadyStateDivergence(now: now)
             #expect(recovered == .init(vms: 0, sandboxes: 0, newlyDetected: 0))
 
             // The exact 15-minute boundary is inclusive.
             recentVM.statusChangedAt = cutoff
-            try await recentVM.save(on: app.db)
+            try await recentVM.save(on: app.testPostgres)
             let boundary = await app.agentService.sweepSteadyStateDivergence(now: now)
             #expect(boundary == .init(vms: 1, sandboxes: 0, newlyDetected: 1))
         }

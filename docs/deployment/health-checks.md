@@ -75,7 +75,7 @@ Checks are graded, because the dependencies are not equally fatal:
   traffic nowhere and merely drops the traffic sessions do not back: agents
   authenticate by SPIFFE/SPIRE mTLS, API-key and CLI clients by key, and the
   reconciler needs only Postgres to converge. Absent from the payload when
-  sessions are not Valkey-backed (the test environment uses Fluent sessions).
+  sessions are not Valkey-backed (the test environment uses memory sessions).
 
 ::: tip Both stores are one instance by default
 Unless you set `SESSION_VALKEY_HOST`, sessions share the coordination Valkey, and

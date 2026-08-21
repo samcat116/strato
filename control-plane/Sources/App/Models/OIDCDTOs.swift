@@ -1,5 +1,4 @@
 import Crypto
-import Fluent
 import Foundation
 import JWT
 import Vapor

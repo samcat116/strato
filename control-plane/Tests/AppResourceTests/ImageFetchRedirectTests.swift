@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import NIOCore
 import StratoShared
@@ -96,8 +95,8 @@ struct ImageFetchRedirectTests {
             }
             app.imageObjectStore = FilesystemImageObjectStore(rootPath: storagePath)
             // Deliberately NOT the mock: the point is the real HTTP path.
-            app.imageFetchService = ImageFetchService(app: app)
-            try await app.autoMigrate()
+            app.imageFetchService = ImageFetchService(
+                app: app, database: app.testPostgres)
 
             try await test(app, port)
         } catch {
@@ -111,7 +110,7 @@ struct ImageFetchRedirectTests {
     private func makePendingImage(
         app: Application, sourceURL: String, expectedChecksum: String? = nil
     ) async throws -> (imageID: UUID, artifactID: UUID) {
-        let builder = TestDataBuilder(db: app.db)
+        let builder = TestDataBuilder(db: app.testPostgres)
         let user = try await builder.createUser()
         let org = try await builder.createOrganization()
         let project = try await builder.createProject(
@@ -125,9 +124,9 @@ struct ImageFetchRedirectTests {
             status: .pending,
             uploadedByID: try user.requireID()
         )
-        try await image.save(on: app.db)
+        try await image.save(on: app.testPostgres)
         let imageID = try image.requireID()
-        let artifact = ImageArtifact(
+        let artifact = try await LegacyImageArtifactStore.insert(
             imageID: imageID,
             kind: .diskImage,
             format: nil,
@@ -140,29 +139,29 @@ struct ImageFetchRedirectTests {
                 kind: ArtifactKind.diskImage.rawValue, filename: "image.qcow2"),
             status: .pending,
             sourceURL: sourceURL,
-            expectedChecksum: expectedChecksum
+            expectedChecksum: expectedChecksum,
+            on: app.testPostgres
         )
-        try await artifact.save(on: app.db)
-        return (imageID, try artifact.requireID())
+        return (imageID, artifact.id)
     }
 
     /// Polls until the image leaves the in-flight states, so the test doesn't
     /// race the detached fetch task.
     private func waitForTerminalStatus(
         app: Application, imageID: UUID, timeout: Duration = .seconds(10)
-    ) async throws -> (Image, ImageArtifact) {
+    ) async throws -> (Image, ImageArtifactSnapshot) {
         let deadline = ContinuousClock.now.advanced(by: timeout)
         while ContinuousClock.now < deadline {
-            if let image = try await Image.find(imageID, on: app.db),
-                let artifact = try await ImageArtifact.query(on: app.db)
-                    .filter(\.$image.$id == imageID).filter(\.$kind == .diskImage).first(),
+            if let image = try await LegacyImageStore.image(id: imageID, on: app.testPostgres),
+                let artifact = try await LegacyImageArtifactStore.artifact(
+                    imageID: imageID, kind: .diskImage, on: app.testPostgres),
                 artifact.status == .ready || artifact.status == .error
             {
                 return (image, artifact)
             }
             try await Task.sleep(for: .milliseconds(50))
         }
-        let last = try await Image.find(imageID, on: app.db)
+        let last = try await LegacyImageStore.image(id: imageID, on: app.testPostgres)
         Issue.record("Fetch did not settle; last status \(String(describing: last?.status))")
         throw ImageError.downloadFailed("timed out waiting for fetch")
     }

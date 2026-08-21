@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -16,9 +16,13 @@ import Vapor
 /// never repair itself — the next boot finds nothing left to reconcile and so
 /// bumps nothing, while every replica keeps its stale compiled policy set.
 enum RoleRegistrySync {
-    static func sync(on db: Database, logger: Logger) async throws {
-        try await PolicySetVersionService.withPolicySetChange(on: db) { transaction in
-            try await reconcile(on: transaction, logger: logger)
+    private static let platformOwnerID = UUID(
+        uuidString: "00000000-0000-0000-0000-000000000000"
+    )!
+
+    static func sync(using iam: IAMPersistence, logger: Logger) async throws {
+        try await iam.withPolicySetChange { transaction in
+            try await reconcile(in: transaction, logger: logger)
         }
     }
 
@@ -30,36 +34,48 @@ enum RoleRegistrySync {
     /// only make every later statement fail. Letting it propagate re-runs the
     /// pass against a fresh transaction, where the other replica's row is
     /// visible and there is simply nothing left to insert.
-    private static func reconcile(on db: Database, logger: Logger) async throws {
-        let managed = try await IAMRoleDefinition.query(on: db)
-            .filter(\.$managed == true)
-            .all()
-        var byID = [UUID: IAMRoleDefinition]()
-        for row in managed {
-            if let id = row.id { byID[id] = row }
-        }
+    private static func reconcile(
+        in transaction: IAMPolicySetTransaction,
+        logger: Logger
+    ) async throws {
+        let managed = try await transaction.allRoles().filter(\.managed)
+        let byID = Dictionary(uniqueKeysWithValues: managed.map { ($0.id, $0) })
 
         var changes = 0
         for desired in RoleDescriptor.seededDefaults() {
             if let row = byID[desired.id] {
                 if row.name != desired.name || row.cedarText != desired.cedarText || row.actions != desired.actions {
-                    row.name = desired.name
-                    row.cedarText = desired.cedarText
-                    row.actions = desired.actions
-                    try await row.save(on: db)
+                    _ = try await transaction.reconcileManagedRole(
+                        IAMRoleSnapshot(
+                            id: row.id,
+                            name: desired.name,
+                            description: row.description,
+                            ownerType: row.ownerType,
+                            ownerID: row.ownerID,
+                            cedarText: desired.cedarText,
+                            actions: desired.actions,
+                            managed: true,
+                            createdBy: row.createdBy,
+                            createdAt: row.createdAt,
+                            updatedAt: row.updatedAt
+                        )
+                    )
                     changes += 1
                 }
             } else {
-                let row = IAMRoleDefinition(
+                _ = try await transaction.reconcileManagedRole(
+                    IAMRoleSnapshot(
                     id: desired.id,
                     name: desired.name,
-                    ownerType: .platform,
-                    ownerID: IAMRoleDefinition.platformOwnerID,
+                    description: nil,
+                    ownerType: IAMRoleOwnerType.platform.rawValue,
+                    ownerID: platformOwnerID,
                     cedarText: desired.cedarText,
                     actions: desired.actions,
-                    managed: true
+                    managed: true,
+                    createdBy: nil
+                    )
                 )
-                try await row.create(on: db)
                 changes += 1
             }
         }
@@ -67,8 +83,8 @@ enum RoleRegistrySync {
         // A managed row whose id the code no longer seeds is a default that
         // was removed by an upgrade.
         for row in managed {
-            guard let id = row.id, IAMRole(seededID: id) == nil else { continue }
-            try await row.delete(on: db)
+            guard IAMRole(seededID: row.id) == nil else { continue }
+            _ = try await transaction.deleteRole(id: row.id)
             changes += 1
         }
 
@@ -84,9 +100,8 @@ enum RoleRegistrySync {
         // registry is silent, and the worst a simultaneous cold boot costs is
         // a few redundant invalidations of a policy set nobody has compiled
         // yet.
-        let version = try await PolicySetVersionService.bump(
+        let version = try await transaction.bumpPolicySetVersion(
             reason: "seeded roles synced (\(changes) changes)",
-            on: db
         )
         logger.info("Policy set version bumped", metadata: ["version": .stringConvertible(version)])
     }

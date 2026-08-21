@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 extension Request {
@@ -99,7 +99,8 @@ extension Request {
         requested requestedProjectId: UUID?,
         action: String,
         resourceKind: String,
-        verb: String = "create"
+        verb: String = "create",
+        on database: PostgresStoreContext
     ) async throws -> Project {
         guard let projectId = requestedProjectId else {
             throw Self.projectIsRequired(verb: verb, resourceKind)
@@ -111,7 +112,7 @@ extension Request {
                 .forbidden, reason: "You don't have permission to \(verb) \(resourceKind) in this project")
         }
 
-        guard let project = try await Project.find(projectId, on: db) else {
+        guard let project = try await Project.find(projectId, on: database) else {
             throw Abort(.badRequest, reason: "Project \(projectId) does not exist")
         }
         return project
@@ -171,17 +172,19 @@ extension Request {
         requestedEnvironment: String?,
         user: User,
         action: String,
-        resourceKind: String
+        resourceKind: String,
+        on database: PostgresStoreContext
     ) async throws -> (project: Project, environment: String) {
         let project = try await authorizedProjectForCreate(
             requested: requestedProjectId,
             action: action,
-            resourceKind: resourceKind)
+            resourceKind: resourceKind,
+            on: database)
 
         // Current-organization scope, deliberately *after* the permission
         // check — ahead of it, "not found" told apart from "denied" is an
         // existence oracle.
-        let rootOrgId = try await project.getRootOrganizationId(on: db)
+        let rootOrgId = try await project.getRootOrganizationId(on: database)
         guard let orgId = rootOrgId, user.currentOrganizationId == orgId else {
             throw Abort(.forbidden, reason: "Access denied to project")
         }

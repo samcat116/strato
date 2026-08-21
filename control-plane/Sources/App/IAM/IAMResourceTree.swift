@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -64,13 +64,139 @@ enum IAMResourceTree {
         let leaf: IAMLeafFacts
     }
 
+    /// Native PostgresNIO tree walk used by production authorization paths.
+    /// The Fluent overloads below remain only while their direct tests and the
+    /// last hierarchy helpers are moved to injected persistence modules.
+    static func ancestors(of node: IAMNode, using iam: IAMPersistence) async throws -> [IAMNode] {
+        try await resolve(node, using: iam).chain
+    }
+
+    static func resolve(
+        _ node: IAMNode,
+        cache: IAMRequestCache? = nil,
+        using iam: IAMPersistence
+    ) async throws -> Resolution {
+        let resolved = try await resolve([node], cache: cache, using: iam)
+        return resolved[node] ?? Resolution(chain: [node], leaf: IAMLeafFacts())
+    }
+
+    static func resolve(
+        _ nodes: [IAMNode],
+        cache: IAMRequestCache? = nil,
+        using iam: IAMPersistence
+    ) async throws -> [IAMNode: Resolution] {
+        var resolved: [IAMNode: Resolution] = [:]
+        var pending: [IAMNode] = []
+        for node in Set(nodes) {
+            if let cached = cache?.chain(of: node) {
+                resolved[node] = cached
+            } else {
+                pending.append(node)
+            }
+        }
+        guard !pending.isEmpty else { return resolved }
+
+        for (node, resolution) in try await nativeWalk(from: pending, cache: cache, using: iam) {
+            cache?.store(chain: resolution, of: node)
+            resolved[node] = resolution
+            if let cache {
+                for index in resolution.chain.indices.dropFirst()
+                where cache.chain(of: resolution.chain[index]) == nil {
+                    cache.store(
+                        chain: Resolution(
+                            chain: Array(resolution.chain[index...]),
+                            leaf: IAMLeafFacts()
+                        ),
+                        of: resolution.chain[index]
+                    )
+                }
+            }
+        }
+        return resolved
+    }
+
+    private static func nativeWalk(
+        from starts: [IAMNode],
+        cache: IAMRequestCache?,
+        using iam: IAMPersistence
+    ) async throws -> [IAMNode: Resolution] {
+        var paths: [IAMNode: Path] = [:]
+        for start in starts {
+            paths[start] = Path(chain: [start], seen: [start], leaf: IAMLeafFacts(), cursor: start)
+        }
+
+        var knownSteps: [IAMNode: Step] = [:]
+        var attempted: [IAMNodeType: Set<UUID>] = [:]
+        for _ in 0..<maxDepth {
+            var frontier: [IAMNodeType: Set<UUID>] = [:]
+            for path in paths.values {
+                guard let cursor = path.cursor else { continue }
+                frontier[cursor.type, default: []].insert(cursor.id)
+            }
+            if frontier.isEmpty { break }
+
+            for type in frontier.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+                let ids = frontier[type]!
+                let unknown = ids.subtracting(attempted[type, default: []])
+                guard !unknown.isEmpty else { continue }
+                attempted[type, default: []].formUnion(unknown)
+                let rows = try await iam.resourceTreeSteps(
+                    nodeType: type.rawValue,
+                    ids: Array(unknown)
+                )
+                for (id, row) in rows {
+                    let parent: IAMNode?
+                    if let value = row.parent {
+                        guard let parentType = IAMNodeType(rawValue: value.type) else {
+                            throw Abort(
+                                .internalServerError,
+                                reason: "PostgresStoreContext returned unknown IAM parent type '\(value.type)'"
+                            )
+                        }
+                        parent = IAMNode(type: parentType, id: value.id)
+                    } else {
+                        parent = nil
+                    }
+                    knownSteps[IAMNode(type: type, id: id)] = Step(
+                        parent: parent,
+                        leaf: IAMLeafFacts(environment: row.environment)
+                    )
+                }
+            }
+
+            for (start, var path) in paths {
+                guard let cursor = path.cursor else { continue }
+                defer { paths[start] = path }
+                path.cursor = nil
+
+                guard let step = knownSteps[cursor] else {
+                    if cursor.type == .organizationalUnit { path.chain.removeLast() }
+                    continue
+                }
+                if cursor == start { path.leaf = step.leaf }
+                guard let next = step.parent, path.chain.count < maxDepth else { continue }
+                if let cachedParent = cache?.chain(of: next) {
+                    for ancestor in cachedParent.chain where path.seen.insert(ancestor).inserted {
+                        path.chain.append(ancestor)
+                    }
+                    continue
+                }
+                guard path.seen.insert(next).inserted else { continue }
+                path.chain.append(next)
+                path.cursor = next
+            }
+        }
+
+        return paths.mapValues { Resolution(chain: $0.chain, leaf: $0.leaf) }
+    }
+
     /// The chain from `node` up to its organization, `node` first.
     ///
     /// A node whose parent cannot be resolved simply ends the chain — a
     /// dangling id, or a project attached to neither a folder nor an org.
     /// Callers degrade to the bindings they can see rather than failing: a
     /// truncated chain can only under-report access, never invent it.
-    static func ancestors(of node: IAMNode, on db: any Database) async throws -> [IAMNode] {
+    static func ancestors(of node: IAMNode, on db: PostgresStoreContext) async throws -> [IAMNode] {
         try await resolve(node, on: db).chain
     }
 
@@ -81,7 +207,7 @@ enum IAMResourceTree {
     ///   Passing nil resolves against the database, which is what every
     ///   caller outside a request (background sweeps, tests) does.
     static func resolve(
-        _ node: IAMNode, cache: IAMRequestCache? = nil, on db: any Database
+        _ node: IAMNode, cache: IAMRequestCache? = nil, on db: PostgresStoreContext
     ) async throws -> Resolution {
         let resolved = try await resolve([node], cache: cache, on: db)
         // The batch is total over its inputs; the fallback is unreachable and
@@ -97,7 +223,7 @@ enum IAMResourceTree {
     /// for the whole batch at once — a hundred VMs in a list cost the same
     /// three or four queries one VM does, instead of three or four each.
     static func resolve(
-        _ nodes: [IAMNode], cache: IAMRequestCache? = nil, on db: any Database
+        _ nodes: [IAMNode], cache: IAMRequestCache? = nil, on db: PostgresStoreContext
     ) async throws -> [IAMNode: Resolution] {
         var resolved: [IAMNode: Resolution] = [:]
         var pending: [IAMNode] = []
@@ -158,7 +284,7 @@ enum IAMResourceTree {
 
     /// Walk every path upward in lockstep, one batched query per (level, type).
     private static func walk(
-        from starts: [IAMNode], cache: IAMRequestCache?, on db: any Database
+        from starts: [IAMNode], cache: IAMRequestCache?, on db: PostgresStoreContext
     ) async throws -> [IAMNode: Resolution] {
         var paths: [IAMNode: Path] = [:]
         for start in starts {
@@ -243,12 +369,12 @@ enum IAMResourceTree {
     /// A node whose row is missing is simply absent from the result; callers
     /// read that as "the chain ends here".
     private static func step(
-        ids: Set<UUID>, type: IAMNodeType, folders: inout FolderRows, on db: any Database
+        ids: Set<UUID>, type: IAMNodeType, folders: inout FolderRows, on db: PostgresStoreContext
     ) async throws -> [UUID: Step] {
         let idList = Array(ids)
 
         /// The shape almost every resource shares: contained by its project.
-        func projectParents<M: Model>(
+        func projectParents<M>(
             _ rows: [M], id: (M) -> UUID?, projectID: (M) -> UUID, environment: (M) -> String? = { _ in nil }
         ) -> [UUID: Step] {
             var steps: [UUID: Step] = [:]
@@ -277,7 +403,9 @@ enum IAMResourceTree {
             let unknown = ids.subtracting(folders.attempted)
             if !unknown.isEmpty {
                 folders.attempted.formUnion(unknown)
-                for row in try await OrganizationalUnit.query(on: db).filter(\.$id ~~ Array(unknown)).all() {
+                for row in try await LegacyOrganizationalUnitStore.organizationalUnits(
+                    ids: Array(unknown), on: db)
+                {
                     if let id = row.id { folders.rows[id] = row }
                 }
             }
@@ -288,31 +416,33 @@ enum IAMResourceTree {
                 .subtracting(folders.attempted)
             if !hinted.isEmpty {
                 folders.attempted.formUnion(hinted)
-                for row in try await OrganizationalUnit.query(on: db).filter(\.$id ~~ Array(hinted)).all() {
+                for row in try await LegacyOrganizationalUnitStore.organizationalUnits(
+                    ids: Array(hinted), on: db)
+                {
                     if let id = row.id { folders.rows[id] = row }
                 }
             }
             var steps: [UUID: Step] = [:]
             for id in ids {
                 guard let ou = folders.rows[id] else { continue }
-                if let parentOUID = ou.$parentOU.id {
+                if let parentOUID = ou.parentOUID {
                     steps[id] = Step(
                         parent: IAMNode(type: .organizationalUnit, id: parentOUID), leaf: IAMLeafFacts())
                 } else {
                     steps[id] = Step(
-                        parent: IAMNode(type: .organization, id: ou.$organization.id), leaf: IAMLeafFacts())
+                        parent: IAMNode(type: .organization, id: ou.organizationID), leaf: IAMLeafFacts())
                 }
             }
             return steps
 
         case .project:
             var steps: [UUID: Step] = [:]
-            for project in try await Project.query(on: db).filter(\.$id ~~ idList).all() {
+            for project in try await LegacyProjectStore.projects(ids: idList, on: db) {
                 guard let id = project.id else { continue }
-                if let ouID = project.$organizationalUnit.id {
+                if let ouID = project.organizationalUnitID {
                     steps[id] = Step(
                         parent: IAMNode(type: .organizationalUnit, id: ouID), leaf: IAMLeafFacts())
-                } else if let orgID = project.$organization.id {
+                } else if let orgID = project.organizationID {
                     steps[id] = Step(parent: IAMNode(type: .organization, id: orgID), leaf: IAMLeafFacts())
                 } else {
                     steps[id] = Step(parent: nil, leaf: IAMLeafFacts())
@@ -322,79 +452,96 @@ enum IAMResourceTree {
 
         case .virtualMachine:
             return projectParents(
-                try await VM.query(on: db).filter(\.$id ~~ idList).all(),
-                id: \.id, projectID: { $0.$project.id }, environment: { $0.environment })
+                try await LegacyVMStore.vms(ids: idList, on: db),
+                id: \.id, projectID: \.projectID, environment: { $0.environment })
 
         case .sandbox:
             return projectParents(
-                try await Sandbox.query(on: db).filter(\.$id ~~ idList).all(),
-                id: \.id, projectID: { $0.$project.id }, environment: { $0.environment })
+                try await LegacySandboxStore.sandboxes(ids: idList, on: db),
+                id: \.id, projectID: \.projectID, environment: { $0.environment })
 
         case .image:
             return projectParents(
-                try await Image.query(on: db).filter(\.$id ~~ idList).all(),
-                id: \.id, projectID: { $0.$project.id })
+                try await LegacyImageStore.images(ids: idList, on: db),
+                id: \.id, projectID: \.projectID)
 
         case .volume:
             return projectParents(
-                try await Volume.query(on: db).filter(\.$id ~~ idList).all(),
-                id: \.id, projectID: { $0.$project.id })
+                try await LegacyVolumeStore.volumes(ids: idList, on: db),
+                id: \.id, projectID: \.projectID)
 
         case .volumeSnapshot:
             // A snapshot references its volume by attribute, not as a parent
             // (docs/architecture/iam.md) — its container is the project.
             return projectParents(
-                try await VolumeSnapshot.query(on: db).filter(\.$id ~~ idList).all(),
-                id: \.id, projectID: { $0.$project.id })
+                try await LegacyVolumeSnapshotStore.snapshots(ids: idList, on: db),
+                id: \.id, projectID: \.projectID)
 
         case .sandboxSnapshot:
             return projectParents(
-                try await SandboxSnapshot.query(on: db).filter(\.$id ~~ idList).all(),
-                id: \.id, projectID: { $0.$project.id }, environment: { $0.environment })
+                try await LegacySandboxSnapshotStore.snapshots(ids: idList, on: db),
+                id: \.id, projectID: \.projectID, environment: { $0.environment })
 
         case .vmSnapshot:
             // Like the other snapshot types, a checkpoint references its VM by
             // attribute, not as a parent — its container is the project.
             return projectParents(
-                try await VMSnapshot.query(on: db).filter(\.$id ~~ idList).all(),
-                id: \.id, projectID: { $0.$project.id }, environment: { $0.environment })
+                try await LegacyVMSnapshotStore.snapshots(ids: idList, on: db),
+                id: \.id, projectID: \.projectID, environment: { $0.environment })
 
         case .floatingIP:
-            return projectParents(
-                try await FloatingIP.query(on: db).filter(\.$id ~~ idList).all(),
-                id: \.id, projectID: { $0.$project.id })
+            var steps: [UUID: Step] = [:]
+            for row in try await LegacyFloatingIPStore.rows(ids: idList, on: db) {
+                steps[row.id] = Step(
+                    parent: IAMNode(type: .project, id: row.projectID),
+                    leaf: IAMLeafFacts())
+            }
+            return steps
 
         case .loadBalancer:
-            return projectParents(
-                try await LoadBalancer.query(on: db).filter(\.$id ~~ idList).all(),
-                id: \.id, projectID: { $0.$project.id })
+            var steps: [UUID: Step] = [:]
+            for loadBalancer in try await LegacyLoadBalancerStore.rows(ids: idList, on: db) {
+                steps[loadBalancer.id] = Step(
+                    parent: IAMNode(type: .project, id: loadBalancer.projectID),
+                    leaf: IAMLeafFacts())
+            }
+            return steps
 
         case .securityGroup:
-            return projectParents(
-                try await SecurityGroup.query(on: db).filter(\.$id ~~ idList).all(),
-                id: \.id, projectID: { $0.$project.id })
+            var steps: [UUID: Step] = [:]
+            for group in try await LegacySecurityGroupStore.groups(ids: idList, on: db) {
+                steps[group.id] = Step(
+                    parent: IAMNode(type: .project, id: group.projectID), leaf: IAMLeafFacts())
+            }
+            return steps
 
         case .dnsZone:
-            return projectParents(
-                try await DNSZone.query(on: db).filter(\.$id ~~ idList).all(),
-                id: \.id, projectID: { $0.$project.id })
+            var steps: [UUID: Step] = [:]
+            for zone in try await LegacyDNSZoneStore.zones(ids: idList, on: db) {
+                steps[zone.id] = Step(
+                    parent: IAMNode(type: .project, id: zone.projectID), leaf: IAMLeafFacts())
+            }
+            return steps
 
         case .dnsRecord:
             // The one leaf whose parent is another leaf: a record belongs to
             // its zone, which belongs to a project. The walk handles the extra
             // level on its own — it just keeps climbing.
             var steps: [UUID: Step] = [:]
-            for record in try await DNSRecord.query(on: db).filter(\.$id ~~ idList).all() {
-                guard let id = record.id else { continue }
-                steps[id] = Step(
-                    parent: IAMNode(type: .dnsZone, id: record.$zone.id), leaf: IAMLeafFacts())
+            for record in try await LegacyDNSRecordStore.records(ids: idList, on: db) {
+                steps[record.id] = Step(
+                    parent: IAMNode(type: .dnsZone, id: record.zoneID), leaf: IAMLeafFacts())
             }
             return steps
 
         case .serviceAccount:
-            return projectParents(
-                try await ServiceAccount.query(on: db).filter(\.$id ~~ idList).all(),
-                id: \.id, projectID: { $0.$project.id })
+            var steps: [UUID: Step] = [:]
+            for account in try await LegacyServiceAccountStore.accounts(ids: idList, on: db) {
+                steps[account.id] = Step(
+                    parent: IAMNode(type: .project, id: account.projectID),
+                    leaf: IAMLeafFacts())
+            }
+            return steps
 
         case .network:
             // Every network belongs to a project (issue #765), so the chain is
@@ -402,25 +549,27 @@ enum IAMResourceTree {
             // site pin constrains where the network is *realized*, never who
             // may act on it.
             return projectParents(
-                try await LogicalNetwork.query(on: db).filter(\.$id ~~ idList).all(),
-                id: \.id, projectID: { $0.$project.id })
+                try await LegacyLogicalNetworkStore.networks(ids: idList, on: db),
+                id: \.id, projectID: \.projectID)
 
         case .site:
             var steps: [UUID: Step] = [:]
-            for site in try await Site.query(on: db).filter(\.$id ~~ idList).all() {
+            for site in try await LegacySiteStore.sites(ids: idList, on: db) {
                 guard let id = site.id else { continue }
                 steps[id] = Step(
-                    parent: scopeNode(ouID: site.$organizationalUnit.id, orgID: site.$organization.id),
+                    parent: scopeNode(
+                        ouID: site.organizationalUnitID,
+                        orgID: site.organizationID),
                     leaf: IAMLeafFacts())
             }
             return steps
 
         case .agent:
             var steps: [UUID: Step] = [:]
-            for agent in try await Agent.query(on: db).filter(\.$id ~~ idList).all() {
+            for agent in try await LegacyAgentStore.agents(ids: idList, on: db) {
                 guard let id = agent.id else { continue }
                 steps[id] = Step(
-                    parent: scopeNode(ouID: agent.$organizationalUnit.id, orgID: agent.$organization.id),
+                    parent: scopeNode(ouID: agent.organizationalUnitID, orgID: agent.organizationID),
                     leaf: IAMLeafFacts())
             }
             return steps

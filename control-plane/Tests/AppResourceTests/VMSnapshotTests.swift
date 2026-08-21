@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -18,15 +17,14 @@ import AppTestSupport
 final class VMSnapshotTests {
 
     private func withCheckpointTestApp(
-        _ test: (Application, User, Project, VM, String) async throws -> Void
+        _ test: (Application, User, Project, inout VM, String) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "ckptuser",
                 email: "ckpt@example.com",
@@ -35,18 +33,17 @@ final class VMSnapshotTests {
             )
             let org = try await builder.createOrganization(name: "Checkpoint Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Checkpoint Project",
                 description: "Project for checkpoint tests",
                 organization: org
             )
-            let vm = try await builder.createVM(name: "ckpt-vm", project: project)
-            let token = try await user.generateAPIKey(on: app.db)
+            var vm = try await builder.createVM(name: "ckpt-vm", project: project)
+            let token = try await user.generateAPIKey(on: app)
 
-            try await test(app, user, project, vm, token)
+            try await test(app, user, project, &vm, token)
         } catch {
             try await app.shutdownForTesting()
             throw error
@@ -59,7 +56,7 @@ final class VMSnapshotTests {
     @discardableResult
     private func placeOnCapableAgent(
         app: Application,
-        vm: VM,
+        vm: inout VM,
         supportsSnapshots: Bool = true,
         status: VMStatus = .running,
         wireProtocolVersion: Int = WireProtocol.currentVersion
@@ -89,7 +86,7 @@ final class VMSnapshotTests {
             ],
             protocolVersion: wireProtocolVersion
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: "checkpoint-agent",
             organizationScope: orgID.map { .organization($0) })
@@ -101,7 +98,7 @@ final class VMSnapshotTests {
         // Converged: desired matches observed, so any later desired-state
         // movement in a test is something the checkpoint path did.
         if status == .running { vm.desiredStatus = .running }
-        try await vm.save(on: app.db)
+        try await vm.save(on: app.testPostgres)
         return agentUUID.uuidString
     }
 
@@ -113,13 +110,13 @@ final class VMSnapshotTests {
         let snapshot = VMSnapshot(
             name: name,
             vmID: try vm.requireID(),
-            projectID: vm.$project.id,
+            projectID: vm.projectID,
             environment: vm.environment,
+            status: .ready,
+            size: 1 << 30,
             agentId: vm.hypervisorId,
             createdByID: try user.requireID())
-        snapshot.status = .ready
-        snapshot.size = 1 << 30
-        try await snapshot.save(on: app.db)
+        try await snapshot.save(on: app.testPostgres)
         return snapshot
     }
 
@@ -133,14 +130,14 @@ final class VMSnapshotTests {
             } afterResponse: { res in
                 #expect(res.status == .conflict)
             }
-            #expect(try await VMSnapshot.query(on: app.db).count() == 0)
+            #expect(try await VMSnapshot.all(on: app.testPostgres).count == 0)
         }
     }
 
     @Test("Checkpointing a stopped VM is refused: there is no machine state to capture")
     func createRefusesStoppedVM() async throws {
         try await withCheckpointTestApp { app, _, _, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm, status: .shutdown)
+            try await placeOnCapableAgent(app: app, vm: &vm, status: .shutdown)
 
             try await app.test(.POST, "/api/vms/\(vm.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -156,7 +153,7 @@ final class VMSnapshotTests {
         try await withCheckpointTestApp { app, _, _, vm, token in
             // A QEMU-less (or pre-v22) agent drops the frame undecoded, so the
             // request would burn its whole budget against silence.
-            try await placeOnCapableAgent(app: app, vm: vm, supportsSnapshots: false)
+            try await placeOnCapableAgent(app: app, vm: &vm, supportsSnapshots: false)
 
             try await app.test(.POST, "/api/vms/\(vm.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -170,7 +167,7 @@ final class VMSnapshotTests {
     @Test("A malformed checkpoint request body is rejected instead of defaulted")
     func createRejectsMalformedBody() async throws {
         try await withCheckpointTestApp { app, _, _, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm)
+            try await placeOnCapableAgent(app: app, vm: &vm)
 
             try await app.test(.POST, "/api/vms/\(vm.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -178,7 +175,7 @@ final class VMSnapshotTests {
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
-            #expect(try await VMSnapshot.query(on: app.db).count() == 0)
+            #expect(try await VMSnapshot.all(on: app.testPostgres).count == 0)
         }
     }
 
@@ -187,7 +184,7 @@ final class VMSnapshotTests {
     @Test("POST snapshots returns 202 and inserts the checkpoint as desired state")
     func createAcceptsAsDesiredState() async throws {
         try await withCheckpointTestApp { app, user, _, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm)
+            try await placeOnCapableAgent(app: app, vm: &vm)
 
             var accepted: AcceptedMutation<VMSnapshotResponse>?
             try await app.test(.POST, "/api/vms/\(vm.id!.uuidString)/snapshots") { req in
@@ -207,7 +204,7 @@ final class VMSnapshotTests {
             #expect(body.resource.conditions.observedGeneration == 0)
 
             let snapshot = try #require(
-                await VMSnapshot.query(on: app.db).filter(\.$vm.$id == vm.id!).first())
+                try await VMSnapshot.all(on: app.testPostgres).first { $0.vmID == vm.id! })
             #expect(snapshot.agentId == vm.hypervisorId)
             #expect(snapshot.desiredStatus == .present)
             // Finalizers are stamped by the DELETE, not at create: re-stamping
@@ -224,24 +221,24 @@ final class VMSnapshotTests {
             // The mutation is attributed in the same transaction as the insert.
             let event = try #require(
                 await ResourceEvent.latest(
-                    .requested, resourceKind: .vmCheckpoint, resourceID: snapshot.id!, on: app.db))
+                    .requested, resourceKind: .vmCheckpoint, resourceID: snapshot.id!, on: app.testPostgres))
             #expect(event.id == body.mutationId)
             #expect(event.mutation == .create)
 
             // Ownership: the creator gets an admin binding on the checkpoint
             // node in the create transaction.
-            let ownerBindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
-                .filter(\.$principalID == user.id!)
-                .filter(\.$roleID == IAMRole.admin.seededID)
-                .filter(\.$nodeType == IAMNodeType.vmSnapshot.rawValue)
-                .filter(\.$nodeID == snapshot.id!)
-                .count()
+            let ownerBindings = try await LegacyRoleBindingStore.bindings(
+                principalType: IAMPrincipalType.user.rawValue,
+                principalID: user.id!,
+                roleID: IAMRole.admin.seededID,
+                nodeType: IAMNodeType.vmSnapshot.rawValue,
+                nodeID: snapshot.id!,
+                on: app.testPostgres).count
             #expect(ownerBindings == 1)
 
             // A checkpoint never touches the VM's desired state — the guest
             // keeps running through it — so the VM's generation never moves.
-            let settled = try #require(await VM.find(vm.id, on: app.db))
+            let settled = try #require(await VM.find(vm.id, on: app.testPostgres))
             #expect(settled.desiredStatus == .running)
             #expect(settled.generation == 1)
         }
@@ -254,7 +251,7 @@ final class VMSnapshotTests {
     @Test("A second checkpoint while one is converging is accepted, not refused")
     func createAllowsConcurrentCaptures() async throws {
         try await withCheckpointTestApp { app, _, _, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm)
+            try await placeOnCapableAgent(app: app, vm: &vm)
 
             for name in ["first", "second"] {
                 try await app.test(.POST, "/api/vms/\(vm.id!.uuidString)/snapshots") { req in
@@ -264,7 +261,7 @@ final class VMSnapshotTests {
                     #expect(res.status == .accepted)
                 }
             }
-            #expect(try await VMSnapshot.query(on: app.db).count() == 2)
+            #expect(try await VMSnapshot.all(on: app.testPostgres).count == 2)
         }
     }
 
@@ -273,7 +270,7 @@ final class VMSnapshotTests {
     @Test("A requested TTL becomes an absolute expiry; zero keeps it forever")
     func createStampsRetention() async throws {
         try await withCheckpointTestApp { app, _, _, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm)
+            try await placeOnCapableAgent(app: app, vm: &vm)
 
             try await app.test(.POST, "/api/vms/\(vm.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -283,7 +280,7 @@ final class VMSnapshotTests {
                 #expect(res.status == .accepted)
             }
             let expiring = try #require(
-                await VMSnapshot.query(on: app.db).filter(\.$name == "expiring").first())
+                try await VMSnapshot.all(on: app.testPostgres).first { $0.name == "expiring" })
             let expiresAt = try #require(expiring.expiresAt)
             #expect(expiresAt.timeIntervalSinceNow > 3000)
 
@@ -295,7 +292,7 @@ final class VMSnapshotTests {
                 #expect(res.status == .accepted)
             }
             let kept = try #require(
-                await VMSnapshot.query(on: app.db).filter(\.$name == "kept").first())
+                try await VMSnapshot.all(on: app.testPostgres).first { $0.name == "kept" })
             #expect(kept.expiresAt == nil)
         }
     }
@@ -303,7 +300,7 @@ final class VMSnapshotTests {
     @Test("A negative TTL is rejected")
     func createRejectsNegativeTTL() async throws {
         try await withCheckpointTestApp { app, _, _, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm)
+            try await placeOnCapableAgent(app: app, vm: &vm)
 
             try await app.test(.POST, "/api/vms/\(vm.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -312,7 +309,7 @@ final class VMSnapshotTests {
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
-            #expect(try await VMSnapshot.query(on: app.db).count() == 0)
+            #expect(try await VMSnapshot.all(on: app.testPostgres).count == 0)
         }
     }
 
@@ -321,7 +318,7 @@ final class VMSnapshotTests {
     @Test("GET snapshots pages a VM's checkpoints, newest first")
     func listReturnsCheckpoints() async throws {
         try await withCheckpointTestApp { app, user, _, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm)
+            try await placeOnCapableAgent(app: app, vm: &vm)
             _ = try await insertReadyCheckpoint(app: app, vm: vm, user: user, name: "first")
             _ = try await insertReadyCheckpoint(app: app, vm: vm, user: user, name: "second")
 
@@ -341,7 +338,7 @@ final class VMSnapshotTests {
     @Test("DELETE marks the checkpoint absent and keeps the row until an agent confirms")
     func deleteAcceptsAndMarksAbsent() async throws {
         try await withCheckpointTestApp { app, user, _, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm)
+            try await placeOnCapableAgent(app: app, vm: &vm)
             let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
 
             try await app.test(
@@ -357,7 +354,7 @@ final class VMSnapshotTests {
             // was lost left a row marked `.deleting` with nothing to retry it,
             // where this one is re-driven by every level-triggered sync until
             // the agent's report omits the artifact.
-            let after = try #require(await VMSnapshot.find(snapshot.id, on: app.db))
+            let after = try #require(await VMSnapshot.find(snapshot.id, on: app.testPostgres))
             #expect(after.desiredStatus == .absent)
             #expect(after.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
             #expect(after.generation > snapshot.generation)
@@ -370,10 +367,10 @@ final class VMSnapshotTests {
     @Test("Deleting a checkpoint with no reachable agent removes the row directly")
     func deleteWithoutAgentRemovesRow() async throws {
         try await withCheckpointTestApp { app, user, _, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm)
+            try await placeOnCapableAgent(app: app, vm: &vm)
             let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
-            snapshot.agentId = nil
-            try await snapshot.save(on: app.db)
+                .replacing(agentId: .some(nil))
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(
                 .DELETE, "/api/vms/\(vm.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)"
@@ -385,7 +382,7 @@ final class VMSnapshotTests {
 
             var removed = false
             for _ in 0..<40 {
-                if try await VMSnapshot.find(snapshot.id, on: app.db) == nil {
+                if try await VMSnapshot.find(snapshot.id, on: app.testPostgres) == nil {
                     removed = true
                     break
                 }
@@ -402,10 +399,10 @@ final class VMSnapshotTests {
     @Test("A checkpoint still capturing can be deleted")
     func deleteAcceptsCreatingCheckpoint() async throws {
         try await withCheckpointTestApp { app, user, _, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm)
+            try await placeOnCapableAgent(app: app, vm: &vm)
             let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
-            snapshot.status = .creating
-            try await snapshot.save(on: app.db)
+                .replacing(status: .creating)
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(
                 .DELETE, "/api/vms/\(vm.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)"
@@ -420,8 +417,8 @@ final class VMSnapshotTests {
     @Test("A checkpoint belonging to another VM is not found under this one")
     func deleteRefusesForeignCheckpoint() async throws {
         try await withCheckpointTestApp { app, user, project, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm)
-            let other = try await TestDataBuilder(db: app.db).createVM(
+            try await placeOnCapableAgent(app: app, vm: &vm)
+            let other = try await TestDataBuilder(db: app.testPostgres).createVM(
                 name: "other-vm", project: project)
             let snapshot = try await insertReadyCheckpoint(app: app, vm: other, user: user)
 
@@ -440,11 +437,11 @@ final class VMSnapshotTests {
     @Test("Restore returns 202 and writes the restore nonce onto the VM")
     func restoreAcceptsAndSetsDesiredRunning() async throws {
         try await withCheckpointTestApp { app, user, _, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm, status: .paused)
+            try await placeOnCapableAgent(app: app, vm: &vm, status: .paused)
             let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
             vm.setFixtureDesiredStatus(.paused)
             vm.generation = 1
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             var accepted: AcceptedMutation<VMDetailResponse>?
             try await app.test(
@@ -465,7 +462,7 @@ final class VMSnapshotTests {
             // durable record. Desired state flips to running alongside, because
             // a restored guest resumes and the next sync would otherwise pause
             // it right back.
-            let stored = try await VM.find(vm.id, on: app.db)
+            let stored = try await VM.find(vm.id, on: app.testPostgres)
             #expect(stored?.restoreGeneration == 1)
             #expect(stored?.restoreSnapshotID == snapshot.id)
             #expect(stored?.desiredStatus == .running)
@@ -474,10 +471,11 @@ final class VMSnapshotTests {
 
             // Nothing was dispatched and nothing awaited a reply: the sync is
             // the whole delivery mechanism now.
-            let events = try await ResourceEvent.query(on: app.db)
-                .filter(\.$resourceID == vm.id!)
-                .filter(\.$mutation == .restore)
-                .all()
+            let events = try await ResourceEvent.matching(
+                resourceID: vm.id!,
+                mutation: .restore,
+                on: app.testPostgres
+            )
             #expect(events.count == 1)
             #expect(events.first?.targetGeneration == 2)
         }
@@ -491,7 +489,7 @@ final class VMSnapshotTests {
     @Test("Restore is refused when the agent advertises no checkpoint backend")
     func restoreRefusesAgentWithoutCheckpointCapability() async throws {
         try await withCheckpointTestApp { app, user, _, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm, supportsSnapshots: false)
+            try await placeOnCapableAgent(app: app, vm: &vm, supportsSnapshots: false)
             let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
 
             try await app.test(
@@ -503,17 +501,17 @@ final class VMSnapshotTests {
                 #expect(res.body.string.contains("snapshot backend"))
             }
 
-            #expect(try await VM.find(vm.id, on: app.db)?.restoreGeneration == 0)
+            #expect(try await VM.find(vm.id, on: app.testPostgres)?.restoreGeneration == 0)
         }
     }
 
     @Test("Restoring a checkpoint that is not ready is refused")
     func restoreRefusesUnreadyCheckpoint() async throws {
         try await withCheckpointTestApp { app, user, _, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm)
+            try await placeOnCapableAgent(app: app, vm: &vm)
             let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
-            snapshot.status = .error
-            try await snapshot.save(on: app.db)
+                .replacing(status: .error)
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(
                 .POST, "/api/vms/\(vm.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/restore"
@@ -528,12 +526,12 @@ final class VMSnapshotTests {
     @Test("Restoring a checkpoint taken on another agent is refused")
     func restoreRefusesCrossAgent() async throws {
         try await withCheckpointTestApp { app, user, _, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm)
+            try await placeOnCapableAgent(app: app, vm: &vm)
             let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
+                .replacing(agentId: .some(UUID().uuidString))
             // The machine state lives inside disks on the agent that took it,
             // so a VM that moved cannot load it.
-            snapshot.agentId = UUID().uuidString
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(
                 .POST, "/api/vms/\(vm.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/restore"
@@ -551,7 +549,7 @@ final class VMSnapshotTests {
     @Test("Checkpoint state counts against the storage quota")
     func checkpointChargesStorageQuota() async throws {
         try await withCheckpointTestApp { app, user, project, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm)
+            try await placeOnCapableAgent(app: app, vm: &vm)
 
             // A quota with no headroom beyond the VM's own disk: the
             // checkpoint's estimated machine state (the memory grant) cannot
@@ -567,7 +565,7 @@ final class VMSnapshotTests {
                 maxVMs: 10,
                 environment: nil
             )
-            try await quota.save(on: app.db)
+            try await quota.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/vms/\(vm.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -575,14 +573,14 @@ final class VMSnapshotTests {
                 #expect(res.status == .forbidden)
                 #expect(res.body.string.lowercased().contains("quota"))
             }
-            #expect(try await VMSnapshot.query(on: app.db).count() == 0)
+            #expect(try await VMSnapshot.all(on: app.testPostgres).count == 0)
 
             // And a ready checkpoint's machine state shows up in the measured
             // storage usage, so a later admission sees it.
             let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
-            let scope = try await QuotaUsageAggregator.scope(of: quota, on: app.db)
+            let scope = try await QuotaUsageAggregator.scope(of: quota, on: app.testPostgres)
             let checkpointBytes = try await QuotaUsageAggregator.vmCheckpointStorageBytes(
-                in: scope, on: app.db)
+                in: scope, on: app.testPostgres)
             #expect(checkpointBytes == snapshot.size)
         }
     }

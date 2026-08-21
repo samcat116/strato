@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -19,8 +18,8 @@ final class ListPaginationTests: BaseTestCase {
     @Test("GET /api/vms pages with the envelope: defaults, slices, clamping, validation")
     func vmListPages() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            let builder = TestDataBuilder(db: app.db)
+            try await setupCommonTestData(on: app)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let project = try await builder.createProject(
                 name: "Paging Project", description: "pagination coverage", organization: testOrganization)
             for index in 0..<5 {
@@ -88,16 +87,15 @@ final class ListPaginationTests: BaseTestCase {
     @Test("total counts only the rows the caller is authorized to read")
     func totalRespectsAuthorization() async throws {
         try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            let builder = TestDataBuilder(db: app.db)
+            try await setupCommonTestData(on: app)
+            let builder = TestDataBuilder(db: app.testPostgres)
 
             let member = try await builder.createUser(
                 username: "pagingmember", email: "pagingmember@example.com", isSystemAdmin: false)
             try await builder.addUserToOrganization(
                 user: member, organization: testOrganization, role: "member")
-            member.currentOrganizationId = testOrganization.id
-            try await member.save(on: app.db)
-            let memberToken = try await member.generateAPIKey(on: app.db)
+            try await member.replacingCurrentOrganization(testOrganization.id).save(on: app.testPostgres)
+            let memberToken = try await member.generateAPIKey(on: app)
 
             let granted = try await builder.createProject(
                 name: "Granted", description: "readable", organization: testOrganization)
@@ -105,7 +103,7 @@ final class ListPaginationTests: BaseTestCase {
                 name: "Withheld", description: "not readable", organization: testOrganization)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: member.id!, role: .viewer,
-                nodeType: .project, nodeID: granted.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: granted.id!, createdBy: nil, on: app.testPostgres)
 
             for index in 0..<3 {
                 _ = try await builder.createVM(name: "granted-vm-\(index)", project: granted)

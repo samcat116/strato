@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -18,49 +17,42 @@ enum SecurityGroupService {
     /// creator can't observe the invariant half-established; the partial
     /// unique index on `(project_id) WHERE is_default` breaks read-then-write
     /// races (the second creator's insert fails and retries the lookup).
-    static func ensureDefaultGroup(projectID: UUID, on db: Database) async throws -> SecurityGroup {
-        if let existing = try await SecurityGroup.query(on: db)
-            .filter(\.$project.$id == projectID)
-            .filter(\.$isDefault == true)
-            .first()
-        {
+    static func ensureDefaultGroup(projectID: UUID, on db: PostgresStoreContext) async throws
+        -> SecurityGroupSnapshot
+    {
+        if let existing = try await LegacySecurityGroupStore.defaultGroup(
+            projectID: projectID, on: db) {
             return existing
         }
 
-        let group = SecurityGroup(
-            projectID: projectID,
-            name: SecurityGroup.defaultGroupName,
-            description: "Default security group",
-            isDefault: true
-        )
+        let group: SecurityGroupSnapshot
         do {
-            try await group.save(on: db)
+            group = try await LegacySecurityGroupStore.insert(
+                projectID: projectID, name: SecurityGroup.defaultGroupName,
+                description: "Default security group", isDefault: true, on: db)
         } catch {
             // Lost a race with a concurrent creator: the partial unique index
             // refused the second default. Use theirs.
-            if let existing = try await SecurityGroup.query(on: db)
-                .filter(\.$project.$id == projectID)
-                .filter(\.$isDefault == true)
-                .first()
-            {
+            if let existing = try await LegacySecurityGroupStore.defaultGroup(
+                projectID: projectID, on: db) {
                 return existing
             }
             throw error
         }
 
-        let groupID = try group.requireID()
+        let groupID = group.id
         for ethertype in [SecurityGroupRule.Ethertype.ipv4, .ipv6] {
-            try await SecurityGroupRule(
+            try await LegacySecurityGroupRuleStore.insert(
                 securityGroupID: groupID,
                 direction: .ingress,
                 ethertype: ethertype,
-                remoteGroupID: groupID
-            ).save(on: db)
-            try await SecurityGroupRule(
+                remoteGroupID: groupID,
+                on: db)
+            try await LegacySecurityGroupRuleStore.insert(
                 securityGroupID: groupID,
                 direction: .egress,
-                ethertype: ethertype
-            ).save(on: db)
+                ethertype: ethertype,
+                on: db)
         }
         return group
     }
@@ -70,7 +62,7 @@ enum SecurityGroupService {
     static func validateRule(
         _ request: CreateSecurityGroupRuleRequest,
         groupProjectID: UUID,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> String? {
         if request.remoteCIDR != nil && request.remoteGroupId != nil {
             throw Abort(.badRequest, reason: "A rule may have a CIDR peer or a group peer, not both")
@@ -137,11 +129,9 @@ enum SecurityGroupService {
             // a distinct cross-project answer would itself disclose that the id
             // names a group in some other project. Scoping the lookup collapses
             // both into one honest "not found" (issue #777).
-            let remote = try await SecurityGroup.query(on: db)
-                .filter(\.$id == remoteGroupId)
-                .filter(\.$project.$id == groupProjectID)
-                .first()
-            guard remote != nil else {
+            let remote = try await LegacySecurityGroupStore.groups(
+                ids: [remoteGroupId], projectIDs: [groupProjectID], on: db)
+            guard !remote.isEmpty else {
                 throw Abort(.badRequest, reason: "Referenced security group not found")
             }
         }
@@ -158,7 +148,7 @@ enum SecurityGroupService {
     /// pre-security-group fleet, where sync assembly simply omits the fields
     /// (documented mixed-fleet rollout semantics).
     static func resolveRequestedGroupIDs(
-        _ requested: [UUID]?, projectID: UUID, on db: Database
+        _ requested: [UUID]?, projectID: UUID, on db: PostgresStoreContext
     ) async throws -> [UUID] {
         let unique: [UUID] = (requested ?? []).reduce(into: []) { unique, groupId in
             if !unique.contains(groupId) { unique.append(groupId) }
@@ -181,12 +171,8 @@ enum SecurityGroupService {
         // One query for the set, then a difference, rather than a lookup per
         // id: the cap bounds it either way, but the error still names the
         // specific id that was missing.
-        let found = Set(
-            try await SecurityGroup.query(on: db)
-                .filter(\.$id ~~ unique)
-                .filter(\.$project.$id == projectID)
-                .all()
-                .compactMap(\.id))
+        let found = Set(try await LegacySecurityGroupStore.groups(
+            ids: unique, projectIDs: [projectID], on: db).map(\.id))
         if let missing = unique.first(where: { !found.contains($0) }) {
             throw Abort(.notFound, reason: "Security group \(missing) not found in this project")
         }
@@ -218,8 +204,8 @@ enum SecurityGroupService {
     /// which no unique index can do here (the invariant is a *count*, not a
     /// duplicate). Keyed on the interface id, with a prefix so VM and sandbox
     /// NICs cannot collide in the shared lock space.
-    static func lockMembership(interfaceID: UUID, on db: Database) async throws {
-        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
+    static func lockMembership(interfaceID: UUID, on db: PostgresStoreContext) async throws {
+        guard let sql = db as? PostgresStoreContext, sql.dialect.name == "postgresql" else { return }
         try await sql.raw(
             "SELECT pg_advisory_xact_lock(hashtext(\(bind: "sgmember:\(interfaceID.uuidString)")))"
         ).run()
@@ -240,12 +226,8 @@ enum SecurityGroupService {
     /// Both tables must be counted everywhere, and it is easy to count only
     /// one: an undercount would let the API report a group as unattached and
     /// then hand the caller a bare FK violation when they try to delete it.
-    static func attachmentCounts(forGroups groupIds: [UUID], on db: Database) async throws -> [UUID: Int] {
+    static func attachmentCounts(forGroups groupIds: [UUID], on db: PostgresStoreContext) async throws -> [UUID: Int] {
         guard !groupIds.isEmpty else { return [:] }
-        guard let sql = db as? SQLDatabase else {
-            throw Abort(.internalServerError, reason: "Attachment counts require an SQL database")
-        }
-
         struct CountRow: Decodable {
             let securityGroupID: UUID
             let total: Int
@@ -258,13 +240,14 @@ enum SecurityGroupService {
 
         var counts: [UUID: Int] = [:]
         for table in ["vm_interface_security_groups", "sandbox_interface_security_groups"] {
-            let rows = try await sql.select()
-                .column("security_group_id")
-                .column(SQLFunction("COUNT", args: SQLLiteral.all), as: "total")
-                .from(table)
-                .where("security_group_id", .in, SQLBind.group(groupIds))
-                .groupBy("security_group_id")
-                .all(decoding: CountRow.self)
+            let rows = try await db.raw(
+                """
+                SELECT security_group_id, COUNT(*)::bigint AS total
+                FROM \(unsafeRaw: table)
+                WHERE security_group_id = ANY(\(bind: groupIds))
+                GROUP BY security_group_id
+                """
+            ).all(decoding: CountRow.self)
             for row in rows {
                 counts[row.securityGroupID, default: 0] += row.total
             }
@@ -273,13 +256,11 @@ enum SecurityGroupService {
     }
 
     /// How many NICs attach one group, across both join tables.
-    static func attachmentCount(forGroup groupId: UUID, on db: Database) async throws -> Int {
-        let vmCount = try await VMInterfaceSecurityGroup.query(on: db)
-            .filter(\.$securityGroup.$id == groupId)
-            .count()
-        let sandboxCount = try await SandboxInterfaceSecurityGroup.query(on: db)
-            .filter(\.$securityGroup.$id == groupId)
-            .count()
+    static func attachmentCount(forGroup groupId: UUID, on db: PostgresStoreContext) async throws -> Int {
+        let vmCount = try await LegacyInterfaceSecurityGroupStore.count(
+            kind: .vm, securityGroupID: groupId, on: db)
+        let sandboxCount = try await LegacyInterfaceSecurityGroupStore.count(
+            kind: .sandbox, securityGroupID: groupId, on: db)
         return vmCount + sandboxCount
     }
 
@@ -306,7 +287,7 @@ enum SecurityGroupService {
     static func realization(
         for vm: VM,
         offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> Realization {
         try await realization(
             forHypervisorId: vm.hypervisorId, offlineGrace: offlineGrace, on: db)
@@ -319,7 +300,7 @@ enum SecurityGroupService {
     static func realization(
         forHypervisorId hypervisorId: String?,
         offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> Realization {
         guard let hypervisorId,
             let agentUUID = UUID(uuidString: hypervisorId),
@@ -336,7 +317,7 @@ enum SecurityGroupService {
     static func realization(
         host: Agent,
         offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> Realization {
         realization(
             host: host,
@@ -368,12 +349,12 @@ enum SecurityGroupService {
     static func enforcement(
         for vm: VM,
         offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> Bool? {
         enforcement(of: try await realization(for: vm, offlineGrace: offlineGrace, on: db))
     }
 
-    /// The sandbox twin (STR-102). `sandbox.$networkInterfaces` must be
+    /// The sandbox twin (STR-102). `sandbox.loadedNetworkInterfaces` must be
     /// eager-loaded; an unloaded relation reads as "no NIC", which is the same
     /// contract `SandboxDetailResponse.securityGroupIds` already keeps — the
     /// two are shown side by side, so they must agree about what silence means.
@@ -414,11 +395,11 @@ enum SecurityGroupService {
     static func sandboxEnforcement(
         for sandbox: Sandbox,
         offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> Bool? {
         // No interface, nothing to filter. Nil is "unknown", not "unenforced" —
         // the same distinction an unplaced VM gets.
-        guard let interfaces = sandbox.$networkInterfaces.value, !interfaces.isEmpty else { return nil }
+        guard let interfaces = sandbox.loadedNetworkInterfaces, !interfaces.isEmpty else { return nil }
         guard let hypervisorId = sandbox.hypervisorId,
             let hostID = UUID(uuidString: hypervisorId),
             let host = try await Agent.find(hostID, on: db)
@@ -440,11 +421,11 @@ enum SecurityGroupService {
     static func enforcementBySandbox(
         _ sandboxes: [Sandbox],
         offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> [UUID: Bool] {
         let hostIDsBySandbox: [UUID: UUID] = sandboxes.reduce(into: [:]) { map, sandbox in
             guard let sandboxID = sandbox.id,
-                let interfaces = sandbox.$networkInterfaces.value, !interfaces.isEmpty,
+                let interfaces = sandbox.loadedNetworkInterfaces, !interfaces.isEmpty,
                 let hypervisorId = sandbox.hypervisorId,
                 let hostID = UUID(uuidString: hypervisorId)
             else { return }
@@ -486,7 +467,7 @@ enum SecurityGroupService {
     static func enforcementByVM(
         _ vms: [VM],
         offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> [UUID: Bool] {
         let hostIDsByVM: [UUID: UUID] = vms.reduce(into: [:]) { map, vm in
             guard let vmID = vm.id,
@@ -523,12 +504,10 @@ enum SecurityGroupService {
     private static func enforcementByHost(
         ids: Set<UUID>,
         offlineGrace: TimeInterval,
-        on db: Database,
+        on db: PostgresStoreContext,
         override: (Agent) -> Bool? = { _ in nil }
     ) async throws -> [UUID: Bool] {
-        let hosts = try await Agent.query(on: db)
-            .filter(\.$id ~~ Array(ids))
-            .all()
+        let hosts = try await LegacyAgentStore.agents(ids: Array(ids), on: db)
         var enforcedByHost: [UUID: Bool] = [:]
         var authorityBySite: [UUID: SiteNetworkAuthority.Authority] = [:]
         for host in hosts {
@@ -538,7 +517,7 @@ enum SecurityGroupService {
                 continue
             }
             let authority: SiteNetworkAuthority.Authority
-            let siteID = host.$site.id
+            let siteID = host.siteID
             if let cached = authorityBySite[siteID] {
                 authority = cached
             } else {

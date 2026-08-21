@@ -1,6 +1,4 @@
 import AppTestSupport
-import Fluent
-import SQLKit
 import StratoShared
 import Testing
 import Vapor
@@ -31,9 +29,8 @@ final class SnapshotConvergenceTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "snapconv",
                 email: "snapconv@example.com",
@@ -74,7 +71,7 @@ final class SnapshotConvergenceTests {
             protocolVersion: protocolVersion,
             sandboxCapable: true
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let uuid = try await app.agentService.registerAgent(
             message, agentName: name, organizationScope: orgID.map { .organization($0) })
         return uuid.uuidString
@@ -99,15 +96,15 @@ final class SnapshotConvergenceTests {
             vmID: try vm.requireID(),
             projectID: try project.requireID(),
             environment: vm.environment,
+            status: status,
+            size: 1 << 30,
             agentId: agentId,
+            desiredStatus: desired,
+            generation: generation,
+            observedGeneration: observedGeneration,
             expiresAt: expiresAt,
             createdByID: try user.requireID())
-        snapshot.status = status
-        snapshot.desiredStatus = desired
-        snapshot.generation = generation
-        snapshot.observedGeneration = observedGeneration
-        snapshot.size = 1 << 30
-        try await snapshot.save(on: app.db)
+        try await snapshot.save(on: app.testPostgres)
         return snapshot
     }
 
@@ -129,7 +126,7 @@ final class SnapshotConvergenceTests {
     private func placedVM(
         _ builder: TestDataBuilder, project: Project, agentId: String, name: String = "vm"
     ) async throws -> VM {
-        let vm = try await builder.createVM(name: name, project: project)
+        var vm = try await builder.createVM(name: name, project: project)
         vm.hypervisorId = agentId
         vm.setStatus(.running)
         try await vm.save(on: builder.db)
@@ -167,11 +164,11 @@ final class SnapshotConvergenceTests {
     func captureModeRidesTheSync() async throws {
         try await withSnapshotApp { app, builder, user, project in
             let agentId = try await registerAgent(app: app, named: "mode-agent")
-            let sandbox = try await builder.createSandbox(name: "sb", project: project)
+            var sandbox = try await builder.createSandbox(name: "sb", project: project)
             sandbox.hypervisorId = agentId
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
-            let snapshot = SandboxSnapshot(
+            var snapshot = SandboxSnapshot(
                 name: "stopper",
                 sandboxID: try sandbox.requireID(),
                 projectID: try project.requireID(),
@@ -179,7 +176,7 @@ final class SnapshotConvergenceTests {
                 agentId: agentId,
                 captureMode: .stop,
                 createdByID: try user.requireID())
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let entry = try #require(message.snapshots.first { $0.kind == .sandboxSnapshot })
@@ -194,20 +191,20 @@ final class SnapshotConvergenceTests {
     func exportPutsUploadSlotsOnTheSync() async throws {
         try await withSnapshotApp { app, builder, user, project in
             let agentId = try await registerAgent(app: app, named: "export-agent")
-            let sandbox = try await builder.createSandbox(name: "sb", project: project)
+            var sandbox = try await builder.createSandbox(name: "sb", project: project)
             sandbox.hypervisorId = agentId
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             let snapshot = SandboxSnapshot(
                 name: "exported",
                 sandboxID: try sandbox.requireID(),
                 projectID: try project.requireID(),
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: agentId,
+                exportDesired: true,
                 createdByID: try user.requireID())
-            snapshot.status = .ready
-            snapshot.exportDesired = true
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let entry = try #require(message.snapshots.first { $0.kind == .sandboxSnapshot })
@@ -248,7 +245,7 @@ final class SnapshotConvergenceTests {
                             observedGeneration: 1)
                     ]))
 
-            let settled = try #require(await VMSnapshot.find(snapshot.id, on: app.db))
+            let settled = try #require(await VMSnapshot.find(snapshot.id, on: app.testPostgres))
             #expect(settled.status == .ready)
             #expect(settled.size == 4096)
             #expect(settled.qemuVersion == "9.1.0")
@@ -283,7 +280,7 @@ final class SnapshotConvergenceTests {
                             failedGeneration: 1)
                     ]))
 
-            let settled = try #require(await VMSnapshot.find(snapshot.id, on: app.db))
+            let settled = try #require(await VMSnapshot.find(snapshot.id, on: app.testPostgres))
             #expect(settled.status == .error)
             let degraded = try #require(settled.conditions.degraded)
             #expect(degraded.reason == "qemu snapshot-save job failed")
@@ -299,27 +296,28 @@ final class SnapshotConvergenceTests {
             let snapshot = try await makeCheckpoint(
                 on: app, user: user, project: project, vm: vm, agentId: agentId,
                 status: .creating, generation: 10, observedGeneration: 9)
-            snapshot.convergenceDeadline = Date().addingTimeInterval(120)
-            try await snapshot.save(on: app.db)
+                .replacing(convergenceDeadline: .some(Date().addingTimeInterval(120)))
+            try await snapshot.save(on: app.testPostgres)
             let snapshotID = try #require(snapshot.id)
-            let stale = try #require(try await VMSnapshot.find(snapshotID, on: app.db))
-            let deleteCopy = try #require(try await VMSnapshot.find(snapshotID, on: app.db))
+            let stale = try #require(try await VMSnapshot.find(snapshotID, on: app.testPostgres))
+            let deleteCopy = try #require(try await VMSnapshot.find(snapshotID, on: app.testPostgres))
 
-            let accepted = try await app.resourceMutation.accept(
+            let acceptedResult = try await app.resourceMutation.acceptValue(
                 .delete, on: deleteCopy, actor: .user(try user.requireID()),
-                dispatch: .directResolution { _ in false }, on: app.db, app: app
-            ) { db in
-                try await ResourceFinalizerService.stampForDeletion(deleteCopy, on: db)
-                deleteCopy.setDesiredStatus(.absent)
+                dispatch: .directResolution { _ in false }, on: app.testPostgres, app: app
+            ) { current, db in
+                try await ResourceFinalizerService.stampForDeletion(current, on: db)
+                    .replacingDesiredStatus(.absent)
             }
+            let accepted = acceptedResult.accepted
             #expect(accepted.targetGeneration == 11)
 
-            let outcome = try await ResourceConvergence.recordFailure(
+            let outcome = try await ResourceConvergence.recordValueFailure(
                 stale, mutation: .create, reason: "obsolete capture failure",
-                telemetryReason: "convergence_failed", on: app.db)
-            #expect(outcome == .superseded(actualGeneration: 11))
+                telemetryReason: "convergence_failed", on: app.testPostgres)
+            #expect(outcome.outcome == .superseded(actualGeneration: 11))
 
-            let stored = try #require(try await VMSnapshot.find(snapshotID, on: app.db))
+            let stored = try #require(try await VMSnapshot.find(snapshotID, on: app.testPostgres))
             #expect(stored.generation == 11)
             #expect(stored.desiredStatus == .absent)
             #expect(stored.convergenceDeadline != nil)
@@ -340,8 +338,8 @@ final class SnapshotConvergenceTests {
             let snapshot = try await makeCheckpoint(
                 on: app, user: user, project: project, vm: vm, agentId: agentId,
                 desired: .absent)
-            snapshot.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
-            try await snapshot.save(on: app.db)
+                .replacing(finalizers: [ResourceFinalizer.agentAbsent.rawValue])
+            try await snapshot.save(on: app.testPostgres)
 
             // Still listed: nothing is confirmed, so the row stays.
             try await app.observedStateApplier.apply(
@@ -355,11 +353,11 @@ final class SnapshotConvergenceTests {
                             present: true,
                             observedGeneration: 1)
                     ]))
-            #expect(try await VMSnapshot.find(snapshot.id, on: app.db) != nil)
+            #expect(try await VMSnapshot.find(snapshot.id, on: app.testPostgres) != nil)
 
             // Omitted from a full list: the bytes are gone, so the row is.
             try await app.observedStateApplier.apply(report(agentId: agentId, snapshots: []))
-            #expect(try await VMSnapshot.find(snapshot.id, on: app.db) == nil)
+            #expect(try await VMSnapshot.find(snapshot.id, on: app.testPostgres) == nil)
         }
     }
 
@@ -374,15 +372,15 @@ final class SnapshotConvergenceTests {
             let terminating = try await makeCheckpoint(
                 on: app, user: user, project: project, vm: vm, agentId: agentId,
                 name: "terminating", desired: .absent)
-            terminating.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
-            try await terminating.save(on: app.db)
+                .replacing(finalizers: [ResourceFinalizer.agentAbsent.rawValue])
+            try await terminating.save(on: app.testPostgres)
             let live = try await makeCheckpoint(
                 on: app, user: user, project: project, vm: vm, agentId: agentId, name: "live")
 
             try await app.observedStateApplier.apply(report(agentId: agentId, snapshots: nil))
 
-            #expect(try await VMSnapshot.find(terminating.id, on: app.db) != nil)
-            let untouched = try #require(await VMSnapshot.find(live.id, on: app.db))
+            #expect(try await VMSnapshot.find(terminating.id, on: app.testPostgres) != nil)
+            let untouched = try #require(await VMSnapshot.find(live.id, on: app.testPostgres))
             #expect(untouched.status == .ready)
         }
     }
@@ -403,8 +401,8 @@ final class SnapshotConvergenceTests {
 
             try await app.observedStateApplier.apply(report(agentId: agentId, snapshots: []))
 
-            #expect(try await VMSnapshot.find(pending.id, on: app.db)?.status == .creating)
-            #expect(try await VMSnapshot.find(lost.id, on: app.db)?.status == .error)
+            #expect(try await VMSnapshot.find(pending.id, on: app.testPostgres)?.status == .creating)
+            #expect(try await VMSnapshot.find(lost.id, on: app.testPostgres)?.status == .error)
         }
     }
 
@@ -440,7 +438,7 @@ final class SnapshotConvergenceTests {
                             observedGeneration: 1)
                     ]))
 
-            let settled = try #require(await VMSnapshot.find(snapshot.id, on: app.db))
+            let settled = try #require(await VMSnapshot.find(snapshot.id, on: app.testPostgres))
             #expect(settled.desiredStatus == .absent)
             // The quota's name reaches the user, which is the whole point of
             // failing rather than tolerating.
@@ -451,7 +449,7 @@ final class SnapshotConvergenceTests {
             let event = try #require(
                 await ResourceEvent.latest(
                     .requested, resourceKind: .vmCheckpoint, resourceID: try snapshot.requireID(),
-                    on: app.db))
+                    on: app.testPostgres))
             #expect(event.mutation == .delete)
             #expect(event.actorType == .system)
         }
@@ -482,7 +480,7 @@ final class SnapshotConvergenceTests {
                             observedGeneration: 1)
                     ]))
 
-            let settled = try #require(await VMSnapshot.find(snapshot.id, on: app.db))
+            let settled = try #require(await VMSnapshot.find(snapshot.id, on: app.testPostgres))
             #expect(settled.desiredStatus == .present)
             #expect(settled.status == .ready)
             #expect(settled.size == 2 << 30)
@@ -498,31 +496,32 @@ final class SnapshotConvergenceTests {
     func outstandingExportBlocksConvergence() async throws {
         try await withSnapshotApp { app, builder, user, project in
             let agentId = try await registerAgent(app: app, named: "export-converge")
-            let sandbox = try await builder.createSandbox(name: "sb", project: project)
+            var sandbox = try await builder.createSandbox(name: "sb", project: project)
             sandbox.hypervisorId = agentId
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
-            let snapshot = SandboxSnapshot(
+            var snapshot = SandboxSnapshot(
                 name: "awaiting-export",
                 sandboxID: try sandbox.requireID(),
                 projectID: try project.requireID(),
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: agentId,
+                observedGeneration: 1,
+                exportDesired: true,
                 createdByID: try user.requireID())
-            snapshot.status = .ready
-            snapshot.observedGeneration = snapshot.generation
-            snapshot.exportDesired = true
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             #expect(!snapshot.isConverged)
             #expect(!snapshot.conditions.converged)
 
             // The upload route's completion is what settles it — never the
             // agent's word.
-            snapshot.exportedArtifacts = SandboxSnapshotArtifactKind.allCases.map {
-                SandboxSnapshotExportedArtifact(kind: $0, sizeBytes: 1, sha256: "abc")
-            }
-            snapshot.exportedAt = Date()
+            snapshot = snapshot.replacing(
+                exportedAt: .some(Date()),
+                exportedArtifacts: .some(SandboxSnapshotArtifactKind.allCases.map {
+                    SandboxSnapshotExportedArtifact(kind: $0, sizeBytes: 1, sha256: "abc")
+                }))
             #expect(snapshot.isConverged)
             #expect(snapshot.conditions.converged)
         }
@@ -536,22 +535,22 @@ final class SnapshotConvergenceTests {
     func currentGenerationFailureUnconvergesArtifact() async throws {
         try await withSnapshotApp { app, builder, user, project in
             let agentId = try await registerAgent(app: app, named: "artifact-degraded")
-            let sandbox = try await builder.createSandbox(name: "sb", project: project)
+            var sandbox = try await builder.createSandbox(name: "sb", project: project)
             sandbox.hypervisorId = agentId
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
-            let snapshot = SandboxSnapshot(
+            var snapshot = SandboxSnapshot(
                 name: "failed-capture",
                 sandboxID: try sandbox.requireID(),
                 projectID: try project.requireID(),
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: agentId,
+                errorMessage: "capture failed: no space left on device",
+                observedGeneration: 1,
+                failedGeneration: 1,
                 createdByID: try user.requireID())
-            snapshot.status = .ready
-            snapshot.observedGeneration = snapshot.generation
-            snapshot.errorMessage = "capture failed: no space left on device"
-            snapshot.failedGeneration = snapshot.generation
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             #expect(!snapshot.isConverged)
             #expect(!snapshot.conditions.converged)
@@ -559,8 +558,7 @@ final class SnapshotConvergenceTests {
 
             // A failure a newer mutation already moved past still stands, but it
             // is not this generation's verdict.
-            snapshot.generation += 1
-            snapshot.observedGeneration = snapshot.generation
+            snapshot = snapshot.replacing(generation: 2, observedGeneration: 2)
             #expect(snapshot.isConverged)
             #expect(snapshot.conditions.converged)
             #expect(snapshot.conditions.degraded != nil)
@@ -571,21 +569,21 @@ final class SnapshotConvergenceTests {
     func terminatingArtifactIsNeverConverged() async throws {
         try await withSnapshotApp { app, builder, user, project in
             let agentId = try await registerAgent(app: app, named: "artifact-terminating")
-            let sandbox = try await builder.createSandbox(name: "sb", project: project)
+            var sandbox = try await builder.createSandbox(name: "sb", project: project)
             sandbox.hypervisorId = agentId
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
-            let snapshot = SandboxSnapshot(
+            var snapshot = SandboxSnapshot(
                 name: "going-away",
                 sandboxID: try sandbox.requireID(),
                 projectID: try project.requireID(),
                 environment: sandbox.environment,
                 agentId: agentId,
                 createdByID: try user.requireID())
-            snapshot.status = .ready
-            snapshot.setFixtureDesiredStatus(.absent)
-            snapshot.observedGeneration = snapshot.generation
-            try await snapshot.save(on: app.db)
+            snapshot = snapshot.replacing(status: .ready)
+                .settingFixtureDesiredStatus(.absent)
+                .replacingObservedGeneration(snapshot.generation + 1)
+            try await snapshot.save(on: app.testPostgres)
 
             // Absence is confirmed by omission from the agent's report, which
             // reaps the row — a still-present row has not converged. Unifying the
@@ -612,17 +610,17 @@ final class SnapshotConvergenceTests {
             let kept = try await makeCheckpoint(
                 on: app, user: user, project: project, vm: vm, agentId: agentId, name: "kept")
 
-            await SnapshotRetentionSweep.run(app: app)
+            await SnapshotRetentionSweep.run(app: app, database: app.testPostgres)
 
-            let swept = try #require(await VMSnapshot.find(expired.id, on: app.db))
+            let swept = try #require(await VMSnapshot.find(expired.id, on: app.testPostgres))
             #expect(swept.desiredStatus == .absent)
             #expect(swept.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
-            #expect(try await VMSnapshot.find(kept.id, on: app.db)?.desiredStatus == .present)
+            #expect(try await VMSnapshot.find(kept.id, on: app.testPostgres)?.desiredStatus == .present)
 
             let event = try #require(
                 await ResourceEvent.latest(
                     .requested, resourceKind: .vmCheckpoint, resourceID: try expired.requireID(),
-                    on: app.db))
+                    on: app.testPostgres))
             #expect(event.mutation == .delete)
             #expect(event.actorType == .system)
         }
@@ -640,12 +638,12 @@ final class SnapshotConvergenceTests {
                 on: app, user: user, project: project, vm: vm, agentId: agentId,
                 name: "expired", expiresAt: Date().addingTimeInterval(-60))
 
-            await SnapshotRetentionSweep.run(app: app)
-            let first = try #require(await VMSnapshot.find(expired.id, on: app.db))
+            await SnapshotRetentionSweep.run(app: app, database: app.testPostgres)
+            let first = try #require(await VMSnapshot.find(expired.id, on: app.testPostgres))
             let generation = first.generation
 
-            await SnapshotRetentionSweep.run(app: app)
-            let second = try #require(await VMSnapshot.find(expired.id, on: app.db))
+            await SnapshotRetentionSweep.run(app: app, database: app.testPostgres)
+            let second = try #require(await VMSnapshot.find(expired.id, on: app.testPostgres))
             #expect(second.generation == generation)
         }
     }

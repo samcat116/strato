@@ -1,6 +1,6 @@
 import Testing
+import ControlPlanePostgres
 import Vapor
-import Fluent
 import VaporTesting
 import StratoShared
 import AppTestSupport
@@ -21,21 +21,20 @@ final class VolumeSizeValidationTests {
     private func withVolumeTestApp(
         _ test: (Application, User, Project, String) async throws -> Void
     ) async throws {
-        try await withVolumeTestApp { app, _, user, project, token in
+        try await withVolumeBuilderTestApp { app, _, user, project, token in
             try await test(app, user, project, token)
         }
     }
 
-    private func withVolumeTestApp(
+    private func withVolumeBuilderTestApp(
         _ test: (Application, TestDataBuilder, User, Project, String) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "volsizeuser",
                 email: "volsize@example.com",
@@ -44,15 +43,14 @@ final class VolumeSizeValidationTests {
             )
             let org = try await builder.createOrganization(name: "Volume Size Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Volume Size Project",
                 description: "Project for volume size validation tests",
                 organization: org
             )
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, builder, user, project, token)
         } catch {
@@ -83,7 +81,7 @@ final class VolumeSizeValidationTests {
     private func makeAvailableVolume(
         app: Application, user: User, project: Project, sizeGB: Int
     ) async throws -> Volume {
-        let pool = try await StoragePool.defaultPool(on: app.db)
+        let pool = try await app.storagePoolsPersistence.defaultPool()
         let volume = Volume(
             name: "resize-target",
             description: "resizable volume",
@@ -95,7 +93,7 @@ final class VolumeSizeValidationTests {
             createdByID: user.id!,
             poolID: pool.id
         )
-        try await app.db.transaction { db in
+        try await app.testPostgres.transaction { db in
             try await volume.save(on: db)
             try await RoleBindingService.grant(
                 principalType: .user,
@@ -127,7 +125,7 @@ final class VolumeSizeValidationTests {
             }
 
             // A rejected request must not have left a volume behind.
-            let count = try await Volume.query(on: app.db).count()
+            let count = try await Volume.all(on: app.testPostgres).count
             #expect(count == 0)
         }
     }
@@ -142,12 +140,12 @@ final class VolumeSizeValidationTests {
                 #expect(res.status == .accepted)
             }
 
-            // Placement runs on a detached task that touches app.db; wait for it
+            // Placement runs on a detached task that touches app.testPostgres; wait for it
             // to settle (no agents connected → degraded) so it can't race
             // application shutdown during test teardown.
             var placed: Volume?
             for _ in 0..<100 {
-                placed = try await Volume.query(on: app.db).first()
+                placed = try await Volume.all(on: app.testPostgres).first
                 if placed?.conditions.degraded != nil { break }
                 try await Task.sleep(for: .milliseconds(50))
             }
@@ -157,7 +155,7 @@ final class VolumeSizeValidationTests {
 
     @Test("POST /api/volumes rejects a Firecracker-only source image")
     func createRejectsSourceImageWithoutDiskArtifact() async throws {
-        try await withVolumeTestApp { app, _, user, project, token in
+        try await withVolumeBuilderTestApp { app, _, user, project, token in
             let image = Image(
                 name: "firecracker-only",
                 description: "",
@@ -165,11 +163,11 @@ final class VolumeSizeValidationTests {
                 architecture: .arm64,
                 status: .ready,
                 uploadedByID: try user.requireID())
-            try await image.save(on: app.db)
+            try await image.save(on: app.testPostgres)
             let imageID = try image.requireID()
 
             let checksum = String(repeating: "c", count: 64)
-            try await ImageArtifact(
+            _ = try await LegacyImageArtifactStore.insert(
                 imageID: imageID,
                 kind: .kernel,
                 format: nil,
@@ -177,9 +175,9 @@ final class VolumeSizeValidationTests {
                 filename: "vmlinux",
                 size: 1,
                 checksum: checksum,
-                storagePath: "images/\(imageID)/kernel/vmlinux"
-            ).save(on: app.db)
-            try await ImageArtifact(
+                storagePath: "images/\(imageID)/kernel/vmlinux",
+                on: app.testPostgres)
+            _ = try await LegacyImageArtifactStore.insert(
                 imageID: imageID,
                 kind: .rootfs,
                 format: .raw,
@@ -187,8 +185,8 @@ final class VolumeSizeValidationTests {
                 filename: "rootfs.raw",
                 size: 1,
                 checksum: checksum,
-                storagePath: "images/\(imageID)/rootfs/rootfs.raw"
-            ).save(on: app.db)
+                storagePath: "images/\(imageID)/rootfs/rootfs.raw",
+                on: app.testPostgres)
             try await RoleBindingService.grant(
                 principalType: .user,
                 principalID: try user.requireID(),
@@ -196,7 +194,7 @@ final class VolumeSizeValidationTests {
                 nodeType: .image,
                 nodeID: imageID,
                 createdBy: try user.requireID(),
-                on: app.db)
+                on: app.testPostgres)
 
             let body = CreateVolumeRequest(
                 name: "from-firecracker",
@@ -217,17 +215,21 @@ final class VolumeSizeValidationTests {
                 #expect(res.body.string.contains("disk-image"))
             }
 
-            #expect(try await Volume.query(on: app.db).count() == 0)
+            #expect(try await Volume.all(on: app.testPostgres).count == 0)
         }
     }
 
     @Test("POST /api/volumes rejects an unimplemented replicated default pool")
     func createRejectsReplicatedPool() async throws {
         try await withVolumeTestApp { app, _, project, token in
-            let pool = try await StoragePool.defaultPool(on: app.db)
-            pool.mode = .replicated
-            pool.replicationFactor = 2
-            try await pool.save(on: app.db)
+            let pool = try await app.storagePoolsPersistence.defaultPool()
+            _ = try await app.storagePoolsPersistence.update(
+                id: pool.id,
+                mode: .replicated,
+                replicationFactor: 2,
+                memberAgentIDs: pool.memberAgentIDs,
+                backing: pool.backing
+            )
 
             try await app.test(.POST, "/api/volumes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -236,8 +238,8 @@ final class VolumeSizeValidationTests {
                 #expect(res.status == .conflict)
             }
 
-            #expect(try await Volume.query(on: app.db).count() == 0)
-            #expect(try await VolumeReplica.query(on: app.db).count() == 0)
+            #expect(try await Volume.all(on: app.testPostgres).count == 0)
+            #expect(try await LegacyVolumeReplicaStore.count(on: app.testPostgres) == 0)
         }
     }
 
@@ -261,7 +263,7 @@ final class VolumeSizeValidationTests {
             }
 
             // The volume's stored size must be untouched by a rejected resize.
-            let reloaded = try await Volume.find(volume.id!, on: app.db)
+            let reloaded = try await Volume.find(volume.id!, on: app.testPostgres)
             #expect(reloaded?.size == 10.gbToBytes!)
             #expect(reloaded?.status == .available)
         }
@@ -281,7 +283,7 @@ final class VolumeSizeValidationTests {
             ),
             protocolVersion: WireProtocol.currentVersion
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let uuid = try await app.agentService.registerAgent(
             message, agentName: name, organizationScope: orgID.map { .organization($0) })
         return uuid.uuidString
@@ -296,16 +298,16 @@ final class VolumeSizeValidationTests {
     /// agent happens to hold the volume.
     @Test("POST /api/volumes/:id/resize grows an attached volume")
     func resizeAcceptsAnAttachedVolume() async throws {
-        try await withVolumeTestApp { app, builder, user, project, token in
+        try await withVolumeBuilderTestApp { app, builder, user, project, token in
             let agentId = try await self.registerAgent(app: app, named: "resize-agent")
             let vm = try await builder.createVM(name: "resize-vm", project: project)
             let volume = try await self.makeAvailableVolume(
-                app: app, user: user, project: project, sizeGB: 10)
-            volume.$vm.id = try vm.requireID()
-            volume.deviceName = "disk1"
-            volume.status = .attached
-            try await volume.save(on: app.db)
-            try await placeVolume(volume, on: agentId, using: app.db)
+                app: app, user: user, project: project, sizeGB: 10).replacing(
+                    status: .attached,
+                    vmID: .some(try vm.requireID()),
+                    deviceName: .some("disk1"))
+            try await volume.persist(on: app.testPostgres)
+            try await placeVolume(volume, on: agentId, using: app.testPostgres)
             let generationBefore = volume.generation
 
             try await app.test(.POST, "/api/volumes/\(volume.id!)/resize") { req in
@@ -315,7 +317,7 @@ final class VolumeSizeValidationTests {
                 #expect(res.status == .accepted)
             }
 
-            let reloaded = try #require(try await Volume.find(volume.id!, on: app.db))
+            let reloaded = try #require(try await Volume.find(volume.id!, on: app.testPostgres))
             #expect(reloaded.size == 20.gbToBytes!)
             #expect(reloaded.generation == generationBefore + 1)
             // Accepted, not done: the agent has not seen the new generation.
@@ -327,16 +329,16 @@ final class VolumeSizeValidationTests {
     /// grow-only rule, not a separate attached-shrink guard.
     @Test("POST /api/volumes/:id/resize still refuses to shrink an attached volume")
     func resizeRefusesAnAttachedShrink() async throws {
-        try await withVolumeTestApp { app, builder, user, project, token in
+        try await withVolumeBuilderTestApp { app, builder, user, project, token in
             let agentId = try await self.registerAgent(app: app, named: "shrink-agent")
             let vm = try await builder.createVM(name: "shrink-vm", project: project)
             let volume = try await self.makeAvailableVolume(
-                app: app, user: user, project: project, sizeGB: 10)
-            volume.$vm.id = try vm.requireID()
-            volume.deviceName = "disk1"
-            volume.status = .attached
-            try await volume.save(on: app.db)
-            try await placeVolume(volume, on: agentId, using: app.db)
+                app: app, user: user, project: project, sizeGB: 10).replacing(
+                    status: .attached,
+                    vmID: .some(try vm.requireID()),
+                    deviceName: .some("disk1"))
+            try await volume.persist(on: app.testPostgres)
+            try await placeVolume(volume, on: agentId, using: app.testPostgres)
 
             try await app.test(.POST, "/api/volumes/\(volume.id!)/resize") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -345,7 +347,7 @@ final class VolumeSizeValidationTests {
                 #expect(res.status == .badRequest)
             }
 
-            let reloaded = try await Volume.find(volume.id!, on: app.db)
+            let reloaded = try await Volume.find(volume.id!, on: app.testPostgres)
             #expect(reloaded?.size == 10.gbToBytes!)
         }
     }
@@ -356,9 +358,9 @@ final class VolumeSizeValidationTests {
     func resizeRefusesATerminatingVolume() async throws {
         try await withVolumeTestApp { app, user, project, token in
             let volume = try await self.makeAvailableVolume(
-                app: app, user: user, project: project, sizeGB: 10)
-            volume.desiredStatus = .absent
-            try await volume.save(on: app.db)
+                app: app, user: user, project: project, sizeGB: 10
+            ).replacing(desiredStatus: .absent)
+            try await volume.persist(on: app.testPostgres)
 
             try await app.test(.POST, "/api/volumes/\(volume.id!)/resize") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -367,7 +369,7 @@ final class VolumeSizeValidationTests {
                 #expect(res.status == .conflict)
             }
 
-            let reloaded = try await Volume.find(volume.id!, on: app.db)
+            let reloaded = try await Volume.find(volume.id!, on: app.testPostgres)
             #expect(reloaded?.size == 10.gbToBytes!)
         }
     }

@@ -1,54 +1,58 @@
-import Fluent
-import Vapor
+import ControlPlanePostgres
 import Foundation
+import Vapor
 
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class Organization: Model, @unchecked Sendable {
-    static let schema = "organizations"
-
-    @ID(key: .id)
-    var id: UUID?
-
-    @Field(key: "name")
-    var name: String
-
-    @Field(key: "description")
-    var description: String
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    // Relationships
-    @Siblings(through: UserOrganization.self, from: \.$organization, to: \.$user)
-    var users: [User]
-
-    @Children(for: \.$organization)
-    var organizationalUnits: [OrganizationalUnit]
-
-    @Children(for: \.$organization)
-    var projects: [Project]
-
-    @Children(for: \.$organization)
-    var groups: [Group]
-
-    init() {}
+struct Organization: Content, Equatable, Sendable {
+    let id: UUID?
+    let name: String
+    let description: String
+    let createdAt: Date?
+    let updatedAt: Date?
 
     init(
-        id: UUID? = nil,
+        id: UUID? = UUID(),
         name: String,
-        description: String
+        description: String,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
         self.description = description
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    init(snapshot: OrganizationSnapshot) {
+        self.init(
+            id: snapshot.id,
+            name: snapshot.name,
+            description: snapshot.description,
+            createdAt: snapshot.createdAt,
+            updatedAt: snapshot.updatedAt)
+    }
+
+    func requireID() throws -> UUID {
+        guard let id else { throw Abort(.internalServerError, reason: "Organization has no identifier") }
+        return id
+    }
+
+    func save(on db: PostgresStoreContext) async throws {
+        _ = try await LegacyOrganizationStore.upsert(self, on: db)
+    }
+
+    static func find(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
+        try await LegacyOrganizationStore.organization(id: id, on: db)
+    }
+
+    static func all(on db: PostgresStoreContext) async throws -> [Self] {
+        try await LegacyOrganizationStore.organizations(on: db)
+    }
+
+    static func count(on db: PostgresStoreContext) async throws -> Int {
+        try await LegacyOrganizationStore.count(on: db)
     }
 }
-
-extension Organization: Content {}
 
 extension Organization {
     struct Public: Content {
@@ -67,47 +71,6 @@ extension Organization {
         )
     }
 }
-
-// MARK: - User-Organization Relationship (Many-to-Many)
-
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class UserOrganization: Model, @unchecked Sendable {
-    static let schema = "user_organizations"
-
-    @ID(key: .id)
-    var id: UUID?
-
-    @Parent(key: "user_id")
-    var user: User
-
-    @Parent(key: "organization_id")
-    var organization: Organization
-
-    /// The canonical role mirrored for this membership, or nil for bare
-    /// membership. Authorization always reads the corresponding RoleBinding.
-    @OptionalField(key: "role_id")
-    var roleID: UUID?
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    init() {}
-
-    init(
-        id: UUID? = nil,
-        userID: UUID,
-        organizationID: UUID,
-        roleID: UUID? = nil
-    ) {
-        self.id = id
-        self.$user.id = userID
-        self.$organization.id = organizationID
-        self.roleID = roleID
-    }
-}
-
-extension UserOrganization: Content {}
 
 // MARK: - DTOs
 
@@ -169,12 +132,11 @@ extension Organization {
     /// Two flat queries, not a tree walk: a project hangs off exactly one of an
     /// organization or a folder (`Project.validate`), and every folder
     /// denormalizes the organization it belongs to (issue #692).
-    func getAllProjects(on db: Database) async throws -> [Project] {
+    func getAllProjects(on db: PostgresStoreContext) async throws -> [Project] {
         guard let organizationID = id else { return [] }
-        let folderIDs = try await OrganizationalUnit.query(on: db)
-            .filter(\.$organization.$id == organizationID)
-            .all(\.$id)
-            .compactMap { $0 }
+        let folderIDs = try await LegacyOrganizationalUnitStore.organizationalUnits(
+            organizationIDs: [organizationID], on: db
+        ).compactMap(\.id)
         return try await Project.all(inOrganization: organizationID, folders: folderIDs, on: db)
     }
 
@@ -182,28 +144,20 @@ extension Organization {
 
 extension OrganizationalUnit {
     /// Get all projects in this OU and its descendants
-    func getAllProjects(on db: Database) async throws -> [Project] {
+    func getAllProjects(on db: PostgresStoreContext) async throws -> [Project] {
         let folderIDs = try await selfAndDescendantIDs(on: db)
         guard !folderIDs.isEmpty else { return [] }
-        return try await Project.query(on: db)
-            .filter(\.$organizationalUnit.$id ~~ folderIDs)
-            .all()
+        return try await LegacyProjectStore.projects(organizationalUnitIDs: folderIDs, on: db)
     }
 }
 
 extension Project {
     /// Every project of an organization, given the ids of its folders: those
     /// hanging directly off the organization plus those inside any folder.
-    static func all(inOrganization organizationID: UUID, folders folderIDs: [UUID], on db: Database) async throws
+    static func all(inOrganization organizationID: UUID, folders folderIDs: [UUID], on db: PostgresStoreContext) async throws
         -> [Project]
     {
-        try await Project.query(on: db)
-            .group(.or) { anyProject in
-                anyProject.filter(\.$organization.$id == organizationID)
-                if !folderIDs.isEmpty {
-                    anyProject.filter(\.$organizationalUnit.$id ~~ folderIDs)
-                }
-            }
-            .all()
+        try await LegacyProjectStore.projects(
+            organizationIDs: [organizationID], organizationalUnitIDs: folderIDs, on: db)
     }
 }

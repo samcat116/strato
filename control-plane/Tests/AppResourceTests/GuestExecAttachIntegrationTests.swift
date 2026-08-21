@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import NIOConcurrencyHelpers
 import NIOCore
@@ -40,13 +39,18 @@ struct GuestExecAttachIntegrationTests {
                 httpClient: app.client)
 
             let org = Organization(name: "Exec WS Org", description: "org for exec attach test")
-            try await org.save(on: app.db)
-            let enrollment = AgentEnrollment(
+            try await org.save(on: app.testPostgres)
+            let site = Site(
+                name: "exec-ws-dc",
+                organizationScope: .organization(try org.requireID()))
+            try await site.save(on: app.testPostgres)
+            let enrollment = TestAgentEnrollment(
                 agentName: agentName,
                 spiffeID: "spiffe://strato.local/agent/\(agentName)",
                 expirationHours: 1,
+                siteID: try site.requireID(),
                 organizationScope: .organization(try org.requireID()))
-            try await enrollment.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             var agentHeaders = HTTPHeaders()
             agentHeaders.add(
@@ -63,38 +67,38 @@ struct GuestExecAttachIntegrationTests {
             // A user whose API key authenticates the browser socket. System
             // admin, so attach authorization flows through the
             // platform-system-admin policy without bindings.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "execattach",
                 email: "execattach@example.com",
                 displayName: "Exec Attach",
                 isSystemAdmin: true
             )
-            let apiKey = try await user.generateAPIKey(on: app.db)
+            let apiKey = try await user.generateAPIKey(on: app)
 
             // A real resource in a real project: an id with no row behind it is
             // a truncated IAM chain and is denied outright, admins included.
             let project = try await builder.createProject(
                 name: "Exec WS Project", description: "p", organization: org)
             let registeredAgent = try #require(
-                try await Agent.query(on: app.db).filter(\.$name == agentName).first())
+                try await LegacyAgentStore.agents(name: agentName, on: app.testPostgres).first)
 
             let collection: String
             let resourceId: String
             switch resourceKind {
             case .sandbox:
-                let sandbox = try await builder.createSandbox(name: "exec-ws-sb", project: project)
+                var sandbox = try await builder.createSandbox(name: "exec-ws-sb", project: project)
                 sandbox.hypervisorId = try registeredAgent.requireID().uuidString
                 sandbox.setStatus(.running)
-                try await sandbox.save(on: app.db)
+                try await sandbox.save(on: app.testPostgres)
                 collection = "sandboxes"
                 resourceId = try sandbox.requireID().uuidString
             case .virtualMachine:
-                let vm = try await builder.createVM(name: "exec-ws-vm", project: project)
+                var vm = try await builder.createVM(name: "exec-ws-vm", project: project)
                 vm.hypervisorId = try registeredAgent.requireID().uuidString
                 vm.guestAgentEnabled = true
                 vm.setStatus(.running)
-                try await vm.save(on: app.db)
+                try await vm.save(on: app.testPostgres)
                 collection = "vms"
                 resourceId = try vm.requireID().uuidString
             }
@@ -123,14 +127,13 @@ struct GuestExecAttachIntegrationTests {
             // WebSocket authentication is checked before the single-use
             // token is consumed, so a rejected attach cannot burn a valid
             // session minted by the user.
-            let unauthenticated = try await ExecWSClient.connect(
-                url: "ws://127.0.0.1:\(port)\(session.websocketPath)",
-                headers: HTTPHeaders(),
-                on: app.eventLoopGroup)
-            let authenticationError = try await unauthenticated.nextControlFrame()
-            #expect(authenticationError.type == "error")
-            #expect(authenticationError.message == "Authentication required")
-            try await unauthenticated.waitForClose()
+            let authenticationError = await #expect(throws: (any Error).self) {
+                try await ExecWSClient.connect(
+                    url: "ws://127.0.0.1:\(port)\(session.websocketPath)",
+                    headers: HTTPHeaders(),
+                    on: app.eventLoopGroup)
+            }
+            #expect(String(reflecting: authenticationError).contains("401 Unauthorized"))
             #expect(app.guestExecSessionManager.hasPendingSession(sessionId: session.sessionId))
 
             // The browser attaches over a real WebSocket upgrade.
@@ -299,7 +302,7 @@ private func drainAndStopExecServer(_ app: Application) async {
     await app.server.shutdown()
     for iteration in 0..<200 {
         try? await Task.sleep(for: .milliseconds(10))
-        let agents = (try? await Agent.query(on: app.db).all()) ?? []
+        let agents = (try? await Agent.all(on: app.testPostgres)) ?? []
         let stillOnline = agents.contains { $0.status == .online }
         if !stillOnline && iteration >= 3 {
             break

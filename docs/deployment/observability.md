@@ -247,11 +247,10 @@ Note that enabling the pillar only gets spans as far as the collector — see
   `scheduler.outcome`.
 - **Desired-state polls** — `GET /agent/desired-state` is covered by the normal
   per-request server span, including its database assembly work.
-- **`fluent.query`** — one client span per database query, with
-  `fluent.query.operation` (`read`/`update`/…), `fluent.query.collection` (the
-  table), `fluent.query.namespace`, and a combined `fluent.query.summary`. No
-  call site in this repo opens it: FluentKit emits it itself (fluent-kit 1.57.0,
-  the version we resolve), so it appears the moment a real tracer is installed.
+- **`postgres.<operation>`** — one client span per native database operation,
+  with `db.system=postgresql`, `db.operation.name`, and an error type or SQLSTATE
+  when an operation fails. The persistence runtime does not record SQL text or
+  bindings.
 - **Valkey commands** — likewise emitted by the client library rather than by
   any call site here: valkey-swift opens a client span per command, named after
   the command (`GET`, `SETEX`, `PUBLISH`, …) plus `Pipeline` and `MULTI` for
@@ -271,8 +270,8 @@ is never bootstrapped).
 ### Bootstrap ordering (why client spans can silently vanish)
 
 `configure(_:)` bootstraps OpenTelemetry **first**, ahead of every client it
-configures. This is load-bearing, not stylistic. Fluent resolves the tracer per
-query, but the Valkey and HTTP clients resolve it once, when their
+configures. This is load-bearing, not stylistic. PostgresNIO operations use the
+installed tracer, while the Valkey and HTTP clients resolve it once when their
 *configuration value* is constructed:
 
 - `HTTPClient.Configuration.TracingConfiguration.init()` stores
@@ -289,12 +288,12 @@ Whatever tracer is installed at that moment is the one those clients use for the
 life of the process. Bootstrapping afterwards left both holding the `NoOpTracer`
 — both libraries were instrumented and enabled, and neither emitted a single
 span. If Valkey or outbound-HTTP spans disappear from the backend while
-`fluent.query` and the request spans keep arriving, suspect that something was
+`postgres.<operation>` and the request spans keep arriving, suspect that something was
 constructed ahead of `bootstrapObservability()`.
 
 ### Why spans nest: the task-local context, and where it breaks
 
-Every tracer involved — our own `withSpan` call sites, FluentKit, valkey-swift,
+Every tracer involved — our own `withSpan` call sites, PostgresNIO persistence, valkey-swift,
 async-http-client — finds its parent by reading the task-local
 `ServiceContext.current`. Vapor's `TracingMiddleware` binds it when it opens the
 server span, and it then flows down the responder chain by task inheritance.
@@ -311,9 +310,9 @@ That callback runs on the event loop, outside any Swift task, so task-local
 storage is gone; the `AsyncMiddleware` bridge below it then starts a fresh
 `Task` with nothing to inherit from. Until this was fixed, `ServiceContext`
 read back `nil` for the entire remainder of every request — `iam.authorize`, the
-rate limiter's Valkey `EVAL`, and every controller's `fluent.query` each opened
+rate limiter's Valkey `EVAL`, and every controller's PostgreSQL operation each opened
 a root span in a trace of its own, which is why a dev-cluster sample found 95 of
-100 traces containing a `fluent.query` rooted at `fluent.query` itself.
+100 traces containing a database span rooted at itself.
 
 `ServiceContextRestoringMiddleware` closes it: `request.serviceContext` lives on
 the `Request` object and is untouched by the event-loop hop, so re-binding the

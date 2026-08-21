@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Testing
 import Vapor
@@ -20,7 +20,6 @@ final class WorkloadPrincipalTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -36,7 +35,7 @@ final class WorkloadPrincipalTests {
     }
 
     private func buildTree(_ app: Application, prefix: String) async throws -> Tree {
-        let builder = TestDataBuilder(db: app.db)
+        let builder = TestDataBuilder(db: app.testPostgres)
         let org = try await builder.createOrganization(name: "\(prefix) Org")
         let project = try await builder.createProject(
             name: "\(prefix) Project", description: "d", organization: org)
@@ -54,7 +53,7 @@ final class WorkloadPrincipalTests {
             context: IAMCheckContext(path: "/test", method: "GET", requestID: "test"),
             state: .detached,
             app: app,
-            db: app.db
+            db: app.testPostgres
         ).allowed
     }
 
@@ -64,9 +63,10 @@ final class WorkloadPrincipalTests {
     func serviceAccountBinding() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "sa-grant")
-            let account = ServiceAccount(name: "deployer", projectID: try tree.project.requireID())
-            try await account.save(on: app.db)
-            let accountID = try account.requireID()
+            let account = try await LegacyServiceAccountStore.insert(
+                ServiceAccountWrite(name: "deployer", projectID: try tree.project.requireID()),
+                on: app.testPostgres)
+            let accountID = account.id
 
             // Before any binding: nothing, including the membership-derived
             // actions users get from bare org membership — a machine
@@ -87,7 +87,7 @@ final class WorkloadPrincipalTests {
                 nodeType: .project,
                 nodeID: tree.project.requireID(),
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             // Editor covers read and start (operator ⊂ editor)…
@@ -111,13 +111,13 @@ final class WorkloadPrincipalTests {
     func workloadBinding() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "wl-grant")
-            let registration = WorkloadRegistration(
-                spiffeID: "spiffe://acme.example/payments/batcher",
-                kind: .workload,
-                organizationID: try tree.org.requireID()
-            )
-            try await registration.save(on: app.db)
-            let registrationID = try registration.requireID()
+            let registration = try await LegacyWorkloadRegistrationStore.insert(
+                WorkloadRegistrationWrite(
+                    spiffeID: "spiffe://acme.example/payments/batcher",
+                    kind: WorkloadRegistrationKind.workload.rawValue,
+                    organizationID: try tree.org.requireID()),
+                on: app.testPostgres)
+            let registrationID = registration.id
 
             let vmNode = IAMNode(type: .virtualMachine, id: try tree.vm.requireID())
             #expect(
@@ -131,7 +131,7 @@ final class WorkloadPrincipalTests {
                 nodeType: .project,
                 nodeID: tree.project.requireID(),
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             #expect(
@@ -149,16 +149,17 @@ final class WorkloadPrincipalTests {
         try await withApp { app in
             app.iamDecisionLogConfig.recordDecisions = true
             let tree = try await buildTree(app, prefix: "sa-subject")
-            let account = ServiceAccount(name: "auditor", projectID: try tree.project.requireID())
-            try await account.save(on: app.db)
-            let accountID = try account.requireID()
+            let account = try await LegacyServiceAccountStore.insert(
+                ServiceAccountWrite(name: "auditor", projectID: try tree.project.requireID()),
+                on: app.testPostgres)
+            let accountID = account.id
 
             _ = try await authorize(
                 app, principal: .serviceAccount(accountID), action: "vm:read",
                 node: IAMNode(type: .virtualMachine, id: tree.vm.requireID()))
 
             await app.iamDecisionRecorder.flush()
-            let entries = try await IAMDecisionLog.query(on: app.db).all()
+            let entries = try await app.decisionLogsPersistence.entries(limit: 500).entries
             let entry = try #require(entries.first)
             #expect(entry.subject == "service_account:\(accountID.uuidString)")
         }
@@ -168,9 +169,10 @@ final class WorkloadPrincipalTests {
     func sliceLoaderGrantsSets() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "sa-slice")
-            let account = ServiceAccount(name: "slicer", projectID: try tree.project.requireID())
-            try await account.save(on: app.db)
-            let accountID = try account.requireID()
+            let account = try await LegacyServiceAccountStore.insert(
+                ServiceAccountWrite(name: "slicer", projectID: try tree.project.requireID()),
+                on: app.testPostgres)
+            let accountID = account.id
 
             try await RoleBindingService.grant(
                 principalType: .serviceAccount,
@@ -179,13 +181,13 @@ final class WorkloadPrincipalTests {
                 nodeType: .project,
                 nodeID: tree.project.requireID(),
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let slice = try await EntitySliceLoader.load(
                 principal: .serviceAccount(accountID),
                 node: IAMNode(type: .virtualMachine, id: try tree.vm.requireID()),
-                on: app.db
+                on: app.testPostgres
             )
             #expect(slice.principal == CedarEntityUID(type: .serviceAccount, id: accountID))
             #expect(slice.grants.serviceAccounts(for: IAMRole.viewer.seededID).contains(accountID))
@@ -198,14 +200,15 @@ final class WorkloadPrincipalTests {
     func principalIsResource() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "sa-self")
-            let account = ServiceAccount(name: "selfie", projectID: try tree.project.requireID())
-            try await account.save(on: app.db)
-            let accountID = try account.requireID()
+            let account = try await LegacyServiceAccountStore.insert(
+                ServiceAccountWrite(name: "selfie", projectID: try tree.project.requireID()),
+                on: app.testPostgres)
+            let accountID = account.id
 
             let slice = try await EntitySliceLoader.load(
                 principal: .serviceAccount(accountID),
                 node: IAMNode(type: .serviceAccount, id: accountID),
-                on: app.db
+                on: app.testPostgres
             )
             let uid = CedarEntityUID(type: .serviceAccount, id: accountID)
             #expect(slice.entities.filter { $0.uid == uid }.count == 1)
@@ -225,9 +228,10 @@ final class WorkloadPrincipalTests {
     func whoCanMachinePrincipals() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "sa-whocan")
-            let account = ServiceAccount(name: "watcher", projectID: try tree.project.requireID())
-            try await account.save(on: app.db)
-            let accountID = try account.requireID()
+            let account = try await LegacyServiceAccountStore.insert(
+                ServiceAccountWrite(name: "watcher", projectID: try tree.project.requireID()),
+                on: app.testPostgres)
+            let accountID = account.id
 
             try await RoleBindingService.grant(
                 principalType: .serviceAccount,
@@ -236,11 +240,11 @@ final class WorkloadPrincipalTests {
                 nodeType: .project,
                 nodeID: tree.project.requireID(),
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let vmNode = IAMNode(type: .virtualMachine, id: try tree.vm.requireID())
-            let result = try await WhoCanService.whoCan(action: "vm:read", node: vmNode, app: app, on: app.db)
+            let result = try await WhoCanService.whoCan(action: "vm:read", node: vmNode, app: app, on: app.testPostgres)
             let entry = try #require(
                 result.principals.first {
                     $0.principal == WhoCanPrincipalRef(type: .serviceAccount, id: accountID)
@@ -251,18 +255,18 @@ final class WorkloadPrincipalTests {
             #expect(
                 try await WhoCanService.can(
                     principalType: .serviceAccount, principalID: accountID,
-                    action: "vm:read", node: vmNode, app: app, on: app.db))
+                    action: "vm:read", node: vmNode, app: app, on: app.testPostgres))
             #expect(
                 try await WhoCanService.can(
                     principalType: .serviceAccount, principalID: accountID,
-                    action: "vm:start", node: vmNode, app: app, on: app.db) == false)
+                    action: "vm:start", node: vmNode, app: app, on: app.testPostgres) == false)
         }
     }
 
     @Test("A populated user grant set never leaks to an ungranted machine principal")
     func principalTypeConfusionWithPopulatedGrants() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let tree = try await buildTree(app, prefix: "sa-confusion")
             let user = try await builder.createUser(
                 username: "sa-confusion-user", email: "sa-confusion@example.com")
@@ -274,10 +278,11 @@ final class WorkloadPrincipalTests {
                 nodeType: .project,
                 nodeID: tree.project.requireID(),
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
-            let account = ServiceAccount(name: "bystander", projectID: try tree.project.requireID())
-            try await account.save(on: app.db)
+            let account = try await LegacyServiceAccountStore.insert(
+                ServiceAccountWrite(name: "bystander", projectID: try tree.project.requireID()),
+                on: app.testPostgres)
 
             // The viewer role's Users set is now non-empty on this chain; the
             // `is User` guard is what keeps the service account out of it.
@@ -285,7 +290,7 @@ final class WorkloadPrincipalTests {
             #expect(try await authorize(app, principal: .user(user.id!), action: "vm:read", node: vmNode))
             #expect(
                 try await authorize(
-                    app, principal: .serviceAccount(account.requireID()), action: "vm:read", node: vmNode)
+                    app, principal: .serviceAccount(account.id), action: "vm:read", node: vmNode)
                     == false)
         }
     }
@@ -293,7 +298,7 @@ final class WorkloadPrincipalTests {
     @Test("The compiled external-org forbid binds machine principals and spares org members")
     func externalCeilingEnforcedByEngine() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let tree = try await buildTree(app, prefix: "sa-forbid")
             let projectID = try tree.project.requireID()
 
@@ -301,9 +306,9 @@ final class WorkloadPrincipalTests {
             let member = try await builder.createUser(
                 username: "sa-forbid-user", email: "sa-forbid@example.com")
             try await builder.addUserToOrganization(user: member, organization: tree.org, role: "member")
-            let account = ServiceAccount(name: "forbidden", projectID: projectID)
-            try await account.save(on: app.db)
-            for principal in [IAMPrincipal.user(member.id!), .serviceAccount(try account.requireID())] {
+            let account = try await LegacyServiceAccountStore.insert(
+                ServiceAccountWrite(name: "forbidden", projectID: projectID), on: app.testPostgres)
+            for principal in [IAMPrincipal.user(member.id!), .serviceAccount(account.id)] {
                 try await RoleBindingService.grant(
                     principalType: principal.type,
                     principalID: principal.id,
@@ -311,7 +316,7 @@ final class WorkloadPrincipalTests {
                     nodeType: .project,
                     nodeID: projectID,
                     createdBy: nil,
-                    on: app.db
+                    on: app.testPostgres
                 )
             }
 
@@ -321,10 +326,10 @@ final class WorkloadPrincipalTests {
                 name: "no-external", description: nil, effect: nil,
                 node: IAMNode(type: .organization, id: tree.org.requireID()),
                 actions: [], principalMatch: .externalToOrganization, resourceMatch: .any,
-                createdBy: nil, on: app.db)
-            _ = try await PolicySetVersionService.bump(reason: "test guardrail", on: app.db)
+                createdBy: nil, on: app.testPostgres)
+            _ = try await PolicySetVersionService.bump(reason: "test guardrail", on: app.testPostgres)
             await app.startCedarPolicySetCache()
-            await app.policySetVersion.refresh(on: app.db)
+            await app.policySetVersion.refresh()
 
             // The org member's grant still works; the machine principal —
             // external by definition — is stopped by the compiled forbid, not
@@ -333,7 +338,7 @@ final class WorkloadPrincipalTests {
             #expect(try await authorize(app, principal: .user(member.id!), action: "vm:read", node: vmNode))
             #expect(
                 try await authorize(
-                    app, principal: .serviceAccount(account.requireID()), action: "vm:read", node: vmNode)
+                    app, principal: .serviceAccount(account.id), action: "vm:read", node: vmNode)
                     == false)
         }
     }
@@ -349,7 +354,7 @@ final class WorkloadPrincipalTests {
                     principalType: principalType,
                     principalID: UUID(),
                     organizationID: orgID,
-                    on: app.db
+                    on: app.testPostgres
                 )
                 #expect(covered, "\(principalType) should be external to every org")
             }
@@ -362,41 +367,46 @@ final class WorkloadPrincipalTests {
     func registryResolution() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "registry")
-            let account = ServiceAccount(name: "resolved", projectID: try tree.project.requireID())
-            try await account.save(on: app.db)
-            let accountID = try account.requireID()
+            let account = try await LegacyServiceAccountStore.insert(
+                ServiceAccountWrite(name: "resolved", projectID: try tree.project.requireID()),
+                on: app.testPostgres)
+            let accountID = account.id
 
-            try await WorkloadRegistration(
-                spiffeID: "spiffe://strato.local/sa/resolved", kind: .serviceAccount,
-                serviceAccountID: accountID
-            ).save(on: app.db)
-            let workloadRow = WorkloadRegistration(
-                spiffeID: "spiffe://strato.local/customer/thing", kind: .workload,
-                organizationID: try tree.org.requireID())
-            try await workloadRow.save(on: app.db)
+            _ = try await LegacyWorkloadRegistrationStore.insert(
+                WorkloadRegistrationWrite(
+                    spiffeID: "spiffe://strato.local/sa/resolved",
+                    kind: WorkloadRegistrationKind.serviceAccount.rawValue,
+                    serviceAccountID: accountID),
+                on: app.testPostgres)
+            let workloadRow = try await LegacyWorkloadRegistrationStore.insert(
+                WorkloadRegistrationWrite(
+                    spiffeID: "spiffe://strato.local/customer/thing",
+                    kind: WorkloadRegistrationKind.workload.rawValue,
+                    organizationID: try tree.org.requireID()),
+                on: app.testPostgres)
             try await WorkloadRegistry.registerAgent(
-                identity: AgentIdentity(trustDomain: "strato.local", name: "node-a"), on: app.db)
+                identity: AgentIdentity(trustDomain: "strato.local", name: "node-a"), on: app.testPostgres)
 
             #expect(
                 try await WorkloadRegistry.resolve(
-                    spiffeID: "spiffe://strato.local/sa/resolved", on: app.db)
+                    spiffeID: "spiffe://strato.local/sa/resolved", on: app.testPostgres)
                     == .serviceAccount(id: accountID))
             #expect(
                 try await WorkloadRegistry.resolve(
-                    spiffeID: "spiffe://strato.local/customer/thing", on: app.db)
-                    == .workload(id: try workloadRow.requireID()))
+                    spiffeID: "spiffe://strato.local/customer/thing", on: app.testPostgres)
+                    == .workload(id: workloadRow.id))
             #expect(
                 try await WorkloadRegistry.resolve(
-                    spiffeID: "spiffe://strato.local/agent/node-a", on: app.db)
+                    spiffeID: "spiffe://strato.local/agent/node-a", on: app.testPostgres)
                     == .agent(name: "node-a"))
             #expect(
                 try await WorkloadRegistry.resolve(
-                    spiffeID: "spiffe://strato.local/agent/unknown", on: app.db) == nil)
+                    spiffeID: "spiffe://strato.local/agent/unknown", on: app.testPostgres) == nil)
 
             // The `.serviceAccount` resolution is what the machine principal
             // rides: it must line up with the IAM principal.
             let resolved = try await WorkloadRegistry.resolve(
-                spiffeID: "spiffe://strato.local/sa/resolved", on: app.db)
+                spiffeID: "spiffe://strato.local/sa/resolved", on: app.testPostgres)
             #expect(resolved?.principal == IAMPrincipal.serviceAccount(accountID))
         }
     }
@@ -409,35 +419,38 @@ final class WorkloadPrincipalTests {
 
             // Registering (and re-requiring) the same agent identity is
             // idempotent…
-            try await WorkloadRegistry.registerAgent(identity: nodeB, on: app.db)
-            try await WorkloadRegistry.requireAgentRegistration(identity: nodeB, on: app.db)
-            let rows = try await WorkloadRegistration.query(on: app.db)
-                .filter(\.$spiffeID == nodeB.key)
-                .count()
-            #expect(rows == 1)
+            try await WorkloadRegistry.registerAgent(identity: nodeB, on: app.testPostgres)
+            try await WorkloadRegistry.requireAgentRegistration(identity: nodeB, on: app.testPostgres)
+            #expect(
+                try await LegacyWorkloadRegistrationStore.registration(
+                    spiffeID: nodeB.key, on: app.testPostgres) != nil)
 
             // …but the same URI cannot become a second principal.
             await #expect(throws: (any Error).self) {
-                try await WorkloadRegistration(
-                    spiffeID: nodeB.key, kind: .workload,
-                    organizationID: try tree.org.requireID()
-                ).save(on: app.db)
+                _ = try await LegacyWorkloadRegistrationStore.insert(
+                    WorkloadRegistrationWrite(
+                        spiffeID: nodeB.key,
+                        kind: WorkloadRegistrationKind.workload.rawValue,
+                        organizationID: try tree.org.requireID()),
+                    on: app.testPostgres)
             }
 
             // An agent-shaped URI already registered to a *different* kind of
             // principal must fail agent authentication outright.
             let claimed = AgentIdentity(trustDomain: "strato.local", name: "node-c")
-            try await WorkloadRegistration(
-                spiffeID: claimed.key, kind: .workload,
-                organizationID: try tree.org.requireID()
-            ).save(on: app.db)
+            _ = try await LegacyWorkloadRegistrationStore.insert(
+                WorkloadRegistrationWrite(
+                    spiffeID: claimed.key,
+                    kind: WorkloadRegistrationKind.workload.rawValue,
+                    organizationID: try tree.org.requireID()),
+                on: app.testPostgres)
             await #expect(throws: (any Error).self) {
-                try await WorkloadRegistry.requireAgentRegistration(identity: claimed, on: app.db)
+                try await WorkloadRegistry.requireAgentRegistration(identity: claimed, on: app.testPostgres)
             }
 
             // Deregistering removes the agent's row.
-            try await WorkloadRegistry.deregisterAgent(identity: nodeB, on: app.db)
-            #expect(try await WorkloadRegistry.resolve(spiffeID: nodeB.key, on: app.db) == nil)
+            try await WorkloadRegistry.deregisterAgent(identity: nodeB, on: app.testPostgres)
+            #expect(try await WorkloadRegistry.resolve(spiffeID: nodeB.key, on: app.testPostgres) == nil)
         }
     }
 
@@ -449,20 +462,25 @@ final class WorkloadPrincipalTests {
             // other) must fail agent authentication rather than answer with
             // either name.
             let nodeZ = AgentIdentity(trustDomain: "strato.local", name: "node-z")
-            try await WorkloadRegistration(
-                spiffeID: nodeZ.key, kind: .agent, agentName: "someone-else"
-            ).save(on: app.db)
+            _ = try await LegacyWorkloadRegistrationStore.insert(
+                WorkloadRegistrationWrite(
+                    spiffeID: nodeZ.key,
+                    kind: WorkloadRegistrationKind.agent.rawValue,
+                    agentName: "someone-else"),
+                on: app.testPostgres)
             await #expect(throws: (any Error).self) {
-                try await WorkloadRegistry.requireAgentRegistration(identity: nodeZ, on: app.db)
+                try await WorkloadRegistry.requireAgentRegistration(identity: nodeZ, on: app.testPostgres)
             }
 
             // A kind row missing its reference resolves to nil.
-            try await WorkloadRegistration(
-                spiffeID: "spiffe://strato.local/sa/dangling", kind: .serviceAccount
-            ).save(on: app.db)
+            _ = try await LegacyWorkloadRegistrationStore.insert(
+                WorkloadRegistrationWrite(
+                    spiffeID: "spiffe://strato.local/sa/dangling",
+                    kind: WorkloadRegistrationKind.serviceAccount.rawValue),
+                on: app.testPostgres)
             #expect(
                 try await WorkloadRegistry.resolve(
-                    spiffeID: "spiffe://strato.local/sa/dangling", on: app.db) == nil)
+                    spiffeID: "spiffe://strato.local/sa/dangling", on: app.testPostgres) == nil)
         }
     }
 

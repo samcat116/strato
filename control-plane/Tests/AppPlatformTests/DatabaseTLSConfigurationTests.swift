@@ -6,7 +6,7 @@ import Vapor
 // rather than setting `DATABASE_TLS` in the process environment: setenv while
 // another parallel test thread reads the environment (e.g. Vapor's
 // `Environment.get` during `configure`) is undefined behavior on glibc.
-@Suite("Database TLS Configuration")
+@Suite("PostgresStoreContext TLS Configuration")
 struct DatabaseTLSConfigurationTests {
 
     @Test("Defaults to require outside development")
@@ -46,3 +46,4 @@ struct DatabaseTLSConfigurationTests {
         }
     }
 }
+import ControlPlanePostgres

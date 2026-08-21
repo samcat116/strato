@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import Testing
 import Vapor
@@ -29,7 +28,6 @@ final class EntitySliceLoaderTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -68,11 +66,11 @@ final class EntitySliceLoaderTests {
     @Test("Chain entities carry the parent edges Cedar's `in` walks")
     func chainParentEdges() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Chain")
             let user = try await builder.createUser(username: "chain-user", email: "chain@example.com")
 
-            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
+            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.testPostgres)
 
             let vmUID = CedarEntityUID(type: .vm, id: tree.vm.id!)
             let projectUID = CedarEntityUID(type: .project, id: tree.project.id!)
@@ -92,11 +90,11 @@ final class EntitySliceLoaderTests {
     @Test("A dangling node yields a one-entity chain and no grants — under-report, never invent")
     func danglingNode() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let user = try await builder.createUser(username: "dangle-user", email: "dangle@example.com")
             let orphan = IAMNode(type: .virtualMachine, id: UUID())
 
-            let slice = try await EntitySliceLoader.load(userID: user.id!, node: orphan, on: app.db)
+            let slice = try await EntitySliceLoader.load(userID: user.id!, node: orphan, on: app.testPostgres)
 
             #expect(entity(slice, orphan.cedarUID)?.parents == [])
             #expect(slice.grants == CedarRoleGrants())
@@ -108,11 +106,11 @@ final class EntitySliceLoaderTests {
     @Test("The target resource carries its environment attribute")
     func environmentAttribute() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Env")
             let user = try await builder.createUser(username: "env-user", email: "env@example.com")
 
-            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
+            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.testPostgres)
 
             let vm = entity(slice, CedarEntityUID(type: .vm, id: tree.vm.id!))
             #expect(vm?.attrs["environment"] == .string("production"))
@@ -125,7 +123,7 @@ final class EntitySliceLoaderTests {
     @Test("A network's slice climbs to its project, carrying no open-to-all attribute")
     func networkSliceClimbsToProject() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Net")
             let user = try await builder.createUser(username: "net-user", email: "net@example.com")
 
@@ -133,7 +131,7 @@ final class EntitySliceLoaderTests {
                 name: "proj-net", project: tree.project, subnet: "10.91.0.0/24", gateway: "10.91.0.1")
 
             let slice = try await EntitySliceLoader.load(
-                userID: user.id!, node: IAMNode(type: .network, id: network.id!), on: app.db)
+                userID: user.id!, node: IAMNode(type: .network, id: network.id!), on: app.testPostgres)
 
             // `openToAllUsers` is gone with global networks themselves (issue
             // #765): a network is reachable only through its project's chain.
@@ -148,9 +146,9 @@ final class EntitySliceLoaderTests {
     @Test("A stale materialized folder path does not change the chain")
     func staleFolderPathIsOnlyAHint() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Stale")
-            let expected = try await IAMResourceTree.ancestors(of: tree.vmNode, on: app.db)
+            let expected = try await IAMResourceTree.ancestors(of: tree.vmNode, on: app.testPostgres)
 
             // The batched folder walk uses `path` to prefetch the rows it is
             // about to need; the parent pointers stay authoritative. Corrupt
@@ -158,12 +156,20 @@ final class EntitySliceLoaderTests {
             // naming an unrelated folder — and the chain must not move.
             let unrelated = try await builder.createOU(
                 name: "Stale Unrelated", description: "d", organization: tree.org)
-            tree.childOU.path = "/nonsense"
-            try await tree.childOU.save(on: app.db)
-            tree.ou.path = "/\(tree.org.id!.uuidString)/\(unrelated.id!.uuidString)/\(tree.ou.id!.uuidString)"
-            try await tree.ou.save(on: app.db)
+            try await OrganizationalUnit(
+                id: tree.childOU.id, name: tree.childOU.name, description: tree.childOU.description,
+                organizationID: tree.childOU.organizationID, parentOUID: tree.childOU.parentOUID,
+                path: "/nonsense", depth: tree.childOU.depth,
+                createdAt: tree.childOU.createdAt, updatedAt: tree.childOU.updatedAt
+            ).save(on: app.testPostgres)
+            try await OrganizationalUnit(
+                id: tree.ou.id, name: tree.ou.name, description: tree.ou.description,
+                organizationID: tree.ou.organizationID, parentOUID: tree.ou.parentOUID,
+                path: "/\(tree.org.id!.uuidString)/\(unrelated.id!.uuidString)/\(tree.ou.id!.uuidString)",
+                depth: tree.ou.depth, createdAt: tree.ou.createdAt, updatedAt: tree.ou.updatedAt
+            ).save(on: app.testPostgres)
 
-            let actual = try await IAMResourceTree.ancestors(of: tree.vmNode, on: app.db)
+            let actual = try await IAMResourceTree.ancestors(of: tree.vmNode, on: app.testPostgres)
             #expect(actual == expected)
             #expect(
                 actual == [
@@ -179,23 +185,23 @@ final class EntitySliceLoaderTests {
     @Test("Loading through a request cache yields the same slices as loading without one")
     func requestCachedSlicesAreUnchanged() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Cache")
             let user = try await builder.createUser(username: "cache-user", email: "cache@example.com")
             try await builder.addUserToOrganization(user: user, organization: tree.org)
             let group = try await builder.createGroup(name: "cache-team", description: "d", organization: tree.org)
-            try await UserGroup(userID: user.id!, groupID: group.id!).save(on: app.db)
+            try await builder.addUserToGroup(user: user, group: group)
             try await RoleBindingService.grant(
                 principalType: .group, principalID: group.id!, role: .viewer,
-                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.testPostgres)
 
             let cache = IAMRequestCache()
             for node in [tree.vmNode, tree.projectNode, tree.orgNode] {
-                let uncached = try await EntitySliceLoader.load(userID: user.id!, node: node, on: app.db)
+                let uncached = try await EntitySliceLoader.load(userID: user.id!, node: node, on: app.testPostgres)
                 let first = try await EntitySliceLoader.load(
-                    userID: user.id!, node: node, cache: cache, on: app.db)
+                    userID: user.id!, node: node, cache: cache, on: app.testPostgres)
                 let second = try await EntitySliceLoader.load(
-                    userID: user.id!, node: node, cache: cache, on: app.db)
+                    userID: user.id!, node: node, cache: cache, on: app.testPostgres)
                 #expect(first == uncached)
                 #expect(second == uncached)
             }
@@ -214,38 +220,38 @@ final class EntitySliceLoaderTests {
     @Test("A later check on an already-covered chain loads its slice without touching the database")
     func laterChecksReuseTheSliceComponents() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Reuse")
             let user = try await builder.createUser(username: "reuse-user", email: "reuse@example.com")
             try await builder.addUserToOrganization(user: user, organization: tree.org)
             let group = try await builder.createGroup(name: "reuse-team", description: "d", organization: tree.org)
-            try await UserGroup(userID: user.id!, groupID: group.id!).save(on: app.db)
+            try await builder.addUserToGroup(user: user, group: group)
             try await RoleBindingService.grant(
                 principalType: .group, principalID: group.id!, role: .viewer,
-                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.testPostgres)
 
             // A request we own, so Fluent's per-request query history records
             // exactly the DB work each check does.
             let req = Request(
                 application: app, method: .POST, url: URI(path: "/api/vms"),
                 on: app.eventLoopGroup.next())
-            req.fluent.history.start()
+            req.application.testPostgres.history.start()
 
             let cache = IAMRequestCache()
             // Check 1 (the middleware's `org:read`) and check 2 (`image:read`
             // stand-in: a leaf whose chain spans project and org) warm the
             // cache the way the real create path does.
-            _ = try await EntitySliceLoader.load(userID: user.id!, node: tree.orgNode, cache: cache, on: req.db)
-            _ = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, cache: cache, on: req.db)
+            _ = try await EntitySliceLoader.load(userID: user.id!, node: tree.orgNode, cache: cache, on: req.application.testPostgres)
+            _ = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, cache: cache, on: req.application.testPostgres)
 
             // Check 3 (`vm:create` on the project): its chain — project,
             // folders, org — was fully covered by check 2, so chains, user
             // facts, and bindings all answer from the request cache.
-            let before = req.fluent.history.queries.count
+            let before = req.application.testPostgres.history.count
             let cached = try await EntitySliceLoader.load(
-                userID: user.id!, node: tree.projectNode, cache: cache, on: req.db)
-            let after = req.fluent.history.queries.count
-            req.fluent.history.stop()
+                userID: user.id!, node: tree.projectNode, cache: cache, on: req.application.testPostgres)
+            let after = req.application.testPostgres.history.count
+            req.application.testPostgres.history.stop()
             #expect(
                 after == before,
                 "third distinct check issued \(after - before) queries; its slice components should all be request-cached"
@@ -253,7 +259,7 @@ final class EntitySliceLoaderTests {
 
             // Reuse must be invisible: the memoized slice equals the
             // independent uncached load, grants included.
-            let uncached = try await EntitySliceLoader.load(userID: user.id!, node: tree.projectNode, on: app.db)
+            let uncached = try await EntitySliceLoader.load(userID: user.id!, node: tree.projectNode, on: app.testPostgres)
             #expect(cached == uncached)
             #expect(cached.grants.groups(for: .viewer) == [group.id!])
         }
@@ -264,14 +270,14 @@ final class EntitySliceLoaderTests {
     @Test("The principal carries group parent edges, org memberships, and the systemAdmin attribute")
     func principalShape() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Principal")
             let user = try await builder.createUser(username: "prin-user", email: "prin@example.com")
             try await builder.addUserToOrganization(user: user, organization: tree.org)
             let group = try await builder.createGroup(name: "team", description: "d", organization: tree.org)
-            try await UserGroup(userID: user.id!, groupID: group.id!).save(on: app.db)
+            try await builder.addUserToGroup(user: user, group: group)
 
-            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
+            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.testPostgres)
 
             let principal = entity(slice, slice.principal)
             let groupUID = CedarEntityUID(type: .group, id: group.id!)
@@ -287,13 +293,13 @@ final class EntitySliceLoaderTests {
     @Test("A system admin's attribute is set; a missing user gets the powerless defaults")
     func systemAdminAndMissingUser() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Admin")
             let admin = try await builder.createUser(
                 username: "root", email: "root@example.com", isSystemAdmin: true)
 
-            let adminSlice = try await EntitySliceLoader.load(userID: admin.id!, node: tree.vmNode, on: app.db)
-            let ghostSlice = try await EntitySliceLoader.load(userID: UUID(), node: tree.vmNode, on: app.db)
+            let adminSlice = try await EntitySliceLoader.load(userID: admin.id!, node: tree.vmNode, on: app.testPostgres)
+            let ghostSlice = try await EntitySliceLoader.load(userID: UUID(), node: tree.vmNode, on: app.testPostgres)
 
             #expect(entity(adminSlice, adminSlice.principal)?.attrs["systemAdmin"] == .bool(true))
             let ghost = entity(ghostSlice, ghostSlice.principal)
@@ -308,18 +314,18 @@ final class EntitySliceLoaderTests {
     @Test("Bindings anywhere along the chain flatten into the role grants")
     func bindingsAlongChain() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Grants")
             let user = try await builder.createUser(username: "grant-user", email: "grant@example.com")
 
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .viewer,
-                nodeType: .virtualMachine, nodeID: tree.vm.id!, createdBy: nil, on: app.db)
+                nodeType: .virtualMachine, nodeID: tree.vm.id!, createdBy: nil, on: app.testPostgres)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .editor,
-                nodeType: .organizationalUnit, nodeID: tree.ou.id!, createdBy: nil, on: app.db)
+                nodeType: .organizationalUnit, nodeID: tree.ou.id!, createdBy: nil, on: app.testPostgres)
 
-            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
+            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.testPostgres)
 
             #expect(slice.grants.users(for: .viewer) == [user.id!])
             #expect(slice.grants.users(for: .editor) == [user.id!])
@@ -330,16 +336,16 @@ final class EntitySliceLoaderTests {
     @Test("A binding outside the chain does not leak in")
     func bindingOutsideChain() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Leak")
             let other = try await buildTree(builder, prefix: "LeakOther")
             let user = try await builder.createUser(username: "leak-user", email: "leak@example.com")
 
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .organization, nodeID: other.org.id!, createdBy: nil, on: app.db)
+                nodeType: .organization, nodeID: other.org.id!, createdBy: nil, on: app.testPostgres)
 
-            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
+            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.testPostgres)
             #expect(slice.grants == CedarRoleGrants())
         }
     }
@@ -347,17 +353,18 @@ final class EntitySliceLoaderTests {
     @Test("Group bindings flatten as group grants, reachable through the principal's parent edge")
     func groupBindings() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Group")
             let user = try await builder.createUser(username: "group-user", email: "group@example.com")
             let group = try await builder.createGroup(name: "ops", description: "d", organization: tree.org)
-            try await UserGroup(userID: user.id!, groupID: group.id!).save(on: app.db)
+            try await builder.addUserToOrganization(user: user, organization: tree.org)
+            try await builder.addUserToGroup(user: user, group: group)
 
             try await RoleBindingService.grant(
                 principalType: .group, principalID: group.id!, role: .operator,
-                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.testPostgres)
 
-            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
+            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.testPostgres)
 
             #expect(slice.grants.groups(for: .operator) == [group.id!])
             #expect(slice.grants.users(for: .operator).isEmpty)
@@ -368,16 +375,16 @@ final class EntitySliceLoaderTests {
     @Test("Another group's binding is not loaded for a non-member")
     func otherGroupsBindingExcluded() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "NonMember")
             let user = try await builder.createUser(username: "nonmember", email: "nonmember@example.com")
             let group = try await builder.createGroup(name: "others", description: "d", organization: tree.org)
 
             try await RoleBindingService.grant(
                 principalType: .group, principalID: group.id!, role: .admin,
-                nodeType: .organization, nodeID: tree.org.id!, createdBy: nil, on: app.db)
+                nodeType: .organization, nodeID: tree.org.id!, createdBy: nil, on: app.testPostgres)
 
-            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
+            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.testPostgres)
             #expect(slice.grants == CedarRoleGrants())
         }
     }
@@ -385,14 +392,14 @@ final class EntitySliceLoaderTests {
     @Test("Expired bindings are excluded; conditioned bindings are skipped and counted, never flattened")
     func expiredAndConditionedBindings() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Expiry")
             let user = try await builder.createUser(username: "exp-user", email: "exp@example.com")
 
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
                 nodeType: .project, nodeID: tree.project.id!, createdBy: nil,
-                expiresAt: Date(timeIntervalSinceNow: -60), on: app.db)
+                expiresAt: Date(timeIntervalSinceNow: -60), on: app.testPostgres)
             // Flattening a conditioned binding as unconditional would turn a
             // restricted grant into an open one — it must be skipped. The
             // schema now refuses such a row (STR-108); this reproduces one
@@ -400,9 +407,9 @@ final class EntitySliceLoaderTests {
             try await insertConditionedRoleBinding(
                 principalType: .user, principalID: user.id!, role: .editor,
                 nodeType: .project, nodeID: tree.project.id!,
-                condition: #"{"mfa": true}"#, on: app.db)
+                condition: #"{"mfa": true}"#, on: app.testPostgres)
 
-            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
+            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.testPostgres)
 
             #expect(slice.grants == CedarRoleGrants())
             #expect(slice.skippedConditionedBindings == 1)
@@ -412,7 +419,7 @@ final class EntitySliceLoaderTests {
     @Test("A cross-org principal's bindings load; its memberOfOrgs names its own org, not the resource's")
     func crossOrgPrincipal() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Home")
             let otherOrg = try await builder.createOrganization(name: "Other Org")
             let outsider = try await builder.createUser(username: "outsider", email: "outsider@example.com")
@@ -420,9 +427,9 @@ final class EntitySliceLoaderTests {
 
             try await RoleBindingService.grant(
                 principalType: .user, principalID: outsider.id!, role: .editor,
-                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.testPostgres)
 
-            let slice = try await EntitySliceLoader.load(userID: outsider.id!, node: tree.vmNode, on: app.db)
+            let slice = try await EntitySliceLoader.load(userID: outsider.id!, node: tree.vmNode, on: app.testPostgres)
 
             // The grant is real — cross-org access is allowed via explicit
             // bindings — and the membership attribute is what lets an
@@ -439,20 +446,20 @@ final class EntitySliceLoaderTests {
     @Test("Two loads of the same slice are identical, including the JSON rendering")
     func deterministicSlices() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Det")
             let user = try await builder.createUser(username: "det-user", email: "det@example.com")
             try await builder.addUserToOrganization(user: user, organization: tree.org)
             for name in ["g1", "g2", "g3"] {
                 let group = try await builder.createGroup(name: name, description: "d", organization: tree.org)
-                try await UserGroup(userID: user.id!, groupID: group.id!).save(on: app.db)
+                try await builder.addUserToGroup(user: user, group: group)
                 try await RoleBindingService.grant(
                     principalType: .group, principalID: group.id!, role: .viewer,
-                    nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
+                    nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.testPostgres)
             }
 
-            let first = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
-            let second = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
+            let first = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.testPostgres)
+            let second = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.testPostgres)
 
             #expect(first == second)
             let firstJSON = try first.entitiesJSON()
@@ -464,12 +471,12 @@ final class EntitySliceLoaderTests {
     @Test("Entities JSON uses Cedar's uid/attrs/parents shape with the __entity escape")
     func entitiesJSONShape() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "JSON")
             let user = try await builder.createUser(username: "json-user", email: "json@example.com")
             try await builder.addUserToOrganization(user: user, organization: tree.org)
 
-            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
+            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.testPostgres)
             let json = try slice.entitiesJSON()
 
             #expect(json.contains("\"uid\":{\"id\":\"\(tree.vm.id!.uuidString.lowercased())\",\"type\":\"VM\"}"))
@@ -483,14 +490,14 @@ final class EntitySliceLoaderTests {
     @Test("The base context carries every grants bucket, empty ones included")
     func baseContextShape() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Ctx")
             let user = try await builder.createUser(username: "ctx-user", email: "ctx@example.com")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .organization, nodeID: tree.org.id!, createdBy: nil, on: app.db)
+                nodeType: .organization, nodeID: tree.org.id!, createdBy: nil, on: app.testPostgres)
 
-            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
+            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.testPostgres)
 
             let roleIDs = Set(IAMRole.allCases.map(\.seededID))
             guard case .record(let context) = slice.baseContextValue(roleIDs: roleIDs),
@@ -513,7 +520,7 @@ final class EntitySliceLoaderTests {
     @Test("Grants for roles outside the compiled set are dropped from the context, not emitted")
     func staleSchemaGrantsDropped() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Stale")
             let user = try await builder.createUser(username: "stale-user", email: "stale@example.com")
 
@@ -522,12 +529,12 @@ final class EntitySliceLoaderTests {
             let unknownRoleID = UUID()
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, roleID: unknownRoleID,
-                nodeType: .organization, nodeID: tree.org.id!, createdBy: nil, on: app.db)
+                nodeType: .organization, nodeID: tree.org.id!, createdBy: nil, on: app.testPostgres)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .viewer,
-                nodeType: .organization, nodeID: tree.org.id!, createdBy: nil, on: app.db)
+                nodeType: .organization, nodeID: tree.org.id!, createdBy: nil, on: app.testPostgres)
 
-            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
+            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.testPostgres)
             // The loader collected both grants…
             #expect(slice.grants.roleIDs == [unknownRoleID, IAMRole.viewer.seededID])
 
@@ -589,7 +596,7 @@ final class EntitySliceLoaderTests {
     @Test("Evaluator decisions agree with a hand-simulation of the static policies across a grid")
     func sliceCrossCheckAgainstWhoCan() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Cross")
             let otherOrg = try await builder.createOrganization(name: "Cross Other Org")
 
@@ -597,7 +604,8 @@ final class EntitySliceLoaderTests {
             try await builder.addUserToOrganization(user: member, organization: tree.org)
             let viaGroup = try await builder.createUser(username: "cross-group", email: "cg@example.com")
             let group = try await builder.createGroup(name: "cross-ops", description: "d", organization: tree.org)
-            try await UserGroup(userID: viaGroup.id!, groupID: group.id!).save(on: app.db)
+            try await builder.addUserToOrganization(user: viaGroup, organization: tree.org)
+            try await builder.addUserToGroup(user: viaGroup, group: group)
             let outsider = try await builder.createUser(username: "cross-out", email: "co@example.com")
             try await builder.addUserToOrganization(user: outsider, organization: otherOrg)
             let admin = try await builder.createUser(
@@ -606,13 +614,13 @@ final class EntitySliceLoaderTests {
 
             try await RoleBindingService.grant(
                 principalType: .group, principalID: group.id!, role: .operator,
-                nodeType: .organizationalUnit, nodeID: tree.ou.id!, createdBy: nil, on: app.db)
+                nodeType: .organizationalUnit, nodeID: tree.ou.id!, createdBy: nil, on: app.testPostgres)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: outsider.id!, role: .viewer,
-                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.testPostgres)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: member.id!, role: .editor,
-                nodeType: .virtualMachine, nodeID: tree.vm.id!, createdBy: nil, on: app.db)
+                nodeType: .virtualMachine, nodeID: tree.vm.id!, createdBy: nil, on: app.testPostgres)
 
             let users = [member, viaGroup, outsider, admin, nobody]
             let actions = [
@@ -623,13 +631,13 @@ final class EntitySliceLoaderTests {
 
             for user in users {
                 for node in nodes {
-                    let slice = try await EntitySliceLoader.load(userID: user.id!, node: node, on: app.db)
-                    let chain = try await IAMResourceTree.ancestors(of: node, on: app.db)
+                    let slice = try await EntitySliceLoader.load(userID: user.id!, node: node, on: app.testPostgres)
+                    let chain = try await IAMResourceTree.ancestors(of: node, on: app.testPostgres)
                     let chainOrgID = chain.first(where: { $0.type == .organization })?.id
                     for action in actions {
                         let expected = try await WhoCanService.can(
                             principalType: .user, principalID: user.id!, action: action, node: node, app: app,
-                            on: app.db)
+                            on: app.testPostgres)
                         let actual = sliceAllows(action: action, slice: slice, user: user, chainOrgID: chainOrgID)
                         #expect(
                             actual == expected,

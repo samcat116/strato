@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -26,9 +25,8 @@ final class ImageDownloadScopingTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(username: "scoping-user", email: "scoping@example.com")
             let org = try await builder.createOrganization(name: "Scoping Org")
             let project = try await builder.createProject(
@@ -60,7 +58,7 @@ final class ImageDownloadScopingTests {
             ),
             protocolVersion: protocolVersion
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let uuid = try await app.agentService.registerAgent(
             message, agentName: name, organizationScope: orgID.map { .organization($0) })
         return uuid.uuidString
@@ -78,10 +76,10 @@ final class ImageDownloadScopingTests {
             let placedAgent = try await self.registerAgent(app: app, named: "placed-agent")
             let otherAgent = try await self.registerAgent(app: app, named: "other-agent")
 
-            let vm = try await builder.createVM(name: "scoped-vm", project: project)
+            var vm = try await builder.createVM(name: "scoped-vm", project: project)
             vm.hypervisorId = placedAgent
-            vm.$sourceImage.id = image.id
-            try await vm.save(on: app.db)
+            vm.sourceImageID = image.id
+            try await vm.save(on: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: placedAgent)
             #expect(message.vms.first?.imageInfo?.imageId == image.id)
@@ -105,10 +103,10 @@ final class ImageDownloadScopingTests {
                 project: project, status: .pending, uploadedBy: user)
             let agentId = try await self.registerAgent(app: app, named: "pending-image-agent")
 
-            let vm = try await builder.createVM(name: "pending-image-vm", project: project)
+            var vm = try await builder.createVM(name: "pending-image-vm", project: project)
             vm.hypervisorId = agentId
-            vm.$sourceImage.id = image.id
-            try await vm.save(on: app.db)
+            vm.sourceImageID = image.id
+            try await vm.save(on: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(message.vms.first?.imageInfo == nil)
@@ -138,8 +136,8 @@ final class ImageDownloadScopingTests {
                 createdByID: user.id!,
                 sourceImageID: image.id
             )
-            try await volume.save(on: app.db)
-            try await placeVolume(volume, on: agentId, using: app.db)
+            try await volume.save(on: app.testPostgres)
+            try await placeVolume(volume, on: agentId, using: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(message.volumes.first?.source?.kind == DesiredVolumeSource.image)
@@ -167,8 +165,8 @@ final class ImageDownloadScopingTests {
                 createdByID: user.id!,
                 sourceImageID: image.id
             )
-            try await volume.save(on: app.db)
-            try await placeVolume(volume, on: owner, using: app.db)
+            try await volume.save(on: app.testPostgres)
+            try await placeVolume(volume, on: owner, using: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: other)
             #expect(message.volumes.isEmpty)
@@ -199,10 +197,10 @@ final class ImageDownloadScopingTests {
                 storagePath: "scoping/repeat-other.qcow2")
             let agentId = try await self.registerAgent(app: app, named: "repeat-agent")
 
-            let vm = try await builder.createVM(name: "repeat-vm", project: project)
+            var vm = try await builder.createVM(name: "repeat-vm", project: project)
             vm.hypervisorId = agentId
-            vm.$sourceImage.id = image.id
-            try await vm.save(on: app.db)
+            vm.sourceImageID = image.id
+            try await vm.save(on: app.testPostgres)
 
             for _ in 0..<3 {
                 _ = try await app.desiredStateAssembler.assemble(agentId: agentId)
@@ -226,10 +224,10 @@ final class ImageDownloadScopingTests {
                 project: project, uploadedBy: user, storagePath: "scoping/undelivered.qcow2")
             let agentId = try await self.registerAgent(app: app, named: "undelivered-agent")
 
-            let vm = try await builder.createVM(name: "undelivered-vm", project: project)
+            var vm = try await builder.createVM(name: "undelivered-vm", project: project)
             vm.hypervisorId = agentId
-            vm.$sourceImage.id = image.id
-            try await vm.save(on: app.db)
+            vm.sourceImageID = image.id
+            try await vm.save(on: app.testPostgres)
 
             // Assemble and throw the payload away, exactly as the poll handler
             // does when the digest matches the client's validator.

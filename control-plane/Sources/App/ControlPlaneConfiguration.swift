@@ -2,6 +2,11 @@ import Configuration
 import Foundation
 import Vapor
 
+private enum DatabaseStatementTimeout {
+    static let defaultMilliseconds = 300_000
+    static let maximumMilliseconds = Int(Int32.max)
+}
+
 /// One operator-facing configuration setting. The registry is deliberately
 /// data, not documentation assembled at call sites, so the deployment reference
 /// can be generated without rediscovering defaults and accepted values.
@@ -69,6 +74,8 @@ enum ControlPlaneBoolKey: String, CaseIterable, Sendable {
 
 enum ControlPlaneIntKey: String, CaseIterable, Sendable {
     case databasePort = "DATABASE_PORT"
+    case databaseMaxConnections = "DATABASE_MAX_CONNECTIONS"
+    case databaseConnectionAcquireTimeoutMS = "DATABASE_CONNECTION_ACQUIRE_TIMEOUT_MS"
     case databaseStatementTimeoutMS = "DATABASE_STATEMENT_TIMEOUT_MS"
     case databaseMigrationStatementTimeoutMS = "DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS"
     case valkeyPort = "VALKEY_PORT"
@@ -106,6 +113,8 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
     ) -> Int? {
         switch self {
         case .databasePort: 5432
+        case .databaseMaxConnections: 20
+        case .databaseConnectionAcquireTimeoutMS: 10_000
         case .databaseStatementTimeoutMS: DatabaseStatementTimeout.defaultMilliseconds
         case .databaseMigrationStatementTimeoutMS: normalStatementTimeout
         case .valkeyPort, .sessionValkeyPort: 6379
@@ -144,6 +153,8 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
             0...Int.max
         case .databaseStatementTimeoutMS, .databaseMigrationStatementTimeoutMS:
             1...DatabaseStatementTimeout.maximumMilliseconds
+        case .databaseMaxConnections, .databaseConnectionAcquireTimeoutMS:
+            1...Int.max
         case .sessionTTLSeconds:
             ValkeySessionDriver.minimumTTL...Int.max
         case .rateLimitAuthMax, .rateLimitAuthWindow, .rateLimitAPIMax, .rateLimitAPIWindow,

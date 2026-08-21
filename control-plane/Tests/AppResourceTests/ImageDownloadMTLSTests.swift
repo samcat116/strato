@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import NIOCore
 import StratoShared
@@ -52,7 +51,7 @@ struct ImageDownloadMTLSTests {
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             )
         )
-        try await agent.save(on: app.db)
+        try await agent.save(on: app.testPostgres)
         await app.coordination.grantImageDownload(agentId: agent.id!.uuidString, imageId: image.id!)
     }
 
@@ -63,7 +62,7 @@ struct ImageDownloadMTLSTests {
     private func makeReadyImage(app: Application, suffix: String = "") async throws -> (
         project: Project, image: Image, bytes: String
     ) {
-        let builder = TestDataBuilder(db: app.db)
+        let builder = TestDataBuilder(db: app.testPostgres)
         let user = try await builder.createUser(username: "dl-user\(suffix)", email: "dl\(suffix)@example.com")
         let org = try await builder.createOrganization(name: "DL Org\(suffix)")
         let project = try await builder.createProject(

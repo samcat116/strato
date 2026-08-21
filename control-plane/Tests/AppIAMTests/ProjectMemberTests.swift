@@ -1,5 +1,5 @@
 import AppTestSupport
-import Fluent
+import ControlPlanePostgres
 import Testing
 import Vapor
 import VaporTesting
@@ -17,28 +17,26 @@ final class ProjectMemberTests {
     }
 
     private func withApp(
-        _ test: (Application, Project, User, User, Group, String) async throws -> Void
+        _ test: (Application, Project, User, User, TestGroup, String) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let org = try await builder.createOrganization(name: "PM Org")
             let actor = try await builder.createUser(
                 username: "pmactor", email: "pmactor@example.com", displayName: "PM Actor")
             try await builder.addUserToOrganization(user: actor, organization: org, role: "admin")
-            actor.currentOrganizationId = org.id
-            try await actor.save(on: app.db)
+            try await actor.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let target = try await builder.createUser(
                 username: "pmtarget", email: "pmtarget@example.com", displayName: "PM Target")
             let project = try await builder.createProject(
                 name: "PM Project", description: "d", organization: org)
-            let group = Group(name: "PM Group", description: "d", organizationID: org.id!)
-            try await group.save(on: app.db)
-            let token = try await actor.generateAPIKey(on: app.db)
+            let group = try await builder.createGroup(
+                name: "PM Group", description: "d", organization: org)
+            let token = try await actor.generateAPIKey(on: app)
 
             try await test(app, project, actor, target, group, token)
         } catch {
@@ -49,27 +47,26 @@ final class ProjectMemberTests {
     }
 
     private func bindings(
-        principalType: IAMPrincipalType, principalID: UUID, projectID: UUID, on db: Database
-    ) async throws -> [RoleBinding] {
-        try await RoleBinding.query(on: db)
-            .filter(\.$principalType == principalType.rawValue)
-            .filter(\.$principalID == principalID)
-            .filter(\.$nodeType == IAMNodeType.project.rawValue)
-            .filter(\.$nodeID == projectID)
-            .all()
+        principalType: IAMPrincipalType, principalID: UUID, projectID: UUID, on db: PostgresStoreContext
+    ) async throws -> [LegacyRoleBindingRecord] {
+        try await LegacyRoleBindingStore.bindings(
+            principalType: principalType.rawValue,
+            principalID: principalID,
+            nodeType: IAMNodeType.project.rawValue,
+            nodeID: projectID,
+            on: db)
     }
 
     private func makeRole(
         name: String, ownerType: IAMRoleOwnerType, ownerID: UUID,
-        actions: [String], on db: Database
-    ) async throws -> IAMRoleDefinition {
+        actions: [String], on db: PostgresStoreContext
+    ) async throws -> LegacyIAMRoleRecord {
         let id = UUID()
-        let role = IAMRoleDefinition(
-            id: id, name: name, ownerType: ownerType, ownerID: ownerID,
+        return try await RoleStore.insertLegacy(IAMRoleSnapshot(
+            id: id, name: name, description: nil,
+            ownerType: ownerType.rawValue, ownerID: ownerID,
             cedarText: RoleDescriptor.canonicalPermitText(id: id, actions: actions),
-            actions: actions, managed: false)
-        try await role.save(on: db)
-        return role
+            actions: actions, managed: false, createdBy: nil), on: db)
     }
 
     @Test("Granting a user writes one authoritative role binding")
@@ -85,7 +82,7 @@ final class ProjectMemberTests {
             }
 
             let rows = try await bindings(
-                principalType: .user, principalID: target.id!, projectID: project.id!, on: app.db)
+                principalType: .user, principalID: target.id!, projectID: project.id!, on: app.testPostgres)
             #expect(rows.map(\.roleID) == [IAMRole.editor.seededID])
         }
     }
@@ -101,7 +98,7 @@ final class ProjectMemberTests {
             }
             #expect(
                 try await bindings(
-                    principalType: .user, principalID: target.id!, projectID: project.id!, on: app.db
+                    principalType: .user, principalID: target.id!, projectID: project.id!, on: app.testPostgres
                 ).isEmpty)
         }
     }
@@ -111,7 +108,7 @@ final class ProjectMemberTests {
         try await withApp { app, project, _, target, _, token in
             try await RoleBindingService.grant(
                 principalType: .user, principalID: target.id!, role: .editor,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
 
             try await app.test(.PATCH, "/api/projects/\(project.id!)/members/\(target.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -122,7 +119,7 @@ final class ProjectMemberTests {
             }
 
             let rows = try await bindings(
-                principalType: .user, principalID: target.id!, projectID: project.id!, on: app.db)
+                principalType: .user, principalID: target.id!, projectID: project.id!, on: app.testPostgres)
             #expect(rows.map(\.roleID) == [IAMRole.admin.seededID])
         }
     }
@@ -132,7 +129,7 @@ final class ProjectMemberTests {
         try await withApp { app, project, _, target, _, token in
             try await RoleBindingService.grant(
                 principalType: .user, principalID: target.id!, role: .viewer,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/projects/\(project.id!)/members/\(target.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -142,7 +139,7 @@ final class ProjectMemberTests {
 
             #expect(
                 try await bindings(
-                    principalType: .user, principalID: target.id!, projectID: project.id!, on: app.db
+                    principalType: .user, principalID: target.id!, projectID: project.id!, on: app.testPostgres
                 ).isEmpty)
         }
     }
@@ -160,7 +157,7 @@ final class ProjectMemberTests {
             }
 
             let rows = try await bindings(
-                principalType: .group, principalID: group.id!, projectID: project.id!, on: app.db)
+                principalType: .group, principalID: group.id!, projectID: project.id!, on: app.testPostgres)
             #expect(rows.map(\.roleID) == [IAMRole.editor.seededID])
 
             try await app.test(.DELETE, "/api/projects/\(project.id!)/groups/\(group.id!)") { req in
@@ -170,7 +167,7 @@ final class ProjectMemberTests {
             }
             #expect(
                 try await bindings(
-                    principalType: .group, principalID: group.id!, projectID: project.id!, on: app.db
+                    principalType: .group, principalID: group.id!, projectID: project.id!, on: app.testPostgres
                 ).isEmpty)
         }
     }
@@ -180,35 +177,35 @@ final class ProjectMemberTests {
         try await withApp { app, project, _, target, _, token in
             let allowed = try await makeRole(
                 name: "deployer", ownerType: .project, ownerID: project.id!,
-                actions: ["vm:read", "vm:start"], on: app.db)
+                actions: ["vm:read", "vm:start"], on: app.testPostgres)
 
             try await app.test(.POST, "/api/projects/\(project.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     ProjectMemberController.GrantMemberRequest(
-                        userEmail: target.email, userID: nil, role: allowed.id!))
+                        userEmail: target.email, userID: nil, role: allowed.id))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
             let rows = try await bindings(
-                principalType: .user, principalID: target.id!, projectID: project.id!, on: app.db)
-            #expect(rows.map(\.roleID) == [allowed.id!])
+                principalType: .user, principalID: target.id!, projectID: project.id!, on: app.testPostgres)
+            #expect(rows.map(\.roleID) == [allowed.id])
         }
     }
 
     @Test("An out-of-scope custom role UUID is rejected")
     func customRoleOutOfScope() async throws {
         try await withApp { app, project, _, target, _, token in
-            let otherOrg = try await TestDataBuilder(db: app.db).createOrganization(name: "Other Org")
+            let otherOrg = try await TestDataBuilder(db: app.testPostgres).createOrganization(name: "Other Org")
             let foreign = try await makeRole(
                 name: "foreign", ownerType: .organization, ownerID: otherOrg.id!,
-                actions: ["vm:read"], on: app.db)
+                actions: ["vm:read"], on: app.testPostgres)
 
             try await app.test(.POST, "/api/projects/\(project.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     ProjectMemberController.GrantMemberRequest(
-                        userEmail: target.email, userID: nil, role: foreign.id!))
+                        userEmail: target.email, userID: nil, role: foreign.id))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
@@ -220,7 +217,7 @@ final class ProjectMemberTests {
         try await withApp { app, project, _, target, _, token in
             try await RoleBindingService.grant(
                 principalType: .user, principalID: target.id!, role: .editor,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
 
             try await app.test(.GET, "/api/projects/\(project.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -237,9 +234,9 @@ final class ProjectMemberTests {
     @Test("Listing requires view_project")
     func listRequiresViewProject() async throws {
         try await withApp { app, project, _, _, _, _ in
-            let outsider = try await TestDataBuilder(db: app.db).createUser(
+            let outsider = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "pm-outsider", email: "pm-outsider@example.com")
-            let outsiderToken = try await outsider.generateAPIKey(on: app.db)
+            let outsiderToken = try await outsider.generateAPIKey(on: app)
             try await app.test(.GET, "/api/projects/\(project.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in
@@ -251,12 +248,12 @@ final class ProjectMemberTests {
     @Test("An editor cannot promote themselves to project admin")
     func editorCannotSelfPromote() async throws {
         try await withApp { app, project, _, _, _, _ in
-            let editor = try await TestDataBuilder(db: app.db).createUser(
+            let editor = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "pm-editor", email: "pm-editor@example.com")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: editor.id!, role: .editor,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
-            let editorToken = try await editor.generateAPIKey(on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
+            let editorToken = try await editor.generateAPIKey(on: app)
 
             try await app.test(.PATCH, "/api/projects/\(project.id!)/members/\(editor.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: editorToken)
@@ -267,7 +264,7 @@ final class ProjectMemberTests {
             }
 
             let rows = try await bindings(
-                principalType: .user, principalID: editor.id!, projectID: project.id!, on: app.db)
+                principalType: .user, principalID: editor.id!, projectID: project.id!, on: app.testPostgres)
             #expect(rows.map(\.roleID) == [IAMRole.editor.seededID])
         }
     }
@@ -278,9 +275,9 @@ final class ProjectMemberTests {
             app.guardrailAnalyzer = OverlappingGuardrailAnalyzer()
             _ = try await GuardrailStore.create(
                 name: "no-vm-stop-org-wide", description: nil, effect: nil,
-                node: IAMNode(type: .organization, id: try #require(project.$organization.id)),
+                node: IAMNode(type: .organization, id: try #require(project.organizationID)),
                 actions: ["vm:stop"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
 
             try await app.test(.POST, "/api/projects/\(project.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)

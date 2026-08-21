@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -12,6 +12,20 @@ import Vapor
 /// - `GET  .../:webhookID/deliveries` — recent delivery history.
 /// - `POST .../:webhookID/deliveries/:deliveryID/redeliver` — re-enqueue one.
 struct WebhookSubscriptionController: RouteCollection {
+    private let subscriptions: WebhookSubscriptionsPersistence
+    private let deliveries: WebhookDeliveriesPersistence
+    private let projects: ProjectsPersistence
+
+    init(
+        subscriptions: WebhookSubscriptionsPersistence,
+        deliveries: WebhookDeliveriesPersistence,
+        projects: ProjectsPersistence
+    ) {
+        self.subscriptions = subscriptions
+        self.deliveries = deliveries
+        self.projects = projects
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let webhooks = routes.grouped("api", "organizations", ":organizationID", "webhooks")
         webhooks.get(use: list)
@@ -33,11 +47,8 @@ struct WebhookSubscriptionController: RouteCollection {
         let organizationID = try requireOrganizationID(req)
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
-        let subscriptions = try await WebhookSubscription.query(on: req.db)
-            .filter(\.$organization.$id == organizationID)
-            .sort(\.$createdAt)
-            .all()
-        return subscriptions.map(WebhookSubscriptionResponse.init(from:))
+        return try await subscriptions.subscriptions(organizationID: organizationID)
+            .map(WebhookSubscriptionResponse.init(from:))
     }
 
     func create(req: Request) async throws -> Response {
@@ -51,20 +62,23 @@ struct WebhookSubscriptionController: RouteCollection {
         try await validateTargetURL(request.url, on: req)
         let eventTypes = try parseEventTypes(request.eventTypes)
         if let projectID = request.projectId {
-            try await validateProjectScope(projectID, organizationID: organizationID, on: req.db)
+            try await validateProjectScope(projectID, organizationID: organizationID)
         }
 
-        let secret = WebhookSubscription.generateSigningSecret()
-        let subscription = WebhookSubscription(
+        let secret = WebhookSigningSecret.generate()
+        let subscription = try await subscriptions.create(WebhookSubscriptionWrite(
+            id: UUID(),
             organizationID: organizationID,
             projectID: request.projectId,
             name: request.name,
             url: request.url,
-            eventTypes: eventTypes,
-            signingSecret: try req.secretsEncryption.encrypt(secret),
+            eventTypesJSON: try webhookEventTypesJSON(eventTypes),
+            encryptedSigningSecret: try req.secretsEncryption.encrypt(secret),
+            isActive: true,
+            disabledReason: nil,
+            failingSince: nil,
             createdByID: try user.requireID()
-        )
-        try await subscription.save(on: req.db)
+        ))
 
         let body = WebhookSubscriptionWithSecretResponse(
             subscription: WebhookSubscriptionResponse(from: subscription),
@@ -77,45 +91,65 @@ struct WebhookSubscriptionController: RouteCollection {
     func get(req: Request) async throws -> WebhookSubscriptionResponse {
         let subscription = try await requireSubscription(req)
         try await OrganizationAccessService.requireMember(
-            organizationID: subscription.$organization.id, on: req)
+            organizationID: subscription.organizationID, on: req)
         return WebhookSubscriptionResponse(from: subscription)
     }
 
     func update(req: Request) async throws -> WebhookSubscriptionResponse {
         let subscription = try await requireSubscription(req)
         try await OrganizationAccessService.requireAdmin(
-            organizationID: subscription.$organization.id, on: req)
+            organizationID: subscription.organizationID, on: req)
 
         let request = try req.content.decodeValidated(UpdateWebhookSubscriptionRequest.self)
-        if let name = request.name {
-            subscription.name = name
-        }
-        if let url = request.url {
-            try await validateTargetURL(url, on: req)
-            subscription.url = url
+        var name = subscription.name
+        var url = subscription.url
+        var eventTypesJSON = subscription.eventTypesJSON
+        var isActive = subscription.isActive
+        var disabledReason = subscription.disabledReason
+        var failingSince = subscription.failingSince
+        if let requestedName = request.name { name = requestedName }
+        if let requestedURL = request.url {
+            try await validateTargetURL(requestedURL, on: req)
+            url = requestedURL
         }
         if let eventTypes = request.eventTypes {
-            subscription.eventTypesArray = try parseEventTypes(eventTypes)
+            eventTypesJSON = try webhookEventTypesJSON(parseEventTypes(eventTypes))
         }
-        if let isActive = request.isActive {
-            subscription.isActive = isActive
+        if let requestedActive = request.isActive {
+            isActive = requestedActive
             // Re-activating clears the failure bookkeeping so the auto-disable
             // window restarts from scratch instead of immediately re-tripping.
-            if isActive {
-                subscription.disabledReason = nil
-                subscription.failingSince = nil
+            if requestedActive {
+                disabledReason = nil
+                failingSince = nil
             }
         }
-        try await subscription.save(on: req.db)
-        return WebhookSubscriptionResponse(from: subscription)
+        guard let updated = try await subscriptions.replace(WebhookSubscriptionWrite(
+            id: subscription.id,
+            organizationID: subscription.organizationID,
+            projectID: subscription.projectID,
+            name: name,
+            url: url,
+            eventTypesJSON: eventTypesJSON,
+            encryptedSigningSecret: subscription.encryptedSigningSecret,
+            isActive: isActive,
+            disabledReason: disabledReason,
+            failingSince: failingSince,
+            createdByID: subscription.createdByID
+        )) else {
+            throw Abort(.notFound, reason: "Webhook subscription not found")
+        }
+        return WebhookSubscriptionResponse(from: updated)
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
         let subscription = try await requireSubscription(req)
         try await OrganizationAccessService.requireAdmin(
-            organizationID: subscription.$organization.id, on: req)
+            organizationID: subscription.organizationID, on: req)
 
-        try await subscription.delete(on: req.db)
+        guard try await subscriptions.delete(id: subscription.id) else {
+            throw Abort(.notFound, reason: "Webhook subscription not found")
+        }
         return .noContent
     }
 
@@ -124,14 +158,18 @@ struct WebhookSubscriptionController: RouteCollection {
     func rotateSecret(req: Request) async throws -> WebhookSubscriptionWithSecretResponse {
         let subscription = try await requireSubscription(req)
         try await OrganizationAccessService.requireAdmin(
-            organizationID: subscription.$organization.id, on: req)
+            organizationID: subscription.organizationID, on: req)
 
-        let secret = WebhookSubscription.generateSigningSecret()
-        subscription.signingSecret = try req.secretsEncryption.encrypt(secret)
-        try await subscription.save(on: req.db)
+        let secret = WebhookSigningSecret.generate()
+        guard let updated = try await subscriptions.replaceSigningSecret(
+            id: subscription.id,
+            replacement: try req.secretsEncryption.encrypt(secret))
+        else {
+            throw Abort(.notFound, reason: "Webhook subscription not found")
+        }
 
         return WebhookSubscriptionWithSecretResponse(
-            subscription: WebhookSubscriptionResponse(from: subscription),
+            subscription: WebhookSubscriptionResponse(from: updated),
             signingSecret: secret)
     }
 
@@ -143,25 +181,25 @@ struct WebhookSubscriptionController: RouteCollection {
     func sendTestEvent(req: Request) async throws -> WebhookDeliveryResponse {
         let subscription = try await requireSubscription(req)
         try await OrganizationAccessService.requireAdmin(
-            organizationID: subscription.$organization.id, on: req)
+            organizationID: subscription.organizationID, on: req)
         guard subscription.isActive else {
             throw Abort(.conflict, reason: "Subscription is disabled")
         }
 
         let event = WebhookEvent(
             type: .webhookTest,
-            organizationID: subscription.$organization.id,
-            projectID: subscription.$project.id,
+            organizationID: subscription.organizationID,
+            projectID: subscription.projectID,
             data: [
                 "message": .string("Test event from Strato"),
-                "subscriptionId": .string(try subscription.requireID().uuidString),
+                "subscriptionId": .string(subscription.id.uuidString),
             ])
-        let delivery = WebhookDelivery(
-            subscriptionID: try subscription.requireID(),
-            eventID: event.id,
-            eventType: event.type,
-            payload: try event.encodedPayload())
-        try await delivery.save(on: req.db)
+        let delivery = try await deliveries.create(
+            WebhookDeliveryWrite(
+                subscriptionID: subscription.id,
+                eventID: event.id,
+                eventType: event.type.rawValue,
+                payload: try event.encodedPayload()))
         return WebhookDeliveryResponse(from: delivery)
     }
 
@@ -174,21 +212,17 @@ struct WebhookSubscriptionController: RouteCollection {
     func listDeliveries(req: Request) async throws -> [WebhookDeliveryResponse] {
         let subscription = try await requireSubscription(req)
         try await OrganizationAccessService.requireAdmin(
-            organizationID: subscription.$organization.id, on: req)
+            organizationID: subscription.organizationID, on: req)
 
         let limit = try req.intQuery("limit", default: 50, in: 1...200)
-        let deliveries = try await WebhookDelivery.query(on: req.db)
-            .filter(\.$subscription.$id == subscription.requireID())
-            .sort(\.$createdAt, .descending)
-            .limit(limit)
-            .all()
-        return deliveries.map(WebhookDeliveryResponse.init(from:))
+        return try await deliveries.deliveries(subscriptionID: subscription.id, limit: limit)
+            .map(WebhookDeliveryResponse.init(from:))
     }
 
     func redeliver(req: Request) async throws -> WebhookDeliveryResponse {
         let subscription = try await requireSubscription(req)
         try await OrganizationAccessService.requireAdmin(
-            organizationID: subscription.$organization.id, on: req)
+            organizationID: subscription.organizationID, on: req)
         guard subscription.isActive else {
             throw Abort(.conflict, reason: "Subscription is disabled")
         }
@@ -197,23 +231,20 @@ struct WebhookSubscriptionController: RouteCollection {
         else {
             throw Abort(.badRequest, reason: "Invalid delivery ID")
         }
-        guard
-            let delivery = try await WebhookDelivery.query(on: req.db)
-                .filter(\.$id == deliveryID)
-                .filter(\.$subscription.$id == subscription.requireID())
-                .first()
+        guard let existing = try await deliveries.delivery(id: deliveryID),
+            existing.subscriptionID == subscription.id
         else {
             throw Abort(.notFound, reason: "Delivery not found")
         }
-        guard delivery.statusValue != .pending else {
+        guard existing.status != .pending else {
             throw Abort(.conflict, reason: "Delivery is already pending")
         }
 
-        delivery.status = WebhookDeliveryStatus.pending.rawValue
-        delivery.attempts = 0
-        delivery.nextAttemptAt = Date()
-        delivery.lastError = nil
-        try await delivery.save(on: req.db)
+        guard let delivery = try await deliveries.redeliver(
+            id: deliveryID, subscriptionID: subscription.id)
+        else {
+            throw Abort(.conflict, reason: "Delivery is already pending")
+        }
         return WebhookDeliveryResponse(from: delivery)
     }
 
@@ -226,16 +257,14 @@ struct WebhookSubscriptionController: RouteCollection {
         return id
     }
 
-    private func requireSubscription(_ req: Request) async throws -> WebhookSubscription {
+    private func requireSubscription(_ req: Request) async throws -> WebhookSubscriptionSnapshot {
         let organizationID = try requireOrganizationID(req)
         guard let raw = req.parameters.get("webhookID"), let id = UUID(uuidString: raw) else {
             throw Abort(.badRequest, reason: "Invalid webhook ID")
         }
         guard
-            let subscription = try await WebhookSubscription.query(on: req.db)
-                .filter(\.$id == id)
-                .filter(\.$organization.$id == organizationID)
-                .first()
+            let subscription = try await subscriptions.subscription(
+                id: id, organizationID: organizationID)
         else {
             throw Abort(.notFound, reason: "Webhook subscription not found")
         }
@@ -275,10 +304,10 @@ struct WebhookSubscriptionController: RouteCollection {
     }
 
     private func validateProjectScope(
-        _ projectID: UUID, organizationID: UUID, on db: Database
+        _ projectID: UUID, organizationID: UUID
     ) async throws {
-        guard let project = try await Project.find(projectID, on: db),
-            try await project.getRootOrganizationId(on: db) == organizationID
+        guard let project = try await projects.project(id: projectID),
+            project.rootOrganizationID == organizationID
         else {
             throw Abort(.badRequest, reason: "Project does not belong to this organization")
         }

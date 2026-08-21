@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import StratoShared
 import Vapor
@@ -22,7 +22,7 @@ enum SnapshotArtifactMutation {
     /// quota and IAM work), so what is shared is the record and the dispatch,
     /// not the transaction.
     static func recordCapture<A: SnapshotArtifactResource>(
-        _ artifact: A, actor: MutationActor, on db: any Database
+        _ artifact: A, actor: MutationActor, on db: PostgresStoreContext
     ) async throws -> ResourceMutation.Accepted {
         let event = try await ResourceEvent.record(
             .create,
@@ -61,7 +61,7 @@ enum SnapshotArtifactMutation {
     static func delete<A: SnapshotArtifactResource>(
         _ artifact: A,
         actor: MutationActor,
-        on db: any Database,
+        on db: PostgresStoreContext,
         app: Application
     ) async throws -> ResourceMutation.Accepted {
         let artifactID = try artifact.requireID()
@@ -95,15 +95,17 @@ enum SnapshotArtifactMutation {
                 return outcome.isRemoved
             }
 
-        return try await app.resourceMutation.accept(
+        let result = try await app.resourceMutation.acceptValue(
             .delete, on: artifact, actor: actor, dispatch: strategy, on: db, app: app
-        ) { @Sendable transaction in
+        ) { @Sendable current, transaction in
             // Stamp before the mark: `stampForDeletion` reads whether the
             // artifact is already terminating, and re-stamping a second DELETE
             // would resurrect tokens their participants have already cleared.
-            try await ResourceFinalizerService.stampForDeletion(artifact, on: transaction)
-            artifact.setDesiredStatus(.absent)
+            let stamped = try await ResourceFinalizerService.stampForDeletion(
+                current, on: transaction)
+            return stamped.replacingDesiredStatus(.absent)
         }
+        return result.accepted
     }
 
     /// Accepts an export request: the placement fact "this snapshot should also
@@ -127,14 +129,15 @@ enum SnapshotArtifactMutation {
     static func requestExport(
         _ snapshot: SandboxSnapshot,
         actor: MutationActor,
-        on db: any Database,
+        on db: PostgresStoreContext,
         app: Application
     ) async throws -> ResourceMutation.Accepted {
-        try await app.resourceMutation.accept(
+        let result = try await app.resourceMutation.acceptValue(
             .snapshotExport, on: snapshot, actor: actor, dispatch: .stateSync, on: db, app: app
-        ) { @Sendable _ in
-            snapshot.exportDesired = true
+        ) { @Sendable current, _ in
+            current.replacing(exportDesired: true)
         }
+        return result.accepted
     }
 
     /// Whether `agentId` names an agent that can converge snapshot artifacts:
@@ -183,7 +186,7 @@ enum SnapshotArtifactMutation {
 /// other two families have no dependents.
 enum SnapshotDeletionGuard {
     static func blocker<A: SnapshotArtifactResource>(
-        for artifact: A, on db: any Database
+        for artifact: A, on db: PostgresStoreContext
     ) async throws -> String? {
         guard A.artifactKind == .sandboxSnapshot, let snapshotID = artifact.id else { return nil }
         guard try await SandboxController.liveForkCount(from: snapshotID, on: db) == 0 else {

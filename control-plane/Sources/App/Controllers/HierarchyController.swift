@@ -1,8 +1,13 @@
 import Foundation
+import ControlPlanePostgres
 import Vapor
-import Fluent
 
 struct HierarchyController: RouteCollection {
+    private let database: PostgresStoreContext
+
+    init(database: PostgresStoreContext) {
+        self.database = database
+    }
     func boot(routes: RoutesBuilder) throws {
         let organizations = routes.grouped("api", "organizations")
 
@@ -40,13 +45,13 @@ struct HierarchyController: RouteCollection {
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
-        guard let organization = try await Organization.find(organizationID, on: req.db) else {
+        guard let organization = try await Organization.find(organizationID, on: database) else {
             throw Abort(.notFound, reason: "Organization not found")
         }
 
         // Build the complete hierarchy — over the rows this caller may read,
         // not every row in the organization (issue #870).
-        let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: req.db)
+        let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: database)
             .readable(on: req)
         return try HierarchyTreeBuilder.buildCompleteHierarchy(organization: organization, snapshot: snapshot)
     }
@@ -63,13 +68,13 @@ struct HierarchyController: RouteCollection {
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
-        guard let organization = try await Organization.find(organizationID, on: req.db) else {
+        guard let organization = try await Organization.find(organizationID, on: database) else {
             throw Abort(.notFound, reason: "Organization not found")
         }
 
         // Every row the response reports on, in four flat queries, narrowed to
         // the ones this caller may read (issue #870).
-        let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: req.db)
+        let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: database)
             .readable(on: req)
         // A flat array, so it carries only folders decided in their own right —
         // the ancestors the tree retains for connectivity have nothing to
@@ -92,7 +97,7 @@ struct HierarchyController: RouteCollection {
             vmsByEnvironment[vm.environment, default: 0] += 1
             vmsByStatus[vm.status.rawValue, default: 0] += 1
 
-            if let projectName = projectNames[vm.$project.id] {
+            if let projectName = projectNames[vm.projectID] {
                 vmsByProject[projectName, default: 0] += 1
             }
         }
@@ -128,7 +133,7 @@ struct HierarchyController: RouteCollection {
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
-        guard let organization = try await Organization.find(organizationID, on: req.db) else {
+        guard let organization = try await Organization.find(organizationID, on: database) else {
             throw Abort(.notFound, reason: "Organization not found")
         }
 
@@ -136,14 +141,14 @@ struct HierarchyController: RouteCollection {
         // come off one load instead of re-deriving the same rows three times —
         // and off the caller's own view of it, so the totals never count rows
         // the tree above would not show them (issue #870).
-        let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: req.db)
+        let snapshot = try await HierarchySnapshot.load(organizationID: organizationID, on: database)
             .readable(on: req)
 
         // The snapshot's quotas are already the ones this caller may read
         // (`QuotaVisibility`), and compliance measures exactly what that gate
         // covers — so there is no second decision to make here.
         let quotaCompliance = try await QuotaComplianceService.complianceInfos(
-            for: snapshot.quotas, on: req.db)
+            for: snapshot.quotas, on: database)
 
         return ResourceSummaryResponse(
             organizationId: organizationID,
@@ -179,7 +184,7 @@ struct HierarchyController: RouteCollection {
                 organizationID: organizationID,
                 query: query,
                 entityType: entityType,
-                on: req.db
+                on: database
             ),
             on: req
         )
@@ -204,8 +209,9 @@ struct HierarchyController: RouteCollection {
         let entityType = req.query[String.self, at: "type"]  // Optional filter by entity type
 
         // Get all organizations the user belongs to
-        try await user.$organizations.load(on: req.db)
-        let organizationIDs = user.organizations.compactMap { $0.id }
+        let organizationIDs = try await OrganizationMembershipStore.memberships(
+            userIDs: [user.requireID()], on: database
+        ).map(\.organizationID)
 
         if organizationIDs.isEmpty {
             return HierarchySearchResponse(
@@ -221,7 +227,7 @@ struct HierarchyController: RouteCollection {
                 organizationIDs: organizationIDs,
                 query: query,
                 entityType: entityType,
-                on: req.db
+                on: database
             ),
             on: req
         )
@@ -253,7 +259,7 @@ struct HierarchyController: RouteCollection {
             entityType: entityType,
             entityID: entityID,
             organizationID: organizationID,
-            on: req.db
+            on: database
         )
         // Names, decided per component — the same filter the tree and the search
         // results next door apply (issue #870).
@@ -274,7 +280,7 @@ struct HierarchyController: RouteCollection {
         // decision-marking admin gate, not a bypass.
         _ = try await req.requireSystemAdmin()
 
-        let issues = try await HierarchyMaintenanceService.findHierarchyIssues(on: req.db)
+        let issues = try await HierarchyMaintenanceService.findHierarchyIssues(on: database)
 
         return HierarchyValidationResponse(
             isValid: issues.isEmpty,
@@ -297,7 +303,7 @@ struct HierarchyController: RouteCollection {
 
         return try await HierarchyMaintenanceService.performHierarchyRepair(
             repairRequest: repairRequest,
-            on: req.db
+            on: database
         )
     }
 }

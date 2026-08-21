@@ -1,5 +1,4 @@
-import Fluent
-import SQLKit
+import ControlPlanePostgres
 import StratoShared
 import Vapor
 
@@ -131,33 +130,30 @@ struct ResourceConditions: Content, Equatable {
 /// (STR-142). Implemented by `VM` and `Sandbox`, whose observed-state entries
 /// carry identical `convergencePhase` / `lastError` / `failedGeneration`
 /// fields, so `ObservedStateApplier` records both through one path.
-protocol ConvergenceObservable: AnyObject {
-    var convergencePhase: String? { get set }
-    var lastError: String? { get set }
-    var failedGeneration: Int64? { get set }
+protocol ConvergenceObservable: Sendable {
+    var convergencePhase: String? { get }
+    var lastError: String? { get }
+    var failedGeneration: Int64? { get }
+
+    func replacingConvergence(
+        phase: String?, lastError: String?, failedGeneration: Int64?
+    ) -> Self
 }
 
 extension ConvergenceObservable {
-    /// Mirrors one report's convergence progress onto the row, nils included:
-    /// the agent drops a phase when it stops working and drops the error pair
-    /// when an attempt finally succeeds, and a stale "downloading image" or a
-    /// long-fixed failure would be worse than none. Returns whether anything
-    /// changed so the steady stream of identical reports does no writes; does
-    /// not persist — call `save(on:)` afterwards.
-    func recordConvergence(
-        phase: String?,
-        lastError: String?,
-        failedGeneration: Int64?
-    ) -> Bool {
+    func recordingConvergence(
+        phase: String?, lastError: String?, failedGeneration: Int64?
+    ) -> (resource: Self, changed: Bool) {
         guard
             convergencePhase != phase
                 || self.lastError != lastError
                 || self.failedGeneration != failedGeneration
-        else { return false }
-        convergencePhase = phase
-        self.lastError = lastError
-        self.failedGeneration = failedGeneration
-        return true
+        else { return (self, false) }
+        return (
+            replacingConvergence(
+                phase: phase, lastError: lastError, failedGeneration: failedGeneration),
+            true
+        )
     }
 }
 
@@ -165,23 +161,22 @@ extension ConvergenceObservable {
 /// internal sustained-divergence claim. Other resource families retain the
 /// common convergence fields without taking these workload-only columns.
 protocol TimestampedConvergenceObservable: ConvergenceObservable {
-    var lastErrorAt: Date? { get set }
-    var divergenceDetectedAt: Date? { get set }
+    var lastErrorAt: Date? { get }
+    var divergenceDetectedAt: Date? { get }
+
+    func replacingTimestampedConvergence(
+        phase: String?, lastError: String?, failedGeneration: Int64?, lastErrorAt: Date?
+    ) -> Self
 }
 
 extension TimestampedConvergenceObservable {
-    /// Mirrors convergence progress and timestamps a newly observed
-    /// error/generation pair. Repeated heartbeats keep the original timestamp.
-    func recordTimestampedConvergence(
+    func recordingTimestampedConvergence(
         phase: String?,
         lastError: String?,
         failedGeneration: Int64?,
         at now: Date = Date()
-    ) -> Bool {
+    ) -> (resource: Self, changed: Bool) {
         let errorPairChanged = self.lastError != lastError || self.failedGeneration != failedGeneration
-        var changed = recordConvergence(
-            phase: phase, lastError: lastError, failedGeneration: failedGeneration)
-
         let nextErrorAt: Date?
         if lastError == nil || failedGeneration == nil {
             nextErrorAt = nil
@@ -190,17 +185,73 @@ extension TimestampedConvergenceObservable {
         } else {
             nextErrorAt = lastErrorAt
         }
-        if lastErrorAt != nextErrorAt {
-            lastErrorAt = nextErrorAt
-            changed = true
-        }
-        return changed
+        let changed = convergencePhase != phase
+            || self.lastError != lastError
+            || self.failedGeneration != failedGeneration
+            || lastErrorAt != nextErrorAt
+        guard changed else { return (self, false) }
+        return (
+            replacingTimestampedConvergence(
+                phase: phase,
+                lastError: lastError,
+                failedGeneration: failedGeneration,
+                lastErrorAt: nextErrorAt),
+            true
+        )
     }
 }
 
-extension VM: TimestampedConvergenceObservable {}
-extension Sandbox: TimestampedConvergenceObservable {}
-extension Volume: ConvergenceObservable {}
+extension VM: TimestampedConvergenceObservable {
+    func replacingConvergence(
+        phase: String?, lastError: String?, failedGeneration: Int64?
+    ) -> Self {
+        var copy = self
+        copy.convergencePhase = phase
+        copy.lastError = lastError
+        copy.failedGeneration = failedGeneration
+        return copy
+    }
+
+    func replacingTimestampedConvergence(
+        phase: String?, lastError: String?, failedGeneration: Int64?, lastErrorAt: Date?
+    ) -> Self {
+        var copy = replacingConvergence(
+            phase: phase, lastError: lastError, failedGeneration: failedGeneration)
+        copy.lastErrorAt = lastErrorAt
+        return copy
+    }
+}
+extension Sandbox: TimestampedConvergenceObservable {
+    func replacingConvergence(
+        phase: String?, lastError: String?, failedGeneration: Int64?
+    ) -> Self {
+        var copy = self
+        copy.convergencePhase = phase
+        copy.lastError = lastError
+        copy.failedGeneration = failedGeneration
+        return copy
+    }
+
+    func replacingTimestampedConvergence(
+        phase: String?, lastError: String?, failedGeneration: Int64?, lastErrorAt: Date?
+    ) -> Self {
+        var copy = replacingConvergence(
+            phase: phase, lastError: lastError, failedGeneration: failedGeneration)
+        copy.lastErrorAt = lastErrorAt
+        return copy
+    }
+}
+extension Volume: ConvergenceObservable {
+    var lastError: String? { errorMessage }
+
+    func replacingConvergence(
+        phase: String?, lastError: String?, failedGeneration: Int64?
+    ) -> Self {
+        replacing(
+            convergencePhase: .some(phase), errorMessage: .some(lastError),
+            failedGeneration: .some(failedGeneration))
+    }
+}
 
 /// A resource whose `conditions` block and `isConverged` predicate are one
 /// derivation over one set of columns.
@@ -262,27 +313,41 @@ protocol AgentPlacedResource {
     /// Every agent whose desired-state sync carries this resource. Most
     /// resources have one placement; a volume derives the set from its active
     /// replica rows.
-    func placementAgentIDs(on db: any Database) async throws -> [String]
+    func placementAgentIDs(on db: PostgresStoreContext) async throws -> [String]
 }
 
-protocol ConvergingResource: Model, ConvergenceDerived, AgentPlacedResource, Sendable
-where IDValue == UUID {
+protocol PersistentResourceRecord: Sendable {
+    static var schema: String { get }
+    var id: UUID? { get }
+
+    func requireID() throws -> UUID
+    func persist(on db: PostgresStoreContext) async throws
+    func remove(on db: PostgresStoreContext) async throws
+    static func load(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self?
+}
+
+protocol ConvergingResource:
+    PersistentResourceRecord, ConvergenceDerived, AgentPlacedResource
+{
     static var operationResourceKind: OperationResourceKind { get }
 
-    /// Writable only so the shared SQL generation writer can copy the value
-    /// returned by PostgreSQL back onto the model before its guarded save.
-    var generation: Int64 { get set }
+    var generation: Int64 { get }
 
     var name: String { get }
     var projectID: UUID { get }
 
-    var convergenceDeadline: Date? { get set }
+    var convergenceDeadline: Date? { get }
+
+    func replacingGeneration(_ generation: Int64) -> Self
+    func replacingConvergenceDeadline(_ deadline: Date?) -> Self
 
     /// Resolves the in-flight state a failed mutation left behind. Returns
     /// whether desired state changed and therefore needs a new generation;
     /// observed-status realignment does not count. Does not persist.
     @discardableResult
-    func resolveForStuckOperation(mutation: VMOperationKind, telemetryReason: String) -> Bool
+    func resolvingForStuckOperation(
+        mutation: VMOperationKind, telemetryReason: String
+    ) -> (resource: Self, desiredStateChanged: Bool)
 
     /// Rows whose convergence deadline has passed — the stuck-convergence
     /// sweep's whole query. A protocol requirement rather than a generic
@@ -290,7 +355,7 @@ where IDValue == UUID {
     /// (`\.$convergenceDeadline`), which a protocol cannot name. Rows with no
     /// deadline are excluded by SQL's `NULL` comparison, which is the wanted
     /// behaviour: nothing is outstanding on them.
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [Self]
+    static func overdueForConvergence(at now: Date, on db: PostgresStoreContext) async throws -> [Self]
 
     /// Copies the columns the *reconciliation* loop owns — everything the
     /// observed-state applier, the scheduler's placement, the finalizer
@@ -310,7 +375,7 @@ where IDValue == UUID {
     /// balloon stats, exit code) is re-reported on every agent poll and heals
     /// itself within seconds, so it is left out rather than growing this list
     /// with fields whose staleness has no lasting consequence.
-    func adoptReconciliationState(from committed: Self)
+    func adoptingReconciliationState(from committed: Self) -> Self
 }
 
 enum ConvergenceTimeoutClaimOutcome: Equatable, Sendable {
@@ -321,62 +386,36 @@ enum ConvergenceTimeoutClaimOutcome: Equatable, Sendable {
 }
 
 extension ConvergingResource {
-    @discardableResult
-    func advanceDesiredStateGeneration(
-        expectedGeneration: Int64? = nil, on db: any Database
-    ) async throws -> DesiredStateGenerationWriter.Outcome {
+    func advancingDesiredStateGeneration(
+        expectedGeneration: Int64? = nil, on db: PostgresStoreContext
+    ) async throws -> (resource: Self, outcome: DesiredStateGenerationWriter.Outcome) {
         let outcome = try await DesiredStateGenerationWriter.advance(
             schema: Self.schema,
             id: try requireID(),
             expectedGeneration: expectedGeneration,
             on: db)
-        if case .applied(let generation) = outcome {
-            self.generation = generation
-        }
-        return outcome
+        guard case .applied(let generation) = outcome else { return (self, outcome) }
+        return (replacingGeneration(generation), outcome)
     }
 
-    /// Locks this resource's row for the rest of the caller's transaction and
-    /// refreshes the reconciliation-owned columns from what is committed.
-    ///
-    /// The lock is what serializes concurrent API mutations on one resource,
-    /// now that the "operation already pending" `409` is gone (STR-147): each
-    /// one's generation bump lands on top of the last, so the loser's desired
-    /// state is genuinely applied rather than silently overwritten by a stale
-    /// snapshot — which would otherwise have the façade report a dropped
-    /// mutation as succeeded. Returns false when the row is gone.
-    func lockAndRefresh(on db: any Database) async throws -> Bool {
-        guard let sql = db as? any SQLDatabase else {
+    func lockingAndRefreshing(on db: PostgresStoreContext) async throws -> Self? {
+        guard let sql = db as? PostgresStoreContext else {
             throw ConvergenceWriteError.unsupportedDatabase
         }
         let id = try requireID()
         let locked = try await sql.raw(
             "SELECT id FROM \(ident: Self.schema) WHERE id = \(bind: id) FOR UPDATE"
         ).all(decoding: ClaimedConvergenceRow.self)
-        guard !locked.isEmpty else { return false }
-
-        // Read *after* the lock so this sees whatever the writer we waited on
-        // committed, not the snapshot our caller opened with.
-        guard let committed = try await Self.find(id, on: db) else { return false }
-        adoptReconciliationState(from: committed)
-        return true
+        guard !locked.isEmpty, let committed = try await Self.load(id, on: db) else {
+            return nil
+        }
+        return adoptingReconciliationState(from: committed)
     }
 
-    /// Claims the right to declare this resource's outstanding convergence
-    /// timed out, by clearing the deadline in a conditional `UPDATE`.
-    ///
-    /// This is what makes the stuck-convergence sweep safe to run on every
-    /// replica *and* exactly-once per deadline (STR-147). Marking degraded is
-    /// idempotent and convergent on its own — the state two replicas write is
-    /// the same — but the completion webhook is not, so the claim decides which
-    /// pass gets to emit it. `AND convergence_deadline IS NOT NULL` is
-    /// evaluated by PostgreSQL under the row lock, so of two racing sweeps
-    /// exactly one updates a row — the compare-and-swap the retired
-    /// stuck-operation sweep needed a cluster lock to approximate.
-    func claimConvergenceTimeout(on db: any Database) async throws
+    func claimingConvergenceTimeout(on db: PostgresStoreContext) async throws
         -> ConvergenceTimeoutClaimOutcome
     {
-        guard let sql = db as? any SQLDatabase else {
+        guard let sql = db as? PostgresStoreContext else {
             throw ConvergenceWriteError.unsupportedDatabase
         }
         let claimed = try await sql.raw(
@@ -389,10 +428,7 @@ extension ConvergingResource {
             RETURNING id
             """
         ).all(decoding: ClaimedConvergenceRow.self)
-        if !claimed.isEmpty {
-            convergenceDeadline = nil
-            return .claimed
-        }
+        if !claimed.isEmpty { return .claimed }
 
         guard
             let current = try await sql.raw(
@@ -403,6 +439,14 @@ extension ConvergingResource {
             return .superseded(actualGeneration: current.generation)
         }
         return .alreadyClaimed
+    }
+
+    func extendingConvergenceDeadline(
+        by budget: TimeInterval, from now: Date = Date()
+    ) -> Self {
+        let candidate = now.addingTimeInterval(budget)
+        if let existing = convergenceDeadline, existing > candidate { return self }
+        return replacingConvergenceDeadline(candidate)
     }
 }
 
@@ -416,142 +460,93 @@ private struct CurrentConvergenceGeneration: Decodable {
     let generation: Int64
 }
 
-extension ConvergingResource {
-    /// Pushes the convergence deadline out to cover a mutation with `budget`
-    /// seconds to converge, never pulling it in.
-    ///
-    /// The `max` is the whole point (STR-147). With the "operation already
-    /// pending" mutex dropped, mutations of different kinds overlap: a reboot
-    /// issued against a VM whose 600s create is still downloading its image
-    /// would, under a plain assignment, hand the create a 120s runway and flip
-    /// a perfectly healthy resource to degraded. Extending only forward means
-    /// the outstanding work is always judged against the most generous budget
-    /// anything asked for.
-    func extendConvergenceDeadline(by budget: TimeInterval, from now: Date = Date()) {
-        let candidate = now.addingTimeInterval(budget)
-        if let existing = convergenceDeadline, existing > candidate { return }
-        convergenceDeadline = candidate
-    }
-}
-
 extension VM: ConvergingResource {
     static var operationResourceKind: OperationResourceKind { .virtualMachine }
-    var projectID: UUID { $project.id }
-    func placementAgentIDs(on db: any Database) async throws -> [String] {
+    func placementAgentIDs(on db: PostgresStoreContext) async throws -> [String] {
         hypervisorId.map { [$0] } ?? []
     }
 
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [VM] {
-        try await VM.query(on: db).filter(\.$convergenceDeadline <= now).all()
+    static func overdueForConvergence(at now: Date, on db: PostgresStoreContext) async throws -> [VM] {
+        try await LegacyVMStore.vms(overdueAt: now, on: db)
     }
 
-    func adoptReconciliationState(from committed: VM) {
-        status = committed.status
-        statusChangedAt = committed.statusChangedAt
-        desiredStatus = committed.desiredStatus
-        generation = committed.generation
-        observedGeneration = committed.observedGeneration
-        convergencePhase = committed.convergencePhase
-        lastError = committed.lastError
-        failedGeneration = committed.failedGeneration
-        lastErrorAt = committed.lastErrorAt
-        divergenceDetectedAt = committed.divergenceDetectedAt
-        convergenceDeadline = committed.convergenceDeadline
-        hypervisorId = committed.hypervisorId
-        finalizers = committed.finalizers
-        // The edge nonces (STR-151) are refreshed for `generation`'s reason,
-        // and losing one is worse: a stale snapshot written back over a racing
-        // reboot would not merely drop a generation bump, it would drop the
-        // *edge*, and no later sync re-derives it.
-        rebootGeneration = committed.rebootGeneration
-        restoreGeneration = committed.restoreGeneration
-        restoreSnapshotID = committed.restoreSnapshotID
+    func adoptingReconciliationState(from committed: VM) -> Self { committed }
+
+    func replacingGeneration(_ generation: Int64) -> Self {
+        var copy = self
+        copy.generation = generation
+        return copy
+    }
+
+    func replacingConvergenceDeadline(_ deadline: Date?) -> Self {
+        var copy = self
+        copy.convergenceDeadline = deadline
+        return copy
+    }
+
+    func resolvingForStuckOperation(
+        mutation: VMOperationKind, telemetryReason: String
+    ) -> (resource: Self, desiredStateChanged: Bool) {
+        var copy = self
+        let changed = copy.resolveForStuckOperation(
+            mutation: mutation, telemetryReason: telemetryReason)
+        return (copy, changed)
     }
 }
 
 extension Sandbox: ConvergingResource {
     static var operationResourceKind: OperationResourceKind { .sandbox }
-    var projectID: UUID { $project.id }
-    func placementAgentIDs(on db: any Database) async throws -> [String] {
+    func placementAgentIDs(on db: PostgresStoreContext) async throws -> [String] {
         hypervisorId.map { [$0] } ?? []
     }
 
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [Sandbox] {
-        try await Sandbox.query(on: db).filter(\.$convergenceDeadline <= now).all()
+    static func overdueForConvergence(at now: Date, on db: PostgresStoreContext) async throws -> [Sandbox] {
+        try await LegacySandboxStore.sandboxes(overdueAt: now, on: db)
     }
 
-    func adoptReconciliationState(from committed: Sandbox) {
-        status = committed.status
-        statusChangedAt = committed.statusChangedAt
-        desiredStatus = committed.desiredStatus
-        generation = committed.generation
-        observedGeneration = committed.observedGeneration
-        convergencePhase = committed.convergencePhase
-        lastError = committed.lastError
-        failedGeneration = committed.failedGeneration
-        lastErrorAt = committed.lastErrorAt
-        divergenceDetectedAt = committed.divergenceDetectedAt
-        convergenceDeadline = committed.convergenceDeadline
-        hypervisorId = committed.hypervisorId
-        finalizers = committed.finalizers
-        restoreGeneration = committed.restoreGeneration
-        restoreSnapshotID = committed.restoreSnapshotID
+    func adoptingReconciliationState(from committed: Sandbox) -> Self { committed }
+
+    func replacingGeneration(_ generation: Int64) -> Self {
+        var copy = self
+        copy.generation = generation
+        return copy
+    }
+
+    func replacingConvergenceDeadline(_ deadline: Date?) -> Self {
+        var copy = self
+        copy.convergenceDeadline = deadline
+        return copy
+    }
+
+    func resolvingForStuckOperation(
+        mutation: VMOperationKind, telemetryReason: String
+    ) -> (resource: Self, desiredStateChanged: Bool) {
+        var copy = self
+        let changed = copy.resolveForStuckOperation(
+            mutation: mutation, telemetryReason: telemetryReason)
+        return (copy, changed)
     }
 }
 
 extension Volume: ConvergingResource {
     static var operationResourceKind: OperationResourceKind { .volume }
-    var projectID: UUID { $project.id }
-    func placementAgentIDs(on db: any Database) async throws -> [String] {
+    func placementAgentIDs(on db: PostgresStoreContext) async throws -> [String] {
         if desiredStatus == .absent {
             return try await VolumeService.agentIDsWithPhysicalReplicas(of: self, on: db)
         }
         return try await VolumeService.agentIDs(holding: self, on: db)
     }
 
-    /// A volume's convergence progress and its most recent failure share one
-    /// column pair with its user-facing error, so `ConvergenceObservable`'s
-    /// `lastError` is `errorMessage` under another name.
-    var lastError: String? {
-        get { errorMessage }
-        set { errorMessage = newValue }
+    static func overdueForConvergence(at now: Date, on db: PostgresStoreContext) async throws -> [Volume] {
+        try await LegacyVolumeStore.volumes(overdueAt: now, on: db)
     }
 
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [Volume] {
-        try await Volume.query(on: db).filter(\.$convergenceDeadline <= now).all()
-    }
+    func adoptingReconciliationState(from committed: Volume) -> Self { committed }
 
-    func adoptReconciliationState(from committed: Volume) {
-        status = committed.status
-        desiredStatus = committed.desiredStatus
-        generation = committed.generation
-        observedGeneration = committed.observedGeneration
-        convergencePhase = committed.convergencePhase
-        errorMessage = committed.errorMessage
-        failedGeneration = committed.failedGeneration
-        convergenceDeadline = committed.convergenceDeadline
-        observedSizeBytes = committed.observedSizeBytes
-        finalizers = committed.finalizers
-        // The desired size, for the same read-modify-write reason as the
-        // attachment below: `accept` saves the whole model, so an attach or a
-        // throttle accepted while a resize commits would write its pre-request
-        // snapshot back over the new size. Adopting it is also what lets
-        // `resizeVolume` compute its quota delta (STR-181) against the row as it
-        // is under the lock rather than as the request found it.
-        size = committed.size
-        // The desired attachment, which is not reconciliation-owned but is
-        // read-modify-written by every mutation all the same: `accept` saves
-        // the whole model, so a resize accepted while an attach commits would
-        // write its pre-request snapshot back over the new attachment. Adopting
-        // it is also what makes `canAttach` answer against the row as it is
-        // under the lock rather than as the request found it — without which
-        // two attaches of one volume to two VMs both pass the guard and the
-        // second silently moves the attachment (STR-129).
-        $vm.id = committed.$vm.id
-        deviceName = committed.deviceName
-        bootOrder = committed.bootOrder
-        readonly = committed.readonly
-        attachedAgentId = committed.attachedAgentId
+    func replacingGeneration(_ generation: Int64) -> Self { replacing(generation: generation) }
+
+    func replacingConvergenceDeadline(_ deadline: Date?) -> Self {
+        replacing(convergenceDeadline: .some(deadline))
     }
 
     /// Resolves the in-flight state a failed mutation left on this volume.
@@ -564,15 +559,18 @@ extension Volume: ConvergingResource {
     /// re-attempt under the agent's own attempt cap. A stuck delete keeps its
     /// `.absent`, for the same reason a VM's does — reverting it would
     /// resurrect a volume the user deleted.
-    @discardableResult
-    func resolveForStuckOperation(mutation: VMOperationKind, telemetryReason: String) -> Bool {
-        guard desiredStatus != .absent else { return false }
-        guard mutation == .attach, $vm.id != nil else { return false }
-        $vm.id = nil
-        deviceName = nil
-        bootOrder = nil
-        readonly = false
-        return true
+    func resolvingForStuckOperation(
+        mutation: VMOperationKind, telemetryReason: String
+    ) -> (resource: Self, desiredStateChanged: Bool) {
+        guard desiredStatus != .absent, mutation == .attach, vmID != nil else {
+            return (self, false)
+        }
+        return (
+            replacing(
+                attachedAgentId: .some(nil), vmID: .some(nil),
+                deviceName: .some(nil), bootOrder: .some(nil), readonly: false),
+            true
+        )
     }
 }
 

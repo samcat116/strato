@@ -1,5 +1,5 @@
 import AppTestSupport
-import Fluent
+import ControlPlanePostgres
 import Testing
 import Vapor
 import VaporTesting
@@ -31,13 +31,12 @@ final class OrganizationMemberRoleTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Role Org")
             let admin = try await builder.createUser(
                 username: "roleadmin", email: "roleadmin@example.com", displayName: "Role Admin")
             try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
             let target = try await builder.createUser(
                 username: "roletarget", email: "roletarget@example.com", displayName: "Role Target")
             try await test(app, org, admin, token, target)
@@ -49,33 +48,30 @@ final class OrganizationMemberRoleTests {
     }
 
     private func makeRole(
-        name: String, organizationID: UUID, actions: [String] = ["vm:read"], on db: Database
-    ) async throws -> IAMRoleDefinition {
+        name: String, organizationID: UUID, actions: [String] = ["vm:read"], on db: PostgresStoreContext
+    ) async throws -> LegacyIAMRoleRecord {
         let id = UUID()
-        let role = IAMRoleDefinition(
-            id: id, name: name, ownerType: .organization, ownerID: organizationID,
+        return try await RoleStore.insertLegacy(IAMRoleSnapshot(
+            id: id, name: name, description: nil,
+            ownerType: IAMRoleOwnerType.organization.rawValue, ownerID: organizationID,
             cedarText: RoleDescriptor.canonicalPermitText(id: id, actions: actions),
-            actions: actions, managed: false)
-        try await role.save(on: db)
-        return role
+            actions: actions, managed: false, createdBy: nil), on: db)
     }
 
-    private func membership(_ userID: UUID, _ orgID: UUID, on db: Database) async throws
-        -> UserOrganization?
+    private func membership(_ userID: UUID, _ orgID: UUID, on db: PostgresStoreContext) async throws
+        -> LegacyOrganizationMembershipRecord?
     {
-        try await UserOrganization.query(on: db)
-            .filter(\.$user.$id == userID)
-            .filter(\.$organization.$id == orgID)
-            .first()
+        try await OrganizationMembershipStore.membership(
+            userID: userID, organizationID: orgID, on: db)
     }
 
-    private func orgBindings(_ userID: UUID, _ orgID: UUID, on db: Database) async throws -> [UUID] {
-        try await RoleBinding.query(on: db)
-            .filter(\.$principalType == IAMPrincipalType.user.rawValue)
-            .filter(\.$principalID == userID)
-            .filter(\.$nodeType == IAMNodeType.organization.rawValue)
-            .filter(\.$nodeID == orgID)
-            .all()
+    private func orgBindings(_ userID: UUID, _ orgID: UUID, on db: PostgresStoreContext) async throws -> [UUID] {
+        try await LegacyRoleBindingStore.bindings(
+            principalType: IAMPrincipalType.user.rawValue,
+            principalID: userID,
+            nodeType: IAMNodeType.organization.rawValue,
+            nodeID: orgID,
+            on: db)
             .map(\.roleID)
     }
 
@@ -88,8 +84,8 @@ final class OrganizationMemberRoleTests {
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
-            #expect(try await membership(target.id!, org.id!, on: app.db)?.roleID == nil)
-            #expect(try await orgBindings(target.id!, org.id!, on: app.db).isEmpty)
+            #expect(try await membership(target.id!, org.id!, on: app.testPostgres)?.roleID == nil)
+            #expect(try await orgBindings(target.id!, org.id!, on: app.testPostgres).isEmpty)
         }
     }
 
@@ -102,7 +98,7 @@ final class OrganizationMemberRoleTests {
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
-            #expect(try await membership(target.id!, org.id!, on: app.db) == nil)
+            #expect(try await membership(target.id!, org.id!, on: app.testPostgres) == nil)
         }
     }
 
@@ -115,38 +111,38 @@ final class OrganizationMemberRoleTests {
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
-            #expect(try await membership(target.id!, org.id!, on: app.db)?.roleID == IAMRole.admin.seededID)
-            #expect(try await orgBindings(target.id!, org.id!, on: app.db) == [IAMRole.admin.seededID])
+            #expect(try await membership(target.id!, org.id!, on: app.testPostgres)?.roleID == IAMRole.admin.seededID)
+            #expect(try await orgBindings(target.id!, org.id!, on: app.testPostgres) == [IAMRole.admin.seededID])
         }
     }
 
     @Test("An org-owned role UUID is stored and bound")
     func customRoleUUID() async throws {
         try await withApp { app, org, _, token, target in
-            let role = try await makeRole(name: "auditor", organizationID: org.id!, on: app.db)
+            let role = try await makeRole(name: "auditor", organizationID: org.id!, on: app.testPostgres)
             try await app.test(.POST, "/api/organizations/\(org.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(AddRequest(userEmail: target.email, role: role.id!))
+                try req.content.encode(AddRequest(userEmail: target.email, role: role.id))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
-            #expect(try await membership(target.id!, org.id!, on: app.db)?.roleID == role.id!)
-            #expect(try await orgBindings(target.id!, org.id!, on: app.db) == [role.id!])
+            #expect(try await membership(target.id!, org.id!, on: app.testPostgres)?.roleID == role.id)
+            #expect(try await orgBindings(target.id!, org.id!, on: app.testPostgres) == [role.id])
         }
     }
 
     @Test("A role owned by another organization is rejected")
     func foreignRoleUUID() async throws {
         try await withApp { app, org, _, token, target in
-            let otherOrg = try await TestDataBuilder(db: app.db).createOrganization(name: "Foreign Org")
-            let role = try await makeRole(name: "foreign", organizationID: otherOrg.id!, on: app.db)
+            let otherOrg = try await TestDataBuilder(db: app.testPostgres).createOrganization(name: "Foreign Org")
+            let role = try await makeRole(name: "foreign", organizationID: otherOrg.id!, on: app.testPostgres)
             try await app.test(.POST, "/api/organizations/\(org.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(AddRequest(userEmail: target.email, role: role.id!))
+                try req.content.encode(AddRequest(userEmail: target.email, role: role.id))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
-            #expect(try await membership(target.id!, org.id!, on: app.db) == nil)
+            #expect(try await membership(target.id!, org.id!, on: app.testPostgres) == nil)
         }
     }
 
@@ -187,7 +183,7 @@ final class OrganizationMemberRoleTests {
     @Test("Updating a member replaces the authoritative binding and role metadata")
     func updateRole() async throws {
         try await withApp { app, org, _, token, target in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             try await builder.addUserToOrganization(user: target, organization: org, role: "admin")
 
             try await app.test(.PATCH, "/api/organizations/\(org.id!)/members/\(target.id!)") { req in
@@ -197,15 +193,15 @@ final class OrganizationMemberRoleTests {
                 #expect(res.status == .ok)
             }
 
-            #expect(try await membership(target.id!, org.id!, on: app.db)?.roleID == IAMRole.editor.seededID)
-            #expect(try await orgBindings(target.id!, org.id!, on: app.db) == [IAMRole.editor.seededID])
+            #expect(try await membership(target.id!, org.id!, on: app.testPostgres)?.roleID == IAMRole.editor.seededID)
+            #expect(try await orgBindings(target.id!, org.id!, on: app.testPostgres) == [IAMRole.editor.seededID])
         }
     }
 
     @Test("Concurrent admin demotions leave one administrator")
     func concurrentAdminDemotions() async throws {
         try await withApp { app, org, admin, token, target in
-            try await TestDataBuilder(db: app.db).addUserToOrganization(
+            try await TestDataBuilder(db: app.testPostgres).addUserToOrganization(
                 user: target, organization: org, role: "admin")
 
             let organizationID = try org.requireID()
@@ -233,19 +229,18 @@ final class OrganizationMemberRoleTests {
             #expect(statuses.filter { $0 == .ok }.count == 1)
             #expect(statuses.filter { $0 == .badRequest }.count == 1)
 
-            let adminBindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
-                .filter(\.$roleID == IAMRole.admin.seededID)
-                .filter(\.$nodeType == IAMNodeType.organization.rawValue)
-                .filter(\.$nodeID == organizationID)
-                .active()
-                .count()
+            let adminBindings = try await LegacyRoleBindingStore.bindings(
+                principalType: IAMPrincipalType.user.rawValue,
+                roleID: IAMRole.admin.seededID,
+                nodeType: IAMNodeType.organization.rawValue,
+                nodeID: organizationID,
+                activeAt: Date(),
+                on: app.testPostgres).count
             #expect(adminBindings == 1)
 
-            let adminMemberships = try await UserOrganization.query(on: app.db)
-                .filter(\.$organization.$id == organizationID)
-                .filter(\.$roleID == IAMRole.admin.seededID)
-                .count()
+            let adminMemberships = try await OrganizationMembershipStore.memberships(
+                organizationID: organizationID, on: app.testPostgres
+            ).filter { $0.roleID == IAMRole.admin.seededID }.count
             #expect(adminMemberships == 1)
         }
     }

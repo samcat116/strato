@@ -1,4 +1,5 @@
-import Fluent
+import ControlPlanePostgres
+import Foundation
 import Vapor
 
 /// Operational lifecycle of a `Site`. String-backed so it stores as a plain
@@ -29,27 +30,24 @@ enum SiteStatus: String, Codable, CaseIterable, Sendable {
 ///
 /// Agents without a site keep the legacy single-node model: a private local
 /// NB they are always authoritative over.
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class Site: Model, Content, @unchecked Sendable {
+/// Immutable application snapshot of one site.
+///
+/// Native PostgresNIO persistence owns writes and HTTP reads. The explicit
+/// legacy store below this layer exists only while the remaining Fluent
+/// aggregates are migrated and need a site lookup on their pinned transaction.
+package struct Site: Content, Equatable, Sendable {
     static let schema = "sites"
 
-    @ID(key: .id)
-    var id: UUID?
-
-    @Field(key: "name")
-    var name: String
-
-    @OptionalField(key: "description")
-    var description: String?
+    let id: UUID?
+    let name: String
+    let description: String?
 
     /// Operational lifecycle of the availability zone. Advisory today (nothing
     /// in scheduling reads it yet), but it gives operators a first-class way to
     /// quiesce a site — `draining`/`maintenance` mark "don't grow this zone"
     /// without deleting it, and `decommissioned` records a retired zone that is
     /// kept for history. Defaults to `active`.
-    @Enum(key: "status")
-    var status: SiteStatus
+    let status: SiteStatus
 
     // MARK: Location (advisory)
     //
@@ -59,31 +57,26 @@ final class Site: Model, Content, @unchecked Sendable {
     // infrastructure — an operator can leave it all unset.
 
     /// Decimal degrees, WGS84, range −90…90. Paired with `longitude`.
-    @OptionalField(key: "latitude")
-    var latitude: Double?
+    let latitude: Double?
 
     /// Decimal degrees, WGS84, range −180…180. Paired with `latitude`.
-    @OptionalField(key: "longitude")
-    var longitude: Double?
+    let longitude: Double?
 
     /// Human-readable location ("Equinix DC1, Ashburn VA") — lat/long alone is
     /// unreadable in a UI, and many logical zones have a place name but no
     /// meaningful coordinates.
-    @OptionalField(key: "location_label")
-    var locationLabel: String?
+    let locationLabel: String?
 
     /// Short operator-defined region/zone slug (e.g. `us-east-1`) for compact
     /// display and future affinity rules. Free-form; not validated against any
     /// canonical region list.
-    @OptionalField(key: "region_code")
-    var regionCode: String?
+    let regionCode: String?
 
     /// Free-form operator labels — the escape hatch that keeps the next
     /// "can we add field X to sites" from needing a migration. Intended for
     /// grouping, cost attribution, and future scheduler affinity/anti-affinity
     /// rules. Empty map (never null) when unset.
-    @Field(key: "labels")
-    var labels: [String: String]
+    let labels: [String: String]
 
     /// The agent that authors the site's shared OVN NB topology. Claimed by the
     /// site's first OVN-capable member (`SiteNetworkAuthority.designateIfUnset`)
@@ -93,26 +86,16 @@ final class Site: Model, Content, @unchecked Sendable {
     /// their ports bind, but switches/routers won't be realized, which is why
     /// the preconditions built on `SiteNetworkAuthority.refusal` reject new
     /// topology-dependent work rather than accept a 202 that can't complete.
-    @OptionalParent(key: "network_controller_agent_id")
-    var networkControllerAgent: Agent?
+    let networkControllerAgentID: UUID?
 
     /// Owning organization (exactly one of organization / organizational
     /// unit). All agents in a site must share the site's root organization —
     /// a site is one OVN deployment, and dedicated capacity must not mix
     /// tenants on a shared SDN.
-    @OptionalParent(key: "organization_id")
-    var organization: Organization?
-
-    @OptionalParent(key: "organizational_unit_id")
-    var organizationalUnit: OrganizationalUnit?
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
+    let organizationID: UUID?
+    let organizationalUnitID: UUID?
+    let createdAt: Date?
+    let updatedAt: Date?
 
     init(
         id: UUID? = nil,
@@ -125,9 +108,11 @@ final class Site: Model, Content, @unchecked Sendable {
         regionCode: String? = nil,
         labels: [String: String] = [:],
         networkControllerAgentID: UUID? = nil,
-        organizationScope: OrganizationScope? = nil
+        organizationScope: OrganizationScope? = nil,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
     ) {
-        self.id = id
+        self.id = id ?? UUID()
         self.name = name
         self.description = description
         self.status = status
@@ -136,27 +121,59 @@ final class Site: Model, Content, @unchecked Sendable {
         self.locationLabel = locationLabel
         self.regionCode = regionCode
         self.labels = labels
-        self.$networkControllerAgent.id = networkControllerAgentID
-        self.$organization.id = organizationScope?.organizationID
-        self.$organizationalUnit.id = organizationScope?.organizationalUnitID
+        self.networkControllerAgentID = networkControllerAgentID
+        self.organizationID = organizationScope?.organizationID
+        self.organizationalUnitID = organizationScope?.organizationalUnitID
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    init(from snapshot: SiteSnapshot) throws {
+        guard let status = SiteStatus(rawValue: snapshot.status) else {
+            throw Abort(
+                .internalServerError,
+                reason: "Site has invalid status '\(snapshot.status)'")
+        }
+        self.id = snapshot.id
+        self.name = snapshot.name
+        self.description = snapshot.description
+        self.status = status
+        self.latitude = snapshot.latitude
+        self.longitude = snapshot.longitude
+        self.locationLabel = snapshot.locationLabel
+        self.regionCode = snapshot.regionCode
+        self.labels = snapshot.labels
+        self.networkControllerAgentID = snapshot.networkControllerAgentID
+        self.organizationID = snapshot.organizationID
+        self.organizationalUnitID = snapshot.organizationalUnitID
+        self.createdAt = snapshot.createdAt
+        self.updatedAt = snapshot.updatedAt
     }
 
     /// The site's org-or-OU owner; nil only for rows that predate mandatory
     /// scoping and were never backfilled.
     var organizationScope: OrganizationScope? {
-        get {
-            if let orgID = self.$organization.id { return .organization(orgID) }
-            if let ouID = self.$organizationalUnit.id { return .organizationalUnit(ouID) }
-            return nil
-        }
-        set {
-            self.$organization.id = newValue?.organizationID
-            self.$organizationalUnit.id = newValue?.organizationalUnitID
-        }
+        if let organizationID { return .organization(organizationID) }
+        if let organizationalUnitID { return .organizationalUnit(organizationalUnitID) }
+        return nil
     }
 
-    func rootOrganizationID(on db: Database) async throws -> UUID? {
+    func rootOrganizationID(on db: PostgresStoreContext) async throws -> UUID? {
         try await organizationScope?.rootOrganizationID(on: db)
+    }
+
+    func requireID() throws -> UUID {
+        guard let id else {
+            throw Abort(.internalServerError, reason: "Site has no identifier")
+        }
+        return id
+    }
+
+    /// Transitional test-builder convenience. Production writes use
+    /// `SitesPersistence` through the native persistence root.
+    @discardableResult
+    func save(on db: PostgresStoreContext) async throws -> Self {
+        try await LegacySiteStore.insert(self, on: db)
     }
 }
 
@@ -171,21 +188,6 @@ extension Site {
         "\(orgName) Default Site"
     }
 
-    /// Creates the organization's default site. Called when an org is created
-    /// (API and bootstrap). Org-scoped and controller-less: the
-    /// operator designates a network controller once nodes are enrolled.
-    @discardableResult
-    static func createDefault(
-        forOrganization organizationID: UUID, named orgName: String, on db: Database
-    ) async throws -> Site {
-        let site = Site(
-            name: defaultName(forOrganizationNamed: orgName),
-            description: "Default availability zone for \(orgName)",
-            organizationScope: .organization(organizationID)
-        )
-        try await site.save(on: db)
-        return site
-    }
 }
 
 // MARK: - DTOs
@@ -231,11 +233,64 @@ struct SiteResponse: Content {
         self.locationLabel = site.locationLabel
         self.regionCode = site.regionCode
         self.labels = site.labels
-        self.networkControllerAgentId = site.$networkControllerAgent.id
-        self.organizationId = site.$organization.id
-        self.organizationalUnitId = site.$organizationalUnit.id
+        self.networkControllerAgentId = site.networkControllerAgentID
+        self.organizationId = site.organizationID
+        self.organizationalUnitId = site.organizationalUnitID
         self.createdAt = site.createdAt
         self.updatedAt = site.updatedAt
+    }
+
+    init(from site: SiteSnapshot, now: Date = Date()) throws {
+        guard let status = SiteStatus(rawValue: site.status) else {
+            throw Abort(.internalServerError, reason: "Site has invalid status '\(site.status)'")
+        }
+        self.id = site.id
+        self.name = site.name
+        self.description = site.description
+        self.status = status
+        self.latitude = site.latitude
+        self.longitude = site.longitude
+        self.locationLabel = site.locationLabel
+        self.regionCode = site.regionCode
+        self.labels = site.labels
+        self.networkControllerAgentId = site.networkControllerAgentID
+        self.organizationId = site.organizationID
+        self.organizationalUnitId = site.organizationalUnitID
+        self.createdAt = site.createdAt
+        self.updatedAt = site.updatedAt
+
+        guard let controller = site.controller else {
+            self.networkControllerStatus = nil
+            self.networkControllerIssue = nil
+            return
+        }
+        guard var controllerStatus = AgentStatus(rawValue: controller.status) else {
+            throw Abort(
+                .internalServerError,
+                reason: "Site network controller has invalid status '\(controller.status)'"
+            )
+        }
+        let heartbeatAge = controller.lastHeartbeat.map { now.timeIntervalSince($0) }
+        let online = heartbeatAge.map { $0 < 60 } ?? false
+        if online && controllerStatus == .offline {
+            controllerStatus = .online
+        } else if !online && controllerStatus == .online {
+            controllerStatus = .offline
+        }
+        self.networkControllerStatus = controllerStatus
+
+        if !controller.supportsInterVMNetworking {
+            self.networkControllerIssue =
+                "Network controller '\(controller.name)' re-registered without overlay (OVN) networking capability"
+        } else if let heartbeatAge, heartbeatAge > SiteNetworkAuthority.controllerOfflineGrace {
+            self.networkControllerIssue =
+                "Network controller '\(controller.name)' is offline (no heartbeat for \(SiteNetworkAuthority.compactAge(heartbeatAge)))"
+        } else if controller.lastHeartbeat == nil {
+            self.networkControllerIssue =
+                "Network controller '\(controller.name)' is offline (it has never sent a heartbeat)"
+        } else {
+            self.networkControllerIssue = nil
+        }
     }
 }
 

@@ -1,35 +1,26 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 import StratoShared
 
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class VM: Model, @unchecked Sendable {
+struct VM: Sendable {
     static let schema = "vms"
 
-    @ID(key: .id)
     var id: UUID?
 
     // Basic VM metadata
-    @Field(key: "name")
     var name: String
 
-    @Field(key: "description")
     var description: String
 
-    @Field(key: "image")
     var image: String
 
     // VM status and hypervisor tracking
-    @Enum(key: "status")
     var status: VMStatus
 
-    @OptionalField(key: "hypervisor_id")
     var hypervisorId: String?
 
     // When `status` last changed. Used by the reconciliation sweep to detect VMs
     // stuck in a transitional state past a timeout.
-    @OptionalField(key: "status_changed_at")
     var statusChangedAt: Date?
 
     // Desired/observed state split (reconciliation phase 2, issue #260).
@@ -37,13 +28,10 @@ final class VM: Model, @unchecked Sendable {
     // purely observed. `generation` bumps on every desired change and
     // `observedGeneration` records the last generation the owning agent
     // confirmed converging to.
-    @Enum(key: "desired_status")
     var desiredStatus: DesiredVMStatus
 
-    @Field(key: "generation")
     var generation: Int64
 
-    @Field(key: "observed_generation")
     var observedGeneration: Int64
 
     // Edge nonces (ADR 0001 stage 9, STR-151). Reboot and restore are the two
@@ -58,17 +46,14 @@ final class VM: Model, @unchecked Sendable {
     // it. `generation` guards ordering and is idempotent by design: an agent
     // that re-applies it does nothing. An edge is the opposite, so it needs its
     // own counter, applied once, and a durable record on the other side.
-    @Field(key: "reboot_generation")
     var rebootGeneration: Int64
 
-    @Field(key: "restore_generation")
     var restoreGeneration: Int64
 
     /// The checkpoint `restoreGeneration` names. Meaningless while that counter
     /// is zero. Not a foreign key: the checkpoint may be deleted long after the
     /// restore it drove, and a `RESTRICT` would make ordinary cleanup fail on a
     /// VM that was once restored.
-    @OptionalField(key: "restore_snapshot_id")
     var restoreSnapshotID: UUID?
 
     // Convergence progress mirrored from the agent's observed-state report
@@ -79,23 +64,18 @@ final class VM: Model, @unchecked Sendable {
     // failure and the generation that produced it, both cleared by the report
     // that follows a successful convergence. Projected as the API's
     // `conditions` block.
-    @OptionalField(key: "convergence_phase")
     var convergencePhase: String?
 
-    @OptionalField(key: "last_error")
     var lastError: String?
 
-    @OptionalField(key: "failed_generation")
     var failedGeneration: Int64?
 
     /// When the current error/generation pair was first observed. Stable while
     /// identical heartbeats repeat it, and cleared by successful convergence.
-    @OptionalField(key: "last_error_at")
     var lastErrorAt: Date?
 
     /// Internal claim for the sustained-divergence warning. Nil starts a new
     /// episode; the sweep atomically stamps it before logging.
-    @OptionalField(key: "divergence_detected_at")
     var divergenceDetectedAt: Date?
 
     /// When the stuck-convergence sweep gives up on the outstanding mutations
@@ -104,14 +84,12 @@ final class VM: Model, @unchecked Sendable {
     /// mutation stamps `max(existing, now + budget)`, so a short-budget
     /// mutation cannot shorten a long one's runway. Nil means nothing is
     /// outstanding — cleared on convergence and on failure alike.
-    @OptionalField(key: "convergence_deadline")
     var convergenceDeadline: Date?
 
     /// Outstanding cleanup participants blocking this VM's removal (ADR 0001,
     /// stage 3). Empty for a live VM; stamped when a `DELETE` marks
     /// `desiredStatus = .absent`, and drained a token at a time until the row
     /// is reaped. See `ResourceFinalizer`.
-    @Field(key: "finalizers")
     var finalizers: [String]
 
     /// The VM's DNS label (issue #770) — the leftmost label of the name it
@@ -123,7 +101,6 @@ final class VM: Model, @unchecked Sendable {
     /// pick a name a slug can't produce. Defaulted from a slugified `name` at
     /// create time. Nil for VMs that predate the column — they get no derived
     /// records until one is set.
-    @OptionalField(key: "hostname")
     var hostname: String?
 
     /// Whether the instance metadata service answers this VM (STR-185) —
@@ -147,7 +124,6 @@ final class VM: Model, @unchecked Sendable {
     /// for exactly this class of edit) and membership converges on every sync.
     /// A bump would additionally mean a hardening edit could not be applied to
     /// a VM whose convergence is already failing.
-    @Field(key: "metadata_enabled")
     var metadataEnabled: Bool
 
     /// Where this VM reads first-boot guest configuration (STR-64). The
@@ -160,23 +136,19 @@ final class VM: Model, @unchecked Sendable {
     /// default to `.iso`. The schema migration and this model's low-level
     /// initializer retain `.iso` so upgrades and fixture construction never
     /// move an existing VM implicitly.
-    @Enum(key: "metadata_source")
     var metadataSource: MetadataSource
 
     /// Secret capability used only by an IMDS-backed NoCloud `seedfrom` URL.
     /// It is stable for the VM's lifetime because the ISO is materialized once,
     /// and it is not part of any public VM response.
-    @Field(key: "metadata_seed_token")
     var metadataSeedToken: UUID
 
     // Observed guest-agent (qga) state (issue #563). Purely informational and
     // best-effort: nil until the agent's guest-info poll first sees a
     // responsive qga on this VM. `qgaAvailable` records the positive liveness
     // signal; `observedHostname` is the guest OS's own hostname.
-    @OptionalField(key: "qga_available")
     var qgaAvailable: Bool?
 
-    @OptionalField(key: "observed_hostname")
     var observedHostname: String?
 
     // Observed guest memory usage from the VM's virtio-balloon device
@@ -186,13 +158,10 @@ final class VM: Model, @unchecked Sendable {
     // reservations and balloon inflation come out of it); available is what
     // the guest can allocate without swapping. `guestMemoryStatsAt` stamps
     // the last report so readers can judge freshness.
-    @OptionalField(key: "guest_memory_total_bytes")
     var guestMemoryTotalBytes: Int64?
 
-    @OptionalField(key: "guest_memory_available_bytes")
     var guestMemoryAvailableBytes: Int64?
 
-    @OptionalField(key: "guest_memory_stats_at")
     var guestMemoryStatsAt: Date?
 
     // Observed balloon size — `query-balloon`'s `actual`, the memory the
@@ -200,7 +169,6 @@ final class VM: Model, @unchecked Sendable {
     // above this comes from QEMU rather than the guest driver, and it is what
     // says whether a `balloonTarget` was actually reached: it converges toward
     // the target as the guest hands pages back.
-    @OptionalField(key: "guest_memory_balloon_actual_bytes")
     var guestMemoryBalloonActualBytes: Int64?
 
     /// Operator-requested memory ceiling for the running guest, in bytes
@@ -209,110 +177,96 @@ final class VM: Model, @unchecked Sendable {
     /// virtio-balloon so the host can reclaim the difference; it deliberately
     /// does *not* change `memory`, so the quota charge and the scheduler's
     /// reservation stay at what was committed. Always at most `memory`.
-    @OptionalField(key: "balloon_target")
     var balloonTarget: Int64?
 
-    @Enum(key: "hypervisor_type")
     var hypervisorType: HypervisorType
 
     // Project and environment tracking
-    @Parent(key: "project_id")
-    var project: Project
+    var projectID: UUID
 
-    @Field(key: "environment")
     var environment: String
 
     /// Free-form operator tags published to the guest through instance
     /// metadata (STR-66). Ordinary metadata only: neither the control plane nor
     /// the guest may treat a tag as an authorization claim.
-    @Field(key: "tags")
     var tags: [String: String]
 
     // Optional reference to the Image used to create this VM (new image system)
-    @OptionalParent(key: "image_id")
-    var sourceImage: Image?
+    var sourceImageID: UUID?
 
-    // Managed boot and data volumes attached to this VM. Requires eager loading.
-    @Children(for: \.$vm)
-    var volumes: [Volume]
+    var loadedSourceImage: Image?
 
-    // Network interfaces attached to this VM (requires eager loading with .with(\.$networkInterfaces))
-    @Children(for: \.$vm)
-    var networkInterfaces: [VMNetworkInterface]
+    var sourceImage: Image? { loadedSourceImage }
+
+    // Managed boot and data volumes explicitly loaded by the desired-state assembler.
+    var loadedVolumes: [Volume] = []
+
+    var volumes: [Volume] { loadedVolumes }
+
+    /// Network interfaces explicitly loaded through
+    /// `LegacyVMNetworkInterfaceStore`.
+    var loadedNetworkInterfaces: [VMNetworkInterface]?
+
+    var networkInterfaces: [VMNetworkInterface] {
+        loadedNetworkInterfaces ?? []
+    }
 
     // CPU configuration
-    @Field(key: "cpu")
     var cpu: Int  // boot_vcpus
 
-    @Field(key: "max_cpu")
     var maxCpu: Int  // max_vcpus
 
     // Memory configuration (in bytes)
-    @Field(key: "memory")
     var memory: Int64
 
     /// Upper bound for online memory growth (issue #568), the counterpart of
     /// `maxCpu`. Fixed when the VM's hypervisor process spawns, so raising
     /// `memory` past it needs a stop/start; equal to `memory` for VMs created
     /// without headroom, which get no hot-pluggable memory device at all.
-    @Field(key: "max_memory")
     var maxMemory: Int64
 
-    @Field(key: "hugepages")
     var hugepages: Bool
 
-    @Field(key: "shared_memory")
     var sharedMemory: Bool
 
     // Disk configuration
-    @Field(key: "disk")
     var disk: Int64
 
     // Payload configuration (kernel, initramfs, etc.)
-    @OptionalField(key: "kernel_path")
     var kernelPath: String?
 
-    @OptionalField(key: "initramfs_path")
     var initramfsPath: String?
 
-    @OptionalField(key: "cmdline")
     var cmdline: String?
 
     // Legacy create-time SSH key. Kept during the plural authorized-key
     // transition so an older control-plane replica can still read the first
     // key written by STR-66. New assembly uses `effectiveSSHAuthorizedKeys`.
-    @OptionalField(key: "ssh_public_key")
     var sshPublicKey: String?
 
     /// The authoritative keys published in `InstanceMetadata` and carried in
     /// `VMSpec` (STR-66). Empty is a real value: it revokes every key from the
     /// metadata document, even though applying that revocation inside an
     /// already-running guest remains cloud-init's responsibility.
-    @Field(key: "ssh_authorized_keys")
     var sshAuthorizedKeys: [String]
 
     // Caller-supplied cloud-init user data (any format cloud-init dispatches
     // on: #cloud-config, #! scripts, #include, MIME multipart, ...), stored
     // verbatim and passed to the agent in the VM spec.
-    @OptionalField(key: "user_data")
     var userData: String?
 
-    @OptionalField(key: "firmware_path")
     var firmwarePath: String?
 
     // Machine profile (issue #565): what Windows 11 / Server 2025 need beyond
     // resource sizing. The control plane records the intent only — the agent
     // realizes it by selecting the signed EDK2 firmware set and running a
     // per-VM swtpm. Both default false, which is pre-#565 behavior.
-    @Field(key: "secure_boot")
     var secureBoot: Bool
 
-    @Field(key: "tpm_enabled")
     var tpmEnabled: Bool
 
     /// Whether Strato's root guest daemon is expected in this VM. Fixed at
     /// creation because changing it changes the domain's PCI device topology.
-    @Field(key: "guest_agent_enabled")
     var guestAgentEnabled: Bool
 
     // Graphics console (issue #566): whether the guest boots with a display
@@ -324,27 +278,20 @@ final class VM: Model, @unchecked Sendable {
     // argument vector: a VM cannot gain or lose a display without being
     // recreated, and a stop/start respawns from the arguments it was created
     // with.
-    @Field(key: "graphics_console")
     var graphicsConsole: Bool
 
     // Console configuration
-    @Enum(key: "console_mode")
     var consoleMode: ConsoleMode
 
-    @Enum(key: "serial_mode")
     var serialMode: ConsoleMode
 
     // Timestamps
-    @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
-    @Timestamp(key: "updated_at", on: .update)
     var updatedAt: Date?
 
-    init() {}
-
     init(
-        id: UUID? = nil,
+        id: UUID? = UUID(),
         name: String,
         description: String,
         image: String,
@@ -367,27 +314,74 @@ final class VM: Model, @unchecked Sendable {
         graphicsConsole: Bool = false,
         metadataEnabled: Bool = true,
         metadataSource: MetadataSource = .iso,
-        metadataSeedToken: UUID = UUID()
+        metadataSeedToken: UUID = UUID(),
+        hypervisorId: String? = nil,
+        statusChangedAt: Date? = nil,
+        desiredStatus: DesiredVMStatus = .shutdown,
+        generation: Int64 = 0,
+        observedGeneration: Int64 = 0,
+        rebootGeneration: Int64 = 0,
+        restoreGeneration: Int64 = 0,
+        restoreSnapshotID: UUID? = nil,
+        convergencePhase: String? = nil,
+        lastError: String? = nil,
+        failedGeneration: Int64? = nil,
+        lastErrorAt: Date? = nil,
+        divergenceDetectedAt: Date? = nil,
+        convergenceDeadline: Date? = nil,
+        finalizers: [String] = [],
+        hostname: String? = nil,
+        qgaAvailable: Bool? = nil,
+        observedHostname: String? = nil,
+        guestMemoryTotalBytes: Int64? = nil,
+        guestMemoryAvailableBytes: Int64? = nil,
+        guestMemoryStatsAt: Date? = nil,
+        guestMemoryBalloonActualBytes: Int64? = nil,
+        balloonTarget: Int64? = nil,
+        tags: [String: String] = [:],
+        sourceImageID: UUID? = nil,
+        loadedSourceImage: Image? = nil,
+        loadedVolumes: [Volume] = [],
+        loadedNetworkInterfaces: [VMNetworkInterface]? = nil,
+        kernelPath: String? = nil,
+        initramfsPath: String? = nil,
+        cmdline: String? = nil,
+        sshPublicKey: String? = nil,
+        sshAuthorizedKeys: [String] = [],
+        userData: String? = nil,
+        firmwarePath: String? = nil,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
         self.description = description
         self.image = image
-        self.$project.id = projectID
+        self.projectID = projectID
         self.environment = environment
-        self.tags = [:]
+        self.tags = tags
         self.cpu = cpu
         self.maxCpu = maxCpu ?? cpu
         self.memory = memory
         self.maxMemory = max(maxMemory ?? memory, memory)
         self.disk = disk
         self.status = status
-        self.desiredStatus = .shutdown
-        self.generation = 0
-        self.observedGeneration = 0
-        self.rebootGeneration = 0
-        self.restoreGeneration = 0
-        self.finalizers = []
+        self.hypervisorId = hypervisorId
+        self.statusChangedAt = statusChangedAt
+        self.desiredStatus = desiredStatus
+        self.generation = generation
+        self.observedGeneration = observedGeneration
+        self.rebootGeneration = rebootGeneration
+        self.restoreGeneration = restoreGeneration
+        self.restoreSnapshotID = restoreSnapshotID
+        self.convergencePhase = convergencePhase
+        self.lastError = lastError
+        self.failedGeneration = failedGeneration
+        self.lastErrorAt = lastErrorAt
+        self.divergenceDetectedAt = divergenceDetectedAt
+        self.convergenceDeadline = convergenceDeadline
+        self.finalizers = finalizers
+        self.hostname = hostname
         self.hypervisorType = hypervisorType
         self.hugepages = hugepages
         self.sharedMemory = sharedMemory
@@ -400,11 +394,72 @@ final class VM: Model, @unchecked Sendable {
         self.metadataEnabled = metadataEnabled
         self.metadataSource = metadataSource
         self.metadataSeedToken = metadataSeedToken
-        self.sshAuthorizedKeys = []
+        self.qgaAvailable = qgaAvailable
+        self.observedHostname = observedHostname
+        self.guestMemoryTotalBytes = guestMemoryTotalBytes
+        self.guestMemoryAvailableBytes = guestMemoryAvailableBytes
+        self.guestMemoryStatsAt = guestMemoryStatsAt
+        self.guestMemoryBalloonActualBytes = guestMemoryBalloonActualBytes
+        self.balloonTarget = balloonTarget
+        self.sourceImageID = sourceImageID
+        self.loadedSourceImage = loadedSourceImage
+        self.loadedVolumes = loadedVolumes
+        self.loadedNetworkInterfaces = loadedNetworkInterfaces
+        self.kernelPath = kernelPath
+        self.initramfsPath = initramfsPath
+        self.cmdline = cmdline
+        self.sshPublicKey = sshPublicKey
+        self.sshAuthorizedKeys = sshAuthorizedKeys
+        self.userData = userData
+        self.firmwarePath = firmwarePath
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    func requireID() throws -> UUID {
+        guard let id else { throw Abort(.internalServerError, reason: "VM has no identifier") }
+        return id
+    }
+
+    func persisted(on db: PostgresStoreContext) async throws -> Self {
+        try await LegacyVMStore.upsert(self, on: db)
+    }
+    func persist(on db: PostgresStoreContext) async throws { _ = try await persisted(on: db) }
+    func save(on db: PostgresStoreContext) async throws { try await persist(on: db) }
+    func update(on db: PostgresStoreContext) async throws { try await persist(on: db) }
+    func delete(on db: PostgresStoreContext) async throws {
+        guard let id else { return }
+        _ = try await LegacyVMStore.delete(id: id, on: db)
+    }
+    func remove(on db: PostgresStoreContext) async throws { try await delete(on: db) }
+    static func find(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
+        try await LegacyVMStore.vm(id: id, on: db)
+    }
+    static func load(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
+        try await find(id, on: db)
+    }
+    static func all(on db: PostgresStoreContext) async throws -> [Self] {
+        try await LegacyVMStore.vms(on: db)
+    }
+
+    func loadingNetworkInterfaces(_ interfaces: [VMNetworkInterface]) -> Self {
+        var copy = self
+        copy.loadedNetworkInterfaces = interfaces
+        return copy
+    }
+
+    func loadingSourceImage(_ image: Image?) -> Self {
+        var copy = self
+        copy.loadedSourceImage = image
+        return copy
+    }
+
+    func loadingVolumes(_ volumes: [Volume]) -> Self {
+        var copy = self
+        copy.loadedVolumes = volumes
+        return copy
     }
 }
-
-extension VM: Content {}
 
 // MARK: - Computed Properties
 
@@ -418,7 +473,7 @@ extension VM {
     /// Writes both the authoritative plural field and the legacy first-key
     /// projection. Keeping the latter in step makes a rollback lose at most the
     /// additional keys rather than all SSH access.
-    func setSSHAuthorizedKeys(_ keys: [String]) {
+    mutating func setSSHAuthorizedKeys(_ keys: [String]) {
         sshAuthorizedKeys = keys
         sshPublicKey = keys.first
     }
@@ -440,7 +495,7 @@ extension VM {
     /// Updates the VM status, starts a fresh divergence episode, and stamps the
     /// change time for reconciliation sweeps. Does not persist — call
     /// `save(on:)` afterwards.
-    func setStatus(_ newStatus: VMStatus, at date: Date = Date()) {
+    mutating func setStatus(_ newStatus: VMStatus, at date: Date = Date()) {
         status = newStatus
         statusChangedAt = date
         divergenceDetectedAt = nil
@@ -449,7 +504,7 @@ extension VM {
     /// Records a new desired state in memory. The caller advances the
     /// generation through `DesiredStateGenerationWriter` in the same
     /// transaction that persists it.
-    func setDesiredStatus(_ newDesired: DesiredVMStatus) {
+    mutating func setDesiredStatus(_ newDesired: DesiredVMStatus) {
         desiredStatus = newDesired
     }
 
@@ -466,7 +521,7 @@ extension VM {
     ///
     /// The desired status is deliberately untouched: a reboot starts and ends
     /// `.running`, which is exactly why it needed a nonce in the first place.
-    func requestReboot() {
+    mutating func requestReboot() {
         rebootGeneration += 1
     }
 
@@ -474,7 +529,7 @@ extension VM {
     /// (STR-151). Sets the desired status to `.running` alongside the nonce —
     /// the restored guest resumes, so desired state has to agree or the next
     /// sync would stop it right back. `ResourceMutation` advances `generation`.
-    func requestRestore(snapshotID: UUID) {
+    mutating func requestRestore(snapshotID: UUID) {
         restoreGeneration += 1
         restoreSnapshotID = snapshotID
         setDesiredStatus(.running)
@@ -495,7 +550,7 @@ extension VM {
     ///
     /// Returns whether anything changed; does not persist.
     @discardableResult
-    func revertDesiredToObserved() -> Bool {
+    mutating func revertDesiredToObserved() -> Bool {
         guard desiredStatus != .absent else { return false }
 
         let resting: DesiredVMStatus
@@ -530,7 +585,7 @@ extension VM {
     /// mutations no longer write one (STR-147), and `.create` is the only thing
     /// this ever read off it.
     @discardableResult
-    func resolveForStuckOperation(
+    mutating func resolveForStuckOperation(
         mutation: VMOperationKind, telemetryReason: String
     ) -> Bool {
         if status.isTransitional || (mutation == .create && status == .created) {
@@ -576,7 +631,7 @@ struct ObservedInterfaceAddressResponse: Content {
     let address: String
     let prefixLength: Int?
 
-    init(from address: VMInterfaceObservedAddress) {
+    init(from address: ObservedInterfaceAddressSnapshot) {
         self.family = address.family
         self.address = address.address
         self.prefixLength = address.prefixLength
@@ -615,25 +670,27 @@ struct NetworkInterfaceResponse: Content {
     let attachmentState: NetworkInterfaceAttachmentState
     let attachmentError: String?
 
-    init(from nic: VMNetworkInterface, vm: VM) {
+    init(
+        from nic: VMNetworkInterface,
+        vm: VM,
+        observedAddresses: [ObservedInterfaceAddressSnapshot],
+        securityGroupIDs: [UUID]? = nil
+    ) {
         self.id = nic.id
-        self.networkId = nic.$logicalNetwork.id
-        self.network = nic.$logicalNetwork.value?.name
+        self.networkId = nic.logicalNetworkID
+        self.network = nic.logicalNetworkName
         self.macAddress = nic.macAddress
         // ipv4-first for a stable, familiar ordering.
-        self.addresses = (nic.$addresses.value ?? [])
+        self.addresses = (nic.loadedAddresses ?? [])
             .sorted { ($0.family, $0.address) < ($1.family, $1.address) }
             .map(InterfaceAddressResponse.init)
-        // `.value ?? []` tolerates callers that didn't eager-load the children.
-        self.observedAddresses = (nic.$observedAddresses.value ?? [])
+        self.observedAddresses = observedAddresses
             .sorted { ($0.family, $0.address) < ($1.family, $1.address) }
             .map(ObservedInterfaceAddressResponse.init)
         self.mtu = nic.mtu
         self.deviceName = nic.deviceName
         self.orderIndex = nic.orderIndex
-        self.securityGroupIds = nic.$securityGroupMemberships.value.map { memberships in
-            memberships.map { $0.$securityGroup.id }.sorted { $0.uuidString < $1.uuidString }
-        }
+        self.securityGroupIds = securityGroupIDs?.sorted { $0.uuidString < $1.uuidString }
         if let detachGeneration = nic.detachGeneration {
             if vm.failedGeneration == detachGeneration {
                 self.attachmentState = .detachFailed
@@ -768,14 +825,16 @@ struct VMDetailResponse: Content {
         securityGroupsEnforced: Bool? = nil,
         spiffeId: String? = nil,
         instanceIdentityPrincipalId: UUID? = nil,
-        instanceIdentityStatus: InstanceIdentityStatus? = nil
+        instanceIdentityStatus: InstanceIdentityStatus? = nil,
+        securityGroupIDsByInterfaceID: [UUID: [UUID]]? = nil,
+        observedAddressesByInterfaceID: [UUID: [ObservedInterfaceAddressSnapshot]]
     ) {
         self.id = vm.id
         self.name = vm.name
         self.description = vm.description
         self.image = vm.image
-        self.imageId = vm.$sourceImage.id
-        self.projectId = vm.$project.id
+        self.imageId = vm.sourceImageID
+        self.projectId = vm.projectID
         self.status = vm.status
         self.hypervisorType = vm.hypervisorType
         self.hypervisorId = vm.hypervisorId
@@ -786,11 +845,21 @@ struct VMDetailResponse: Content {
         self.maxMemory = vm.maxMemory
         self.disk = vm.disk
         self.diskFormatted = vm.disk.formattedByteSize
-        // `.value ?? []` tolerates callers that didn't eager-load the children;
+        // Nil tolerates callers that didn't explicitly load the children;
         // sorted to match the deterministic ordering agents receive in the spec.
-        self.networkInterfaces = (vm.$networkInterfaces.value ?? [])
+        self.networkInterfaces = (vm.loadedNetworkInterfaces ?? [])
             .inDeviceOrder
-            .map { NetworkInterfaceResponse(from: $0, vm: vm) }
+            .map { interface in
+                NetworkInterfaceResponse(
+                    from: interface,
+                    vm: vm,
+                    observedAddresses: interface.id.flatMap {
+                        observedAddressesByInterfaceID[$0]
+                    } ?? [],
+                    securityGroupIDs: securityGroupIDsByInterfaceID.map { memberships in
+                        interface.id.flatMap { memberships[$0] } ?? []
+                    })
+            }
         self.securityGroupsEnforced = securityGroupsEnforced
         self.spiffeId = spiffeId
         self.instanceIdentityPrincipalId = instanceIdentityPrincipalId

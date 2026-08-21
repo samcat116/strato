@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import Testing
 import Vapor
@@ -21,7 +20,6 @@ final class HierarchyPathVisibilityTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -76,13 +74,13 @@ final class HierarchyPathVisibilityTests {
     ) async throws -> (User, String) {
         let user = try await builder.createUser(username: username, email: "\(username)@example.com")
         try await builder.addUserToOrganization(user: user, organization: organization, role: "member")
-        return (user, try await user.generateAPIKey(on: app.db))
+        return (user, try await user.generateAPIKey(on: app))
     }
 
     private func grantViewer(_ app: Application, to user: User, on node: IAMNode) async throws {
         try await RoleBindingService.grant(
             principalType: .user, principalID: user.id!, role: .viewer,
-            nodeType: node.type, nodeID: node.id, createdBy: nil, on: app.db)
+            nodeType: node.type, nodeID: node.id, createdBy: nil, on: app.testPostgres)
     }
 
     private func entityPath(
@@ -116,7 +114,7 @@ final class HierarchyPathVisibilityTests {
     @Test("A breadcrumb names nothing a bare member may not read")
     func entityPathIsBareForABareMember() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let fixture = try await makeFixture(builder)
             let (_, token) = try await bareMember(
                 app, builder: builder, organization: fixture.organization, username: "path-bare")
@@ -136,7 +134,7 @@ final class HierarchyPathVisibilityTests {
     @Test("A breadcrumb elides the folders the caller may not read")
     func entityPathElidesUnreadableAncestors() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let fixture = try await makeFixture(builder)
             let (user, token) = try await bareMember(
                 app, builder: builder, organization: fixture.organization, username: "path-scoped")
@@ -156,12 +154,12 @@ final class HierarchyPathVisibilityTests {
     @Test("An org admin still gets the whole breadcrumb")
     func entityPathIsCompleteForAnAdmin() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let fixture = try await makeFixture(builder)
             let admin = try await builder.createUser(username: "path-admin", email: "path-admin@example.com")
             try await builder.addUserToOrganization(
                 user: admin, organization: fixture.organization, role: "admin")
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             let components = try await entityPath(
                 app, organization: fixture.organization, type: "vm", id: fixture.nestedVM.id!, token: token)
@@ -176,7 +174,7 @@ final class HierarchyPathVisibilityTests {
     @Test("A bare member is told no quota's measured usage")
     func quotaComplianceIsEmptyForABareMember() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let fixture = try await makeFixture(builder)
             let (_, token) = try await bareMember(
                 app, builder: builder, organization: fixture.organization, username: "quota-bare")
@@ -194,7 +192,7 @@ final class HierarchyPathVisibilityTests {
     @Test("A project binding is told that project's usage, not the organization's")
     func quotaComplianceIsScopedToTheCallersGrant() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let fixture = try await makeFixture(builder)
             let (user, token) = try await bareMember(
                 app, builder: builder, organization: fixture.organization, username: "quota-scoped")
@@ -215,12 +213,12 @@ final class HierarchyPathVisibilityTests {
     @Test("An org admin still sees the organization's quota compliance")
     func quotaComplianceIsCompleteForAnAdmin() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let fixture = try await makeFixture(builder)
             let admin = try await builder.createUser(username: "quota-admin", email: "quota-admin@example.com")
             try await builder.addUserToOrganization(
                 user: admin, organization: fixture.organization, role: "admin")
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             let response = try await summary(app, organization: fixture.organization, token: token)
 
@@ -238,7 +236,7 @@ final class HierarchyPathVisibilityTests {
     @Test("A folder-scoped quota follows the folder grant, not a sibling project's")
     func folderScopedQuotaFollowsTheFolderGrant() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let fixture = try await makeFixture(builder)
 
             let folderViewer = try await builder.createUser(
@@ -247,7 +245,7 @@ final class HierarchyPathVisibilityTests {
                 user: folderViewer, organization: fixture.organization, role: "member")
             try await grantViewer(
                 app, to: folderViewer, on: IAMNode(type: .organizationalUnit, id: fixture.folder.id!))
-            let folderToken = try await folderViewer.generateAPIKey(on: app.db)
+            let folderToken = try await folderViewer.generateAPIKey(on: app)
 
             // A folder grant reaches the folder's own quota and the quota of the
             // project nested under it, and stops there.
@@ -277,13 +275,13 @@ final class HierarchyPathVisibilityTests {
     @Test("A bare member reaches the organization's measured usage on no route")
     func measuredUsageIsUnreachableForABareMember() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let fixture = try await makeFixture(builder)
             let (_, token) = try await bareMember(
                 app, builder: builder, organization: fixture.organization, username: "usage-bare")
 
             let orgQuota = try #require(
-                try await ResourceQuota.query(on: app.db).filter(\.$name == "org-quota").first())
+                try await LegacyResourceQuotaStore.quotas(name: "org-quota", on: app.testPostgres).first)
             let quotaID = try orgQuota.requireID()
 
             // The direct door: measured live, with a per-VM breakdown.
@@ -322,15 +320,15 @@ final class HierarchyPathVisibilityTests {
     @Test("An org admin still reaches a quota's measured usage")
     func measuredUsageStaysAvailableToAnAdmin() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let fixture = try await makeFixture(builder)
             let admin = try await builder.createUser(username: "usage-admin", email: "usage-admin@example.com")
             try await builder.addUserToOrganization(
                 user: admin, organization: fixture.organization, role: "admin")
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             let orgQuota = try #require(
-                try await ResourceQuota.query(on: app.db).filter(\.$name == "org-quota").first())
+                try await LegacyResourceQuotaStore.quotas(name: "org-quota", on: app.testPostgres).first)
 
             try await app.test(.GET, "/api/quotas/\(try orgQuota.requireID())/usage") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)

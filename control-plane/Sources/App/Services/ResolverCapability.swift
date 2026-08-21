@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 /// Who can run the per-network DNS resolver, and why a network's guests might
@@ -25,12 +25,10 @@ enum ResolverCapability {
     /// Offline agents count. A host that is down is one that will come back, and
     /// treating "not currently connected" as "not in the site" would flip the
     /// resolver on during a rolling restart and off again afterwards.
-    static func incapableAgentNames(inSite siteID: UUID, on db: any Database) async throws
+    static func incapableAgentNames(inSite siteID: UUID, on db: PostgresStoreContext) async throws
         -> [String]
     {
-        try await Agent.query(on: db)
-            .filter(\.$site.$id == siteID)
-            .all()
+        try await LegacyAgentStore.agents(siteID: siteID, on: db)
             .filter { !$0.effectiveResolverCapable }
             .map(\.name)
             .sorted()
@@ -40,10 +38,9 @@ enum ResolverCapability {
     ///
     /// One query, so listing N networks costs one round trip rather than N. The
     /// common case materializes zero rows.
-    static func index(on db: any Database) async throws -> Index {
+    static func index(on db: PostgresStoreContext) async throws -> Index {
         Index(
-            incapable: try await Agent.query(on: db)
-                .all()
+            incapable: try await Agent.all(on: db)
                 .filter { !$0.effectiveResolverCapable })
     }
 
@@ -51,7 +48,7 @@ enum ResolverCapability {
     struct Index: Sendable {
         private let bySite: [UUID: [String]]
         init(incapable: [Agent]) {
-            self.bySite = Dictionary(grouping: incapable) { $0.$site.id }
+            self.bySite = Dictionary(grouping: incapable, by: \.siteID)
                 .mapValues { $0.map(\.name).sorted() }
         }
 

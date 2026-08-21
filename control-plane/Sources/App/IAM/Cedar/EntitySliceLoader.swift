@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -180,9 +180,17 @@ enum EntitySliceLoader {
     /// action on the node — and there is no per-action code path here to get
     /// out of sync.
     static func load(
-        userID: UUID, node: IAMNode, cache: IAMRequestCache? = nil, on db: any Database
+        userID: UUID,
+        node: IAMNode,
+        cache: IAMRequestCache? = nil,
+        using iam: IAMPersistence
     ) async throws -> CedarEntitySlice {
-        try await load(principal: .user(userID), node: node, cache: cache, on: db)
+        try await load(
+            principal: .user(userID),
+            node: node,
+            cache: cache,
+            using: iam
+        )
     }
 
     /// Gather the slice for "may `principal` act on `node`?" — the typed form
@@ -200,10 +208,18 @@ enum EntitySliceLoader {
     ///   everything, which is what callers outside a request do.
     static func load(
         principal: IAMPrincipal, node: IAMNode, action: String? = nil,
-        cache: IAMRequestCache? = nil, on db: any Database
+        cache: IAMRequestCache? = nil,
+        using iam: IAMPersistence
     ) async throws -> CedarEntitySlice {
         let target = IAMCheckTarget(principal: principal, node: node)
-        guard let slice = try await load([target], action: action, cache: cache, on: db)[target] else {
+        guard
+            let slice = try await load(
+                [target],
+                action: action,
+                cache: cache,
+                using: iam
+            )[target]
+        else {
             // Unreachable: the batch is total over its inputs. Failing closed
             // beats a force-unwrap in the security-critical path.
             throw Abort(.internalServerError, reason: "Authorization entity slice unavailable")
@@ -226,7 +242,8 @@ enum EntitySliceLoader {
     /// cost what one VM costs.
     static func load(
         _ targets: [IAMCheckTarget], action: String? = nil,
-        cache: IAMRequestCache? = nil, on db: any Database
+        cache: IAMRequestCache? = nil,
+        using iam: IAMPersistence
     ) async throws -> [IAMCheckTarget: CedarEntitySlice] {
         let distinct = Set(targets)
         guard !distinct.isEmpty else { return [:] }
@@ -234,10 +251,14 @@ enum EntitySliceLoader {
         // Independent loads: the chain walk knows nothing about the principals
         // and the memberships know nothing about the resources. Only the
         // bindings query below needs both.
-        async let resolvedChains = IAMResourceTree.resolve(distinct.map(\.node), cache: cache, on: db)
-        async let principalFacts = IAMUserFacts.load(
-            userIDs: Set(distinct.compactMap { $0.principal.type == .user ? $0.principal.id : nil }),
-            cache: cache, on: db)
+        async let resolvedChains = IAMResourceTree.resolve(
+            distinct.map(\.node), cache: cache, using: iam)
+        async let principalFacts: [UUID: IAMUserFacts] = {
+            let userIDs = Set(
+                distinct.compactMap { $0.principal.type == .user ? $0.principal.id : nil }
+            )
+            return try await IAMUserFacts.load(userIDs: userIDs, cache: cache, using: iam)
+        }()
         let resolutions = try await resolvedChains
         var userFacts = try await principalFacts
 
@@ -250,14 +271,23 @@ enum EntitySliceLoader {
             resolutions.values.lazy.flatMap(\.chain).filter { $0.type == .user }.map(\.id)
         ).subtracting(userFacts.keys)
         if !resourceUserIDs.isEmpty {
-            let loaded = try await IAMUserFacts.load(userIDs: resourceUserIDs, cache: cache, on: db)
+            let loaded = try await IAMUserFacts.load(
+                userIDs: resourceUserIDs,
+                cache: cache,
+                using: iam
+            )
             userFacts.merge(loaded) { current, _ in current }
         }
 
         let bindings = try await bindingsAlongChains(
-            for: distinct, resolutions: resolutions, userFacts: userFacts, cache: cache, on: db)
+            for: distinct,
+            resolutions: resolutions,
+            userFacts: userFacts,
+            cache: cache,
+            using: iam
+        )
         let foreignWorkloads = try await agentForeignWorkloads(
-            for: distinct.map(\.node), action: action, on: db)
+            for: distinct.map(\.node), action: action, using: iam)
 
         var slices: [IAMCheckTarget: CedarEntitySlice] = [:]
         slices.reserveCapacity(distinct.count)
@@ -308,7 +338,7 @@ enum EntitySliceLoader {
         resolutions: [IAMNode: IAMResourceTree.Resolution],
         userFacts: [UUID: IAMUserFacts],
         cache: IAMRequestCache?,
-        on db: any Database
+        using iam: IAMPersistence
     ) async throws -> [IAMRequestCache.BindingKey: [IAMBindingFact]] {
         var bindings: [IAMRequestCache.BindingKey: [IAMBindingFact]] = [:]
         var pending: Set<IAMRequestCache.BindingKey> = []
@@ -325,34 +355,19 @@ enum EntitySliceLoader {
         }
         guard !pending.isEmpty else { return bindings }
 
-        var subjectIDs: [IAMPrincipalType: Set<UUID>] = [:]
-        var chainIDs: [IAMNodeType: Set<UUID>] = [:]
+        var subjects: Set<IAMOwnerReference> = []
+        var nodes: Set<IAMNodeReference> = []
         for key in pending {
             for subject in bindingSubjects(of: key.principal, userFacts: userFacts) {
-                subjectIDs[subject.type, default: []].insert(subject.id)
+                subjects.insert(IAMOwnerReference(type: subject.type.rawValue, id: subject.id))
             }
-            chainIDs[key.node.type, default: []].insert(key.node.id)
+            nodes.insert(IAMNodeReference(type: key.node.type.rawValue, id: key.node.id))
         }
 
-        let rows = try await RoleBinding.query(on: db)
-            .group(.or) { anyPrincipal in
-                for (type, ids) in subjectIDs {
-                    anyPrincipal.group(.and) { thisType in
-                        thisType.filter(\.$principalType == type.rawValue)
-                        thisType.filter(\.$principalID ~~ Array(ids))
-                    }
-                }
-            }
-            .group(.or) { anyNode in
-                for (type, ids) in chainIDs {
-                    anyNode.group(.and) { thisType in
-                        thisType.filter(\.$nodeType == type.rawValue)
-                        thisType.filter(\.$nodeID ~~ Array(ids))
-                    }
-                }
-            }
-            .active()
-            .all()
+        let rows = try await iam.activeBindings(
+            subjects: Array(subjects),
+            nodes: Array(nodes)
+        )
 
         // A row whose principal or node type this build cannot interpret is
         // dropped; it could never match a subject, so skipping under-grants,
@@ -387,24 +402,20 @@ enum EntitySliceLoader {
     /// Gated on the same constant the forbid's action list is built from, so
     /// the attribute is present exactly when a policy can read it.
     private static func agentForeignWorkloads(
-        for nodes: [IAMNode], action: String?, on db: any Database
+        for nodes: [IAMNode],
+        action: String?,
+        using iam: IAMPersistence
     ) async throws -> [IAMNode: Bool] {
         guard let action, IAMRoleRegistry.agentForeignWorkloadGuardedActions.contains(action) else { return [:] }
         let agentIDs = Set(nodes.lazy.filter { $0.type == .agent }.map(\.id))
         guard !agentIDs.isEmpty else { return [:] }
 
-        var rows: [UUID: Agent] = [:]
-        for agent in try await Agent.query(on: db).filter(\.$id ~~ Array(agentIDs)).all() {
-            if let id = agent.id { rows[id] = agent }
-        }
-        var inventory: [IAMNode: Bool] = [:]
-        for agentID in agentIDs {
-            // Missing row → true: an agent we cannot inventory is not one to
-            // let a delegated admin take down.
-            inventory[IAMNode(type: .agent, id: agentID)] =
-                try await rows[agentID]?.hostsForeignWorkloads(on: db) ?? true
-        }
-        return inventory
+        let known = try await iam.agentsHostingForeignWorkloads(ids: Array(agentIDs))
+        return Dictionary(
+            uniqueKeysWithValues: agentIDs.map {
+                (IAMNode(type: .agent, id: $0), known[$0] ?? true)
+            }
+        )
     }
 
     /// Assemble one slice from data already in memory. Pure — every database
@@ -547,4 +558,33 @@ enum EntitySliceLoader {
             "systemAdmin": .bool(isSystemAdmin),
         ]
     }
+
+#if DEBUG
+    package static func load(
+        userID: UUID, node: IAMNode, cache: IAMRequestCache? = nil,
+        on database: PostgresStoreContext
+    ) async throws -> CedarEntitySlice {
+        try await load(
+            userID: userID, node: node, cache: cache,
+            using: database.testIAMPersistence)
+    }
+
+    package static func load(
+        principal: IAMPrincipal, node: IAMNode, action: String? = nil,
+        cache: IAMRequestCache? = nil, on database: PostgresStoreContext
+    ) async throws -> CedarEntitySlice {
+        try await load(
+            principal: principal, node: node, action: action, cache: cache,
+            using: database.testIAMPersistence)
+    }
+
+    package static func load(
+        _ targets: [IAMCheckTarget], action: String? = nil,
+        cache: IAMRequestCache? = nil, on database: PostgresStoreContext
+    ) async throws -> [IAMCheckTarget: CedarEntitySlice] {
+        try await load(
+            targets, action: action, cache: cache,
+            using: database.testIAMPersistence)
+    }
+#endif
 }

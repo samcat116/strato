@@ -1,6 +1,6 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
-import Fluent
 
 /// Hierarchy validation and repair.
 ///
@@ -24,11 +24,11 @@ import Fluent
 /// to report what remains). Chunking per organization would only move the loop,
 /// so it stays whole until an installation is large enough for that to hurt.
 struct HierarchyMaintenanceService {
-    static func findHierarchyIssues(on db: Database) async throws -> [HierarchyIssue] {
+    static func findHierarchyIssues(on db: PostgresStoreContext) async throws -> [HierarchyIssue] {
         try await scan(on: db).issues
     }
 
-    static func performHierarchyRepair(repairRequest: HierarchyRepairRequest, on db: Database) async throws
+    static func performHierarchyRepair(repairRequest: HierarchyRepairRequest, on db: PostgresStoreContext) async throws
         -> HierarchyRepairResponse
     {
         let scan = try await scan(on: db)
@@ -47,9 +47,7 @@ struct HierarchyMaintenanceService {
             for issue in selected {
                 if let fix = scan.folderFixes[issue.id] {
                     let previous = "\(fix.folder.path) (depth \(fix.folder.depth))"
-                    fix.folder.path = fix.path
-                    fix.folder.depth = fix.depth
-                    try await fix.folder.save(on: transaction)
+                    try await fix.folder.replacingPath(fix.path, depth: fix.depth).save(on: transaction)
                     repaired.append(
                         .init(
                             issueId: issue.id,
@@ -60,8 +58,7 @@ struct HierarchyMaintenanceService {
                         ))
                 } else if let fix = scan.projectFixes[issue.id] {
                     let previous = fix.project.path
-                    fix.project.path = fix.path
-                    try await fix.project.save(on: transaction)
+                    try await fix.project.replacingPath(fix.path).save(on: transaction)
                     repaired.append(
                         .init(
                             issueId: issue.id,
@@ -126,9 +123,9 @@ struct HierarchyMaintenanceService {
         var projectFixes: [UUID: (project: Project, path: String)] = [:]
     }
 
-    private static func scan(on db: Database) async throws -> Scan {
-        let folders = try await OrganizationalUnit.query(on: db).all()
-        let projects = try await Project.query(on: db).all()
+    private static func scan(on db: PostgresStoreContext) async throws -> Scan {
+        let folders = try await OrganizationalUnit.all(on: db)
+        let projects = try await Project.all(on: db)
 
         let foldersByID = Dictionary(
             folders.compactMap { folder in folder.id.map { ($0, folder) } },
@@ -151,7 +148,7 @@ struct HierarchyMaintenanceService {
             if seen.contains(folderID) { return .cycle }
 
             let result: Expectation
-            if let parentID = folder.$parentOU.id {
+            if let parentID = folder.parentOUID {
                 switch expectation(for: parentID, seen: seen.union([folderID])) {
                 case .path(let parentPath, let parentDepth):
                     result = .path(
@@ -163,7 +160,7 @@ struct HierarchyMaintenanceService {
                     result = .severed
                 }
             } else {
-                let organizationPath = OrganizationalUnit.organizationPath(folder.$organization.id)
+                let organizationPath = OrganizationalUnit.organizationPath(folder.organizationID)
                 result = .path(OrganizationalUnit.path(under: organizationPath, folderID: folderID), depth: 0)
             }
 
@@ -218,7 +215,7 @@ struct HierarchyMaintenanceService {
                 // Only the folder whose own parent is missing is reported: every
                 // folder below it is severed as a consequence, and naming them
                 // all buries the one break an operator has to fix.
-                guard let parentID = folder.$parentOU.id, foldersByID[parentID] == nil else { continue }
+                guard let parentID = folder.parentOUID, foldersByID[parentID] == nil else { continue }
                 scan.issues.append(
                     HierarchyIssue(
                         id: folderID,
@@ -238,7 +235,7 @@ struct HierarchyMaintenanceService {
             guard let projectID = project.id else { continue }
 
             let parentPath: String
-            if let folderID = project.$organizationalUnit.id {
+            if let folderID = project.organizationalUnitID {
                 // Unreachable for the same reason as the folder case above:
                 // `organizational_unit_id` cascades. Defense against a dropped
                 // constraint, not a live shape.
@@ -261,7 +258,7 @@ struct HierarchyMaintenanceService {
                 // own right; the project's path is not independently checkable.
                 guard case .path(let folderPath, _) = expectation(for: folderID, seen: []) else { continue }
                 parentPath = folderPath
-            } else if let organizationID = project.$organization.id {
+            } else if let organizationID = project.organizationID {
                 parentPath = OrganizationalUnit.organizationPath(organizationID)
             } else {
                 // This one is live: both columns are nullable and the check

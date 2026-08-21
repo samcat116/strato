@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -36,17 +35,8 @@ actor VMCommandExecutionService {
         let exitCode: Int
     }
 
-    private struct Claimed: Decodable { let id: UUID }
-    private struct TimedOut: Decodable {
-        let id: UUID
-        let agentKey: String
-        enum CodingKeys: String, CodingKey {
-            case id
-            case agentKey = "agent_key"
-        }
-    }
-
     private let app: Application
+    private let persistence: VMCommandExecutionsPersistence
     private let sendEnvelope: @Sendable (MessageEnvelope, String) async throws -> Void
     private let beforeClassifyStart: (@Sendable () async throws -> Void)?
     private let beforePersistResult: (@Sendable () async throws -> Void)?
@@ -56,12 +46,14 @@ actor VMCommandExecutionService {
 
     init(
         app: Application,
+        persistence: VMCommandExecutionsPersistence,
         sendEnvelope: (@Sendable (MessageEnvelope, String) async throws -> Void)? = nil,
         beforeClassifyStart: (@Sendable () async throws -> Void)? = nil,
         beforePersistResult: (@Sendable () async throws -> Void)? = nil,
         retryDelay: Duration = .seconds(1)
     ) {
         self.app = app
+        self.persistence = persistence
         self.beforeClassifyStart = beforeClassifyStart
         self.beforePersistResult = beforePersistResult
         self.retryDelay = retryDelay
@@ -167,11 +159,8 @@ actor VMCommandExecutionService {
             // operation pending until the timeout sweep.
             do {
                 guard
-                    try await VMCommandExecution.query(on: app.db)
-                        .filter(\.$id == id)
-                        .filter(\.$status == .pending)
-                        .filter(\.$agentKey == agentKey)
-                        .first() != nil
+                    try await persistence.pendingExecution(
+                        id: id, agentKey: agentKey) != nil
                 else { return false }
             } catch {
                 app.logger.error("Could not identify closed recorded VM command: \(error)")
@@ -203,16 +192,8 @@ actor VMCommandExecutionService {
         // suspended start-classification query and therefore did not return
         // this id from the conditional update below.
         captures = captures.filter { $0.value.deadline > now }
-        guard let sql = app.db as? any SQLDatabase else { return }
         do {
-            let timedOut = try await sql.raw(
-                """
-                UPDATE vm_command_executions
-                SET status = 'failed', error = 'Command execution timed out', completed_at = \(bind: now)
-                WHERE status = 'pending' AND deadline <= \(bind: now)
-                RETURNING id, agent_key
-                """
-            ).all(decoding: TimedOut.self)
+            let timedOut = try await persistence.failTimedOut(now: now)
             for execution in timedOut {
                 captures.removeValue(forKey: execution.id)
                 try? await sendEnvelope(
@@ -228,34 +209,19 @@ actor VMCommandExecutionService {
 
     private func complete(id: UUID, capture: Capture, exitCode: Int) async throws {
         try await beforePersistResult?()
-        try await app.db.transaction { db in
-            guard let sql = db as? any SQLDatabase else { throw Abort(.internalServerError) }
-            let claimed = try await sql.raw(
-                """
-                UPDATE vm_command_executions
-                SET status = 'succeeded', error = NULL, completed_at = now()
-                WHERE id = \(bind: id) AND status IN ('pending', 'failed')
-                RETURNING id
-                """
-            ).all(decoding: Claimed.self)
-            guard !claimed.isEmpty else { return }
-            guard let payload = try await VMCommandPayload.find(id, on: db) else {
-                throw Abort(.internalServerError, reason: "VM command payload is missing")
-            }
-            payload.recordResult(
-                stdout: capture.stdout, stderr: capture.stderr,
-                exitCode: exitCode, truncated: capture.truncated)
-            try await payload.update(on: db)
-        }
+        _ = try await persistence.complete(
+            id: id,
+            stdout: capture.stdout,
+            stderr: capture.stderr,
+            exitCode: exitCode,
+            truncated: capture.truncated)
     }
 
-    private func recordedExecution(id: UUID, agentKey: String) async throws -> VMCommandExecution? {
+    private func recordedExecution(id: UUID, agentKey: String) async throws
+        -> VMCommandExecutionSnapshot?
+    {
         try await beforeClassifyStart?()
-        return try await VMCommandExecution.query(on: app.db)
-            .filter(\.$id == id)
-            .filter(\.$status == .pending)
-            .filter(\.$agentKey == agentKey)
-            .first()
+        return try await persistence.pendingExecution(id: id, agentKey: agentKey)
     }
 
     private func closeStdin(sessionId: String, id: UUID, agentKey: String) async {
@@ -333,15 +299,7 @@ actor VMCommandExecutionService {
     }
 
     private func fail(id: UUID, reason: String) async throws {
-        guard let sql = app.db as? any SQLDatabase else { throw Abort(.internalServerError) }
-        _ = try await sql.raw(
-            """
-            UPDATE vm_command_executions
-            SET status = 'failed', error = \(bind: String(reason.prefix(4_096))), completed_at = now()
-            WHERE id = \(bind: id) AND status = 'pending'
-            RETURNING id
-            """
-        ).all(decoding: Claimed.self)
+        _ = try await persistence.fail(id: id, reason: reason)
     }
 }
 
@@ -351,7 +309,12 @@ extension Application {
     }
 
     var vmCommandExecutionService: VMCommandExecutionService {
-        get { lazyService(VMCommandExecutionServiceKey.self) { VMCommandExecutionService(app: self) } }
+        get {
+            guard let service = storage[VMCommandExecutionServiceKey.self] else {
+                preconditionFailure("VM command execution service has not been configured")
+            }
+            return service
+        }
         set { setStorageValue(VMCommandExecutionServiceKey.self, to: newValue) }
     }
 }
@@ -359,50 +322,5 @@ extension Application {
 extension Request {
     var vmCommandExecutionService: VMCommandExecutionService {
         application.vmCommandExecutionService
-    }
-}
-
-extension VMCommandExecution {
-    /// Persist attribution/status and the exact argv in one transaction owned
-    /// by the caller. Keeping argv in the cold payload preserves the audit fact
-    /// without adding it to every operation poll/history row.
-    func create(command: [String], on db: any Database) async throws {
-        try await create(on: db)
-        try await VMCommandPayload(
-            executionID: try requireID(), command: command
-        ).create(on: db)
-    }
-
-    func operationResponse(on db: any Database) async throws -> OperationResponse {
-        let executionID = try requireID()
-        let payload =
-            status == .succeeded
-            ? try await VMCommandPayload.find(executionID, on: db)
-            : nil
-        return try operationResponse(payload: payload)
-    }
-
-    func operationResponse(payload: VMCommandPayload?) throws -> OperationResponse {
-        let executionID = try requireID()
-        let result = payload.flatMap { payload -> VMCommandResultResponse? in
-            guard let stdout = payload.stdout, let stderr = payload.stderr,
-                let exitCode = payload.exitCode, let truncated = payload.truncated
-            else { return nil }
-            return VMCommandResultResponse(
-                stdout: String(decoding: stdout, as: UTF8.self),
-                stderr: String(decoding: stderr, as: UTF8.self),
-                exitCode: exitCode,
-                truncated: truncated)
-        }
-        return OperationResponse(
-            id: executionID,
-            resourceKind: .virtualMachine,
-            resourceID: vmID,
-            kind: .run,
-            status: status,
-            error: error,
-            createdAt: createdAt,
-            completedAt: completedAt,
-            result: result)
     }
 }

@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -26,9 +25,8 @@ final class DesiredStateAssemblerTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Metadata Org")
             let project = try await builder.createProject(
                 name: "Metadata Project", description: "Project for metadata assembly tests",
@@ -62,7 +60,7 @@ final class DesiredStateAssemblerTests {
             protocolVersion: protocolVersion,
             resolverCapable: resolverCapable
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let uuid = try await app.agentService.registerAgent(
             message, agentName: name, siteID: siteID,
             organizationScope: orgID.map { .organization($0) })
@@ -73,10 +71,10 @@ final class DesiredStateAssemblerTests {
         app: Application, project: Project, named name: String, onAgent agentId: String,
         environment: String = "development"
     ) async throws -> VM {
-        let vm = try await TestDataBuilder(db: app.db).createVM(
+        var vm = try await TestDataBuilder(db: app.testPostgres).createVM(
             name: name, project: project, environment: environment)
         vm.hypervisorId = agentId
-        try await vm.save(on: app.db)
+        try await vm.save(on: app.testPostgres)
         return vm
     }
 
@@ -94,20 +92,22 @@ final class DesiredStateAssemblerTests {
         let nic = VMNetworkInterface(
             vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),
             macAddress: mac, mtu: mtu, deviceName: deviceName, orderIndex: orderIndex)
-        try await nic.save(on: app.db)
+        try await nic.save(on: app.testPostgres)
         if let ipv4 {
-            try await VMInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(),
                 family: .ipv4, address: ipv4.address, prefixLength: ipv4.prefix,
-                gateway: ipv4.gateway
-            ).save(on: app.db)
+                gateway: ipv4.gateway,
+                on: app.testPostgres)
         }
         if let ipv6 {
-            try await VMInterfaceAddress(
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(),
                 family: .ipv6, address: ipv6.address, prefixLength: ipv6.prefix,
-                gateway: ipv6.gateway
-            ).save(on: app.db)
+                gateway: ipv6.gateway,
+                on: app.testPostgres)
         }
     }
 
@@ -117,24 +117,24 @@ final class DesiredStateAssemblerTests {
     func metadataMirrorsTheVMAndItsNICs() async throws {
         try await withAssemblerApp { app, org, project in
             let site = Site(name: "dc-meta", organizationScope: .organization(try org.requireID()))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
             let agentId = try await self.registerAgent(
                 app: app, named: "meta-agent", siteID: try site.requireID(),
                 resolverCapable: true)
 
-            let vm = try await self.placeVM(
+            var vm = try await self.placeVM(
                 app: app, project: project, named: "meta-vm", onAgent: agentId,
                 environment: "production")
             vm.hostname = "web-01"
             vm.sshPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 operator@example"
             vm.userData = "#cloud-config\nruncmd: [echo hi]\n"
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             // The VM's instance identity (STR-55). Registered explicitly
             // because `placeVM` builds the row directly rather than going
             // through the create endpoint that would register it.
             let identity = try await GuestIdentity.register(
-                vmID: try vm.requireID(), organizationID: nil, createdBy: nil, on: app.db)
+                vmID: try vm.requireID(), organizationID: nil, createdBy: nil, on: app.testPostgres)
 
             // Two networks with different DHCP/DNS config, so a per-NIC field
             // taken from the wrong network row would show up.
@@ -143,12 +143,12 @@ final class DesiredStateAssemblerTests {
                 subnet6: "fd40::/64", gateway6: "fd40::1", projectID: try project.requireID(),
                 dnsServers: ["10.40.0.53", "fd40::53"], domainName: "front.example",
                 resolverIndex: 7, siteID: try site.requireID())
-            try await front.save(on: app.db)
+            try await front.save(on: app.testPostgres)
             let back = LogicalNetwork(
                 name: "back", subnet: "10.41.0.0/24", gateway: "10.41.0.1",
                 projectID: try project.requireID(), dnsServers: ["10.41.0.53"],
                 resolverIndex: 8, siteID: try site.requireID())
-            try await back.save(on: app.db)
+            try await back.save(on: app.testPostgres)
 
             // Attached out of order, so ordering can only come from
             // `orderIndex` — the order the spec's NICs are sent in.
@@ -228,7 +228,7 @@ final class DesiredStateAssemblerTests {
     func revokedIdentityIsNotVended() async throws {
         try await withAssemblerApp { app, _, project in
             let agentId = try await self.registerAgent(app: app, named: "revoked-agent")
-            let vm = try await self.placeVM(
+            var vm = try await self.placeVM(
                 app: app, project: project, named: "revoked-identity-vm", onAgent: agentId)
 
             // No registration row — the shape an administrator's revocation
@@ -248,10 +248,10 @@ final class DesiredStateAssemblerTests {
                 defaultTTLSeconds: 300,
                 maximumTTLSeconds: 1_200)
             let agentId = try await self.registerAgent(app: app, named: "identity-policy-agent")
-            let vm = try await self.placeVM(
+            var vm = try await self.placeVM(
                 app: app, project: project, named: "identity-policy-vm", onAgent: agentId)
             let identity = try await GuestIdentity.register(
-                vmID: try vm.requireID(), organizationID: nil, createdBy: nil, on: app.db)
+                vmID: try vm.requireID(), organizationID: nil, createdBy: nil, on: app.testPostgres)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let policy = try #require(
@@ -270,7 +270,7 @@ final class DesiredStateAssemblerTests {
     func metadataForAVMWithoutNICs() async throws {
         try await withAssemblerApp { app, _, project in
             let agentId = try await self.registerAgent(app: app, named: "bare-agent")
-            let vm = try await self.placeVM(
+            var vm = try await self.placeVM(
                 app: app, project: project, named: "bare-vm", onAgent: agentId)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
@@ -298,7 +298,7 @@ final class DesiredStateAssemblerTests {
             // arrive as an empty string. The renderer decides what an unset
             // environment looks like, and it cannot if it is handed one.
             let agentId = try await self.registerAgent(app: app, named: "env-agent")
-            let vm = try await self.placeVM(
+            var vm = try await self.placeVM(
                 app: app, project: project, named: "env-vm", onAgent: agentId, environment: "")
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
@@ -314,10 +314,10 @@ final class DesiredStateAssemblerTests {
 
             let served = try await self.placeVM(
                 app: app, project: project, named: "served-vm", onAgent: agentId)
-            let hardened = try await self.placeVM(
+            var hardened = try await self.placeVM(
                 app: app, project: project, named: "hardened-vm", onAgent: agentId)
             hardened.metadataEnabled = false
-            try await hardened.save(on: app.db)
+            try await hardened.save(on: app.testPostgres)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
 
@@ -339,7 +339,7 @@ final class DesiredStateAssemblerTests {
     func edgeNoncesRideTheSync() async throws {
         try await withAssemblerApp { app, _, project in
             let agentId = try await self.registerAgent(app: app, named: "nonce-agent")
-            let vm = try await self.placeVM(
+            var vm = try await self.placeVM(
                 app: app, project: project, named: "nonce-vm", onAgent: agentId)
 
             // A VM nobody has restarted or restored puts nothing on the wire:
@@ -353,7 +353,7 @@ final class DesiredStateAssemblerTests {
             let snapshotID = UUID()
             vm.requestFixtureReboot()
             vm.requestFixtureRestore(snapshotID: snapshotID)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
             entry = try #require(sync.vms.first { $0.vmId == vm.id })
@@ -377,22 +377,20 @@ final class DesiredStateAssemblerTests {
     /// directly with a deliberately short `networks` map.
     @Test("A NIC whose network wasn't loaded drops out of the spec and the metadata alike")
     func unloadedNetworkDropsFromBothLists() throws {
-        let vm = VM(
+        var vm = VM(
             name: "drop-vm", description: "d", image: "img", projectID: UUID(),
             environment: "production", cpu: 2, memory: 1 << 31, disk: 1 << 34)
         vm.id = UUID()
 
         let loadedNetwork = LogicalNetwork(
             id: UUID(), name: "loaded", subnet: "10.60.0.0/24", gateway: "10.60.0.1",
-            projectID: vm.$project.id, siteID: UUID())
+            projectID: vm.projectID, siteID: UUID())
         let missingNetworkID = UUID()
 
         func nic(_ device: String, order: Int, network: UUID, mac: String) -> VMNetworkInterface {
-            let interface = VMNetworkInterface(
+            VMNetworkInterface(
                 id: UUID(), vmID: vm.id!, logicalNetworkID: network, macAddress: mac,
-                deviceName: device, orderIndex: order)
-            interface.$addresses.value = []
-            return interface
+                loadedAddresses: [], deviceName: device, orderIndex: order)
         }
         // The middle NIC is the one whose row wasn't loaded, so a drop that
         // shifted the survivors would be visible in the order below.
@@ -407,12 +405,10 @@ final class DesiredStateAssemblerTests {
         #expect(resolved.map(\.interface.deviceName) == ["net0", "net2"])
 
         let boot = Volume(
-            id: UUID(), name: "boot", description: "", projectID: vm.$project.id,
+            id: UUID(), name: "boot", description: "", projectID: vm.projectID,
             environment: vm.environment, size: vm.disk, volumeType: .boot,
-            status: .attached, createdByID: UUID())
-        boot.$vm.id = vm.id!
-        boot.deviceName = VolumeDeviceName.disk(0).rawValue
-        boot.bootOrder = 0
+            status: .attached, createdByID: UUID(), vmID: vm.id!,
+            deviceName: VolumeDeviceName.disk(0).rawValue, bootOrder: 0)
         let spec = try VMSpecBuilder.buildVMSpec(
             from: vm, image: nil, volumes: [boot], resolvedInterfaces: resolved)
         let metadata = InstanceMetadata.build(
@@ -427,7 +423,7 @@ final class DesiredStateAssemblerTests {
     @Test("Only IMDS-backed VMs publish a NoCloud seed capability")
     func noCloudSeedCapabilityFollowsMetadataSource() {
         let seedToken = UUID(uuidString: "11111111-2222-4333-8444-555555555555")!
-        let vm = VM(
+        var vm = VM(
             name: "imds-vm", description: "d", image: "img", projectID: UUID(),
             environment: "production", cpu: 2, memory: 1 << 31, disk: 1 << 34,
             metadataSource: .imds, metadataSeedToken: seedToken)
@@ -456,10 +452,10 @@ final class DesiredStateAssemblerTests {
     func metadataAddsNoQueriesAsTheFleetGrows() async throws {
         try await withAssemblerApp { app, org, _ in
             let agentId = try await self.registerAgent(app: app, named: "scale-agent")
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let site = Site(
                 name: "Scale Site", organizationScope: .organization(try org.requireID()))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
 
             /// Places `count` VMs, each in its own project on its own network
             /// with two addressed NICs.
@@ -472,17 +468,17 @@ final class DesiredStateAssemblerTests {
                         gateway: "10.50.\(index % 250).1", projectID: try project.requireID(),
                         dnsServers: ["10.50.\(index % 250).53"], domainName: "s\(index).example",
                         siteID: try site.requireID())
-                    try await network.save(on: app.db)
-                    let vm = try await self.placeVM(
+                    try await network.save(on: app.testPostgres)
+                    var vm = try await self.placeVM(
                         app: app, project: project, named: "scale-vm-\(index)", onAgent: agentId)
                     vm.hostname = "scale-\(index)"
-                    try await vm.save(on: app.db)
+                    try await vm.save(on: app.testPostgres)
                     // Registered so the identity lookup measures the loaded
                     // path: a per-VM query hidden behind an always-empty table
                     // would never show up in the counts below.
                     try await GuestIdentity.register(
                         vmID: try vm.requireID(), organizationID: try org.requireID(),
-                        createdBy: nil, on: app.db)
+                        createdBy: nil, on: app.testPostgres)
                     for nic in 0..<2 {
                         try await self.attachNIC(
                             app: app, vm: vm, network: network, deviceName: "net\(nic)",
@@ -494,8 +490,8 @@ final class DesiredStateAssemblerTests {
             }
 
             func queriesToAssemble(expecting expected: Int) async throws -> Int {
-                app.fluent.history.start()
-                defer { app.fluent.history.stop() }
+                app.testPostgres.history.start()
+                defer { app.testPostgres.history.stop() }
                 let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
                 #expect(sync.vms.count == expected)
                 // Every VM carries metadata for both its NICs and its own
@@ -503,7 +499,7 @@ final class DesiredStateAssemblerTests {
                 // would prove nothing.
                 #expect(sync.vms.allSatisfy { ($0.metadata?.nics.count ?? 0) == 2 })
                 #expect(sync.vms.allSatisfy { $0.metadata?.identity != nil })
-                return app.fluent.history.queries.count
+                return app.testPostgres.history.count
             }
 
             try await grow(from: 0, to: 3)

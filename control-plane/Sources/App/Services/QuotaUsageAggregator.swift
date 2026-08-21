@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 /// What a resource quota measures: which projects' workloads count against it,
@@ -100,29 +99,29 @@ struct QuotaUsageAggregator {
     /// Resolves what `quota` measures. Costs one indexed row lookup for a
     /// folder-scoped quota (to read its materialized path) and nothing at all
     /// for the other scopes.
-    static func scope(of quota: ResourceQuota, on db: Database) async throws -> QuotaScope {
+    static func scope(of quota: ResourceQuota, on db: PostgresStoreContext) async throws -> QuotaScope {
         QuotaScope(
             projects: try await projects(of: quota, on: db),
             environment: quota.environment
         )
     }
 
-    private static func projects(of quota: ResourceQuota, on db: Database) async throws -> QuotaScope.Projects {
-        if let projectID = quota.$project.id {
+    private static func projects(of quota: ResourceQuota, on db: PostgresStoreContext) async throws -> QuotaScope.Projects {
+        if let projectID = quota.projectID {
             return .project(projectID)
         }
-        if let folderID = quota.$organizationalUnit.id {
+        if let folderID = quota.organizationalUnitID {
             guard let folder = try await OrganizationalUnit.find(folderID, on: db) else { return .none }
             return .folderSubtree(path: folder.path)
         }
-        if let organizationID = quota.$organization.id {
+        if let organizationID = quota.organizationID {
             return .organization(organizationID)
         }
         return .none
     }
 
     /// Convenience for callers that hold a quota rather than a resolved scope.
-    static func measure(quota: ResourceQuota, on db: Database) async throws -> QuotaMeasuredUsage {
+    static func measure(quota: ResourceQuota, on db: PostgresStoreContext) async throws -> QuotaMeasuredUsage {
         try await measure(try await scope(of: quota, on: db), on: db)
     }
 
@@ -130,7 +129,7 @@ struct QuotaUsageAggregator {
     /// the snapshot artifacts that also occupy the storage pool, and volumes
     /// with their own snapshots and logical networks (STR-181 and STR-236,
     /// which share a single round trip).
-    static func measure(_ scope: QuotaScope, on db: Database) async throws -> QuotaMeasuredUsage {
+    static func measure(_ scope: QuotaScope, on db: PostgresStoreContext) async throws -> QuotaMeasuredUsage {
         if case .none = scope.projects { return .none }
         let sql = try requireSQL(db)
         let inScope = scope.predicate
@@ -192,7 +191,7 @@ struct QuotaUsageAggregator {
     /// the recorded per-artifact sizes are added on top. Counting the
     /// *recorded* bytes rather than a flag makes the figure track a partial
     /// export as its artifacts land, and fall away with the row on delete.
-    static func snapshotStorageBytes(in scope: QuotaScope, on db: Database) async throws -> Int64 {
+    static func snapshotStorageBytes(in scope: QuotaScope, on db: PostgresStoreContext) async throws -> Int64 {
         if case .none = scope.projects { return 0 }
         let sql = try requireSQL(db)
 
@@ -227,7 +226,7 @@ struct QuotaUsageAggregator {
     /// VM's memory grant, which bounds the machine state) until the agent
     /// reports the real figure; `error` rows are excluded, since a failed
     /// checkpoint's partial state is deleted.
-    static func vmCheckpointStorageBytes(in scope: QuotaScope, on db: Database) async throws -> Int64 {
+    static func vmCheckpointStorageBytes(in scope: QuotaScope, on db: PostgresStoreContext) async throws -> Int64 {
         if case .none = scope.projects { return 0 }
         let sql = try requireSQL(db)
 
@@ -278,14 +277,14 @@ struct QuotaUsageAggregator {
     /// bytes are either asked for or not yet reclaimed. A volume being deleted
     /// keeps its row precisely until the agent confirms the data is gone.
     static func infrastructureTotals(
-        in scope: QuotaScope, on db: Database
+        in scope: QuotaScope, on db: PostgresStoreContext
     ) async throws -> QuotaInfrastructureTotals {
         if case .none = scope.projects { return .none }
         let sql = try requireSQL(db)
         let inScope = scope.predicate
         // Networks have no environment column and are deliberately counted only
         // by quotas that span every environment (STR-236).
-        let networkScope: SQLQueryString = scope.environment == nil ? scope.projectPredicate : "FALSE"
+        let networkScope: PostgresSQLQuery = scope.environment == nil ? scope.projectPredicate : "FALSE"
 
         struct Totals: Decodable {
             let volume_bytes: Int64
@@ -321,7 +320,7 @@ struct QuotaUsageAggregator {
 
     /// Counts the scope's VMs by environment and by status in one grouped
     /// aggregate, for the per-quota usage endpoint.
-    static func vmBreakdown(in scope: QuotaScope, on db: Database) async throws -> QuotaVMBreakdown {
+    static func vmBreakdown(in scope: QuotaScope, on db: PostgresStoreContext) async throws -> QuotaVMBreakdown {
         if case .none = scope.projects { return QuotaVMBreakdown() }
         let sql = try requireSQL(db)
 
@@ -347,8 +346,8 @@ struct QuotaUsageAggregator {
         return breakdown
     }
 
-    private static func requireSQL(_ db: Database) throws -> any SQLDatabase {
-        guard let sql = db as? SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             // Fail closed. A zero measurement here would resync every quota's
             // reservations down to nothing and wave through the create that
             // asked for them.
@@ -367,7 +366,7 @@ extension QuotaScope {
     /// or a folder (`Project.validate`), and every folder both denormalizes its
     /// organization and materializes its `path`, so one join covers both
     /// shapes with no tree walk.
-    fileprivate var projectPredicate: SQLQueryString {
+    fileprivate var projectPredicate: PostgresSQLQuery {
         switch projects {
         case .project(let projectID):
             return "project_id = \(bind: projectID)"
@@ -398,7 +397,7 @@ extension QuotaScope {
 
     /// Workload predicate. Unlike `projectPredicate`, this also applies the
     /// environment dimension present on VMs, sandboxes and storage resources.
-    fileprivate var predicate: SQLQueryString {
+    fileprivate var predicate: PostgresSQLQuery {
         var predicate = projectPredicate
         if let environment {
             predicate += " AND environment = \(bind: environment)"

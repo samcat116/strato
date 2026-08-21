@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -38,7 +38,7 @@ enum GuardrailText {
         guardrailID: UUID,
         attachNode: IAMNode,
         engine: any CedarEngine,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Prepared {
         let trimmed = cedarText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw GuardrailError.emptyCedarText }
@@ -59,6 +59,33 @@ enum GuardrailText {
         return Prepared(cedarText: trimmed)
     }
 
+    static func prepare(
+        cedarText: String,
+        guardrailID: UUID,
+        attachNode: IAMNode,
+        engine: any CedarEngine,
+        using iam: IAMPersistence
+    ) async throws -> Prepared {
+        let trimmed = cedarText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw GuardrailError.emptyCedarText }
+
+        let id = GuardrailRendering.policyID(guardrailID)
+        let shape = try CedarAuthoredPolicyInspector.describe(cedarText: trimmed, policyID: id)
+        guard shape.effect == .forbid else {
+            throw GuardrailError.authoredMustForbid(shape.effect.rawValue)
+        }
+        try await requireContained(shape, attachNode: attachNode, using: iam)
+        try validateNotSelfLocking(shape)
+
+        let roles = try await iam.allRoles().map(RoleDescriptor.init(row:))
+        let schemaText = CedarSchemaBuilder.schemaText(roles: roles)
+        let source = CedarPolicySource(id: id, text: trimmed)
+        if let issue = engine.policyIssue(schemaText: schemaText, policy: source) {
+            throw GuardrailError.rejectedByCedar(issue)
+        }
+        return Prepared(cedarText: trimmed)
+    }
+
     /// Prove the forbid's resource scope names the attach node or a resource
     /// inside it — a ceiling reaches only the subtree it hangs on.
     ///
@@ -66,7 +93,7 @@ enum GuardrailText {
     /// attach node rather than an owner, and there is no owner-type gate because
     /// `GuardrailStore.attachableNodeTypes` already fixed it upstream.
     private static func requireContained(
-        _ shape: AuthoredPolicyShape, attachNode: IAMNode, on db: any Database
+        _ shape: AuthoredPolicyShape, attachNode: IAMNode, on db: PostgresStoreContext
     ) async throws {
         guard let scope = shape.resourceScope else {
             throw GuardrailError.authoredUnscopedResource
@@ -80,6 +107,27 @@ enum GuardrailText {
             throw GuardrailError.authoredOutOfScope(
                 attach: "\(attachNode.type.rawValue)/\(attachNode.id)",
                 resource: "\(scope.type.rawValue)/\(scope.id)")
+        }
+    }
+
+    private static func requireContained(
+        _ shape: AuthoredPolicyShape,
+        attachNode: IAMNode,
+        using iam: IAMPersistence
+    ) async throws {
+        guard let scope = shape.resourceScope else {
+            throw GuardrailError.authoredUnscopedResource
+        }
+        guard let scopeNodeType = scope.type.nodeType else {
+            throw GuardrailError.authoredPrincipalResourceScope(scope.type.rawValue)
+        }
+        let resourceNode = IAMNode(type: scopeNodeType, id: scope.id)
+        let chain = try await IAMResourceTree.ancestors(of: resourceNode, using: iam)
+        guard chain.contains(attachNode) else {
+            throw GuardrailError.authoredOutOfScope(
+                attach: "\(attachNode.type.rawValue)/\(attachNode.id)",
+                resource: "\(scope.type.rawValue)/\(scope.id)"
+            )
         }
     }
 
@@ -105,7 +153,7 @@ enum GuardrailText {
     /// per-policy validation `CedarPolicySetCache` runs at boot, so a forbid
     /// that only fails against the live schema is caught here.
     private static func compileCandidate(
-        policyID: String, cedarText: String, engine: any CedarEngine, on db: any Database
+        policyID: String, cedarText: String, engine: any CedarEngine, on db: PostgresStoreContext
     ) async throws {
         let roles = try await RoleStore.allDescriptors(on: db)
         let schemaText = CedarSchemaBuilder.schemaText(roles: roles)

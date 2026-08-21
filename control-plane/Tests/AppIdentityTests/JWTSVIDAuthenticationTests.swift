@@ -1,5 +1,5 @@
 import Crypto
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import JWT
 import Testing
@@ -334,20 +334,23 @@ struct JWTSVIDAuthenticationTests {
     @Test("A registered service account authenticates and is authorized by its bindings")
     func authenticatesRegisteredServiceAccount() async throws {
         try await withApp { app, signer in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "JWT Org")
             let project = try await builder.createProject(
                 name: "JWT Project", description: "d", organization: org)
 
-            let account = ServiceAccount(name: "ci", description: "CI", projectID: try project.requireID())
-            try await account.save(on: app.db)
-            let accountID = try account.requireID()
+            let account = try await LegacyServiceAccountStore.insert(
+                ServiceAccountWrite(
+                    name: "ci", description: "CI", projectID: try project.requireID()),
+                on: app.testPostgres)
+            let accountID = account.id
 
-            try await WorkloadRegistration(
-                spiffeID: "spiffe://strato.local/ci/builder",
-                kind: .serviceAccount,
-                serviceAccountID: accountID
-            ).save(on: app.db)
+            _ = try await LegacyWorkloadRegistrationStore.insert(
+                WorkloadRegistrationWrite(
+                    spiffeID: "spiffe://strato.local/ci/builder",
+                    kind: WorkloadRegistrationKind.serviceAccount.rawValue,
+                    serviceAccountID: accountID),
+                on: app.testPostgres)
 
             let token = try await signer.sign(
                 subject: "spiffe://strato.local/ci/builder", audience: [Self.audience])
@@ -364,13 +367,14 @@ struct JWTSVIDAuthenticationTests {
             // A binding is what actually opens the door — and it is an
             // ordinary role binding against the service-account principal, the
             // same row a user's grant would be.
-            try await RoleBinding(
-                principalType: .serviceAccount,
-                principalID: accountID,
-                role: .viewer,
-                nodeType: .organization,
-                nodeID: try org.requireID()
-            ).save(on: app.db)
+            _ = try await LegacyRoleBindingStore.insert(
+                LegacyRoleBindingWrite(
+                    principalType: IAMPrincipalType.serviceAccount.rawValue,
+                    principalID: accountID,
+                    roleID: IAMRole.viewer.seededID,
+                    nodeType: IAMNodeType.organization.rawValue,
+                    nodeID: try org.requireID()),
+                on: app.testPostgres)
 
             try await app.testing().test(
                 .GET, "/api/vms",
@@ -416,11 +420,12 @@ struct JWTSVIDAuthenticationTests {
     @Test("A JWT-SVID naming an agent identity is refused as an API credential")
     func refusesAgentIdentity() async throws {
         try await withApp { app, signer in
-            try await WorkloadRegistration(
-                spiffeID: "spiffe://strato.local/agent/node-1",
-                kind: .agent,
-                agentName: "node-1"
-            ).save(on: app.db)
+            _ = try await LegacyWorkloadRegistrationStore.insert(
+                WorkloadRegistrationWrite(
+                    spiffeID: "spiffe://strato.local/agent/node-1",
+                    kind: WorkloadRegistrationKind.agent.rawValue,
+                    agentName: "node-1"),
+                on: app.testPostgres)
 
             let token = try await signer.sign(
                 subject: "spiffe://strato.local/agent/node-1", audience: [Self.audience])
@@ -439,18 +444,20 @@ struct JWTSVIDAuthenticationTests {
     @Test("A workload principal is refused on the self-scoped identity plane")
     func refusesIdentityPlaneRoutes() async throws {
         try await withApp { app, signer in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Identity Plane Org")
             let project = try await builder.createProject(
                 name: "Identity Plane Project", description: "d", organization: org)
-            let account = ServiceAccount(name: "ci", description: "", projectID: try project.requireID())
-            try await account.save(on: app.db)
+            let account = try await LegacyServiceAccountStore.insert(
+                ServiceAccountWrite(name: "ci", projectID: try project.requireID()),
+                on: app.testPostgres)
 
-            try await WorkloadRegistration(
-                spiffeID: "spiffe://strato.local/ci/builder",
-                kind: .serviceAccount,
-                serviceAccountID: try account.requireID()
-            ).save(on: app.db)
+            _ = try await LegacyWorkloadRegistrationStore.insert(
+                WorkloadRegistrationWrite(
+                    spiffeID: "spiffe://strato.local/ci/builder",
+                    kind: WorkloadRegistrationKind.serviceAccount.rawValue,
+                    serviceAccountID: account.id),
+                on: app.testPostgres)
 
             let token = try await signer.sign(
                 subject: "spiffe://strato.local/ci/builder", audience: [Self.audience])
@@ -489,7 +496,6 @@ struct JWTSVIDAuthenticationTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let signer = try TestJWTSVIDSigner()
             app.jwtSVIDAuthorityStore = JWTSVIDAuthorityStore(

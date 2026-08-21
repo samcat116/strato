@@ -1,106 +1,14 @@
+import ControlPlanePostgres
 import Crypto
-import Fluent
 import Foundation
 import Vapor
 
-/// A CLI login session minted by the OAuth device grant: a short-lived access
-/// token plus a rotating refresh token, both stored as SHA-256 hashes.
-///
-/// Unlike API keys these are not user-managed secrets — the CLI obtains and
-/// rotates them automatically — so they live in their own table with their own
-/// Settings surface, and the access token authenticates through
-/// `OAuthTokenAuthenticator` (prefix `st_`) alongside the `sk_` key path.
-/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
-/// receive IDs or immutable snapshots and reload their own instance.
-final class CLISession: Model, @unchecked Sendable {
-    static let schema = "cli_sessions"
-
-    /// Access tokens live one hour; the CLI refreshes transparently.
+/// Secret formatting and lifetimes for CLI sessions. Durable state lives in
+/// `OAuthDeviceSessionsPersistence`.
+enum CLISession {
     static let accessTokenLifetime: TimeInterval = 3600
-    /// Refresh tokens slide forward 30 days on every rotation.
     static let refreshTokenLifetime: TimeInterval = 30 * 86400
-
-    @ID(key: .id)
-    var id: UUID?
-
-    @Parent(key: "user_id")
-    var user: User
-
-    @Field(key: "client_name")
-    var clientName: String
-
-    @Field(key: "restriction_actions")
-    var restrictionActions: [String]
-
-    @OptionalField(key: "restriction_node_type")
-    var restrictionNodeType: String?
-
-    @OptionalField(key: "restriction_node_id")
-    var restrictionNodeID: UUID?
-
-    @Field(key: "access_token_hash")
-    var accessTokenHash: String
-
-    @Field(key: "access_token_prefix")
-    var accessTokenPrefix: String
-
-    @Field(key: "access_token_expires_at")
-    var accessTokenExpiresAt: Date
-
-    @Field(key: "refresh_token_hash")
-    var refreshTokenHash: String
-
-    /// The immediately-previous refresh token hash. A presented token matching
-    /// this one is a replay of an already-rotated credential — the session is
-    /// revoked on the spot (OAuth security BCP refresh-token reuse detection).
-    @OptionalField(key: "previous_refresh_token_hash")
-    var previousRefreshTokenHash: String?
-
-    @Field(key: "refresh_token_expires_at")
-    var refreshTokenExpiresAt: Date
-
-    @OptionalField(key: "revoked_at")
-    var revokedAt: Date?
-
-    @OptionalField(key: "last_used_at")
-    var lastUsedAt: Date?
-
-    @OptionalField(key: "last_used_ip")
-    var lastUsedIP: String?
-
-    @Timestamp(key: "created_at", on: .create)
-    var createdAt: Date?
-
-    @Timestamp(key: "updated_at", on: .update)
-    var updatedAt: Date?
-
-    init() {}
-
-    init(
-        id: UUID? = nil,
-        userID: UUID,
-        clientName: String,
-        restriction: CredentialRestriction = .unrestricted,
-        accessTokenHash: String,
-        accessTokenPrefix: String,
-        accessTokenExpiresAt: Date,
-        refreshTokenHash: String,
-        refreshTokenExpiresAt: Date
-    ) {
-        self.id = id
-        self.$user.id = userID
-        self.clientName = clientName
-        self.restrictionActions = restriction.actions
-        self.restrictionNodeType = restriction.node?.type.rawValue
-        self.restrictionNodeID = restriction.node?.id
-        self.accessTokenHash = accessTokenHash
-        self.accessTokenPrefix = accessTokenPrefix
-        self.accessTokenExpiresAt = accessTokenExpiresAt
-        self.refreshTokenHash = refreshTokenHash
-        self.refreshTokenExpiresAt = refreshTokenExpiresAt
-    }
-
-    // MARK: - Token generation
+    static let lastUsedDebounceWindow: TimeInterval = 15 * 60
 
     static func generateAccessToken() -> String { generateToken(prefix: "st") }
     static func generateRefreshToken() -> String { generateToken(prefix: "rt") }
@@ -122,38 +30,13 @@ final class CLISession: Model, @unchecked Sendable {
         return hashed.compactMap { String(format: "%02x", $0) }.joined()
     }
 
-    // MARK: - Validity
-
-    var isRevoked: Bool { revokedAt != nil }
-
-    var isAccessTokenExpired: Bool { Date() > accessTokenExpiresAt }
-
-    var isRefreshTokenExpired: Bool { Date() > refreshTokenExpiresAt }
-
-    /// Issue a fresh access/refresh pair for this session, returning the raw
-    /// tokens (never persisted). The old refresh hash is kept one generation
-    /// for replay detection.
-    func rotate() -> (accessToken: String, refreshToken: String) {
-        let accessToken = Self.generateAccessToken()
-        let refreshToken = Self.generateRefreshToken()
-        previousRefreshTokenHash = refreshTokenHash
-        accessTokenHash = Self.hashToken(accessToken)
-        accessTokenPrefix = String(accessToken.prefix(12)) + "..."
-        accessTokenExpiresAt = Date().addingTimeInterval(Self.accessTokenLifetime)
-        refreshTokenHash = Self.hashToken(refreshToken)
-        refreshTokenExpiresAt = Date().addingTimeInterval(Self.refreshTokenLifetime)
-        return (accessToken, refreshToken)
+    static func lastUsedIsStale(_ lastUsedAt: Date?, now: Date = Date()) -> Bool {
+        guard let lastUsedAt else { return true }
+        return now.timeIntervalSince(lastUsedAt) >= lastUsedDebounceWindow
     }
 }
 
-extension CLISession: Content {}
-
-extension CLISession: CredentialRestrictionStoring {}
-
-// MARK: - DTOs
-
-/// RFC 8628 §3.2 device authorization response. Snake-case field names are
-/// part of the OAuth wire format, not our JSON conventions.
+/// RFC 8628 section 3.2 device authorization response.
 struct DeviceAuthorizationResponse: Content {
     let deviceCode: String
     let userCode: String
@@ -172,7 +55,6 @@ struct DeviceAuthorizationResponse: Content {
     }
 }
 
-/// RFC 6749 §5.1 token response.
 struct TokenResponse: Content {
     let accessToken: String
     let tokenType: String
@@ -187,7 +69,6 @@ struct TokenResponse: Content {
     }
 }
 
-/// RFC 6749 §5.2 / RFC 8628 §3.5 error response (HTTP 400).
 struct OAuthErrorResponse: Content {
     let error: String
     let errorDescription: String?
@@ -198,20 +79,15 @@ struct OAuthErrorResponse: Content {
     }
 }
 
-/// Details of a pending device authorization shown on the `/activate`
-/// approval page.
 struct PendingDeviceAuthorizationResponse: Content {
     let userCode: String
     let clientName: String
-    /// What the client asked to be able to do — what the approval page shows
-    /// the user before they hand over a session.
     let restriction: CredentialRestrictionPayload
     let requestIP: String?
     let createdAt: Date?
     let expiresAt: Date
 }
 
-/// A CLI session as listed in Settings.
 struct CLISessionResponse: Content {
     let id: UUID?
     let clientName: String
@@ -222,10 +98,12 @@ struct CLISessionResponse: Content {
     let lastUsedIP: String?
     let refreshTokenExpiresAt: Date
 
-    init(from session: CLISession) {
+    init(from session: CLISessionSnapshot) {
         self.id = session.id
         self.clientName = session.clientName
-        self.restriction = CredentialRestrictionPayload(session.restriction)
+        self.restriction = CredentialRestrictionPayload(
+            CredentialRestriction(session.restriction)
+        )
         self.accessTokenPrefix = session.accessTokenPrefix
         self.createdAt = session.createdAt
         self.lastUsedAt = session.lastUsedAt

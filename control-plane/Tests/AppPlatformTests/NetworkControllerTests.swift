@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -23,9 +22,8 @@ final class NetworkControllerTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "netuser",
                 email: "net@example.com",
@@ -34,8 +32,7 @@ final class NetworkControllerTests {
             )
             let org = try await builder.createOrganization(name: "Network Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Network Project",
@@ -46,8 +43,8 @@ final class NetworkControllerTests {
                 id: Self.fixtureSiteID,
                 name: "Network Test Site",
                 organizationScope: .organization(try org.requireID()))
-            try await site.save(on: app.db)
-            let token = try await user.generateAPIKey(on: app.db)
+            try await site.save(on: app.testPostgres)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, project, token)
 
@@ -64,7 +61,7 @@ final class NetworkControllerTests {
     @Test("GET /api/networks lists the caller's project's networks")
     func listIncludesProjectNetworks() async throws {
         try await withNetworkTestApp { app, _, project, token in
-            let mine = try await TestDataBuilder(db: app.db).createNetwork(
+            let mine = try await TestDataBuilder(db: app.testPostgres).createNetwork(
                 name: "listed-net", project: project, subnet: "10.8.0.0/24", gateway: "10.8.0.1")
 
             try await app.test(.GET, "/api/networks") { req in
@@ -84,11 +81,11 @@ final class NetworkControllerTests {
         try await withNetworkTestApp { app, user, project, token in
             // A network in a different project that must not appear — including
             // one sharing the caller's network name, which is legal now.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let otherProject = try await builder.createProject(
                 name: "Other Project",
                 description: "not the caller's project",
-                organization: try await Organization.find(user.currentOrganizationId, on: app.db)
+                organization: try await Organization.find(user.currentOrganizationId, on: app.testPostgres)
             )
             try await builder.createNetwork(
                 name: "shared-name", project: project, subnet: "10.8.0.0/24", gateway: "10.8.0.1")
@@ -111,9 +108,9 @@ final class NetworkControllerTests {
         try await withNetworkTestApp { app, _, project, _ in
             // A bare org member: membership grants org:read + project:create
             // only, so the project_id filter's view_project check denies.
-            let member = try await TestDataBuilder(db: app.db).createUser(
+            let member = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "net-member", email: "net-member@example.com")
-            let memberToken = try await member.generateAPIKey(on: app.db)
+            let memberToken = try await member.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/networks?project_id=\(project.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
@@ -128,13 +125,13 @@ final class NetworkControllerTests {
     @Test("A project quota bounds its use of the fleet-wide resolver pool")
     func projectQuotaProtectsFleetResolverPool() async throws {
         try await withNetworkTestApp { app, user, project, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let organization = try #require(
-                try await Organization.find(user.currentOrganizationId, on: app.db))
+                try await Organization.find(user.currentOrganizationId, on: app.testPostgres))
             let site = Site(
                 name: "Quota Resolver Site",
                 organizationScope: .organization(try organization.requireID()))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
             let siteID = try site.requireID()
             let quota = try await builder.createResourceQuota(
                 name: "one-network", maxNetworks: 1, project: project)
@@ -152,7 +149,7 @@ final class NetworkControllerTests {
             }
             let admittedID = try #require(admitted?.id)
             let admittedIndex = try #require(
-                await LogicalNetwork.find(admittedID, on: app.db)?.resolverIndex)
+                await LogicalNetwork.find(admittedID, on: app.testPostgres)?.resolverIndex)
 
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -165,7 +162,7 @@ final class NetworkControllerTests {
                 #expect(res.body.string.contains("Quota 'one-network' exceeded"))
             }
             #expect(
-                try await LogicalNetwork.query(on: app.db).filter(\.$name == "refused").first() == nil,
+                try await LegacyLogicalNetworkStore.networks(name: "refused", on: app.testPostgres).first == nil,
                 "a refused create must persist neither a network nor a resolver index")
 
             let otherProject = try await builder.createProject(
@@ -184,7 +181,7 @@ final class NetworkControllerTests {
             }
             let otherID = try #require(other?.id)
             let otherIndex = try #require(
-                await LogicalNetwork.find(otherID, on: app.db)?.resolverIndex)
+                await LogicalNetwork.find(otherID, on: app.testPostgres)?.resolverIndex)
             #expect(otherIndex == admittedIndex + 1, "the refusal did not consume a fleet-wide index")
 
             try await app.test(.GET, "/api/quotas/\(try quota.requireID())") { req in
@@ -209,10 +206,10 @@ final class NetworkControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            let afterDelete = try #require(try await ResourceQuota.find(quota.id, on: app.db))
+            let afterDelete = try #require(try await ResourceQuota.find(quota.id, on: app.testPostgres))
             #expect(afterDelete.networkCount == 0)
-            try await QuotaEnforcementService.resyncReservations(afterDelete, on: app.db)
-            #expect(afterDelete.networkCount == 0, "the released count survives a canonical resync")
+            let synchronized = try await QuotaEnforcementService.resyncReservations(afterDelete, on: app.testPostgres)
+            #expect(synchronized.networkCount == 0, "the released count survives a canonical resync")
         }
     }
 
@@ -234,8 +231,8 @@ final class NetworkControllerTests {
                 #expect(network.attachedInterfaceCount == 0)
             }
 
-            let persisted = try await LogicalNetwork.query(on: app.db)
-                .filter(\.$name == "app-net").first()
+            let persisted = try await LegacyLogicalNetworkStore.networks(
+                name: "app-net", on: app.testPostgres).first
             #expect(persisted != nil)
         }
     }
@@ -364,7 +361,7 @@ final class NetworkControllerTests {
             let network = LogicalNetwork(
                 name: "metadata-update-net", subnet: "10.33.0.0/24", gateway: "10.33.0.1",
                 projectID: project.id!, createdByID: user.id!)
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
 
             try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -374,7 +371,7 @@ final class NetworkControllerTests {
                 #expect(res.body.string.contains("reserved for Strato's own link-local services"))
             }
 
-            let reloaded = try await LogicalNetwork.find(network.id!, on: app.db)
+            let reloaded = try await LogicalNetwork.find(network.id!, on: app.testPostgres)
             #expect(reloaded?.subnet6 == nil)
         }
     }
@@ -386,9 +383,10 @@ final class NetworkControllerTests {
                 name: "legacy-service-space-net", subnet: "10.34.0.0/24", gateway: "10.34.0.1",
                 subnet6: "fd00:ec2:abcd::/64", gateway6: "fd00:ec2:abcd::1",
                 projectID: project.id!, createdByID: user.id!)
-            try await colliding.save(on: app.db)
+            try await colliding.save(on: app.testPostgres)
 
-            let found = try await NetworkServiceSpaceAudit.collidingNetworks(on: app.db)
+            let found = try await NetworkServiceSpaceAudit.collidingNetworks(
+                using: app.networksPersistence)
             #expect(found.map(\.id).contains(colliding.id))
         }
     }
@@ -400,7 +398,7 @@ final class NetworkControllerTests {
                 name: "sibling6-net", subnet: "10.26.0.0/24", gateway: "10.26.0.1",
                 subnet6: "fd00:aa:bb:cc::/64", gateway6: "fd00:aa:bb:cc::1",
                 projectID: project.id!, createdByID: user.id!)
-            try await existing.save(on: app.db)
+            try await existing.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -420,12 +418,12 @@ final class NetworkControllerTests {
             let network = LogicalNetwork(
                 name: "grow6-net", subnet: "10.28.0.0/24", gateway: "10.28.0.1",
                 projectID: project.id!, createdByID: user.id!)
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
             // In use by a NIC — additive IPv6 must still be allowed.
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "grow6-vm", project: project)
+            let vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "grow6-vm", project: project)
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: network.id!, macAddress: VMNetworkInterface.generateMACAddress())
-            try await nic.save(on: app.db)
+            try await nic.save(on: app.testPostgres)
 
             try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -437,7 +435,7 @@ final class NetworkControllerTests {
                 #expect(updated.gateway6 != nil)
             }
 
-            let persisted = try await LogicalNetwork.find(network.id, on: app.db)
+            let persisted = try await LogicalNetwork.find(network.id, on: app.testPostgres)
             #expect(persisted?.generation == 2)
         }
     }
@@ -464,15 +462,16 @@ final class NetworkControllerTests {
                 name: "shrink6-net", subnet: "10.29.0.0/24", gateway: "10.29.0.1",
                 subnet6: "fd00:29::/64", gateway6: "fd00:29::1",
                 projectID: project.id!, createdByID: user.id!)
-            try await network.save(on: app.db)
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "shrink6-vm", project: project)
+            try await network.save(on: app.testPostgres)
+            let vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "shrink6-vm", project: project)
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: network.id!, macAddress: VMNetworkInterface.generateMACAddress())
-            try await nic.save(on: app.db)
-            let address6 = VMInterfaceAddress(
+            try await nic.save(on: app.testPostgres)
+            try await LegacyInterfaceAddressStore.insert(
+                kind: .vm,
                 interfaceID: nic.id!, logicalNetworkID: network.id!, family: .ipv6,
-                address: "fd00:29::100", prefixLength: 64, gateway: "fd00:29::1")
-            try await address6.save(on: app.db)
+                address: "fd00:29::100", prefixLength: 64, gateway: "fd00:29::1",
+                on: app.testPostgres)
 
             try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -522,7 +521,7 @@ final class NetworkControllerTests {
     @Test("POST /api/networks rejects a name already used in the same project (409)")
     func createRejectsDuplicateNameInProject() async throws {
         try await withNetworkTestApp { app, _, project, token in
-            try await TestDataBuilder(db: app.db).createNetwork(
+            try await TestDataBuilder(db: app.testPostgres).createNetwork(
                 name: "taken-net", project: project, subnet: "10.39.0.0/24", gateway: "10.39.0.1")
 
             try await app.test(.POST, "/api/networks") { req in
@@ -540,8 +539,8 @@ final class NetworkControllerTests {
     @Test("A non-current agent cannot register into a fleet that already has colliding names")
     func registrationRefusedWhenNamesAlreadyCollide() async throws {
         try await withNetworkTestApp { app, user, project, _ in
-            let builder = TestDataBuilder(db: app.db)
-            let org = try #require(try await Organization.find(user.currentOrganizationId, on: app.db))
+            let builder = TestDataBuilder(db: app.testPostgres)
+            let org = try #require(try await Organization.find(user.currentOrganizationId, on: app.testPostgres))
             let neighbour = try await builder.createProject(
                 name: "Late Rollback Neighbour", description: "p", organization: org)
 
@@ -576,13 +575,15 @@ final class NetworkControllerTests {
                     named: "rolled-back-agent")
             }
             // The refusal is total: no half-registered row survives it.
-            let rows = try await Agent.query(on: app.db).filter(\.$name == "rolled-back-agent").count()
+            let rows = try await LegacyAgentStore.agents(
+                name: "rolled-back-agent", on: app.testPostgres).count
             #expect(rows == 0)
 
             // A current agent joins the same fleet without complaint.
             _ = try await register(
                 protocolVersion: WireProtocol.currentVersion, named: "current-agent")
-            let current = try await Agent.query(on: app.db).filter(\.$name == "current-agent").count()
+            let current = try await LegacyAgentStore.agents(
+                name: "current-agent", on: app.testPostgres).count
             #expect(current == 1)
         }
     }
@@ -593,10 +594,10 @@ final class NetworkControllerTests {
             // The acceptance criterion of issue #765: two projects can each own
             // a network called "default", on the same subnet, without sharing
             // an L2 domain or an IP pool.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let otherProject = try await builder.createProject(
                 name: "Neighbour Project", description: "p",
-                organization: try await Organization.find(user.currentOrganizationId, on: app.db))
+                organization: try await Organization.find(user.currentOrganizationId, on: app.testPostgres))
             let theirs = try await builder.createNetwork(
                 name: "default", project: otherProject, subnet: "10.41.0.0/24", gateway: "10.41.0.1")
 
@@ -622,12 +623,12 @@ final class NetworkControllerTests {
         try await withNetworkTestApp { app, _, project, _ in
             // A project viewer can see the project but holds no
             // network:create.
-            let viewer = try await TestDataBuilder(db: app.db).createUser(
+            let viewer = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "net-viewer", email: "net-viewer@example.com")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: viewer.id!, role: .viewer,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
-            let viewerToken = try await viewer.generateAPIKey(on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
+            let viewerToken = try await viewer.generateAPIKey(on: app)
 
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: viewerToken)
@@ -648,7 +649,7 @@ final class NetworkControllerTests {
             let network = LogicalNetwork(
                 name: "editable-net", subnet: "10.60.0.0/24", gateway: "10.60.0.1",
                 projectID: project.id!, createdByID: user.id!)
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
 
             try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -667,7 +668,7 @@ final class NetworkControllerTests {
             let network = LogicalNetwork(
                 name: "l3-net", subnet: "10.61.0.0/24", gateway: "10.61.0.1",
                 projectID: project.id!, createdByID: user.id!)
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
             let startGeneration = network.generation
 
             // Toggling external access is L3-affecting → generation bumps.
@@ -679,7 +680,7 @@ final class NetworkControllerTests {
                 let updated = try res.content.decode(NetworkResponse.self)
                 #expect(updated.externalAccess == false)
             }
-            let afterToggle = try await LogicalNetwork.find(network.id, on: app.db)
+            let afterToggle = try await LogicalNetwork.find(network.id, on: app.testPostgres)
             #expect(afterToggle?.generation == startGeneration + 1)
 
             // A DHCP-only edit does not bump the generation (no L3 change).
@@ -689,7 +690,7 @@ final class NetworkControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
-            let afterDHCP = try await LogicalNetwork.find(network.id, on: app.db)
+            let afterDHCP = try await LogicalNetwork.find(network.id, on: app.testPostgres)
             #expect(afterDHCP?.generation == startGeneration + 1)
         }
     }
@@ -700,7 +701,7 @@ final class NetworkControllerTests {
             let network = LogicalNetwork(
                 name: "concurrent-l3-net", subnet: "10.62.0.0/24", gateway: "10.62.0.1",
                 projectID: project.id!, createdByID: user.id!)
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
             let networkID = try network.requireID()
             let startGeneration = network.generation
 
@@ -722,7 +723,7 @@ final class NetworkControllerTests {
             }()
             _ = try await (gatewayUpdate, externalAccessUpdate)
 
-            let persisted = try #require(try await LogicalNetwork.find(networkID, on: app.db))
+            let persisted = try #require(try await LogicalNetwork.find(networkID, on: app.testPostgres))
             #expect(persisted.gateway == "10.62.0.254")
             #expect(persisted.externalAccess == false)
             #expect(persisted.generation == startGeneration + 2)
@@ -749,7 +750,7 @@ final class NetworkControllerTests {
             }
             let networkID = try #require(created?.id)
             let startGeneration = try #require(
-                await LogicalNetwork.find(networkID, on: app.db)?.generation)
+                await LogicalNetwork.find(networkID, on: app.testPostgres)?.generation)
 
             try await app.test(.PUT, "/api/networks/\(networkID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -760,7 +761,7 @@ final class NetworkControllerTests {
                 #expect(disabled.metadataEnabled == false)
             }
 
-            let updated = try await LogicalNetwork.find(networkID, on: app.db)
+            let updated = try await LogicalNetwork.find(networkID, on: app.testPostgres)
             #expect(updated?.metadataEnabled == false)
             // Deliberately no bump: the metadata port converges level-triggered
             // on every network reconcile, like the DHCP rows, so bumping would
@@ -775,7 +776,7 @@ final class NetworkControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
-            let reEnabled = try await LogicalNetwork.find(networkID, on: app.db)
+            let reEnabled = try await LogicalNetwork.find(networkID, on: app.testPostgres)
             #expect(reEnabled?.metadataEnabled == true)
         }
     }
@@ -805,9 +806,9 @@ final class NetworkControllerTests {
             }
             let networkID = try #require(created?.id)
             let startGeneration = try #require(
-                await LogicalNetwork.find(networkID, on: app.db)?.generation)
+                await LogicalNetwork.find(networkID, on: app.testPostgres)?.generation)
             let allocated = try #require(
-                await LogicalNetwork.find(networkID, on: app.db)?.resolverIndex)
+                await LogicalNetwork.find(networkID, on: app.testPostgres)?.resolverIndex)
 
             try await app.test(.PUT, "/api/networks/\(networkID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -823,7 +824,7 @@ final class NetworkControllerTests {
                 #expect(disabled.resolverAddresses?.count == 2)
             }
 
-            let updated = try await LogicalNetwork.find(networkID, on: app.db)
+            let updated = try await LogicalNetwork.find(networkID, on: app.testPostgres)
             #expect(updated?.resolverEnabled == false)
             // No bump, for the metadata port's reason: the localport, the DHCP
             // row and the resolver process all converge level-triggered on every
@@ -836,7 +837,7 @@ final class NetworkControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
-            let reEnabled = try await LogicalNetwork.find(networkID, on: app.db)
+            let reEnabled = try await LogicalNetwork.find(networkID, on: app.testPostgres)
             #expect(reEnabled?.resolverEnabled == true)
             // **The same index, not a fresh one.** Moving it would change what
             // guests were told over DHCP and strand every lease until it
@@ -864,7 +865,7 @@ final class NetworkControllerTests {
                     #expect(res.status == .ok)
                     let created = try res.content.decode(NetworkResponse.self)
                     addresses.append(try #require(created.resolverAddresses))
-                    let row = try await LogicalNetwork.find(created.id, on: app.db)
+                    let row = try await LogicalNetwork.find(created.id, on: app.testPostgres)
                     indexes.append(try #require(row?.resolverIndex))
                 }
             }
@@ -899,7 +900,7 @@ final class NetworkControllerTests {
                 let created = try res.content.decode(NetworkResponse.self)
                 #expect(created.resolverEnabled == false)
                 #expect(created.resolverAddresses == nil)
-                let row = try await LogicalNetwork.find(created.id, on: app.db)
+                let row = try await LogicalNetwork.find(created.id, on: app.testPostgres)
                 #expect(row?.resolverIndex == nil)
             }
         }
@@ -931,7 +932,7 @@ final class NetworkControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
-            let after = try await LogicalNetwork.find(networkID, on: app.db)
+            let after = try await LogicalNetwork.find(networkID, on: app.testPostgres)
             #expect(after?.resolverEnabled == true)
             // The list itself is unchanged in shape; only what consumes it moved.
             #expect(after?.dnsServers == ["9.9.9.9"])
@@ -940,12 +941,12 @@ final class NetworkControllerTests {
 
     @Test("The zone-resolution warning names whichever thing is withholding the resolver")
     func zoneResolutionWarningBranches() {
-        let network = LogicalNetwork(
+        var network = LogicalNetwork(
             name: "warn", subnet: "10.90.0.0/24", projectID: UUID(), resolverIndex: 400)
 
         // Nothing attached: nothing to fail to deliver, whatever the resolver
         // is doing.
-        network.resolverEnabled = false
+        network = network.replacing(resolverEnabled: false)
         #expect(
             ResolverCapability.zoneResolutionWarning(
                 network: network, attachedZoneCount: 0, incapableAgentNames: ["old-host"]) == nil)
@@ -956,7 +957,7 @@ final class NetworkControllerTests {
         #expect(off.contains("resolver is off"))
         #expect(off.contains("its attached DNS zone"))
 
-        network.resolverEnabled = true
+        network = network.replacing(resolverEnabled: true)
         #expect(
             ResolverCapability.zoneResolutionWarning(
                 network: network, attachedZoneCount: 2, incapableAgentNames: []) == nil)
@@ -969,7 +970,7 @@ final class NetworkControllerTests {
         #expect(incapable.contains("its 2 attached DNS zones"))
 
         // The pre-STR-40 state the backfill exists to remove.
-        network.resolverIndex = nil
+        network = network.replacing(resolverIndex: .some(nil))
         let unallocated = try! #require(
             ResolverCapability.zoneResolutionWarning(
                 network: network, attachedZoneCount: 1, incapableAgentNames: []))
@@ -981,13 +982,12 @@ final class NetworkControllerTests {
         let siteA = UUID()
         let siteB = UUID()
         func incapableAgent(named name: String, site: UUID) -> Agent {
-            let agent = Agent(
+            Agent(
                 name: name, hostname: name, version: "1.0",
                 resources: AgentResources(
                     totalCPU: 1, availableCPU: 1, totalMemory: 1, availableMemory: 1,
-                    totalDisk: 1, availableDisk: 1))
-            agent.$site.id = site
-            return agent
+                    totalDisk: 1, availableDisk: 1)
+            ).replacing(siteID: site)
         }
         let index = ResolverCapability.Index(incapable: [
             incapableAgent(named: "old-b", site: siteB),
@@ -1016,7 +1016,7 @@ final class NetworkControllerTests {
             let existing = LogicalNetwork(
                 name: "net-a", subnet: "10.50.0.0/16", gateway: "10.50.0.1",
                 projectID: project.id!, createdByID: user.id!)
-            try await existing.save(on: app.db)
+            try await existing.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1034,12 +1034,12 @@ final class NetworkControllerTests {
             let network = LogicalNetwork(
                 name: "gw-net", subnet: "10.71.0.0/24", gateway: "10.71.0.1",
                 projectID: project.id!, createdByID: user.id!)
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
 
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "gw-vm", project: project)
+            let vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "gw-vm", project: project)
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: network.id!, macAddress: VMNetworkInterface.generateMACAddress())
-            try await nic.save(on: app.db)
+            try await nic.save(on: app.testPostgres)
 
             try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1056,12 +1056,12 @@ final class NetworkControllerTests {
             let network = LogicalNetwork(
                 name: "used-net", subnet: "10.70.0.0/24", gateway: "10.70.0.1",
                 projectID: project.id!, createdByID: user.id!)
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
 
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "nic-vm", project: project)
+            let vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "nic-vm", project: project)
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: network.id!, macAddress: VMNetworkInterface.generateMACAddress())
-            try await nic.save(on: app.db)
+            try await nic.save(on: app.testPostgres)
 
             // Safe since issue #765: the NIC references the row by id, so the
             // name is a label nothing resolves through.
@@ -1074,7 +1074,8 @@ final class NetworkControllerTests {
                 #expect(renamed.name == "renamed-net")
             }
 
-            let reloaded = try await VMNetworkInterface.find(nic.id, on: app.db)
+            let reloaded = try await LegacyVMNetworkInterfaceStore.interface(
+                id: try nic.requireID(), on: app.testPostgres)
             #expect(reloaded?.logicalNetworkID == network.id)
         }
     }
@@ -1087,7 +1088,7 @@ final class NetworkControllerTests {
             let network = LogicalNetwork(
                 name: "throwaway-net", subnet: "10.80.0.0/24", gateway: "10.80.0.1",
                 projectID: project.id!, createdByID: user.id!)
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/networks/\(network.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1095,7 +1096,7 @@ final class NetworkControllerTests {
                 #expect(res.status == .noContent)
             }
 
-            let gone = try await LogicalNetwork.find(network.id, on: app.db)
+            let gone = try await LogicalNetwork.find(network.id, on: app.testPostgres)
             #expect(gone == nil)
         }
     }
@@ -1106,12 +1107,12 @@ final class NetworkControllerTests {
             let network = LogicalNetwork(
                 name: "busy-net", subnet: "10.90.0.0/24", gateway: "10.90.0.1",
                 projectID: project.id!, createdByID: user.id!)
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
 
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "busy-vm", project: project)
+            let vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "busy-vm", project: project)
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: network.id!, macAddress: VMNetworkInterface.generateMACAddress())
-            try await nic.save(on: app.db)
+            try await nic.save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/networks/\(network.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1124,14 +1125,14 @@ final class NetworkControllerTests {
     @Test("DELETE /api/networks rejects a network carrying only sandbox interfaces (409)")
     func deleteRejectsNetworkWithSandboxInterface() async throws {
         try await withNetworkTestApp { app, _, project, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let network = try await builder.createNetwork(
                 name: "sandbox-net", project: project, subnet: "10.91.0.0/24", gateway: "10.91.0.1")
             let sandbox = try await builder.createSandbox(name: "sb", project: project)
             let nic = SandboxNetworkInterface(
                 sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: VMNetworkInterface.generateMACAddress())
-            try await nic.save(on: app.db)
+            try await nic.save(on: app.testPostgres)
 
             // A sandbox NIC holds an address from the same pool, so the network
             // is in use — the guard used to count VM interfaces only.
@@ -1141,7 +1142,7 @@ final class NetworkControllerTests {
                 #expect(res.status == .conflict)
             }
 
-            let stillThere = try await LogicalNetwork.find(network.id, on: app.db)
+            let stillThere = try await LogicalNetwork.find(network.id, on: app.testPostgres)
             #expect(stillThere != nil)
         }
     }
@@ -1193,7 +1194,8 @@ final class NetworkControllerTests {
                 #expect(res.status == .badRequest)
             }
 
-            let stored = try await LogicalNetwork.query(on: app.db).filter(\.$name == "smuggle-net").first()
+            let stored = try await LegacyLogicalNetworkStore.networks(
+                name: "smuggle-net", on: app.testPostgres).first
             #expect(stored == nil)
         }
     }
@@ -1264,7 +1266,7 @@ final class NetworkControllerTests {
             let network = LogicalNetwork(
                 name: "domain-edit-net", subnet: "10.96.0.0/24", gateway: "10.96.0.1",
                 projectID: project.id!, createdByID: user.id!, domainName: "corp.example.com")
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
 
             try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1273,7 +1275,7 @@ final class NetworkControllerTests {
                 #expect(res.status == .badRequest)
             }
 
-            let unchanged = try await LogicalNetwork.find(network.id, on: app.db)
+            let unchanged = try await LogicalNetwork.find(network.id, on: app.testPostgres)
             #expect(unchanged?.domainName == "corp.example.com")
 
             // An empty string still clears it — the one non-domain value the
@@ -1370,8 +1372,8 @@ private extension CreateNetworkRequest {
 }
 
 private extension LogicalNetwork {
-    convenience init(
-        id: UUID? = nil,
+    init(
+        id: UUID? = UUID(),
         name: String,
         subnet: String,
         gateway: String? = nil,

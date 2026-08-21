@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 /// The authored-policy API (issue #606): creating and editing permit/forbid
@@ -11,6 +11,8 @@ import Vapor
 /// `iam:readPolicy`: what a policy permits or forbids is a statement about who
 /// can do what.
 struct PolicyController: RouteCollection {
+    let iam: IAMPersistence
+
     func boot(routes: RoutesBuilder) throws {
         let iam = routes.grouped("api", "iam")
 
@@ -46,16 +48,15 @@ struct PolicyController: RouteCollection {
         let createdAt: Date?
         let updatedAt: Date?
 
-        init(_ policy: IAMPolicy) throws {
-            guard let id = policy.id,
-                let ownerType = policy.owner,
-                let effect = policy.policyEffect
+        init(_ policy: IAMPolicySnapshot) throws {
+            guard let ownerType = IAMRoleOwnerType(rawValue: policy.ownerType),
+                let effect = IAMPolicyEffect(rawValue: policy.effect)
             else {
                 throw Abort(
                     .internalServerError,
-                    reason: "Policy row is missing its id or names an unknown owner type or effect")
+                    reason: "Policy row names an unknown owner type or effect")
             }
-            self.id = id
+            self.id = policy.id
             self.name = policy.name
             self.description = policy.description
             self.ownerType = ownerType
@@ -135,7 +136,11 @@ struct PolicyController: RouteCollection {
         let owner = try IAMPolicySetOwner(type: ownerType, id: ownerId, kind: .policy)
         try await owner.requirePolicyAdmin(write: false, req: req)
 
-        let policies = try await PolicyStore.owned(by: owner.type, ownerID: owner.id, on: req.db)
+        let policies = try await PolicyStore.owned(
+            by: owner.type,
+            ownerID: owner.id,
+            using: iam
+        )
         return PolicyListResponse(policies: try policies.map(PolicyDTO.init))
     }
 
@@ -152,16 +157,16 @@ struct PolicyController: RouteCollection {
         let user = try req.auth.require(User.self)
         let payload = try req.content.decodeValidated(CreatePolicyRequest.self)
         let owner = try IAMPolicySetOwner(creating: payload.ownerType, id: payload.ownerId, kind: .policy)
-        try await owner.requireExists(on: req.db)
+        try await owner.requireExists(using: iam)
         try await owner.requirePolicyAdmin(write: true, req: req)
 
         let id = payload.id ?? UUID()
         let prepared = try await PolicyStore.prepare(
             id: id, cedarText: payload.cedarText, ownerType: owner.type, ownerID: owner.id,
-            engine: req.application.cedarEngine, on: req.db)
+            engine: req.application.cedarEngine, using: iam)
         let crossOrgGrant = try await requireAuthoredGrantPermitted(prepared, owner: owner, req: req)
 
-        let policy = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
+        let policy = try await iam.withPolicySetChange { transaction in
             let policy = try await PolicyStore.create(
                 id: id,
                 name: payload.name,
@@ -171,10 +176,10 @@ struct PolicyController: RouteCollection {
                 prepared: prepared,
                 createdBy: user.id,
                 enabled: payload.enabled ?? true,
-                on: db
+                in: transaction
             )
-            try await PolicySetVersionService.bump(
-                reason: "policy created: \(payload.name)", changedBy: user.id, on: db)
+            try await transaction.bumpPolicySetVersion(
+                reason: "policy created: \(payload.name)", changedBy: user.id)
             return policy
         }
         await req.application.announcePolicySetChange()
@@ -193,9 +198,7 @@ struct PolicyController: RouteCollection {
         let existing = try await find(req)
         let owner = try owner(of: existing)
         try await owner.requirePolicyAdmin(write: true, req: req)
-        guard let id = existing.id else {
-            throw Abort(.internalServerError, reason: "Policy row is missing its id")
-        }
+        let id = existing.id
 
         let payload = try req.content.decodeValidated(UpdatePolicyRequest.self)
         // Re-preparing only when the text changes: containment and the Cedar
@@ -205,7 +208,7 @@ struct PolicyController: RouteCollection {
             payload.cedarText != nil
             ? try await PolicyStore.prepare(
                 id: id, cedarText: payload.cedarText!, ownerType: owner.type, ownerID: owner.id,
-                engine: req.application.cedarEngine, on: req.db)
+                engine: req.application.cedarEngine, using: iam)
             : nil
         var crossOrgGrant: AuthoredCrossOrgGrant?
         if let prepared {
@@ -213,27 +216,35 @@ struct PolicyController: RouteCollection {
         }
 
         let name = payload.name ?? existing.name
-        let updated = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
+        let updated = try await iam.withPolicySetChange { transaction in
             // Re-read inside the transaction so the edit and the bump see the
             // same row, and a retried attempt starts from the row as it is now.
-            guard let policy = try await IAMPolicy.find(id, on: db) else {
+            guard let policy = try await transaction.policy(id: id) else {
                 throw Abort(.notFound, reason: "Policy not found")
             }
-            if let newName = payload.name { policy.name = newName }
-            if let description = payload.description { policy.description = description }
-            if let prepared {
-                policy.cedarText = prepared.cedarText
-                policy.effect = prepared.effect.rawValue
-            }
-            if let enabled = payload.enabled { policy.enabled = enabled }
+            let replacement = IAMPolicySnapshot(
+                id: policy.id,
+                name: payload.name ?? policy.name,
+                description: payload.description ?? policy.description,
+                ownerType: policy.ownerType,
+                ownerID: policy.ownerID,
+                cedarText: prepared?.cedarText ?? policy.cedarText,
+                effect: prepared?.effect.rawValue ?? policy.effect,
+                enabled: payload.enabled ?? policy.enabled,
+                createdBy: policy.createdBy,
+                createdAt: policy.createdAt,
+                updatedAt: policy.updatedAt
+            )
             do {
-                try await policy.save(on: db)
-            } catch let error as any DatabaseError where error.isConstraintFailure {
+                guard let saved = try await transaction.replacePolicy(replacement) else {
+                    throw Abort(.notFound, reason: "Policy not found")
+                }
+                try await transaction.bumpPolicySetVersion(
+                    reason: "policy updated: \(name)", changedBy: user.id)
+                return saved
+            } catch IAMPersistenceError.duplicatePolicyName {
                 throw PolicyError.duplicateName(name)
             }
-            try await PolicySetVersionService.bump(
-                reason: "policy updated: \(name)", changedBy: user.id, on: db)
-            return policy
         }
         await req.application.announcePolicySetChange()
         if let crossOrgGrant {
@@ -249,15 +260,13 @@ struct PolicyController: RouteCollection {
         let user = try req.auth.require(User.self)
         let policy = try await find(req)
         try await owner(of: policy).requirePolicyAdmin(write: true, req: req)
-        guard let id = policy.id else {
-            throw Abort(.internalServerError, reason: "Policy row is missing its id")
-        }
+        let id = policy.id
 
         let name = policy.name
-        try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
-            try await IAMPolicy.query(on: db).filter(\.$id == id).delete()
-            try await PolicySetVersionService.bump(
-                reason: "policy deleted: \(name)", changedBy: user.id, on: db)
+        try await iam.withPolicySetChange { transaction in
+            _ = try await transaction.deletePolicy(id: id)
+            try await transaction.bumpPolicySetVersion(
+                reason: "policy deleted: \(name)", changedBy: user.id)
         }
         await req.application.announcePolicySetChange()
 
@@ -283,7 +292,7 @@ struct PolicyController: RouteCollection {
         let id = payload.id ?? UUID()
         let prepared = try await PolicyStore.prepare(
             id: id, cedarText: payload.cedarText, ownerType: owner.type, ownerID: owner.id,
-            engine: req.application.cedarEngine, on: req.db)
+            engine: req.application.cedarEngine, using: iam)
         return ValidatePolicyResponse(id: id, cedarText: prepared.cedarText, effect: prepared.effect)
     }
 
@@ -328,7 +337,8 @@ struct PolicyController: RouteCollection {
         // grant and needs no cross-org permission.
         if let principal = namedPrincipal {
             let external = try await CrossOrgBindingGate.isCrossOrg(
-                principalType: principal.type, principalID: principal.id, node: ownerNode, on: req.db)
+                principalType: principal.type, principalID: principal.id,
+                node: ownerNode, using: iam)
             if !external { return nil }
         }
 
@@ -367,7 +377,7 @@ struct PolicyController: RouteCollection {
                 username: actor?.username,
                 apiKeyID: req.apiKey?.id,
                 organizationID: try? await CrossOrgBindingGate.rootOrganizationID(
-                    of: owner.node, on: req.db),
+                    of: owner.node, using: iam),
                 method: req.method.rawValue,
                 path: req.url.path,
                 resourceType: owner.node.type.rawValue,
@@ -378,11 +388,11 @@ struct PolicyController: RouteCollection {
             ))
     }
 
-    private func find(_ req: Request) async throws -> IAMPolicy {
+    private func find(_ req: Request) async throws -> IAMPolicySnapshot {
         guard let id = req.parameters.get("policyID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Policy id must be a UUID")
         }
-        guard let policy = try await IAMPolicy.find(id, on: req.db) else {
+        guard let policy = try await iam.policy(id: id) else {
             throw Abort(.notFound, reason: "Policy not found")
         }
         return policy
@@ -397,8 +407,8 @@ struct PolicyController: RouteCollection {
     /// such a row is unreachable today; this keeps it a loud `500` if one ever
     /// appears rather than a silently mis-scoped check. Roles say the same
     /// thing by returning nil (a platform *role* is a real, readable row).
-    private func owner(of policy: IAMPolicy) throws -> IAMPolicySetOwner {
-        guard let type = policy.owner, type != .platform else {
+    private func owner(of policy: IAMPolicySnapshot) throws -> IAMPolicySetOwner {
+        guard let type = IAMRoleOwnerType(rawValue: policy.ownerType), type != .platform else {
             throw Abort(
                 .internalServerError,
                 reason: "Policy row names an owner type that cannot own a policy: '\(policy.ownerType)'")

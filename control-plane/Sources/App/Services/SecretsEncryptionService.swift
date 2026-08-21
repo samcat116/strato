@@ -1,5 +1,5 @@
+import ControlPlanePostgres
 import Crypto
-import Fluent
 import Foundation
 import Vapor
 
@@ -129,52 +129,78 @@ struct SecretsEncryptionService: @unchecked Sendable {
     /// existed converge to encrypted form as soon as one is configured.
     /// Idempotent; concurrent replicas may both re-encrypt a row, but each
     /// writes a self-contained valid ciphertext.
-    func encryptStoredSecrets(on db: Database, logger: Logger) async throws {
+    func encryptStoredSecrets(
+        oidcProviders: OIDCProvidersPersistence,
+        ssfStreams: SSFStreamsPersistence,
+        registryPullSecrets: RegistryPullSecretsPersistence,
+        webhookSubscriptions: WebhookSubscriptionsPersistence,
+        logger: Logger
+    ) async throws {
         guard isEnabled else { return }
 
-        let providers = try await OIDCProvider.query(on: db).all()
+        let providers = try await oidcProviders.providersWithClientSecrets()
         var migratedSecrets = 0
-        for provider in providers where !provider.clientSecret.hasPrefix(Self.encryptedPrefix) {
-            provider.clientSecret = try encrypt(provider.clientSecret)
-            try await provider.save(on: db)
-            migratedSecrets += 1
+        for provider in providers where !provider.encryptedClientSecret.hasPrefix(Self.encryptedPrefix) {
+            if try await oidcProviders.replaceEncryptedClientSecret(
+                id: provider.id,
+                expectedCurrentValue: provider.encryptedClientSecret,
+                replacement: try encrypt(provider.encryptedClientSecret)
+            ) {
+                migratedSecrets += 1
+            }
         }
         if migratedSecrets > 0 {
             logger.info("Encrypted \(migratedSecrets) stored OIDC client secret(s) at rest")
         }
 
-        let streams = try await SSFStream.query(on: db).all()
+        let streams = try await ssfStreams.streamsWithAuthTokens()
         var migratedTokens = 0
         for stream in streams {
-            guard let token = stream.authToken, !token.hasPrefix(Self.encryptedPrefix) else {
+            guard
+                let token = stream.encryptedAuthToken,
+                !token.hasPrefix(Self.encryptedPrefix)
+            else {
                 continue
             }
-            stream.authToken = try encrypt(token)
-            try await stream.save(on: db)
-            migratedTokens += 1
+            if try await ssfStreams.replaceEncryptedAuthToken(
+                id: stream.id,
+                expectedCurrentValue: token,
+                replacement: try encrypt(token)
+            ) {
+                migratedTokens += 1
+            }
         }
         if migratedTokens > 0 {
             logger.info("Encrypted \(migratedTokens) stored SSF stream auth token(s) at rest")
         }
 
-        let pullSecrets = try await RegistryPullSecret.query(on: db).all()
+        let pullSecrets = try await registryPullSecrets.all()
         var migratedPullSecrets = 0
-        for pullSecret in pullSecrets where !pullSecret.secret.hasPrefix(Self.encryptedPrefix) {
-            pullSecret.secret = try encrypt(pullSecret.secret)
-            try await pullSecret.save(on: db)
-            migratedPullSecrets += 1
+        for pullSecret in pullSecrets
+        where !pullSecret.encryptedSecret.hasPrefix(Self.encryptedPrefix) {
+            if try await registryPullSecrets.replaceEncryptedSecret(
+                id: pullSecret.id,
+                expectedCurrentValue: pullSecret.encryptedSecret,
+                replacement: try encrypt(pullSecret.encryptedSecret)
+            ) {
+                migratedPullSecrets += 1
+            }
         }
         if migratedPullSecrets > 0 {
             logger.info("Encrypted \(migratedPullSecrets) stored registry pull secret(s) at rest")
         }
 
-        let subscriptions = try await WebhookSubscription.query(on: db).all()
+        let subscriptions = try await webhookSubscriptions.allWithSigningSecrets()
         var migratedSigningSecrets = 0
         for subscription in subscriptions
-        where !subscription.signingSecret.hasPrefix(Self.encryptedPrefix) {
-            subscription.signingSecret = try encrypt(subscription.signingSecret)
-            try await subscription.save(on: db)
-            migratedSigningSecrets += 1
+        where !subscription.encryptedSigningSecret.hasPrefix(Self.encryptedPrefix) {
+            if try await webhookSubscriptions.replaceSigningSecret(
+                id: subscription.id,
+                expectedCurrentValue: subscription.encryptedSigningSecret,
+                replacement: try encrypt(subscription.encryptedSigningSecret)
+            ) != nil {
+                migratedSigningSecrets += 1
+            }
         }
         if migratedSigningSecrets > 0 {
             logger.info("Encrypted \(migratedSigningSecrets) stored webhook signing secret(s) at rest")

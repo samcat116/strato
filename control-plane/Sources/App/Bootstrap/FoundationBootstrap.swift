@@ -29,11 +29,6 @@ extension Application {
 
         try bootstrapObservability()
 
-        // Track fire-and-forget background work (async VM operations) so shutdown
-        // can drain it before Fluent closes its connection pools. Registered
-        // before anything that can spawn work.
-        setUpBackgroundTaskRegistry()
-
         // How far to trust `X-Forwarded-For`, shared by rate limiting, audit
         // `sourceIP`, and API-key `lastUsedIP` so one request resolves to one
         // address everywhere. Set before any middleware that reads it.

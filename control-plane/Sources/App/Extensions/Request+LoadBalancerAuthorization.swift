@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 extension Request {
@@ -6,8 +6,12 @@ extension Request {
     /// this in the handler mirrors VM authorization and makes every nested
     /// listener/backend route defend itself instead of trusting only a path
     /// middleware mapping.
-    func authorizedLoadBalancer(_ loadBalancerID: UUID, action: String) async throws -> LoadBalancer {
-        guard let loadBalancer = try await LoadBalancer.find(loadBalancerID, on: db) else {
+    func authorizedLoadBalancer(
+        _ loadBalancerID: UUID, action: String, on database: PostgresStoreContext
+    ) async throws -> LoadBalancerSnapshot {
+        guard let loadBalancer = try await LegacyLoadBalancerStore.find(
+            id: loadBalancerID, on: database)
+        else {
             throw Abort(.notFound, reason: "Load balancer not found")
         }
         try await authorize(action, on: IAMNode(type: .loadBalancer, id: loadBalancerID))

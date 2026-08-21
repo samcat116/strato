@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Testing
 import Vapor
@@ -17,7 +17,7 @@ struct LastUsedTrackingTests {
 
     // MARK: - Helpers
 
-    private func makeUser(on db: any Database) async throws -> User {
+    private func makeUser(on db: PostgresStoreContext) async throws -> User {
         let user = User(
             username: "lastused-tester",
             email: "lastused@example.com",
@@ -30,43 +30,68 @@ struct LastUsedTrackingTests {
 
     private func makeAPIKey(
         for user: User,
-        on db: any Database,
+        on app: Application,
         lastUsedAt: Date?,
         lastUsedIP: String?
-    ) async throws -> (APIKey, String) {
-        let fullKey = APIKey.generateAPIKey()
-        let apiKey = APIKey(
-            userID: try user.requireID(),
-            name: "Test API Key",
-            keyHash: APIKey.hashAPIKey(fullKey),
-            keyPrefix: String(fullKey.prefix(8))
+    ) async throws -> (APIKeySnapshot, String) {
+        let fullKey = APIKeyCredential.generate()
+        let created = try await app.apiKeysPersistence.issue(
+            APIKeyWrite(
+                userID: try user.requireID(),
+                name: "Test API Key",
+                keyHash: APIKeyCredential.hash(fullKey),
+                keyPrefix: String(fullKey.prefix(8)),
+                restriction: CredentialRestriction.unrestricted.stored
+            ),
+            maximumKeysPerUser: 10
         )
-        apiKey.lastUsedAt = lastUsedAt
-        apiKey.lastUsedIP = lastUsedIP
-        try await apiKey.save(on: db)
-        return (apiKey, fullKey)
+        guard let lastUsedAt else { return (created, fullKey) }
+        _ = try await app.apiKeysPersistence.recordUsage(
+            id: created.id,
+            usedAt: lastUsedAt,
+            sourceIP: lastUsedIP,
+            staleBefore: .distantFuture
+        )
+        let seeded = try #require(
+            try await app.apiKeysPersistence.ownedKey(
+                id: created.id,
+                userID: created.userID
+            )
+        )
+        return (seeded, fullKey)
     }
 
     private func makeCLISession(
         for user: User,
-        on db: any Database,
+        on app: Application,
         lastUsedAt: Date?,
         lastUsedIP: String?
-    ) async throws -> (CLISession, String) {
+    ) async throws -> (CLISessionSnapshot, String) {
         let accessToken = CLISession.generateAccessToken()
-        let session = CLISession(
-            userID: try user.requireID(),
-            clientName: "test-cli",
-            accessTokenHash: CLISession.hashToken(accessToken),
-            accessTokenPrefix: String(accessToken.prefix(8)),
-            accessTokenExpiresAt: Date().addingTimeInterval(CLISession.accessTokenLifetime),
-            refreshTokenHash: CLISession.hashToken(CLISession.generateRefreshToken()),
-            refreshTokenExpiresAt: Date().addingTimeInterval(CLISession.refreshTokenLifetime)
+        let created = try await app.oauthDeviceSessionsPersistence.createSession(
+            CLISessionWrite(
+                userID: try user.requireID(),
+                clientName: "test-cli",
+                restriction: CredentialRestriction.unrestricted.stored,
+                accessTokenHash: CLISession.hashToken(accessToken),
+                accessTokenPrefix: String(accessToken.prefix(8)),
+                accessTokenExpiresAt: Date().addingTimeInterval(CLISession.accessTokenLifetime),
+                refreshTokenHash: CLISession.hashToken(CLISession.generateRefreshToken()),
+                refreshTokenExpiresAt: Date().addingTimeInterval(CLISession.refreshTokenLifetime)
+            )
         )
-        session.lastUsedAt = lastUsedAt
-        session.lastUsedIP = lastUsedIP
-        try await session.save(on: db)
-        return (session, accessToken)
+        guard let lastUsedAt else { return (created, accessToken) }
+        _ = try await app.oauthDeviceSessionsPersistence.recordSessionUsage(
+            id: created.id,
+            usedAt: lastUsedAt,
+            sourceIP: lastUsedIP,
+            staleBefore: lastUsedAt
+        )
+        let seeded = try #require(
+            try await app.oauthDeviceSessionsPersistence.session(
+                accessTokenHash: created.accessTokenHash
+            ))
+        return (seeded, accessToken)
     }
 
     /// Replaces the routing table with a single route behind the production
@@ -100,51 +125,31 @@ struct LastUsedTrackingTests {
         await app.backgroundTasks.drain(timeout: .seconds(10))
     }
 
-    /// The column sets written by recorded `UPDATE`s against `schema`.
-    ///
-    /// Fluent records the query as issued, before it stamps `updated_at` onto
-    /// any update, so these are exactly the columns the caller asked for.
-    private func recordedUpdateColumns(on app: Application, schema: String) -> [Set<FieldKey>] {
-        app.fluent.history.queries.compactMap { query in
-            guard query.schema == schema, case .update = query.action else { return nil }
-            var columns: Set<FieldKey> = []
-            for case .dictionary(let fields) in query.input {
-                columns.formUnion(fields.keys)
-            }
-            return columns
-        }
-    }
-
     // MARK: - Debounce predicate
 
     @Test("A credential that has never been used is always stale")
     func testNeverUsedIsStale() {
-        let key = APIKey(userID: UUID(), name: "k", keyHash: "h", keyPrefix: "p")
-        #expect(key.lastUsedIsStale())
+        #expect(APIKeyCredential.lastUsedIsStale(nil))
     }
 
     @Test("A recently recorded timestamp is inside the debounce window")
     func testRecentTimestampIsFresh() {
         let now = Date()
-        let key = APIKey(userID: UUID(), name: "k", keyHash: "h", keyPrefix: "p")
-        key.lastUsedAt = now.addingTimeInterval(-APIKey.lastUsedDebounceWindow + 60)
-        #expect(!key.lastUsedIsStale(now: now))
+        let lastUsedAt = now.addingTimeInterval(-APIKeyCredential.lastUsedDebounceWindow + 60)
+        #expect(!APIKeyCredential.lastUsedIsStale(lastUsedAt, now: now))
     }
 
     @Test("A timestamp older than the debounce window is stale")
     func testOldTimestampIsStale() {
         let now = Date()
-        let key = APIKey(userID: UUID(), name: "k", keyHash: "h", keyPrefix: "p")
-        key.lastUsedAt = now.addingTimeInterval(-APIKey.lastUsedDebounceWindow - 1)
-        #expect(key.lastUsedIsStale(now: now))
+        let lastUsedAt = now.addingTimeInterval(-APIKeyCredential.lastUsedDebounceWindow - 1)
+        #expect(APIKeyCredential.lastUsedIsStale(lastUsedAt, now: now))
     }
 
     @Test("A timestamp ahead of now reads as fresh rather than being dragged back")
     func testFutureTimestampIsFresh() {
         let now = Date()
-        let session = CLISession()
-        session.lastUsedAt = now.addingTimeInterval(300)
-        #expect(!session.lastUsedIsStale(now: now))
+        #expect(!CLISession.lastUsedIsStale(now.addingTimeInterval(300), now: now))
     }
 
     // MARK: - API keys
@@ -153,27 +158,24 @@ struct LastUsedTrackingTests {
     func testAPIKeyFirstUseRecords() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await makeUser(on: app.db)
+        let user = try await makeUser(on: app.testPostgres)
         let (apiKey, fullKey) = try await makeAPIKey(
-            for: user, on: app.db, lastUsedAt: nil, lastUsedIP: nil)
-        let keyID = try apiKey.requireID()
+            for: user, on: app, lastUsedAt: nil, lastUsedIP: nil)
+        let keyID = apiKey.id
 
         registerProtectedRoute(on: app)
-        app.fluent.history.start()
         try await authenticate(app, token: fullKey)
 
-        let reloaded = try #require(try await APIKey.find(keyID, on: app.db))
+        let reloaded = try #require(
+            try await app.apiKeysPersistence.ownedKey(id: keyID, userID: apiKey.userID)
+        )
         #expect(reloaded.lastUsedAt != nil)
-        // A targeted update, not the full-row `save` this replaced: every other
-        // column of the key stays out of the statement.
-        #expect(
-            recordedUpdateColumns(on: app, schema: APIKey.schema) == [
-                [APIKey.lastUsedAtKey, APIKey.lastUsedIPKey]
-            ])
+        #expect(reloaded.name == "Test API Key")
+        #expect(reloaded.keyPrefix == apiKey.keyPrefix)
+        #expect(reloaded.isActive)
+        #expect(reloaded.expiresAt == nil)
 
-        app.fluent.history.stop()
         try await app.shutdownForTesting()
     }
 
@@ -181,34 +183,38 @@ struct LastUsedTrackingTests {
     func testAPIKeyDebouncesRepeatedUse() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await makeUser(on: app.db)
+        let user = try await makeUser(on: app.testPostgres)
         let (apiKey, fullKey) = try await makeAPIKey(
-            for: user, on: app.db, lastUsedAt: nil, lastUsedIP: nil)
-        let keyID = try apiKey.requireID()
+            for: user, on: app, lastUsedAt: nil, lastUsedIP: nil)
+        let keyID = apiKey.id
 
         registerProtectedRoute(on: app)
 
         // First request pays the write, then stamp a recognizable IP so a
         // second write would be visible in the row as well as in the history.
         try await authenticate(app, token: fullKey)
-        let afterFirst = try #require(try await APIKey.find(keyID, on: app.db))
+        let afterFirst = try #require(
+            try await app.apiKeysPersistence.ownedKey(id: keyID, userID: apiKey.userID)
+        )
         let recordedAt = try #require(afterFirst.lastUsedAt)
-        afterFirst.lastUsedIP = "198.51.100.7"
-        try await afterFirst.save(on: app.db)
+        _ = try await app.apiKeysPersistence.recordUsage(
+            id: keyID,
+            usedAt: recordedAt,
+            sourceIP: "198.51.100.7",
+            staleBefore: recordedAt.addingTimeInterval(1)
+        )
 
-        app.fluent.history.start()
         for _ in 0..<3 {
             try await authenticate(app, token: fullKey)
         }
 
-        #expect(recordedUpdateColumns(on: app, schema: APIKey.schema).isEmpty)
-        let afterRepeats = try #require(try await APIKey.find(keyID, on: app.db))
+        let afterRepeats = try #require(
+            try await app.apiKeysPersistence.ownedKey(id: keyID, userID: apiKey.userID)
+        )
         #expect(afterRepeats.lastUsedAt == recordedAt)
         #expect(afterRepeats.lastUsedIP == "198.51.100.7")
 
-        app.fluent.history.stop()
         try await app.shutdownForTesting()
     }
 
@@ -216,24 +222,33 @@ struct LastUsedTrackingTests {
     func testConcurrentWritersCollapseToOne() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await makeUser(on: app.db)
+        let user = try await makeUser(on: app.testPostgres)
         let (apiKey, _) = try await makeAPIKey(
-            for: user, on: app.db, lastUsedAt: nil, lastUsedIP: nil)
-        let keyID = try apiKey.requireID()
+            for: user, on: app, lastUsedAt: nil, lastUsedIP: nil)
+        let keyID = apiKey.id
 
-        // Both calls run against the same in-memory row — the state two
-        // concurrent requests see when neither has written yet — so both pass
-        // the in-process staleness check and only the `WHERE` can separate
-        // them.
         let first = Date()
-        apiKey.recordUsage(ip: "198.51.100.1", on: app, now: first)
-        await app.backgroundTasks.drain(timeout: .seconds(10))
-        apiKey.recordUsage(ip: "198.51.100.2", on: app, now: first.addingTimeInterval(1))
-        await app.backgroundTasks.drain(timeout: .seconds(10))
+        #expect(
+            try await app.apiKeysPersistence.recordUsage(
+                id: keyID,
+                usedAt: first,
+                sourceIP: "198.51.100.1",
+                staleBefore: first.addingTimeInterval(-APIKeyCredential.lastUsedDebounceWindow)
+            )
+        )
+        #expect(
+            !(try await app.apiKeysPersistence.recordUsage(
+                id: keyID,
+                usedAt: first.addingTimeInterval(1),
+                sourceIP: "198.51.100.2",
+                staleBefore: first.addingTimeInterval(-APIKeyCredential.lastUsedDebounceWindow + 1)
+            ))
+        )
 
-        let reloaded = try #require(try await APIKey.find(keyID, on: app.db))
+        let reloaded = try #require(
+            try await app.apiKeysPersistence.ownedKey(id: keyID, userID: apiKey.userID)
+        )
         #expect(reloaded.lastUsedIP == "198.51.100.1")
 
         try await app.shutdownForTesting()
@@ -243,18 +258,19 @@ struct LastUsedTrackingTests {
     func testAPIKeyWritesAfterWindow() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await makeUser(on: app.db)
-        let stale = Date().addingTimeInterval(-APIKey.lastUsedDebounceWindow - 60)
+        let user = try await makeUser(on: app.testPostgres)
+        let stale = Date().addingTimeInterval(-APIKeyCredential.lastUsedDebounceWindow - 60)
         let (apiKey, fullKey) = try await makeAPIKey(
-            for: user, on: app.db, lastUsedAt: stale, lastUsedIP: "198.51.100.7")
-        let keyID = try apiKey.requireID()
+            for: user, on: app, lastUsedAt: stale, lastUsedIP: "198.51.100.7")
+        let keyID = apiKey.id
 
         registerProtectedRoute(on: app)
         try await authenticate(app, token: fullKey)
 
-        let reloaded = try #require(try await APIKey.find(keyID, on: app.db))
+        let reloaded = try #require(
+            try await app.apiKeysPersistence.ownedKey(id: keyID, userID: apiKey.userID)
+        )
         let recordedAt = try #require(reloaded.lastUsedAt)
         #expect(recordedAt > stale)
 
@@ -267,30 +283,34 @@ struct LastUsedTrackingTests {
     func testCLISessionDebounce() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await makeUser(on: app.db)
+        let user = try await makeUser(on: app.testPostgres)
         let (session, accessToken) = try await makeCLISession(
-            for: user, on: app.db, lastUsedAt: nil, lastUsedIP: nil)
-        let sessionID = try session.requireID()
+            for: user, on: app, lastUsedAt: nil, lastUsedIP: nil)
+        let sessionID = session.id
 
         registerProtectedRoute(on: app)
 
         try await authenticate(app, token: accessToken)
-        let afterFirst = try #require(try await CLISession.find(sessionID, on: app.db))
+        let afterFirst = try #require(
+            try await app.oauthDeviceSessionsPersistence.session(
+                accessTokenHash: session.accessTokenHash
+            ))
         let recordedAt = try #require(afterFirst.lastUsedAt)
-        afterFirst.lastUsedIP = "198.51.100.9"
-        try await afterFirst.save(on: app.db)
+        let sql = try #require(Optional(app.testPostgres))
+        try await sql.raw(
+            "UPDATE cli_sessions SET last_used_ip = \(bind: "198.51.100.9") WHERE id = \(bind: sessionID)"
+        ).run()
 
-        app.fluent.history.start()
         try await authenticate(app, token: accessToken)
 
-        #expect(recordedUpdateColumns(on: app, schema: CLISession.schema).isEmpty)
-        let afterSecond = try #require(try await CLISession.find(sessionID, on: app.db))
+        let afterSecond = try #require(
+            try await app.oauthDeviceSessionsPersistence.session(
+                accessTokenHash: session.accessTokenHash
+            ))
         #expect(afterSecond.lastUsedAt == recordedAt)
         #expect(afterSecond.lastUsedIP == "198.51.100.9")
 
-        app.fluent.history.stop()
         try await app.shutdownForTesting()
     }
 }

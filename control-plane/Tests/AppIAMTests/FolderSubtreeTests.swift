@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -16,13 +15,12 @@ struct FolderSubtreeTests {
         _ test: (Application, Organization, TestDataBuilder, String) async throws -> Void
     ) async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(username: "folderadmin", email: "folders@example.com")
             let org = try await builder.createOrganization(name: "Folder Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
-            let token = try await user.generateAPIKey(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, org, builder, token)
         }
@@ -40,17 +38,17 @@ struct FolderSubtreeTests {
             let marketing = try await builder.createOU(
                 name: "Marketing", description: "d", organization: org)
 
-            let descendantIDs = Set(try await engineering.descendants(on: app.db).compactMap { $0.id })
+            let descendantIDs = Set(try await engineering.descendants(on: app.testPostgres).compactMap { $0.id })
             #expect(descendantIDs == Set([teamA.id!, squad.id!]))
             #expect(!descendantIDs.contains(engineering.id!))
             #expect(!descendantIDs.contains(marketing.id!))
 
-            let subtree = Set(try await engineering.selfAndDescendantIDs(on: app.db))
+            let subtree = Set(try await engineering.selfAndDescendantIDs(on: app.testPostgres))
             #expect(subtree == Set([engineering.id!, teamA.id!, squad.id!]))
 
             // A leaf has no descendants but is still its own subtree.
-            let leafDescendants = try await squad.descendants(on: app.db)
-            let leafSubtree = try await squad.selfAndDescendantIDs(on: app.db)
+            let leafDescendants = try await squad.descendants(on: app.testPostgres)
+            let leafSubtree = try await squad.selfAndDescendantIDs(on: app.testPostgres)
             #expect(leafDescendants.isEmpty)
             #expect(leafSubtree == [squad.id!])
         }
@@ -78,15 +76,15 @@ struct FolderSubtreeTests {
                 #expect(res.status == .ok)
             }
 
-            let movedTeam = try #require(try await OrganizationalUnit.find(teamA.id, on: app.db))
-            let movedSquad = try #require(try await OrganizationalUnit.find(squad.id, on: app.db))
+            let movedTeam = try #require(try await OrganizationalUnit.find(teamA.id, on: app.testPostgres))
+            let movedSquad = try #require(try await OrganizationalUnit.find(squad.id, on: app.testPostgres))
             #expect(movedTeam.path == "/\(org.id!.uuidString)/\(platform.id!.uuidString)/\(teamA.id!.uuidString)")
             #expect(movedSquad.path == "\(movedTeam.path)/\(squad.id!.uuidString)")
             #expect(movedSquad.depth == 2)
 
             // And the subtree is discoverable from its new parent.
-            let platformSubtree = Set(try await platform.descendants(on: app.db).compactMap { $0.id })
-            let engineeringSubtree = try await engineering.descendants(on: app.db)
+            let platformSubtree = Set(try await platform.descendants(on: app.testPostgres).compactMap { $0.id })
+            let engineeringSubtree = try await engineering.descendants(on: app.testPostgres)
             #expect(platformSubtree == Set([teamA.id!, squad.id!]))
             #expect(engineeringSubtree.isEmpty)
         }
@@ -105,7 +103,7 @@ struct FolderSubtreeTests {
             _ = try await builder.createVM(name: "one", project: project)  // cpu 2
 
             let platformQuota = try await builder.createResourceQuota(name: "platform", ou: platform)
-            let before = try await QuotaUsageAggregator.measure(quota: platformQuota, on: app.db)
+            let before = try await QuotaUsageAggregator.measure(quota: platformQuota, on: app.testPostgres)
             #expect(before.vmCount == 0)
 
             try await app.test(.POST, "/api/organizations/\(org.id!)/ous/\(teamA.id!)/move") { req in
@@ -115,7 +113,7 @@ struct FolderSubtreeTests {
                 #expect(res.status == .ok)
             }
 
-            let after = try await QuotaUsageAggregator.measure(quota: platformQuota, on: app.db)
+            let after = try await QuotaUsageAggregator.measure(quota: platformQuota, on: app.testPostgres)
             #expect(after.vmCount == 1)
             #expect(after.vcpus == 2)
         }

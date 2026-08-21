@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import NIOConcurrencyHelpers
 import Vapor
@@ -30,41 +30,28 @@ enum DecoyKeyService {
     /// Gets the decoy key, generating and persisting one if none exists yet.
     /// Concurrent first calls (multi-replica boot) race benignly: the loser of
     /// the insert re-reads the winner's key.
-    static func getKey(from app: Application) async throws -> String {
+    static func getKey(
+        from app: Application,
+        settings: AppSettingsPersistence
+    ) async throws -> String {
         if let cachedKey = app.decoyKeyCache.key {
             return cachedKey
         }
 
-        if let setting = try await AppSetting.query(on: app.db)
-            .filter(\.$key == AppSetting.decoyCredentialKey)
-            .first()
-        {
+        if let setting = try await settings.setting(forKey: decoyCredentialKey) {
             app.decoyKeyCache.key = setting.value
             return setting.value
         }
 
         let newKey = generateRandomKey()
-        let setting = AppSetting(key: AppSetting.decoyCredentialKey, value: newKey)
-
-        do {
-            try await setting.save(on: app.db)
-            app.decoyKeyCache.key = newKey
+        let setting = try await settings.createIfAbsent(key: decoyCredentialKey, value: newKey)
+        app.decoyKeyCache.key = setting.value
+        if setting.value == newKey {
             app.logger.info("Generated and stored new decoy credential key")
-            return newKey
-        } catch {
-            // Handle race condition: another instance may have inserted the key
-            // Re-query to get the existing key
-            if let existingSetting = try await AppSetting.query(on: app.db)
-                .filter(\.$key == AppSetting.decoyCredentialKey)
-                .first()
-            {
-                app.decoyKeyCache.key = existingSetting.value
-                app.logger.info("Loaded decoy credential key from database (concurrent insert)")
-                return existingSetting.value
-            }
-            // If still not found, rethrow the original error
-            throw error
+        } else {
+            app.logger.info("Loaded decoy credential key from database (concurrent insert)")
         }
+        return setting.value
     }
 
     /// Generates a cryptographically secure random key
@@ -77,6 +64,9 @@ enum DecoyKeyService {
         }
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
+
+    /// Historical persisted key name retained for schema/data compatibility.
+    private static let decoyCredentialKey = "image_download_signing_key"
 }
 
 // MARK: - Application Extension for Decoy Key Cache

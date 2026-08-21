@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 // JWT-SVID request authentication (issue #495).
@@ -40,6 +40,7 @@ struct AuthenticatedWorkload: Sendable {
 }
 
 struct JWTSVIDAuthenticator {
+    let workloads: WorkloadsPersistence
 
     /// Authenticate a bearer token that looks like a JWT-SVID.
     ///
@@ -71,7 +72,8 @@ struct JWTSVIDAuthenticator {
             throw Abort(.unauthorized, reason: "JWT-SVID was not accepted")
         }
 
-        guard let resolved = try await WorkloadRegistry.resolve(spiffeID: verified.spiffeID.uri, on: request.db)
+        guard let resolved = try await WorkloadRegistry.resolve(
+            spiffeID: verified.spiffeID.uri, using: workloads)
         else {
             request.logger.info(
                 "JWT-SVID names an unregistered identity",

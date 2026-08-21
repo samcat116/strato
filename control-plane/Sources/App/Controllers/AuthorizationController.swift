@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 /// The authorization query surface: "can I?", "can *they*?", and "who can?".
@@ -8,6 +8,13 @@ import Vapor
 /// (docs/architecture/iam.md); the policy simulator and decision logs land with
 /// later phases.
 struct AuthorizationController: RouteCollection {
+    let iam: IAMPersistence
+    let groups: GroupsPersistence
+    let hierarchy: HierarchyPersistence
+    let users: UserDirectoryPersistence
+    let serviceAccounts: ServiceAccountsPersistence
+    let workloads: WorkloadsPersistence
+
     /// Cap on checks per request — keeps a single call bounded.
     private static let maxChecks = 50
 
@@ -116,8 +123,7 @@ struct AuthorizationController: RouteCollection {
                 context: context,
                 state: req.iamAuthState,
                 cache: req.iamCache,
-                app: req.application,
-                db: req.db
+                app: req.application
             )
         }
         for item in asked {
@@ -154,7 +160,11 @@ struct AuthorizationController: RouteCollection {
                 nodes: nodes,
                 app: req.application,
                 cache: req.iamCache,
-                on: req.db
+                using: iam,
+                groups: groups,
+                users: users,
+                serviceAccounts: serviceAccounts,
+                workloads: workloads
             )
         }
 
@@ -214,9 +224,18 @@ struct AuthorizationController: RouteCollection {
         try Self.validate(action: payload.action, on: payload.node)
         try await Self.requirePolicyRead(on: payload.node, req: req)
 
-        let ancestors = try await IAMResourceTree.ancestors(of: payload.node, on: req.db)
+        let ancestors = try await IAMResourceTree.ancestors(of: payload.node, using: iam)
         let result = try await WhoCanService.whoCan(
-            action: payload.action, node: payload.node, app: req.application, on: req.db)
+            action: payload.action,
+            node: payload.node,
+            app: req.application,
+            using: iam,
+            groups: groups,
+            hierarchy: hierarchy,
+            users: users,
+            serviceAccounts: serviceAccounts,
+            workloads: workloads
+        )
 
         return WhoCanResponse(
             action: payload.action,

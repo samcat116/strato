@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 
 /// Drops the role bindings of a resource whose row is being removed.
@@ -83,19 +83,17 @@ enum ResourceBindingCleanup {
     /// away with it. Call inside the transaction that removes the VM row, so
     /// bindings and rows can never diverge — and *before* the delete, which
     /// takes the `vm_snapshots` rows this reads with it.
-    static func revokeBindings(forDeletedVM vmID: UUID, on db: any Database) async throws {
-        let snapshotIDs = try await VMSnapshot.query(on: db)
-            .filter(\.$vm.$id == vmID)
-            .all(\.$id)
+    static func revokeBindings(forDeletedVM vmID: UUID, on db: PostgresStoreContext) async throws {
+        let snapshotIDs = try await LegacyVMSnapshotStore.snapshots(vmID: vmID, on: db)
+            .compactMap(\.id)
         try await RoleBindingService.revokeAll(nodeType: .vmSnapshot, nodeIDs: snapshotIDs, on: db)
 
         // The VM's instance-identity registration (STR-55) cascades away with
         // the VM row, and the grants that principal *holds* are orphaned by the
         // cascade exactly as a service account's are by a project delete. Read
         // before the delete, for the same reason the checkpoints above are.
-        let registrationIDs = try await WorkloadRegistration.query(on: db)
-            .filter(\.$vm.$id == vmID)
-            .all(\.$id)
+        let registrationIDs = try await LegacyWorkloadRegistrationStore.ids(
+            vmIDs: [vmID], on: db)
         try await RoleBindingService.revokeAll(
             principalType: .workload, principalIDs: registrationIDs, on: db)
 
@@ -104,20 +102,20 @@ enum ResourceBindingCleanup {
 
     /// Sandbox counterpart: the sandbox node plus the snapshots that cascade
     /// away with it (issue #428). Same read-before-delete ordering requirement.
-    static func revokeBindings(forDeletedSandbox sandboxID: UUID, on db: any Database) async throws {
-        let snapshotIDs = try await SandboxSnapshot.query(on: db)
-            .filter(\.$sandbox.$id == sandboxID)
-            .all(\.$id)
+    static func revokeBindings(forDeletedSandbox sandboxID: UUID, on db: PostgresStoreContext) async throws {
+        let snapshotIDs = try await LegacySandboxSnapshotStore.snapshots(
+            sandboxID: sandboxID, on: db
+        ).compactMap(\.id)
         try await RoleBindingService.revokeAll(nodeType: .sandboxSnapshot, nodeIDs: snapshotIDs, on: db)
         try await RoleBindingService.revokeAll(nodeType: .sandbox, nodeID: sandboxID, on: db)
     }
 
     /// Volume counterpart: the volume node plus the snapshots that cascade away
     /// with it (STR-148). Same read-before-delete ordering requirement.
-    static func revokeBindings(forDeletedVolume volumeID: UUID, on db: any Database) async throws {
-        let snapshotIDs = try await VolumeSnapshot.query(on: db)
-            .filter(\.$volume.$id == volumeID)
-            .all(\.$id)
+    static func revokeBindings(forDeletedVolume volumeID: UUID, on db: PostgresStoreContext) async throws {
+        let snapshotIDs = try await LegacyVolumeSnapshotStore.snapshots(
+            volumeID: volumeID, on: db
+        ).compactMap(\.id)
         try await RoleBindingService.revokeAll(nodeType: .volumeSnapshot, nodeIDs: snapshotIDs, on: db)
         try await RoleBindingService.revokeAll(nodeType: .volume, nodeID: volumeID, on: db)
     }
@@ -126,15 +124,13 @@ enum ResourceBindingCleanup {
     /// cascade away with it. Records hang off the zone, not the project, so
     /// this is the one project child collected through its own parent rather
     /// than through `project_id`.
-    static func revokeBindings(forDeletedDNSZone zoneID: UUID, on db: any Database) async throws {
+    static func revokeBindings(forDeletedDNSZone zoneID: UUID, on db: PostgresStoreContext) async throws {
         try await revokeBindings(forDeletedDNSZones: [zoneID], on: db)
     }
 
-    static func revokeBindings(forDeletedDNSZones zoneIDs: [UUID], on db: any Database) async throws {
+    static func revokeBindings(forDeletedDNSZones zoneIDs: [UUID], on db: PostgresStoreContext) async throws {
         guard !zoneIDs.isEmpty else { return }
-        let recordIDs = try await DNSRecord.query(on: db)
-            .filter(\.$zone.$id ~~ zoneIDs)
-            .all(\.$id)
+        let recordIDs = try await LegacyDNSRecordStore.ids(zoneIDs: zoneIDs, on: db)
         try await RoleBindingService.revokeAll(nodeType: .dnsRecord, nodeIDs: recordIDs, on: db)
         try await RoleBindingService.revokeAll(nodeType: .dnsZone, nodeIDs: zoneIDs, on: db)
     }
@@ -145,22 +141,21 @@ enum ResourceBindingCleanup {
     /// Same ordering requirement as the VM and sandbox helpers, and a stricter
     /// one: this reads the child rows the delete is about to remove, so it must
     /// run *before* `project.delete`, inside that transaction.
-    static func revokeBindings(forDeletedProject projectID: UUID, on db: any Database) async throws {
+    static func revokeBindings(forDeletedProject projectID: UUID, on db: PostgresStoreContext) async throws {
         try await revokeBindings(forDeletedProjects: [projectID], on: db)
     }
 
     /// The plural form, for the container deletes that cascade a whole set of
     /// projects at once.
-    static func revokeBindings(forDeletedProjects projectIDs: [UUID], on db: any Database) async throws {
+    static func revokeBindings(forDeletedProjects projectIDs: [UUID], on db: PostgresStoreContext) async throws {
         guard !projectIDs.isEmpty else { return }
 
         // A service account is both a node and a principal, so it needs both
         // directions: its own node bindings (at least its creator's) and the
         // bindings it holds elsewhere, which are not confined to this project
         // or even this organization (issue #491).
-        let serviceAccountIDs = try await ServiceAccount.query(on: db)
-            .filter(\.$project.$id ~~ projectIDs)
-            .all(\.$id)
+        let serviceAccountIDs = try await LegacyServiceAccountStore.ids(
+            projectIDs: projectIDs, on: db)
         try await RoleBindingService.revokeAll(
             principalType: .serviceAccount, principalIDs: serviceAccountIDs, on: db)
         try await RoleBindingService.revokeAll(nodeType: .serviceAccount, nodeIDs: serviceAccountIDs, on: db)
@@ -171,42 +166,43 @@ enum ResourceBindingCleanup {
         // written to the foreign key rather than to that invariant, because
         // the foreign key is what the database will actually act on.
         if !serviceAccountIDs.isEmpty {
-            let workloadIDs = try await WorkloadRegistration.query(on: db)
-                .filter(\.$serviceAccount.$id ~~ serviceAccountIDs)
-                .filter(\.$kind == .workload)
-                .all(\.$id)
+            let workloadIDs = try await LegacyWorkloadRegistrationStore.ids(
+                serviceAccountIDs: serviceAccountIDs, kind: .workload, on: db)
             try await RoleBindingService.revokeAll(
                 principalType: .workload, principalIDs: workloadIDs, on: db)
         }
 
-        let zoneIDs = try await DNSZone.query(on: db)
-            .filter(\.$project.$id ~~ projectIDs)
-            .all(\.$id)
+        let zoneIDs = try await LegacyDNSZoneStore.ids(projectIDs: projectIDs, on: db)
         try await revokeBindings(forDeletedDNSZones: zoneIDs, on: db)
 
-        let imageIDs = try await Image.query(on: db).filter(\.$project.$id ~~ projectIDs).all(\.$id)
+        let imageIDs = try await LegacyImageStore.images(projectIDs: projectIDs, on: db)
+            .compactMap(\.id)
         try await RoleBindingService.revokeAll(nodeType: .image, nodeIDs: imageIDs, on: db)
 
-        let networkIDs = try await LogicalNetwork.query(on: db).filter(\.$project.$id ~~ projectIDs).all(\.$id)
+        let networkIDs = try await LegacyLogicalNetworkStore.ids(projectIDs: projectIDs, on: db)
         try await RoleBindingService.revokeAll(nodeType: .network, nodeIDs: networkIDs, on: db)
 
-        let securityGroupIDs = try await SecurityGroup.query(on: db).filter(\.$project.$id ~~ projectIDs).all(\.$id)
+        let securityGroupIDs = try await LegacySecurityGroupStore.ids(
+            projectIDs: projectIDs, on: db)
         try await RoleBindingService.revokeAll(nodeType: .securityGroup, nodeIDs: securityGroupIDs, on: db)
 
-        let floatingIPIDs = try await FloatingIP.query(on: db).filter(\.$project.$id ~~ projectIDs).all(\.$id)
+        let floatingIPIDs = try await LegacyFloatingIPStore.ids(projectIDs: projectIDs, on: db)
         try await RoleBindingService.revokeAll(nodeType: .floatingIP, nodeIDs: floatingIPIDs, on: db)
 
-        let loadBalancerIDs = try await LoadBalancer.query(on: db)
-            .filter(\.$project.$id ~~ projectIDs).all(\.$id)
+        let loadBalancerIDs = try await LegacyLoadBalancerStore.ids(
+            projectIDs: projectIDs, on: db)
         try await RoleBindingService.revokeAll(
             nodeType: .loadBalancer, nodeIDs: loadBalancerIDs, on: db)
 
         // `volume_snapshots` carries its own (denormalized) `project_id`, so it
         // cascades directly rather than through its volume.
-        let snapshotIDs = try await VolumeSnapshot.query(on: db).filter(\.$project.$id ~~ projectIDs).all(\.$id)
+        let snapshotIDs = try await LegacyVolumeSnapshotStore.snapshots(
+            projectIDs: projectIDs, on: db
+        ).compactMap(\.id)
         try await RoleBindingService.revokeAll(nodeType: .volumeSnapshot, nodeIDs: snapshotIDs, on: db)
 
-        let volumeIDs = try await Volume.query(on: db).filter(\.$project.$id ~~ projectIDs).all(\.$id)
+        let volumeIDs = try await LegacyVolumeStore.volumes(projectIDs: projectIDs, on: db)
+            .compactMap(\.id)
         try await RoleBindingService.revokeAll(nodeType: .volume, nodeIDs: volumeIDs, on: db)
 
         try await RoleBindingService.revokeAll(nodeType: .project, nodeIDs: projectIDs, on: db)
@@ -226,13 +222,13 @@ enum ResourceBindingCleanup {
     /// locked `FOR UPDATE` (an FK child insert takes `FOR KEY SHARE` on it),
     /// which is a concurrency change worth making deliberately rather than as
     /// a side effect of this one.
-    static func revokeBindings(forDeletedFolder folder: OrganizationalUnit, on db: any Database) async throws {
+    static func revokeBindings(forDeletedFolder folder: OrganizationalUnit, on db: PostgresStoreContext) async throws {
         let folderID = try folder.requireID()
         let descendantIDs = try await folder.descendants(on: db).compactMap(\.id)
         let folderIDs = [folderID] + descendantIDs
-        let projectIDs = try await Project.query(on: db)
-            .filter(\.$organizationalUnit.$id ~~ folderIDs)
-            .all(\.$id)
+        let projectIDs = try await LegacyProjectStore.projects(
+            organizationalUnitIDs: folderIDs, on: db
+        ).compactMap(\.id)
         try await revokeBindings(forDeletedProjects: projectIDs, on: db)
         try await RoleBindingService.revokeAll(nodeType: .organizationalUnit, nodeIDs: folderIDs, on: db)
     }
@@ -246,33 +242,30 @@ enum ResourceBindingCleanup {
     /// than nodes — neither is a bindable node, but both cascade on
     /// `organization_id` and their grants elsewhere would outlive them, the
     /// cleanup each one's own delete endpoint does.
-    static func revokeBindings(forDeletedOrganization organizationID: UUID, on db: any Database) async throws {
-        let folderIDs = try await OrganizationalUnit.query(on: db)
-            .filter(\.$organization.$id == organizationID)
-            .all(\.$id)
-        var projectIDs = try await Project.query(on: db)
-            .filter(\.$organization.$id == organizationID)
-            .all(\.$id)
+    static func revokeBindings(forDeletedOrganization organizationID: UUID, on db: PostgresStoreContext) async throws {
+        let folderIDs = try await LegacyOrganizationalUnitStore.organizationalUnits(
+            organizationIDs: [organizationID], on: db
+        ).compactMap(\.id)
+        var projectIDs = try await LegacyProjectStore.projects(
+            organizationIDs: [organizationID], on: db
+        ).compactMap(\.id)
         if !folderIDs.isEmpty {
-            let folderProjectIDs = try await Project.query(on: db)
-                .filter(\.$organizationalUnit.$id ~~ folderIDs)
-                .all(\.$id)
+            let folderProjectIDs = try await LegacyProjectStore.projects(
+                organizationalUnitIDs: folderIDs, on: db
+            ).compactMap(\.id)
             projectIDs = Array(Set(projectIDs).union(folderProjectIDs))
         }
 
-        let groupIDs = try await Group.query(on: db)
-            .filter(\.$organization.$id == organizationID)
-            .all(\.$id)
+        let groupIDs = try await LegacyGroupSQLBridge.groupIDs(
+            organizationID: organizationID, on: db)
         try await RoleBindingService.revokeAll(principalType: .group, principalIDs: groupIDs, on: db)
 
         // A `kind == .workload` registration *is* the principal (principal id
         // = row id), and the row is org-scoped. The `kind` filter is documentation
         // rather than necessity: agent and service-account rows hold nothing
         // under `.workload`.
-        let workloadIDs = try await WorkloadRegistration.query(on: db)
-            .filter(\.$organization.$id == organizationID)
-            .filter(\.$kind == .workload)
-            .all(\.$id)
+        let workloadIDs = try await LegacyWorkloadRegistrationStore.ids(
+            organizationIDs: [organizationID], kind: .workload, on: db)
         try await RoleBindingService.revokeAll(principalType: .workload, principalIDs: workloadIDs, on: db)
 
         try await revokeBindings(forDeletedProjects: projectIDs, on: db)

@@ -1,4 +1,3 @@
-import Fluent
 import Vapor
 
 /// Enforces per-user security state set by SSF signal handlers (issue #38):

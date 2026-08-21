@@ -1,6 +1,6 @@
-import Fluent
 import Foundation
 import StratoShared
+import ControlPlanePostgres
 import Vapor
 
 /// The graphics console (issue #566): a VM's VNC framebuffer, relayed to noVNC
@@ -26,6 +26,11 @@ import Vapor
 ///   cannot carry an explanation anyway (WebSocketKit's `close(code:)` sends a
 ///   two-byte status code and nothing else).
 struct VNCWebSocketController: RouteCollection {
+    private let database: PostgresStoreContext
+
+    init(database: PostgresStoreContext) {
+        self.database = database
+    }
     /// Bound on the attach socket. The browser's side of RFB is small — key and
     /// pointer events, update requests — but a clipboard paste arrives as one
     /// `ClientCutText`, which comfortably exceeds Vapor's 16 KiB default (the
@@ -85,7 +90,7 @@ struct VNCWebSocketController: RouteCollection {
             throw Abort(.forbidden, reason: "You do not have permission to access this VM console")
         }
 
-        guard let vm = try await VM.find(vmId, on: req.db) else {
+        guard let vm = try await VM.find(vmId, on: database) else {
             throw Abort(.notFound, reason: "VM not found")
         }
 
@@ -105,7 +110,7 @@ struct VNCWebSocketController: RouteCollection {
 
         guard let agentIdString = vm.hypervisorId,
             let agentId = UUID(uuidString: agentIdString),
-            let agent = try await Agent.find(agentId, on: req.db)
+            let agent = try await Agent.find(agentId, on: database)
         else {
             throw Abort(.conflict, reason: "VM has no assigned hypervisor")
         }

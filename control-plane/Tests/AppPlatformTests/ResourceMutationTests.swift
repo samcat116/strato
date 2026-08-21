@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -54,19 +53,18 @@ actor DispatchFailureGate {
 /// the absence of the "operation already pending" mutex.
 @Suite("Resource Mutation", .serialized)
 final class ResourceMutationTests {
-    private func withVM(_ test: (Application, VM) async throws -> Void) async throws {
+    private func withVM(_ test: (Application, inout VM) async throws -> Void) async throws {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Mutation Org")
             let project = try await builder.createProject(
                 name: "Mutation Project", description: "mutation tests", organization: org)
-            let vm = try await builder.createVM(name: "mutation-vm", project: project)
+            var vm = try await builder.createVM(name: "mutation-vm", project: project)
 
-            try await test(app, vm)
+            try await test(app, &vm)
         } catch {
             try await app.shutdownForTesting()
             throw error
@@ -74,20 +72,19 @@ final class ResourceMutationTests {
         try await app.shutdownForTesting()
     }
 
-    private func withSandbox(_ test: (Application, Sandbox) async throws -> Void) async throws {
+    private func withSandbox(_ test: (Application, inout Sandbox) async throws -> Void) async throws {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Mutation Org")
             let project = try await builder.createProject(
                 name: "Mutation Project", description: "mutation tests", organization: org)
-            let sandbox = try await builder.createSandbox(
+            var sandbox = try await builder.createSandbox(
                 name: "mutation-sandbox", project: project)
 
-            try await test(app, sandbox)
+            try await test(app, &sandbox)
         } catch {
             try await app.shutdownForTesting()
             throw error
@@ -96,7 +93,8 @@ final class ResourceMutationTests {
     }
 
     private func mutation(_ app: Application, _ fake: FakeAgentDispatch) -> ResourceMutation {
-        ResourceMutation(agentDispatch: fake, logger: app.logger)
+        ResourceMutation(
+            agentDispatch: fake, logger: app.logger, database: app.testPostgres)
     }
 
     // MARK: - Dispatch
@@ -106,19 +104,25 @@ final class ResourceMutationTests {
         try await withVM { app, vm in
             let fake = FakeAgentDispatch(online: true)
             vm.hypervisorId = "agent-1"
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             let vmID = try vm.requireID()
 
-            let accepted = try await self.mutation(app, fake).accept(
-                .boot, on: vm, actor: .user(UUID()), dispatch: .stateSync, on: app.db, app: app
-            ) { _ in vm.setDesiredStatus(.running) }
+            let result = try await self.mutation(app, fake).acceptValue(
+                .boot, on: vm, actor: .user(UUID()), dispatch: .stateSync, on: app.testPostgres, app: app
+            ) { current, _ in
+                var current = current
+                current.setDesiredStatus(.running)
+                return current
+            }
+            vm = result.resource
+            let accepted = result.accepted
 
             // The mutation committed atomically with the attribution event, and
             // the client is told which generation to wait for.
-            let reloaded = try #require(try await VM.find(vmID, on: app.db))
+            let reloaded = try #require(try await VM.find(vmID, on: app.testPostgres))
             #expect(reloaded.desiredStatus == .running)
             #expect(accepted.targetGeneration == reloaded.generation)
-            let event = try #require(try await ResourceEvent.find(accepted.mutationID, on: app.db))
+            let event = try #require(try await ResourceEvent.find(accepted.mutationID, on: app.testPostgres))
             #expect(event.mutation == .boot)
             #expect(event.phase == .requested)
 
@@ -127,7 +131,7 @@ final class ResourceMutationTests {
             // The owning agent was nudged; nothing is converged until it reports.
             let synced = await fake.syncedAgentIds
             #expect(synced == ["agent-1"])
-            let afterDispatch = try #require(try await VM.find(vmID, on: app.db))
+            let afterDispatch = try #require(try await VM.find(vmID, on: app.testPostgres))
             #expect(!afterDispatch.conditions.converged)
             #expect(afterDispatch.conditions.degraded == nil)
         }
@@ -138,16 +142,22 @@ final class ResourceMutationTests {
         try await withVM { app, vm in
             let fake = FakeAgentDispatch(online: false)
             vm.hypervisorId = "agent-1"
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             let vmID = try vm.requireID()
 
-            let accepted = try await self.mutation(app, fake).accept(
-                .boot, on: vm, actor: .user(UUID()), dispatch: .stateSync, on: app.db, app: app
-            ) { _ in vm.setDesiredStatus(.running) }
+            let result = try await self.mutation(app, fake).acceptValue(
+                .boot, on: vm, actor: .user(UUID()), dispatch: .stateSync, on: app.testPostgres, app: app
+            ) { current, _ in
+                var current = current
+                current.setDesiredStatus(.running)
+                return current
+            }
+            vm = result.resource
+            let accepted = result.accepted
 
             await app.backgroundTasks.drain(timeout: .seconds(10))
 
-            let reloaded = try #require(try await VM.find(vmID, on: app.db))
+            let reloaded = try #require(try await VM.find(vmID, on: app.testPostgres))
             let degraded = try #require(reloaded.conditions.degraded)
             #expect(degraded.reason.contains("offline"))
             #expect(degraded.sinceGeneration == accepted.targetGeneration)
@@ -164,13 +174,18 @@ final class ResourceMutationTests {
             let fake = FakeAgentDispatch(online: true)
             let vmID = try vm.requireID()
 
-            _ = try await self.mutation(app, fake).accept(
-                .boot, on: vm, actor: .user(UUID()), dispatch: .stateSync, on: app.db, app: app
-            ) { _ in vm.setDesiredStatus(.running) }
+            let result = try await self.mutation(app, fake).acceptValue(
+                .boot, on: vm, actor: .user(UUID()), dispatch: .stateSync, on: app.testPostgres, app: app
+            ) { current, _ in
+                var current = current
+                current.setDesiredStatus(.running)
+                return current
+            }
+            vm = result.resource
 
             await app.backgroundTasks.drain(timeout: .seconds(10))
 
-            let reloaded = try #require(try await VM.find(vmID, on: app.db))
+            let reloaded = try #require(try await VM.find(vmID, on: app.testPostgres))
             #expect(reloaded.conditions.degraded?.reason.contains("not placed") == true)
         }
     }
@@ -190,7 +205,7 @@ final class ResourceMutationTests {
 
             await app.backgroundTasks.drain(timeout: .seconds(10))
 
-            let reloaded = try #require(try await VM.find(vmID, on: app.db))
+            let reloaded = try #require(try await VM.find(vmID, on: app.testPostgres))
             #expect(reloaded.conditions.degraded?.reason.contains("no agent has capacity") == true)
         }
     }
@@ -215,17 +230,21 @@ final class ResourceMutationTests {
                 }, app: app)
             await gate.waitUntilEntered()
 
-            let accepted = try await self.mutation(app, fake).accept(
+            let result = try await self.mutation(app, fake).acceptValue(
                 .boot, on: vm, actor: .user(UUID()),
                 dispatch: .directResolution { _ in false },
-                on: app.db, app: app
-            ) { _ in
-                vm.setDesiredStatus(.running)
+                on: app.testPostgres, app: app
+            ) { current, _ in
+                var current = current
+                current.setDesiredStatus(.running)
+                return current
             }
+            vm = result.resource
+            let accepted = result.accepted
             await gate.release()
             await app.backgroundTasks.drain(timeout: .seconds(10))
 
-            let reloaded = try #require(try await VM.find(vmID, on: app.db))
+            let reloaded = try #require(try await VM.find(vmID, on: app.testPostgres))
             #expect(reloaded.generation == accepted.targetGeneration)
             #expect(reloaded.desiredStatus == .running)
             #expect(reloaded.convergenceDeadline != nil)
@@ -240,23 +259,25 @@ final class ResourceMutationTests {
             let fake = FakeAgentDispatch(online: true)
             let vmID = try vm.requireID()
 
-            _ = try await self.mutation(app, fake).accept(
+            let result = try await self.mutation(app, fake).acceptValue(
                 .delete, on: vm, actor: .user(UUID()),
                 dispatch: .directResolution { db in
-                    try await ResourceFinalizerService.stampForDeletion(vm, on: db)
+                    guard let current = try await VM.find(vmID, on: db) else { return true }
                     return try await ResourceFinalizerService.clear(
-                        .agentAbsent, from: vm, on: db, app: app
+                        .agentAbsent, from: current, on: db, app: app
                     ).isRemoved
                 },
-                on: app.db, app: app
-            ) { db in
-                try await ResourceFinalizerService.stampForDeletion(vm, on: db)
-                vm.setDesiredStatus(.absent)
+                on: app.testPostgres, app: app
+            ) { current, db in
+                var current = try await ResourceFinalizerService.stampForDeletion(current, on: db)
+                current.setDesiredStatus(.absent)
+                return current
             }
+            vm = result.resource
 
             await app.backgroundTasks.drain(timeout: .seconds(10))
 
-            #expect(try await VM.find(vmID, on: app.db) == nil)
+            #expect(try await VM.find(vmID, on: app.testPostgres) == nil)
         }
     }
 
@@ -276,16 +297,21 @@ final class ResourceMutationTests {
             // Committed, as the create transaction leaves it — `accept`
             // refreshes the reconciliation-owned columns under its row lock, so
             // an unsaved deadline is not what the reboot composes against.
-            vm.extendConvergenceDeadline(
+            vm = vm.extendingConvergenceDeadline(
                 by: OperationResourceKind.virtualMachine.completionBudgetSeconds(for: .create))
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             let createDeadline = try #require(vm.convergenceDeadline)
 
-            _ = try await self.mutation(app, fake).accept(
-                .reboot, on: vm, actor: .user(UUID()), dispatch: .stateSync, on: app.db, app: app
-            ) { _ in vm.setDesiredStatus(.running) }
+            let result = try await self.mutation(app, fake).acceptValue(
+                .reboot, on: vm, actor: .user(UUID()), dispatch: .stateSync, on: app.testPostgres, app: app
+            ) { current, _ in
+                var current = current
+                current.setDesiredStatus(.running)
+                return current
+            }
+            vm = result.resource
 
-            let reloaded = try #require(try await VM.find(try vm.requireID(), on: app.db))
+            let reloaded = try #require(try await VM.find(try vm.requireID(), on: app.testPostgres))
             let deadline = try #require(reloaded.convergenceDeadline)
             // Reboot's 120s is well inside create's 600s, so the deadline is
             // unchanged rather than pulled in.
@@ -298,9 +324,9 @@ final class ResourceMutationTests {
     @Test("a longer budget pushes the deadline out")
     func deadlineExtendsForward() async throws {
         try await withVM { app, vm in
-            vm.extendConvergenceDeadline(by: 120)
+            vm = vm.extendingConvergenceDeadline(by: 120)
             let short = try #require(vm.convergenceDeadline)
-            vm.extendConvergenceDeadline(by: 600)
+            vm = vm.extendingConvergenceDeadline(by: 600)
             let long = try #require(vm.convergenceDeadline)
             #expect(long > short)
         }
@@ -317,20 +343,24 @@ final class ResourceMutationTests {
             // The route handler's instance is loaded, and *then* the agent's
             // report commits — the window every converted endpoint has, since
             // it mutates a model read before the request's transaction opened.
-            let staleFromTheRouteHandler = try #require(try await VM.find(vmID, on: app.db))
-            let reported = try #require(try await VM.find(vmID, on: app.db))
+            let staleFromTheRouteHandler = try #require(try await VM.find(vmID, on: app.testPostgres))
+            var reported = try #require(try await VM.find(vmID, on: app.testPostgres))
             reported.hypervisorId = "agent-1"
             reported.observedGeneration = 7
             reported.generation = 7
             reported.setStatus(.running)
-            try await reported.save(on: app.db)
+            try await reported.save(on: app.testPostgres)
 
-            _ = try await self.mutation(app, fake).accept(
+            _ = try await self.mutation(app, fake).acceptValue(
                 .shutdown, on: staleFromTheRouteHandler, actor: .user(UUID()),
-                dispatch: .stateSync, on: app.db, app: app
-            ) { _ in staleFromTheRouteHandler.setDesiredStatus(.shutdown) }
+                dispatch: .stateSync, on: app.testPostgres, app: app
+            ) { current, _ in
+                var current = current
+                current.setDesiredStatus(.shutdown)
+                return current
+            }
 
-            let reloaded = try #require(try await VM.find(vmID, on: app.db))
+            let reloaded = try #require(try await VM.find(vmID, on: app.testPostgres))
             // None of this may regress: an observedGeneration going backwards
             // un-converges a client that was already satisfied, and a nulled
             // hypervisorId loses the scheduler's placement.
@@ -351,21 +381,31 @@ final class ResourceMutationTests {
         try await withVM { app, vm in
             let fake = FakeAgentDispatch(online: true)
             vm.hypervisorId = "agent-1"
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             let vmID = try vm.requireID()
 
-            let start = try await self.mutation(app, fake).accept(
-                .boot, on: vm, actor: .user(UUID()), dispatch: .stateSync, on: app.db, app: app
-            ) { _ in vm.setDesiredStatus(.running) }
+            let startResult = try await self.mutation(app, fake).acceptValue(
+                .boot, on: vm, actor: .user(UUID()), dispatch: .stateSync, on: app.testPostgres, app: app
+            ) { current, _ in
+                var current = current
+                current.setDesiredStatus(.running)
+                return current
+            }
+            vm = startResult.resource
 
             // No 409: level-triggered desired state makes the overlap safe, and
             // "stop it, it's taking too long" is exactly what a user does.
-            let stop = try await self.mutation(app, fake).accept(
-                .shutdown, on: vm, actor: .user(UUID()), dispatch: .stateSync, on: app.db, app: app
-            ) { _ in vm.setDesiredStatus(.shutdown) }
+            let stopResult = try await self.mutation(app, fake).acceptValue(
+                .shutdown, on: vm, actor: .user(UUID()), dispatch: .stateSync, on: app.testPostgres, app: app
+            ) { current, _ in
+                var current = current
+                current.setDesiredStatus(.shutdown)
+                return current
+            }
+            vm = stopResult.resource
 
-            #expect(stop.targetGeneration > start.targetGeneration)
-            let reloaded = try #require(try await VM.find(vmID, on: app.db))
+            #expect(stopResult.accepted.targetGeneration > startResult.accepted.targetGeneration)
+            let reloaded = try #require(try await VM.find(vmID, on: app.testPostgres))
             #expect(reloaded.desiredStatus == .shutdown)
 
             await app.backgroundTasks.drain(timeout: .seconds(10))
@@ -377,34 +417,41 @@ final class ResourceMutationTests {
         try await withVM { app, vm in
             let fake = FakeAgentDispatch(online: true)
             vm.hypervisorId = "agent-1"
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             let vmID = try vm.requireID()
-            let firstSnapshot = try #require(try await VM.find(vmID, on: app.db))
-            let secondSnapshot = try #require(try await VM.find(vmID, on: app.db))
+            let firstSnapshot = try #require(try await VM.find(vmID, on: app.testPostgres))
+            let secondSnapshot = try #require(try await VM.find(vmID, on: app.testPostgres))
             let runningMutation = self.mutation(app, fake)
             let shutdownMutation = self.mutation(app, fake)
 
-            async let running = runningMutation.accept(
+            async let running = runningMutation.acceptValue(
                 .boot, on: firstSnapshot, actor: .user(UUID()), dispatch: .stateSync,
-                on: app.db, app: app
-            ) { _ in
-                firstSnapshot.setDesiredStatus(.running)
+                on: app.testPostgres, app: app
+            ) { current, _ in
+                var current = current
+                current.setDesiredStatus(.running)
+                return current
             }
-            async let shutdown = shutdownMutation.accept(
+            async let shutdown = shutdownMutation.acceptValue(
                 .shutdown, on: secondSnapshot, actor: .user(UUID()), dispatch: .stateSync,
-                on: app.db, app: app
-            ) { _ in
-                secondSnapshot.setDesiredStatus(.shutdown)
+                on: app.testPostgres, app: app
+            ) { current, _ in
+                var current = current
+                current.setDesiredStatus(.shutdown)
+                return current
             }
 
-            let (runningAccepted, shutdownAccepted) = try await (running, shutdown)
+            let (runningResult, shutdownResult) = try await (running, shutdown)
             #expect(
-                Set([runningAccepted.targetGeneration, shutdownAccepted.targetGeneration])
+                Set([
+                    runningResult.accepted.targetGeneration,
+                    shutdownResult.accepted.targetGeneration,
+                ])
                     == [1, 2])
 
-            let reloaded = try #require(try await VM.find(vmID, on: app.db))
+            let reloaded = try #require(try await VM.find(vmID, on: app.testPostgres))
             let expectedDesired: DesiredVMStatus =
-                runningAccepted.targetGeneration > shutdownAccepted.targetGeneration
+                runningResult.accepted.targetGeneration > shutdownResult.accepted.targetGeneration
                 ? .running : .shutdown
             #expect(reloaded.generation == 2)
             #expect(reloaded.desiredStatus == expectedDesired)
@@ -422,32 +469,33 @@ final class ResourceMutationTests {
             vm.desiredStatus = .running
             vm.setStatus(.starting)
             vm.convergenceDeadline = Date().addingTimeInterval(120)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             // This is the applier's bulk-loaded copy. A delete commits after
             // it was read but before its failed-generation resolution saves.
-            let staleReportCopy = try #require(try await VM.find(vmID, on: app.db))
-            let deleteCopy = try #require(try await VM.find(vmID, on: app.db))
-            let acceptedDelete = try await self.mutation(app, fake).accept(
+            var staleReportCopy = try #require(try await VM.find(vmID, on: app.testPostgres))
+            let deleteCopy = try #require(try await VM.find(vmID, on: app.testPostgres))
+            let deleteResult = try await self.mutation(app, fake).acceptValue(
                 .delete, on: deleteCopy, actor: .user(UUID()),
                 dispatch: .directResolution { _ in false },
-                on: app.db, app: app
-            ) { db in
-                try await ResourceFinalizerService.stampForDeletion(deleteCopy, on: db)
-                deleteCopy.setDesiredStatus(.absent)
+                on: app.testPostgres, app: app
+            ) { current, db in
+                var current = try await ResourceFinalizerService.stampForDeletion(current, on: db)
+                current.setDesiredStatus(.absent)
+                return current
             }
-            #expect(acceptedDelete.targetGeneration == 11)
+            #expect(deleteResult.accepted.targetGeneration == 11)
 
             staleReportCopy.setStatus(.shutdown)
-            let outcome = try await ResourceConvergence.recordFailure(
+            let failure = try await ResourceConvergence.recordValueFailure(
                 staleReportCopy,
                 mutation: .boot,
                 reason: "boot failed before the delete",
                 telemetryReason: "convergence_failed",
-                on: app.db)
-            #expect(outcome == .superseded(actualGeneration: 11))
+                on: app.testPostgres)
+            #expect(failure.outcome == .superseded(actualGeneration: 11))
 
-            let reloaded = try #require(try await VM.find(vmID, on: app.db))
+            let reloaded = try #require(try await VM.find(vmID, on: app.testPostgres))
             #expect(reloaded.generation == 11)
             #expect(reloaded.desiredStatus == .absent)
             #expect(reloaded.lastError == nil)
@@ -466,30 +514,31 @@ final class ResourceMutationTests {
             sandbox.desiredStatus = .running
             sandbox.setStatus(.starting)
             sandbox.convergenceDeadline = Date().addingTimeInterval(120)
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
-            let staleReportCopy = try #require(try await Sandbox.find(sandboxID, on: app.db))
-            let deleteCopy = try #require(try await Sandbox.find(sandboxID, on: app.db))
-            let acceptedDelete = try await self.mutation(app, fake).accept(
+            var staleReportCopy = try #require(try await Sandbox.find(sandboxID, on: app.testPostgres))
+            let deleteCopy = try #require(try await Sandbox.find(sandboxID, on: app.testPostgres))
+            let deleteResult = try await self.mutation(app, fake).acceptValue(
                 .delete, on: deleteCopy, actor: .user(UUID()),
                 dispatch: .directResolution { _ in false },
-                on: app.db, app: app
-            ) { db in
-                try await ResourceFinalizerService.stampForDeletion(deleteCopy, on: db)
-                deleteCopy.setDesiredStatus(.absent)
+                on: app.testPostgres, app: app
+            ) { current, db in
+                var current = try await ResourceFinalizerService.stampForDeletion(current, on: db)
+                current.setDesiredStatus(.absent)
+                return current
             }
-            #expect(acceptedDelete.targetGeneration == 11)
+            #expect(deleteResult.accepted.targetGeneration == 11)
 
             staleReportCopy.setStatus(.stopped)
-            let outcome = try await ResourceConvergence.recordFailure(
+            let failure = try await ResourceConvergence.recordValueFailure(
                 staleReportCopy,
                 mutation: .boot,
                 reason: "start failed before the delete",
                 telemetryReason: "convergence_failed",
-                on: app.db)
-            #expect(outcome == .superseded(actualGeneration: 11))
+                on: app.testPostgres)
+            #expect(failure.outcome == .superseded(actualGeneration: 11))
 
-            let reloaded = try #require(try await Sandbox.find(sandboxID, on: app.db))
+            let reloaded = try #require(try await Sandbox.find(sandboxID, on: app.testPostgres))
             #expect(reloaded.generation == 11)
             #expect(reloaded.desiredStatus == .absent)
             #expect(reloaded.lastError == nil)
@@ -515,23 +564,24 @@ final class ResourceMutationTests {
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.observedGeneration = vm.generation
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             let generation = vm.generation
 
-            let recorded = try await ResourceConvergence.recordFailure(
+            let firstFailure = try await ResourceConvergence.recordValueFailure(
                 vm, mutation: .resize, reason: "resize failed: no space left on device",
-                telemetryReason: "convergence_failed", on: app.db)
-            #expect(recorded == .recorded)
+                telemetryReason: "convergence_failed", on: app.testPostgres)
+            vm = firstFailure.resource
+            #expect(firstFailure.outcome == .recorded)
             #expect(vm.generation == generation)  // nothing was abandoned
             #expect(vm.failedGeneration == generation)
             #expect(!vm.conditions.converged)
             #expect(vm.conditions.degraded?.sinceGeneration == generation)
 
             // Idempotent: the agent restates the same error on every heartbeat.
-            let again = try await ResourceConvergence.recordFailure(
+            let again = try await ResourceConvergence.recordValueFailure(
                 vm, mutation: .resize, reason: "resize failed: no space left on device",
-                telemetryReason: "convergence_failed", on: app.db)
-            #expect(again == .alreadyRecorded)
+                telemetryReason: "convergence_failed", on: app.testPostgres)
+            #expect(again.outcome == .alreadyRecorded)
 
             await app.backgroundTasks.drain(timeout: .seconds(10))
         }
@@ -550,16 +600,21 @@ final class ResourceMutationTests {
             vm.observedGeneration = vm.generation
             vm.lastError = "resize failed: no space left on device"
             vm.failedGeneration = vm.generation
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             let vmID = try vm.requireID()
             let failedAt = vm.generation
 
-            let accepted = try await self.mutation(app, fake).accept(
-                .shutdown, on: vm, actor: .user(UUID()), dispatch: .stateSync, on: app.db, app: app
-            ) { _ in vm.setDesiredStatus(.shutdown) }
-            #expect(accepted.targetGeneration > failedAt)
+            let result = try await self.mutation(app, fake).acceptValue(
+                .shutdown, on: vm, actor: .user(UUID()), dispatch: .stateSync, on: app.testPostgres, app: app
+            ) { current, _ in
+                var current = current
+                current.setDesiredStatus(.shutdown)
+                return current
+            }
+            vm = result.resource
+            #expect(result.accepted.targetGeneration > failedAt)
 
-            var reloaded = try #require(try await VM.find(vmID, on: app.db))
+            var reloaded = try #require(try await VM.find(vmID, on: app.testPostgres))
             // Not converged, but on the generation clause now — the failure is
             // one a newer mutation is already retrying past.
             #expect(!reloaded.conditions.converged)
@@ -569,9 +624,9 @@ final class ResourceMutationTests {
             reloaded.observedGeneration = reloaded.generation
             reloaded.lastError = nil
             reloaded.failedGeneration = nil
-            try await reloaded.save(on: app.db)
+            try await reloaded.save(on: app.testPostgres)
 
-            reloaded = try #require(try await VM.find(vmID, on: app.db))
+            reloaded = try #require(try await VM.find(vmID, on: app.testPostgres))
             #expect(reloaded.conditions.converged)
             #expect(reloaded.conditions.degraded == nil)
 

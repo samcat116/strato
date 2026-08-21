@@ -1,4 +1,5 @@
 import Foundation
+import ControlPlanePostgres
 
 // IAM roles/policies authoring, phase 1 (issue #604): the role definition as
 // the Cedar builders consume it, and the one place Cedar-side role naming
@@ -71,11 +72,12 @@ struct RoleDescriptor: Equatable, Sendable {
 }
 
 extension RoleDescriptor {
-    /// Descriptor for a role-definition row. Nil when the row has no id
-    /// (unsaved model), which cannot reach the compile path.
-    init?(row: IAMRoleDefinition) {
-        guard let id = row.id else { return nil }
-        self.init(id: id, name: row.name, cedarText: row.cedarText, actions: row.actions)
+    init(row: IAMRoleSnapshot) {
+        self.init(id: row.id, name: row.name, cedarText: row.cedarText, actions: row.actions)
+    }
+
+    init(row: LegacyIAMRoleRecord) {
+        self.init(id: row.id, name: row.name, cedarText: row.cedarText, actions: row.actions)
     }
 
     /// The seeded defaults as descriptors — the content `RoleRegistrySync`

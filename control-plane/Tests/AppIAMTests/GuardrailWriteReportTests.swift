@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import Testing
 import Vapor
@@ -20,7 +19,6 @@ final class GuardrailWriteReportTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             app.guardrailAnalyzer = SymCCGuardrailAnalyzer(solverPath: solverPath()!)
             try await test(app)
         } catch {
@@ -48,7 +46,7 @@ final class GuardrailWriteReportTests {
         _ app: Application, _ binding: ProposedBinding
     ) async throws -> [GuardrailWriteReport.GrantCeiling] {
         try await GuardrailWriteReport.ceilings(
-            narrowing: binding, analyzer: app.guardrailAnalyzer, on: app.db, logger: app.logger)
+            narrowing: binding, analyzer: app.guardrailAnalyzer, on: app.testPostgres, logger: app.logger)
     }
 
     // MARK: - The report finds what it should
@@ -56,7 +54,7 @@ final class GuardrailWriteReportTests {
     @Test("A grant a ceiling narrows is reported, naming the ceiling")
     func narrowingIsNamed() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Breach")
             let user = try await builder.createUser(username: "breach", email: "breach@example.com")
 
@@ -69,7 +67,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .any,
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let found = try await ceilings(
@@ -98,7 +96,7 @@ final class GuardrailWriteReportTests {
     @Test("A one-action ceiling narrows a broad role by that one action")
     func narrowCeilingSubtractsOneAction() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Narrow")
             let user = try await builder.createUser(username: "narrow", email: "narrow@example.com")
 
@@ -115,7 +113,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .any,
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             for role in [IAMRole.operator, .editor, .admin] {
@@ -145,7 +143,7 @@ final class GuardrailWriteReportTests {
     @Test("A ceiling on an unrelated action set narrows nothing")
     func nonOverlappingActionsAreClean() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Actions")
             let user = try await builder.createUser(username: "actions", email: "actions@example.com")
 
@@ -159,7 +157,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .user(user.id!),
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let found = try await ceilings(
@@ -174,7 +172,7 @@ final class GuardrailWriteReportTests {
     @Test("A ceiling naming another principal narrows nothing")
     func otherPrincipalIsClean() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Principal")
             let alice = try await builder.createUser(username: "alice-p", email: "alice-p@example.com")
             let bob = try await builder.createUser(username: "bob-p", email: "bob-p@example.com")
@@ -188,7 +186,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .user(bob.id!),
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             // Resolved against the database, not symbolically: a solver told
@@ -206,7 +204,7 @@ final class GuardrailWriteReportTests {
     @Test("A disabled ceiling is not in force")
     func disabledCeilingIsClean() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Disabled")
             let user = try await builder.createUser(username: "disabled", email: "disabled@example.com")
 
@@ -222,7 +220,7 @@ final class GuardrailWriteReportTests {
                 resourceMatch: .any,
                 enabled: false,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let found = try await ceilings(
@@ -237,7 +235,7 @@ final class GuardrailWriteReportTests {
     @Test("An environment ceiling still bites a grant on the whole project")
     func environmentCeilingReachesProjectGrant() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Environment")
             let user = try await builder.createUser(username: "env", email: "env@example.com")
 
@@ -250,7 +248,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .any,
                 resourceMatch: .environment("production"),
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             // The project holds no production VM *today*. The ceiling still
@@ -270,10 +268,10 @@ final class GuardrailWriteReportTests {
     @Test("A ceiling on a group catches a grant to that group")
     func groupCeilingCatchesGroupGrant() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Group")
-            let group = Group(name: "contractors", description: "d", organizationID: tree.org.id!)
-            try await group.save(on: app.db)
+            let group = try await builder.createGroup(
+                name: "contractors", description: "d", organization: tree.org)
 
             _ = try await GuardrailStore.create(
                 name: "no-prod-for-contractors",
@@ -284,7 +282,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .group(group.id!),
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let found = try await ceilings(
@@ -299,16 +297,17 @@ final class GuardrailWriteReportTests {
     @Test("A ceiling on a group catches a grant to a group sharing a member")
     func groupCeilingCatchesOverlappingGroup() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Overlap")
-            let contractors = Group(name: "overlap-contractors", description: "d", organizationID: tree.org.id!)
-            try await contractors.save(on: app.db)
-            let engineers = Group(name: "overlap-engineers", description: "d", organizationID: tree.org.id!)
-            try await engineers.save(on: app.db)
+            let contractors = try await builder.createGroup(
+                name: "overlap-contractors", description: "d", organization: tree.org)
+            let engineers = try await builder.createGroup(
+                name: "overlap-engineers", description: "d", organization: tree.org)
 
             let shared = try await builder.createUser(username: "shared", email: "shared@example.com")
-            try await UserGroup(userID: shared.id!, groupID: contractors.id!).save(on: app.db)
-            try await UserGroup(userID: shared.id!, groupID: engineers.id!).save(on: app.db)
+            try await builder.addUserToOrganization(user: shared, organization: tree.org)
+            try await builder.addUserToGroup(user: shared, group: contractors)
+            try await builder.addUserToGroup(user: shared, group: engineers)
 
             _ = try await GuardrailStore.create(
                 name: "contractors-no-vms",
@@ -319,7 +318,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .group(contractors.id!),
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             // The grant is to engineers, but it reaches a contractor through
@@ -339,7 +338,7 @@ final class GuardrailWriteReportTests {
     @Test("Without a solver the write is accepted, with nothing to report")
     func unavailableSolverCostsOnlyTheExplanation() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "NoSolver")
             let user = try await builder.createUser(username: "nosolver", email: "nosolver@example.com")
 
@@ -352,7 +351,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .any,
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let binding = ProposedBinding(
@@ -368,7 +367,7 @@ final class GuardrailWriteReportTests {
                 _ = try await GuardrailWriteReport.ceilings(
                     narrowing: binding,
                     analyzer: UnavailableGuardrailAnalyzer(reason: "no solver in this test"),
-                    on: app.db,
+                    on: app.testPostgres,
                     logger: app.logger
                 )
             }
@@ -378,7 +377,7 @@ final class GuardrailWriteReportTests {
     @Test("An action the ceiling cannot reach is not reported as ceilinged")
     func unreachableActionsAreNotReported() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Reach")
             let user = try await builder.createUser(username: "reach", email: "reach@example.com")
 
@@ -391,7 +390,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .any,
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             // The solver's answers are stubbed *per resource type* so the
@@ -405,7 +404,7 @@ final class GuardrailWriteReportTests {
                     principalType: .user, principalID: user.id!, role: .editor,
                     node: tree.projectNode),
                 analyzer: SelectiveGuardrailAnalyzer(nonDisjointResourceTypes: [CedarEntityType.vm.rawValue]),
-                on: app.db,
+                on: app.testPostgres,
                 logger: app.logger
             )
             #expect(found.count == 1)
@@ -416,7 +415,7 @@ final class GuardrailWriteReportTests {
     @Test("With no ceiling in force the solver is never consulted")
     func noCeilingsMeansNoSolverCall() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "NoCeilings")
             let user = try await builder.createUser(username: "noceil", email: "noceil@example.com")
 
@@ -427,7 +426,7 @@ final class GuardrailWriteReportTests {
                     principalType: .user, principalID: user.id!, role: .admin,
                     node: tree.projectNode),
                 analyzer: UnavailableGuardrailAnalyzer(reason: "must not be consulted"),
-                on: app.db,
+                on: app.testPostgres,
                 logger: app.logger
             )
             #expect(found.isEmpty)
@@ -439,7 +438,7 @@ final class GuardrailWriteReportTests {
     @Test("A new ceiling reports the bindings it narrows rather than refusing")
     func guardrailWriteReportsShadowedBindings() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(app: app)
             let tree = try await buildTree(builder, prefix: "Shadow")
             let user = try await builder.createUser(username: "shadow", email: "shadow@example.com")
 
@@ -450,7 +449,7 @@ final class GuardrailWriteReportTests {
                 nodeType: .project,
                 nodeID: tree.project.id!,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let guardrail = try await GuardrailStore.create(
@@ -462,11 +461,11 @@ final class GuardrailWriteReportTests {
                 principalMatch: .any,
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let shadowed = try await GuardrailWriteReport.shadowedBindings(
-                by: guardrail, analyzer: app.guardrailAnalyzer, on: app.db, logger: app.logger)
+                by: guardrail, analyzer: app.guardrailAnalyzer, on: app.testPostgres, logger: app.logger)
             #expect(shadowed.count == 1)
             #expect(shadowed.first?.role == .editor)
             #expect(shadowed.first?.node == tree.projectNode)

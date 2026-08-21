@@ -1,4 +1,3 @@
-import Fluent
 import SPIREServerAPI
 import Vapor
 

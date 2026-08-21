@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import StratoShared
 import Vapor
 
@@ -241,7 +241,7 @@ enum OperationFacade {
     }
 
     static func view(
-        of kind: OperationResourceKind, id: UUID, on db: any Database
+        of kind: OperationResourceKind, id: UUID, on db: PostgresStoreContext
     ) async throws -> ResourceView {
         let conditions: ResourceConditions?
         switch kind {
@@ -265,7 +265,7 @@ enum OperationFacade {
     ///
     /// `event` must be a `.requested` row; terminal rows are the *evidence*
     /// this reads, not its subject.
-    static func response(for event: ResourceEvent, on db: any Database) async throws -> OperationResponse {
+    static func response(for event: ResourceEvent, on db: PostgresStoreContext) async throws -> OperationResponse {
         let view = try await view(of: event.resourceKind, id: event.resourceID, on: db)
         return response(for: event, in: view)
     }
@@ -373,15 +373,16 @@ enum OperationFacade {
         resourceKind: OperationResourceKind,
         resourceID: UUID,
         limit: Int,
-        on db: any Database
+        vmCommands: VMCommandExecutionsPersistence? = nil,
+        on db: PostgresStoreContext
     ) async throws -> [OperationResponse] {
-        let events = try await ResourceEvent.query(on: db)
-            .filter(\.$resourceKind == resourceKind)
-            .filter(\.$resourceID == resourceID)
-            .filter(\.$phase == .requested)
-            .sort(\.$createdAt, .descending)
-            .limit(limit)
-            .all()
+        let events = try await ResourceEvent.matching(
+            resourceKind: resourceKind,
+            resourceID: resourceID,
+            phase: .requested,
+            limit: limit,
+            on: db
+        )
         var responses: [OperationResponse] = []
         if !events.isEmpty {
             let view = try await view(of: resourceKind, id: resourceID, on: db)
@@ -389,11 +390,10 @@ enum OperationFacade {
         }
 
         if resourceKind == .virtualMachine {
-            let commands = try await VMCommandExecution.query(on: db)
-                .filter(\.$vmID == resourceID)
-                .sort(\.$createdAt, .descending)
-                .limit(limit)
-                .all()
+            guard let vmCommands else {
+                throw Abort(.internalServerError, reason: "VM command persistence was not injected")
+            }
+            let commands = try await vmCommands.history(vmID: resourceID, limit: limit)
             for command in commands {
                 responses.append(try command.operationResponse(payload: nil))
             }

@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 extension Request {
@@ -13,8 +13,10 @@ extension Request {
     ///
     /// - Throws: `.unauthorized` if unauthenticated, `.notFound` if the volume
     ///   does not exist, `.forbidden` if the user lacks `action` on it.
-    func authorizedVolume(_ volumeID: UUID, action: String) async throws -> Volume {
-        guard let volume = try await Volume.find(volumeID, on: db) else {
+    func authorizedVolume(
+        _ volumeID: UUID, action: String, on database: PostgresStoreContext
+    ) async throws -> Volume {
+        guard let volume = try await Volume.find(volumeID, on: database) else {
             throw Abort(.notFound)
         }
 

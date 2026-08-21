@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Testing
 
@@ -28,7 +27,7 @@ struct AgentWorkloadClaimEnumConstraintTests {
             // `WorkloadKind.allCases` rather than a literal list, so a kind
             // added later fails here instead of in production.
             for kind in WorkloadKind.allCases {
-                let claim = AgentWorkloadClaim(
+                let claim = AgentWorkloadClaimWrite(
                     agentId: "claim-agent",
                     resourceKind: kind.resourceKind,
                     resourceID: UUID(),
@@ -38,12 +37,10 @@ struct AgentWorkloadClaimEnumConstraintTests {
                     observedGeneration: 6,
                     observedStatus: "present"
                 )
-                try await claim.save(on: app.db)
+                try await app.workloadsPersistence.insertClaims([claim.native])
             }
 
-            let recorded = try await AgentWorkloadClaim.query(on: app.db)
-                .filter(\.$agentId == "claim-agent")
-                .count()
+            let recorded = try await app.workloadsPersistence.countClaims(agentID: "claim-agent")
             #expect(recorded == WorkloadKind.allCases.count)
         }
     }
@@ -51,7 +48,7 @@ struct AgentWorkloadClaimEnumConstraintTests {
     @Test("The constraint still rejects a value no workload kind maps to")
     func unknownKindIsRejected() async throws {
         try await withTestApp { app in
-            let sql = try #require(app.db as? any SQLDatabase)
+            let sql = try #require(Optional(app.testPostgres))
             // The guard is not merely widened to everything: FluentKit
             // force-unwraps `RawRepresentable.init(rawValue:)` on enum columns,
             // so an unexpected value traps the process rather than failing a
@@ -71,7 +68,7 @@ struct AgentWorkloadClaimEnumConstraintTests {
     @Test("The installed constraint covers every OperationResourceKind")
     func constraintCoversEveryResourceKind() async throws {
         try await withTestApp { app in
-            let sql = try #require(app.db as? any SQLDatabase)
+            let sql = try #require(Optional(app.testPostgres))
             let row = try #require(
                 try await sql.raw(
                     """

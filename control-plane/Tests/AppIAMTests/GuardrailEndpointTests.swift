@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -24,14 +23,13 @@ final class GuardrailEndpointTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             // This suite is about the API, not the symbolic analysis: with the
             // real analyzer these tests would pass or fail on whether the
             // machine has an SMT solver. The shadowed-bindings report is
             // covered against a real solver in GuardrailWriteReportTests.
             app.guardrailAnalyzer = PermissiveGuardrailAnalyzer()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "guardrailuser",
                 email: "guardrail@example.com",
@@ -40,12 +38,11 @@ final class GuardrailEndpointTests {
             )
             let org = try await builder.createOrganization(name: "Guardrail Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
             let project = try await builder.createProject(
                 name: "Guardrail Project", description: "d", organization: org)
 
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
             try await test(app, Fixture(user: user, token: token, org: org, project: project))
         } catch {
             try await app.shutdownForTesting()
@@ -78,7 +75,7 @@ final class GuardrailEndpointTests {
     @Test("Creating a guardrail returns it as a forbid and bumps the policy-set version")
     func createReturnsForbidAndBumpsVersion() async throws {
         try await withApp { app, fixture in
-            let before = try await PolicySetVersionService.current(on: app.db)
+            let before = try await PolicySetVersionService.current(on: app.testPostgres)
 
             try await app.test(
                 .POST, "/api/iam/guardrails",
@@ -98,7 +95,7 @@ final class GuardrailEndpointTests {
                     #expect(decoded.shape == "unconditional")
                 })
 
-            let after = try await PolicySetVersionService.current(on: app.db)
+            let after = try await PolicySetVersionService.current(on: app.testPostgres)
             #expect(after == before + 1)
         }
     }
@@ -106,7 +103,7 @@ final class GuardrailEndpointTests {
     @Test("A permit-shaped request is a 400 and writes nothing")
     func permitIsRejectedAtTheBoundary() async throws {
         try await withApp { app, fixture in
-            let before = try await PolicySetVersionService.current(on: app.db)
+            let before = try await PolicySetVersionService.current(on: app.testPostgres)
 
             try await app.test(
                 .POST, "/api/iam/guardrails",
@@ -120,8 +117,8 @@ final class GuardrailEndpointTests {
                     #expect(res.body.string.contains("forbid-only"))
                 })
 
-            let stored = try await Guardrail.query(on: app.db).count()
-            let after = try await PolicySetVersionService.current(on: app.db)
+            let stored = try await LegacyGuardrailStore.count(on: app.testPostgres)
+            let after = try await PolicySetVersionService.current(on: app.testPostgres)
             #expect(stored == 0)
             // A rejected write must not move the version: replicas would
             // recompile an unchanged policy set.
@@ -176,11 +173,11 @@ final class GuardrailEndpointTests {
         try await withApp { app, fixture in
             // A bare org member holds no admin binding, so iam:setPolicy on
             // the org is denied.
-            let member = try await TestDataBuilder(db: app.db).createUser(
+            let member = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "guardrail-member", email: "guardrail-member@example.com")
-            try await TestDataBuilder(db: app.db).addUserToOrganization(
+            try await TestDataBuilder(db: app.testPostgres).addUserToOrganization(
                 user: member, organization: fixture.org, role: "member")
-            let memberToken = try await member.generateAPIKey(on: app.db)
+            let memberToken = try await member.generateAPIKey(on: app)
 
             try await app.test(
                 .POST, "/api/iam/guardrails",
@@ -192,7 +189,7 @@ final class GuardrailEndpointTests {
                     #expect(res.status == .forbidden)
                 })
 
-            let stored = try await Guardrail.query(on: app.db).count()
+            let stored = try await LegacyGuardrailStore.count(on: app.testPostgres)
             #expect(stored == 0)
         }
     }
@@ -211,7 +208,7 @@ final class GuardrailEndpointTests {
                     guardrailID = try res.content.decode(GuardrailController.GuardrailWriteResponse.self).guardrail.id
                 })
             let id = try #require(guardrailID)
-            let afterCreate = try await PolicySetVersionService.current(on: app.db)
+            let afterCreate = try await PolicySetVersionService.current(on: app.testPostgres)
 
             try await app.test(
                 .DELETE, "/api/iam/guardrails/\(id.uuidString)",
@@ -222,8 +219,8 @@ final class GuardrailEndpointTests {
                     #expect(res.status == .noContent)
                 })
 
-            let stored = try await Guardrail.query(on: app.db).count()
-            let afterDelete = try await PolicySetVersionService.current(on: app.db)
+            let stored = try await LegacyGuardrailStore.count(on: app.testPostgres)
+            let afterDelete = try await PolicySetVersionService.current(on: app.testPostgres)
             #expect(stored == 0)
             #expect(afterDelete == afterCreate + 1)
         }
@@ -305,7 +302,7 @@ final class GuardrailEndpointTests {
                     #expect(res.status == .badRequest)
                 })
 
-            let count = try await Guardrail.query(on: app.db).count()
+            let count = try await LegacyGuardrailStore.count(on: app.testPostgres)
             #expect(count == 0)
         }
     }

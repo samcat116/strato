@@ -1,6 +1,6 @@
+import ControlPlanePostgres
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import AppTestSupport
 @testable import App
@@ -22,17 +22,16 @@ final class WorkloadSizeValidationTests {
     private func gb(_ value: Double) -> Int64 { Int64(value * 1024 * 1024 * 1024) }
 
     private func quota(reservedStorage: Int64, isEnabled: Bool = true) -> ResourceQuota {
-        let quota = ResourceQuota(
+        ResourceQuota(
             name: "snapshot-quota",
             projectID: UUID(),
             maxVCPUs: 10,
             maxMemory: gb(20),
             maxStorage: gb(100),
-            maxVMs: 5
+            maxVMs: 5,
+            isEnabled: isEnabled,
+            reservedStorage: reservedStorage
         )
-        quota.reservedStorage = reservedStorage
-        quota.isEnabled = isEnabled
-        return quota
     }
 
     // MARK: - Quota arithmetic
@@ -53,7 +52,7 @@ final class WorkloadSizeValidationTests {
     func reserveSnapshotStorageThrowsOnOverflow() async throws {
         let quota = quota(reservedStorage: gb(10))
         let error = #expect(throws: Abort.self) {
-            try quota.reserveStorage(Int64.max, for: "the snapshot")
+            _ = try quota.reservingStorage(Int64.max, for: "the snapshot")
         }
         #expect(error?.status == .forbidden)
         // The rejection must not have moved the counter.
@@ -65,28 +64,28 @@ final class WorkloadSizeValidationTests {
         // A disabled quota never blocks but still tracks reservations, so the
         // unbounded operand reaches the add with no check in front of it.
         let quota = quota(reservedStorage: Int64.max - 10, isEnabled: false)
-        try quota.reserveStorage(Int64.max, for: "the snapshot")
-        #expect(quota.reservedStorage == Int64.max)
+        let updated = try quota.reservingStorage(Int64.max, for: "the snapshot")
+        #expect(updated.reservedStorage == Int64.max)
     }
 
     @Test("A disabled quota saturates the VM and sandbox counters too, rather than trapping")
     func disabledQuotaSaturatesWorkloadCounters() async throws {
         let vmQuota = quota(reservedStorage: Int64.max - 10, isEnabled: false)
-        vmQuota.reservedVCPUs = Int.max - 1
-        vmQuota.reservedMemory = Int64.max - 10
-        try vmQuota.reserveResources(vcpus: Int.max, memory: Int64.max, storage: Int64.max)
-        #expect(vmQuota.reservedVCPUs == Int.max)
-        #expect(vmQuota.reservedMemory == Int64.max)
-        #expect(vmQuota.reservedStorage == Int64.max)
-        #expect(vmQuota.vmCount == 1)
+            .replacingCounters(reservedVCPUs: Int.max - 1, reservedMemory: Int64.max - 10)
+        let updatedVMQuota = try vmQuota.reservingResources(
+            vcpus: Int.max, memory: Int64.max, storage: Int64.max)
+        #expect(updatedVMQuota.reservedVCPUs == Int.max)
+        #expect(updatedVMQuota.reservedMemory == Int64.max)
+        #expect(updatedVMQuota.reservedStorage == Int64.max)
+        #expect(updatedVMQuota.vmCount == 1)
 
         let sandboxQuota = quota(reservedStorage: 0, isEnabled: false)
-        sandboxQuota.reservedVCPUs = Int.max - 1
-        sandboxQuota.reservedMemory = Int64.max - 10
-        try sandboxQuota.reserveSandboxResources(vcpus: Int.max, memory: Int64.max)
-        #expect(sandboxQuota.reservedVCPUs == Int.max)
-        #expect(sandboxQuota.reservedMemory == Int64.max)
-        #expect(sandboxQuota.sandboxCount == 1)
+            .replacingCounters(reservedVCPUs: Int.max - 1, reservedMemory: Int64.max - 10)
+        let updatedSandboxQuota = try sandboxQuota.reservingSandboxResources(
+            vcpus: Int.max, memory: Int64.max)
+        #expect(updatedSandboxQuota.reservedVCPUs == Int.max)
+        #expect(updatedSandboxQuota.reservedMemory == Int64.max)
+        #expect(updatedSandboxQuota.sandboxCount == 1)
     }
 
     @Test("A negative snapshot size floors the counter at zero rather than going negative")
@@ -95,8 +94,8 @@ final class WorkloadSizeValidationTests {
         // operand is not hypothetical; a negative reservation is meaningless
         // for a counter that caches measured usage.
         let quota = quota(reservedStorage: gb(1))
-        try quota.reserveStorage(gb(-5), for: "the snapshot")
-        #expect(quota.reservedStorage == 0)
+        let updated = try quota.reservingStorage(gb(-5), for: "the snapshot")
+        #expect(updated.reservedStorage == 0)
     }
 
     @Test("A snapshot that fits is still admitted and reserved")
@@ -104,8 +103,8 @@ final class WorkloadSizeValidationTests {
         let quota = quota(reservedStorage: gb(10))
         let check = quota.canAccommodateStorage(gb(5), for: "the snapshot")
         #expect(check.allowed)
-        try quota.reserveStorage(gb(5), for: "the snapshot")
-        #expect(quota.reservedStorage == gb(15))
+        let updated = try quota.reservingStorage(gb(5), for: "the snapshot")
+        #expect(updated.reservedStorage == gb(15))
     }
 
     @Test("A snapshot exactly filling the remaining storage is admitted")
@@ -114,8 +113,8 @@ final class WorkloadSizeValidationTests {
         let remaining = quota.maxStorage - quota.reservedStorage
         let check = quota.canAccommodateStorage(remaining, for: "the snapshot")
         #expect(check.allowed)
-        try quota.reserveStorage(remaining, for: "the snapshot")
-        #expect(quota.reservedStorage == quota.maxStorage)
+        let updated = try quota.reservingStorage(remaining, for: "the snapshot")
+        #expect(updated.reservedStorage == quota.maxStorage)
     }
 
     // MARK: - Admission through the service
@@ -123,7 +122,7 @@ final class WorkloadSizeValidationTests {
     @Test("reserveSnapshotStorage answers 403 when the size would overflow the storage counter")
     func reserveSnapshotStorageRejectsOverflow() async throws {
         try await withApp { app, project, _, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             // A VM's disk gives the quota a non-zero measured storage baseline,
             // which is what turns an `Int64.max` snapshot size into an overflow.
             _ = try await builder.createVM(name: "storage-vm", project: project)
@@ -131,7 +130,7 @@ final class WorkloadSizeValidationTests {
 
             let error = await #expect(throws: Abort.self) {
                 try await QuotaEnforcementService.reserveSnapshotStorage(
-                    for: project, environment: "development", size: Int64.max, on: app.db)
+                    for: project, environment: "development", size: Int64.max, on: app.testPostgres)
             }
             #expect(error?.status == .forbidden)
         }
@@ -183,7 +182,7 @@ final class WorkloadSizeValidationTests {
                 // snapshot path later trapped the process on it.
                 self.expectSizeRejection(res)
             }
-            let count = try await VM.query(on: app.db).count()
+            let count = try await VM.all(on: app.testPostgres).count
             #expect(count == 0)
         }
     }
@@ -203,7 +202,7 @@ final class WorkloadSizeValidationTests {
             } afterResponse: { res in
                 self.expectSizeRejection(res)
             }
-            let count = try await VM.query(on: app.db).count()
+            let count = try await VM.all(on: app.testPostgres).count
             #expect(count == 0)
         }
     }
@@ -220,7 +219,7 @@ final class WorkloadSizeValidationTests {
             } afterResponse: { res in
                 self.expectSizeRejection(res)
             }
-            let count = try await VM.query(on: app.db).count()
+            let count = try await VM.all(on: app.testPostgres).count
             #expect(count == 0)
         }
     }
@@ -246,7 +245,7 @@ final class WorkloadSizeValidationTests {
             }
 
             let vmID = try #require(createdVMID)
-            let created = try #require(await VM.find(vmID, on: app.db))
+            let created = try #require(await VM.find(vmID, on: app.testPostgres))
             #expect(created.cpu == WorkloadSizeLimits.maxVCPUs)
             #expect(created.memory == WorkloadSizeLimits.maxMemoryBytes)
             #expect(created.disk == WorkloadSizeLimits.maxDiskBytes)
@@ -254,14 +253,14 @@ final class WorkloadSizeValidationTests {
 
             // The background create dispatch fails (no agents run in tests);
             // let it reach a terminal state before teardown.
-            try await waitForCreateToSettle(resourceID: vmID, on: app.db)
+            try await waitForCreateToSettle(resourceID: vmID, on: app.testPostgres)
         }
     }
 
     @Test("PUT /api/vms/:id rejects an oversized 'memory' with 400")
     func vmResizeRejectsOversizedMemory() async throws {
         try await withApp { app, project, _, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let vm = try await builder.createVM(name: "resize-target", project: project)
 
             try await app.test(.PUT, "/api/vms/\(vm.id!)") { req in
@@ -273,7 +272,7 @@ final class WorkloadSizeValidationTests {
                 self.expectSizeRejection(res)
             }
 
-            let refreshed = try await VM.find(vm.id, on: app.db)
+            let refreshed = try await VM.find(vm.id, on: app.testPostgres)
             #expect(refreshed?.memory == vm.memory)
         }
     }
@@ -281,7 +280,7 @@ final class WorkloadSizeValidationTests {
     @Test("PUT /api/vms/:id accepts a resize to exactly the memory limit")
     func vmResizeAcceptsMemoryAtTheLimit() async throws {
         try await withApp { app, project, _, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let vm = try await builder.createVM(name: "resize-to-limit", project: project)
 
             try await app.test(.PUT, "/api/vms/\(vm.id!)") { req in
@@ -295,7 +294,7 @@ final class WorkloadSizeValidationTests {
                 #expect(res.status == .ok)
             }
 
-            let refreshed = try await VM.find(vm.id, on: app.db)
+            let refreshed = try await VM.find(vm.id, on: app.testPostgres)
             #expect(refreshed?.memory == WorkloadSizeLimits.maxMemoryBytes)
             #expect(refreshed?.maxMemory == WorkloadSizeLimits.maxMemoryBytes)
         }
@@ -318,7 +317,7 @@ final class WorkloadSizeValidationTests {
             } afterResponse: { res in
                 self.expectSizeRejection(res)
             }
-            let count = try await Sandbox.query(on: app.db).count()
+            let count = try await Sandbox.all(on: app.testPostgres).count
             #expect(count == 0)
         }
     }
@@ -341,7 +340,7 @@ final class WorkloadSizeValidationTests {
             } afterResponse: { res in
                 self.expectSizeRejection(res)
             }
-            let count = try await Sandbox.query(on: app.db).count()
+            let count = try await Sandbox.all(on: app.testPostgres).count
             #expect(count == 0)
         }
     }
@@ -363,11 +362,11 @@ final class WorkloadSizeValidationTests {
             }
 
             let sandboxID = try #require(createdSandboxID)
-            let created = try #require(await Sandbox.find(sandboxID, on: app.db))
+            let created = try #require(await Sandbox.find(sandboxID, on: app.testPostgres))
             #expect(created.cpus == WorkloadSizeLimits.maxVCPUs)
             #expect(created.memory == WorkloadSizeLimits.maxMemoryBytes)
 
-            try await waitForCreateToSettle(resourceID: sandboxID, on: app.db)
+            try await waitForCreateToSettle(resourceID: sandboxID, on: app.testPostgres)
         }
     }
 
@@ -376,7 +375,7 @@ final class WorkloadSizeValidationTests {
     /// lands as `degraded` on the workload itself since STR-152 — there is no
     /// operation row left to poll — so the workload is both the subject and the
     /// evidence, and either kind may be the one under test.
-    private func waitForCreateToSettle(resourceID: UUID, on db: any Database) async throws {
+    private func waitForCreateToSettle(resourceID: UUID, on db: PostgresStoreContext) async throws {
         for _ in 0..<100 {
             if try await VM.find(resourceID, on: db)?.failedGeneration != nil { return }
             if try await Sandbox.find(resourceID, on: db)?.failedGeneration != nil { return }
@@ -395,21 +394,19 @@ final class WorkloadSizeValidationTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "sizeuser", email: "size@example.com", displayName: "Size User")
             let org = try await builder.createOrganization(name: "Size Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Size Project", description: "p", organization: org)
             _ = try await builder.createNetwork(name: "default", project: project)
             let image = try await builder.createImage(project: project, uploadedBy: user)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, project, image, token)
         } catch {

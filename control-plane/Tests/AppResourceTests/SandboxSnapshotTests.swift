@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -25,9 +24,8 @@ final class SandboxSnapshotTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "snapuser",
                 email: "snap@example.com",
@@ -36,8 +34,7 @@ final class SandboxSnapshotTests {
             )
             let org = try await builder.createOrganization(name: "Snapshot Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Snapshot Project",
@@ -45,7 +42,7 @@ final class SandboxSnapshotTests {
                 organization: org
             )
             let sandbox = try await builder.createSandbox(name: "snap-sandbox", project: project)
-            let token = try await user.generateAPIKey(on: app.db)
+            let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, project, sandbox, token)
         } catch {
@@ -65,6 +62,7 @@ final class SandboxSnapshotTests {
         status: SandboxStatus = .running,
         wireProtocolVersion: Int = WireProtocol.currentVersion
     ) async throws -> String {
+        var sandbox = sandbox
         let message = AgentRegisterMessage(
             agentId: "snapshot-agent",
             hostname: "test-host",
@@ -91,7 +89,7 @@ final class SandboxSnapshotTests {
             protocolVersion: wireProtocolVersion,
             sandboxCapable: true
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: "snapshot-agent",
             organizationScope: orgID.map { .organization($0) })
@@ -103,7 +101,7 @@ final class SandboxSnapshotTests {
         if status == .running {
             sandbox.desiredStatus = .running
         }
-        try await sandbox.save(on: app.db)
+        try await sandbox.save(on: app.testPostgres)
         return agentUUID.uuidString
     }
 
@@ -170,9 +168,7 @@ final class SandboxSnapshotTests {
             #expect(!body.resource.conditions.converged)
 
             let snapshot = try #require(
-                await SandboxSnapshot.query(on: app.db)
-                    .filter(\.$sandbox.$id == sandbox.id!)
-                    .first())
+                try await SandboxSnapshot.all(on: app.testPostgres).first { $0.sandboxID == sandbox.id! })
             #expect(snapshot.agentId == sandbox.hypervisorId)
             #expect(snapshot.desiredStatus == .present)
             // The admission estimate stands until the agent reports a real
@@ -185,13 +181,13 @@ final class SandboxSnapshotTests {
 
             // Ownership: the creator gets an admin binding on the snapshot
             // node in the create transaction.
-            let ownerBindings = try await RoleBinding.query(on: app.db)
-                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
-                .filter(\.$principalID == user.id!)
-                .filter(\.$roleID == IAMRole.admin.seededID)
-                .filter(\.$nodeType == IAMNodeType.sandboxSnapshot.rawValue)
-                .filter(\.$nodeID == snapshot.id!)
-                .count()
+            let ownerBindings = try await LegacyRoleBindingStore.bindings(
+                principalType: IAMPrincipalType.user.rawValue,
+                principalID: user.id!,
+                roleID: IAMRole.admin.seededID,
+                nodeType: IAMNodeType.sandboxSnapshot.rawValue,
+                nodeID: snapshot.id!,
+                on: app.testPostgres).count
             #expect(ownerBindings == 1)
         }
     }
@@ -214,12 +210,10 @@ final class SandboxSnapshotTests {
             }
 
             let snapshot = try #require(
-                await SandboxSnapshot.query(on: app.db)
-                    .filter(\.$sandbox.$id == sandbox.id!)
-                    .first())
+                try await SandboxSnapshot.all(on: app.testPostgres).first { $0.sandboxID == sandbox.id! })
             #expect(snapshot.captureMode == .stop)
 
-            let settled = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            let settled = try #require(await Sandbox.find(sandbox.id, on: app.testPostgres))
             #expect(settled.desiredStatus == .stopped)
             #expect(settled.generation == 2)
         }
@@ -239,7 +233,7 @@ final class SandboxSnapshotTests {
                 #expect(res.status == .badRequest)
             }
 
-            let snapshots = try await SandboxSnapshot.query(on: app.db).count()
+            let snapshots = try await SandboxSnapshot.all(on: app.testPostgres).count
             #expect(snapshots == 0)
         }
     }
@@ -251,13 +245,14 @@ final class SandboxSnapshotTests {
     @Test("A snapshot is accepted while another sandbox mutation is pending")
     func createAllowsConcurrentOperations() async throws {
         try await withSnapshotTestApp { app, _, _, sandbox, token in
+            var sandbox = sandbox
             _ = try await placeOnCapableAgent(app: app, sandbox: sandbox, status: .running)
 
             // An unconverged boot on the sandbox: desired state moved, the
             // agent has not caught up.
             sandbox.setFixtureDesiredStatus(.running)
-            sandbox.extendConvergenceDeadline(by: 600)
-            try await sandbox.save(on: app.db)
+            sandbox = sandbox.extendingConvergenceDeadline(by: 600)
+            try await sandbox.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -274,7 +269,7 @@ final class SandboxSnapshotTests {
 
             // Sandbox memory is 1 GiB; half a gigabyte of storage quota
             // cannot admit the estimate.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             _ = try await builder.createResourceQuota(
                 name: "tiny-storage",
                 maxVCPUs: 10,
@@ -293,11 +288,12 @@ final class SandboxSnapshotTests {
 
             // The rejection rolled the whole transaction back: no snapshot row
             // and no recorded mutation survive.
-            let snapshots = try await SandboxSnapshot.query(on: app.db).count()
+            let snapshots = try await SandboxSnapshot.all(on: app.testPostgres).count
             #expect(snapshots == 0)
-            let requested = try await ResourceEvent.query(on: app.db)
-                .filter(\.$resourceKind == .sandboxSnapshot)
-                .count()
+            let requested = try await ResourceEvent.count(
+                resourceKind: .sandboxSnapshot,
+                on: app.testPostgres
+            )
             #expect(requested == 0)
         }
     }
@@ -310,16 +306,15 @@ final class SandboxSnapshotTests {
             let snapshot = SandboxSnapshot(
                 name: "seeded",
                 sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
+                projectID: sandbox.projectID,
                 environment: sandbox.environment,
+                status: .ready,
+                size: 42,
                 agentId: "agent-1",
+                guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
+                forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.size = 42
-            snapshot.guestControlProtocolVersion =
-                SandboxGuestControlProtocol.currentVersion
-            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(.GET, "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -346,13 +341,13 @@ final class SandboxSnapshotTests {
             let snapshot = SandboxSnapshot(
                 name: "orphaned",
                 sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
+                projectID: sandbox.projectID,
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: nil,
+                guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(
                 .DELETE,
@@ -365,7 +360,7 @@ final class SandboxSnapshotTests {
 
             var removed = false
             for _ in 0..<40 {
-                if try await SandboxSnapshot.find(snapshot.id, on: app.db) == nil {
+                if try await SandboxSnapshot.find(snapshot.id, on: app.testPostgres) == nil {
                     removed = true
                     break
                 }
@@ -385,11 +380,11 @@ final class SandboxSnapshotTests {
             let snapshot = SandboxSnapshot(
                 name: "in-flight",
                 sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
+                projectID: sandbox.projectID,
                 environment: sandbox.environment,
                 agentId: nil,
                 createdByID: user.id!)
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(
                 .DELETE,
@@ -412,11 +407,11 @@ final class SandboxSnapshotTests {
                 sandboxID: sandbox.id!,
                 projectID: project.id!,
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: nil,
+                guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             let fork = Sandbox(
                 name: "live-fork",
@@ -426,7 +421,7 @@ final class SandboxSnapshotTests {
                 cpus: sandbox.cpus,
                 memory: sandbox.memory,
                 restoredFromSnapshotId: snapshot.id)
-            try await fork.save(on: app.db)
+            try await fork.save(on: app.testPostgres)
 
             try await app.test(
                 .DELETE,
@@ -464,12 +459,12 @@ final class SandboxSnapshotTests {
             let snapshot = SandboxSnapshot(
                 name: "broken",
                 sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
+                projectID: sandbox.projectID,
                 environment: sandbox.environment,
+                status: .error,
                 agentId: agentId,
                 createdByID: user.id!)
-            snapshot.status = .error
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(
                 .POST,
@@ -489,13 +484,13 @@ final class SandboxSnapshotTests {
             let snapshot = SandboxSnapshot(
                 name: "elsewhere",
                 sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
+                projectID: sandbox.projectID,
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: "some-other-agent",
+                guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(
                 .POST,
@@ -516,13 +511,13 @@ final class SandboxSnapshotTests {
             let snapshot = SandboxSnapshot(
                 name: "checkpoint",
                 sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
+                projectID: sandbox.projectID,
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: agentId,
+                guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             var accepted: AcceptedMutation<SandboxDetailResponse>?
             try await app.test(
@@ -541,7 +536,7 @@ final class SandboxSnapshotTests {
             // was asked for plus the snapshot it names, applied once by the
             // agent against its own durable record. Desired state flips to
             // running alongside — a restored guest resumes.
-            let stored = try await Sandbox.find(sandbox.id, on: app.db)
+            let stored = try await Sandbox.find(sandbox.id, on: app.testPostgres)
             #expect(stored?.restoreGeneration == 1)
             #expect(stored?.restoreSnapshotID == snapshot.id)
             #expect(stored?.desiredStatus == .running)
@@ -559,14 +554,13 @@ final class SandboxSnapshotTests {
             let snapshot = SandboxSnapshot(
                 name: "legacy-checkpoint",
                 sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
+                projectID: sandbox.projectID,
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: agentId,
+                guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion - 1,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.guestControlProtocolVersion =
-                SandboxGuestControlProtocol.currentVersion - 1
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(
                 .POST,
@@ -593,13 +587,13 @@ final class SandboxSnapshotTests {
             let snapshot = SandboxSnapshot(
                 name: "checkpoint",
                 sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
+                projectID: sandbox.projectID,
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: agentId,
+                guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(
                 .POST,
@@ -611,7 +605,7 @@ final class SandboxSnapshotTests {
                 #expect(res.body.string.contains("snapshot backend"))
             }
 
-            #expect(try await Sandbox.find(sandbox.id, on: app.db)?.restoreGeneration == 0)
+            #expect(try await Sandbox.find(sandbox.id, on: app.testPostgres)?.restoreGeneration == 0)
         }
     }
 
@@ -620,7 +614,7 @@ final class SandboxSnapshotTests {
     @Test("Quota resync counts non-error snapshot sizes into reserved storage")
     func quotaResyncCountsSnapshotStorage() async throws {
         try await withSnapshotTestApp { app, user, project, sandbox, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let quota = try await builder.createResourceQuota(
                 name: "storage-quota",
                 maxStorageGB: 100,
@@ -632,24 +626,24 @@ final class SandboxSnapshotTests {
                 sandboxID: sandbox.id!,
                 projectID: project.id!,
                 environment: sandbox.environment,
+                status: .ready,
+                size: 5 * 1024 * 1024 * 1024,
                 agentId: "agent-1",
                 createdByID: user.id!)
-            ready.status = .ready
-            ready.size = 5 * 1024 * 1024 * 1024
-            try await ready.save(on: app.db)
+            try await ready.save(on: app.testPostgres)
 
             let errored = SandboxSnapshot(
                 name: "not-counted",
                 sandboxID: sandbox.id!,
                 projectID: project.id!,
                 environment: sandbox.environment,
+                status: .error,
+                size: 7 * 1024 * 1024 * 1024,
                 agentId: "agent-1",
                 createdByID: user.id!)
-            errored.status = .error
-            errored.size = 7 * 1024 * 1024 * 1024
-            try await errored.save(on: app.db)
+            try await errored.save(on: app.testPostgres)
 
-            let storage = try await quota.sandboxSnapshotStorageInScope(on: app.db)
+            let storage = try await quota.sandboxSnapshotStorageInScope(on: app.testPostgres)
             #expect(storage == 5 * 1024 * 1024 * 1024)
         }
     }
@@ -687,7 +681,7 @@ final class SandboxSnapshotTests {
             sandboxCapable: true,
             hostInfo: HostInfo(cpuModel: cpuModel)
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: name,
             organizationScope: orgID.map { .organization($0) })
@@ -706,23 +700,24 @@ final class SandboxSnapshotTests {
         let snapshot = SandboxSnapshot(
             name: "exported",
             sandboxID: sandbox.id!,
-            projectID: sandbox.$project.id,
+            projectID: sandbox.projectID,
             environment: sandbox.environment,
+            status: .ready,
+            size: 64,
             agentId: agentId,
+            firecrackerVersion: firecrackerVersion,
+            architecture: architecture,
+            guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
+            forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion,
+            cpuTemplate: cpuTemplate,
+            sourceCPUModel: sourceCPUModel,
+            exportedAt: Date(),
+            exportedArtifacts: SandboxSnapshotArtifactKind.allCases.map {
+                SandboxSnapshotExportedArtifact(
+                    kind: $0, sizeBytes: 16, sha256: String(repeating: "0", count: 64))
+            },
             createdByID: user.id!)
-        snapshot.status = .ready
-        snapshot.size = 64
-        snapshot.firecrackerVersion = firecrackerVersion
-        snapshot.architecture = architecture
-        snapshot.cpuTemplate = cpuTemplate
-        snapshot.sourceCPUModel = sourceCPUModel
-        snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
-        snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
-        snapshot.exportedArtifacts = SandboxSnapshotArtifactKind.allCases.map {
-            SandboxSnapshotExportedArtifact(kind: $0, sizeBytes: 16, sha256: String(repeating: "0", count: 64))
-        }
-        snapshot.exportedAt = Date()
-        try await snapshot.save(on: app.db)
+        try await snapshot.save(on: app.testPostgres)
         return snapshot
     }
 
@@ -733,12 +728,12 @@ final class SandboxSnapshotTests {
             let snapshot = SandboxSnapshot(
                 name: "broken",
                 sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
+                projectID: sandbox.projectID,
                 environment: sandbox.environment,
+                status: .error,
                 agentId: agentId,
                 createdByID: user.id!)
-            snapshot.status = .error
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(
                 .POST,
@@ -762,13 +757,13 @@ final class SandboxSnapshotTests {
             let snapshot = SandboxSnapshot(
                 name: "to-export",
                 sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
+                projectID: sandbox.projectID,
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: agentId,
+                observedGeneration: 1,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.observedGeneration = snapshot.generation
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             var accepted: AcceptedMutation<SandboxSnapshotResponse>?
             try await app.test(
@@ -784,7 +779,7 @@ final class SandboxSnapshotTests {
             let body = try #require(accepted)
             #expect(body.resource.exportDesired)
             #expect(!body.resource.conditions.converged)
-            let current = try #require(await SandboxSnapshot.find(snapshot.id, on: app.db))
+            let current = try #require(await SandboxSnapshot.find(snapshot.id, on: app.testPostgres))
             #expect(current.exportDesired)
             #expect(current.generation > snapshot.observedGeneration)
             #expect(current.exportedAt == nil)
@@ -817,13 +812,13 @@ final class SandboxSnapshotTests {
                 let snapshot = SandboxSnapshot(
                     name: "transfer",
                     sandboxID: sandbox.id!,
-                    projectID: sandbox.$project.id,
+                    projectID: sandbox.projectID,
                     environment: sandbox.environment,
+                    status: .ready,
+                    size: 1 << 20,
                     agentId: "agent-a",
                     createdByID: user.id!)
-                snapshot.status = .ready
-                snapshot.size = 1 << 20
-                try await snapshot.save(on: app.db)
+                try await snapshot.save(on: app.testPostgres)
 
                 let payload = "checkpointed guest memory bytes"
                 let path = SandboxSnapshot.artifactTransferPath(
@@ -837,7 +832,7 @@ final class SandboxSnapshotTests {
                 }
                 #expect(uploadResponse.status == .ok)
 
-                let uploaded = try #require(await SandboxSnapshot.find(snapshot.id, on: app.db))
+                let uploaded = try #require(await SandboxSnapshot.find(snapshot.id, on: app.testPostgres))
                 let recorded = try #require(uploaded.exportedArtifact(for: .memory))
                 #expect(recorded.sizeBytes == Int64(payload.utf8.count))
                 #expect(recorded.sha256.count == 64)
@@ -877,13 +872,14 @@ final class SandboxSnapshotTests {
     @Test("Cross-agent restore refuses an incompatible target and accepts a compatible one")
     func crossAgentRestoreCompatibilityGate() async throws {
         try await withSnapshotTestApp { app, user, _, sandbox, token in
+            var sandbox = sandbox
             // Target agent: current wire, Firecracker 1.7.0, known CPU model.
             let targetId = try await registerMobilityAgent(app: app, named: "restore-target")
             sandbox.hypervisorId = targetId
             sandbox.setStatus(.stopped)
             sandbox.observedGeneration = 1
             sandbox.generation = 1
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             // Firecracker version mismatch blocks the restore.
             let mismatched = try await seedExportedSnapshot(
@@ -927,7 +923,7 @@ final class SandboxSnapshotTests {
             } afterResponse: { res in
                 #expect(res.status == .accepted)
             }
-            let stored = try await Sandbox.find(sandbox.id, on: app.db)
+            let stored = try await Sandbox.find(sandbox.id, on: app.testPostgres)
             #expect(stored?.restoreGeneration == 1)
             #expect(stored?.restoreSnapshotID == compatible.id)
         }
@@ -936,22 +932,23 @@ final class SandboxSnapshotTests {
     @Test("Cross-agent restore of an unexported snapshot demands an export")
     func crossAgentRestoreRequiresExport() async throws {
         try await withSnapshotTestApp { app, user, _, sandbox, token in
+            var sandbox = sandbox
             let targetId = try await registerMobilityAgent(app: app, named: "unexported-target")
             sandbox.hypervisorId = targetId
             sandbox.setStatus(.stopped)
             sandbox.observedGeneration = 1
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             let snapshot = SandboxSnapshot(
                 name: "local-only",
                 sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
+                projectID: sandbox.projectID,
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: "some-other-agent",
+                guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(
                 .POST,
@@ -975,7 +972,7 @@ final class SandboxSnapshotTests {
             let snapshot = try await seedExportedSnapshot(
                 app: app, user: user, sandbox: sandbox, agentId: nil)
             let key = SandboxSnapshotObjectKey.artifact(
-                projectId: sandbox.$project.id, snapshotId: snapshot.id!, kind: .memory)
+                projectId: sandbox.projectID, snapshotId: snapshot.id!, kind: .memory)
             let writer = try await app.imageObjectStore.openWriter(key: key)
             try await writer.write(ByteBuffer(string: "bytes"))
             try await writer.finish()
@@ -1011,16 +1008,16 @@ final class SandboxSnapshotTests {
             let snapshot = SandboxSnapshot(
                 name: "doomed",
                 sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
+                projectID: sandbox.projectID,
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: nil,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
-            try await sandbox.delete(on: app.db)
+            try await sandbox.delete(on: app.testPostgres)
 
-            let remaining = try await SandboxSnapshot.query(on: app.db).count()
+            let remaining = try await SandboxSnapshot.all(on: app.testPostgres).count
             #expect(remaining == 0)
         }
     }
@@ -1034,23 +1031,23 @@ final class SandboxSnapshotTests {
             // sandbox:snapshot nor sandbox:export — the per-verb gate now
             // falls out of role membership (the registry pins which roles
             // carry export; CedarSchemaTests prove the closure).
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let operatorUser = try await builder.createUser(
                 username: "snap-operator", email: "snap-operator@example.com")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: operatorUser.id!, role: .operator,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
-            let token = try await operatorUser.generateAPIKey(on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
+            let token = try await operatorUser.generateAPIKey(on: app)
             let agentId = try await placeOnCapableAgent(app: app, sandbox: sandbox)
             let snapshot = SandboxSnapshot(
                 name: "viewer-cannot-export",
                 sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
+                projectID: sandbox.projectID,
                 environment: sandbox.environment,
+                status: .ready,
                 agentId: agentId,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(
                 .POST,
@@ -1061,9 +1058,10 @@ final class SandboxSnapshotTests {
                 #expect(res.status == .forbidden)
             }
             // Nothing was recorded: admission refused before anything started.
-            let requested = try await ResourceEvent.query(on: app.db)
-                .filter(\.$resourceKind == .sandboxSnapshot)
-                .count()
+            let requested = try await ResourceEvent.count(
+                resourceKind: .sandboxSnapshot,
+                on: app.testPostgres
+            )
             #expect(requested == 0)
         }
     }
@@ -1075,13 +1073,13 @@ final class SandboxSnapshotTests {
             let snapshot = SandboxSnapshot(
                 name: "too-big-to-export",
                 sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
+                projectID: sandbox.projectID,
                 environment: sandbox.environment,
+                status: .ready,
+                size: 8 << 30,
                 agentId: agentId,
                 createdByID: user.id!)
-            snapshot.status = .ready
-            snapshot.size = 8 << 30
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             // A pool with room for the on-agent copy already counted, but not
             // for a second one in object storage.
@@ -1093,7 +1091,7 @@ final class SandboxSnapshotTests {
                 maxStorage: 12 << 30,
                 maxVMs: 32,
                 maxSandboxes: 32)
-            try await quota.save(on: app.db)
+            try await quota.save(on: app.testPostgres)
 
             try await app.test(
                 .POST,
@@ -1120,10 +1118,10 @@ final class SandboxSnapshotTests {
                 maxStorage: 64 << 30,
                 maxVMs: 32,
                 maxSandboxes: 32)
-            try await quota.save(on: app.db)
+            try await quota.save(on: app.testPostgres)
 
             let exportedBytes = (snapshot.exportedArtifacts ?? []).reduce(Int64(0)) { $0 + $1.sizeBytes }
-            let inScope = try await quota.sandboxSnapshotStorageInScope(on: app.db)
+            let inScope = try await quota.sandboxSnapshotStorageInScope(on: app.testPostgres)
             #expect(inScope == (snapshot.size ?? 0) + exportedBytes)
             #expect(exportedBytes > 0)
         }
@@ -1155,7 +1153,7 @@ final class SandboxSnapshotTests {
                 // database: the in-memory Date carries sub-second precision
                 // the datetime column truncates, so comparing it against a
                 // later DB read fails spuriously.
-                let seeded = try #require(await SandboxSnapshot.find(snapshot.id, on: app.db))
+                let seeded = try #require(await SandboxSnapshot.find(snapshot.id, on: app.testPostgres))
                 let exportedAt = try #require(seeded.exportedAt)
 
                 // One artifact of a re-export lands, then the run dies. The
@@ -1173,7 +1171,7 @@ final class SandboxSnapshotTests {
                 }
                 #expect(response.status == .ok)
 
-                let current = try #require(await SandboxSnapshot.find(snapshot.id, on: app.db))
+                let current = try #require(await SandboxSnapshot.find(snapshot.id, on: app.testPostgres))
                 #expect(current.exportedAt == exportedAt)
                 #expect(current.isExported)
                 // The integrity entry was still refreshed from the new bytes.

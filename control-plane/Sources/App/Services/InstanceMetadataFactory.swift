@@ -60,7 +60,7 @@ extension InstanceMetadata {
             // stored column exists to avoid, and it would disagree with the
             // records the VM's DNS zone assembles from the same column.
             hostname: vm.hostname,
-            projectId: vm.$project.id,
+            projectId: vm.projectID,
             // `VM.environment` is a non-optional column, but an empty string is
             // "unset", not an environment named "": the renderer decides what
             // an unset environment looks like and cannot if it is handed one.

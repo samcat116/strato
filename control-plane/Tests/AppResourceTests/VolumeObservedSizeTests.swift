@@ -1,6 +1,6 @@
 import Testing
+import ControlPlanePostgres
 import Vapor
-import Fluent
 import VaporTesting
 import StratoShared
 import AppTestSupport
@@ -27,9 +27,8 @@ final class VolumeObservedSizeTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "obssizeuser",
                 email: "obssize@example.com",
@@ -38,8 +37,7 @@ final class VolumeObservedSizeTests {
             )
             let org = try await builder.createOrganization(name: "Observed Size Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Observed Size Project",
@@ -67,13 +65,13 @@ final class VolumeObservedSizeTests {
             ),
             protocolVersion: WireProtocol.currentVersion
         )
-        guard let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id else {
+        guard let orgID = try await Organization.all(on: app.testPostgres).first?.id else {
             throw Abort(.internalServerError, reason: "Volume test organization is missing")
         }
         let site = Site(
             name: "\(name)-site",
             organizationScope: .organization(orgID))
-        try await site.save(on: app.db)
+        try await site.save(on: app.testPostgres)
         let uuid = try await app.agentService.registerAgent(
             message,
             agentName: name,
@@ -93,7 +91,7 @@ final class VolumeObservedSizeTests {
         generation: Int64 = 1,
         observedGeneration: Int64 = 1
     ) async throws -> Volume {
-        let pool = try await StoragePool.defaultPool(on: app.db)
+        let pool = try await app.storagePoolsPersistence.defaultPool()
         let volume = Volume(
             name: "observed-size-target",
             description: "",
@@ -102,14 +100,14 @@ final class VolumeObservedSizeTests {
             format: .qcow2,
             volumeType: .data,
             status: .available,
+            generation: generation,
+            observedGeneration: observedGeneration,
+            observedSizeBytes: observedSizeBytes,
             createdByID: user.id!,
             poolID: pool.id
         )
-        volume.generation = generation
-        volume.observedGeneration = observedGeneration
-        volume.observedSizeBytes = observedSizeBytes
-        try await volume.save(on: app.db)
-        try await placeVolume(volume, on: agentId, using: app.db)
+        try await volume.save(on: app.testPostgres)
+        try await placeVolume(volume, on: agentId, using: app.testPostgres)
         return volume
     }
 
@@ -150,7 +148,7 @@ final class VolumeObservedSizeTests {
                             observedGeneration: 1)
                     ]))
 
-            let stored = try #require(try await Volume.find(volume.id!, on: app.db))
+            let stored = try #require(try await Volume.find(volume.id!, on: app.testPostgres))
             #expect(stored.observedSizeBytes == 3 << 30)
             let response = VolumeResponse(from: stored)
             #expect(response.size == 3 << 30)
@@ -170,18 +168,18 @@ final class VolumeObservedSizeTests {
     func vmStartAdmitsAndConfirmsLargerBootVolume() async throws {
         try await withVolumeApp { app, user, project in
             let agentId = try await self.registerAgent(app: app, named: "rapid-start-agent")
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let quota = try await builder.createResourceQuota(
                 name: "materialized-boot", maxStorageGB: 4, project: project)
             let image = try await builder.createImage(project: project, uploadedBy: user)
-            let vm = try await builder.createVM(name: "rapid-start-vm", project: project)
+            var vm = try await builder.createVM(name: "rapid-start-vm", project: project)
             vm.hypervisorId = agentId
             vm.setStatus(.created)
             vm.desiredStatus = .running
             vm.generation = 2
             vm.observedGeneration = 1
             vm.convergenceDeadline = Date().addingTimeInterval(300)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let requestedSize: Int64 = 2 << 30
             let sourceSize: Int64 = 112 << 20
@@ -194,13 +192,15 @@ final class VolumeObservedSizeTests {
                 size: requestedSize,
                 observedSizeBytes: nil,
                 generation: 1,
-                observedGeneration: 0)
-            bootVolume.volumeType = .boot
-            bootVolume.$sourceImage.id = try image.requireID()
-            bootVolume.$vm.id = try vm.requireID()
-            bootVolume.deviceName = "disk0"
-            bootVolume.bootOrder = 0
-            try await bootVolume.save(on: app.db)
+                observedGeneration: 0
+            ).replacing(
+                volumeType: .boot,
+                vmID: try vm.requireID(),
+                deviceName: "disk0",
+                bootOrder: 0,
+                sourceImageID: try image.requireID()
+            )
+            try await bootVolume.save(on: app.testPostgres)
 
             let vmObservation = ObservedVMState(
                 vmId: try vm.requireID(),
@@ -222,7 +222,7 @@ final class VolumeObservedSizeTests {
                             convergencePhase: "resizing")
                     ]))
 
-            let pending = try #require(try await VM.find(try vm.requireID(), on: app.db))
+            let pending = try #require(try await VM.find(try vm.requireID(), on: app.testPostgres))
             #expect(pending.observedGeneration == 1)
             #expect(pending.status == .created)
             #expect(pending.conditions.converged == false)
@@ -243,20 +243,20 @@ final class VolumeObservedSizeTests {
                             observedGeneration: 1)
                     ]))
 
-            let admittedVM = try #require(try await VM.find(try vm.requireID(), on: app.db))
+            let admittedVM = try #require(try await VM.find(try vm.requireID(), on: app.testPostgres))
             #expect(admittedVM.observedGeneration == 1)
             #expect(admittedVM.status == .created)
             #expect(admittedVM.conditions.converged == false)
 
             let admittedVolume = try #require(
-                try await Volume.find(try bootVolume.requireID(), on: app.db))
+                try await Volume.find(try bootVolume.requireID(), on: app.testPostgres))
             #expect(admittedVolume.size == materializedSize)
             #expect(admittedVolume.observedSizeBytes == materializedSize)
             #expect(admittedVolume.generation == 2)
             #expect(admittedVolume.observedGeneration == 1)
             #expect(admittedVolume.conditions.converged == false)
             let admittedQuota = try #require(
-                try await ResourceQuota.find(try quota.requireID(), on: app.db))
+                try await ResourceQuota.find(try quota.requireID(), on: app.testPostgres))
             #expect(admittedQuota.reservedStorage == materializedSize)
 
             _ = try await app.observedStateApplier.apply(
@@ -274,14 +274,14 @@ final class VolumeObservedSizeTests {
                             observedGeneration: 2)
                     ]))
 
-            let settled = try #require(try await VM.find(try vm.requireID(), on: app.db))
+            let settled = try #require(try await VM.find(try vm.requireID(), on: app.testPostgres))
             #expect(settled.observedGeneration == 2)
             #expect(settled.status == .running)
             #expect(settled.conditions.phase == nil)
             #expect(settled.conditions.converged)
 
             let settledVolume = try #require(
-                try await Volume.find(try bootVolume.requireID(), on: app.db))
+                try await Volume.find(try bootVolume.requireID(), on: app.testPostgres))
             #expect(settledVolume.size == materializedSize)
             #expect(settledVolume.observedSizeBytes == materializedSize)
             #expect(settledVolume.generation == 2)
@@ -295,25 +295,27 @@ final class VolumeObservedSizeTests {
     func largerBootVolumeCannotBypassAdmissionLimits() async throws {
         try await withVolumeApp { app, user, project in
             let agentId = try await self.registerAgent(app: app, named: "quota-boot-agent")
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             _ = try await builder.createResourceQuota(
                 name: "requested-only", maxStorageGB: 2, project: project)
             let image = try await builder.createImage(project: project, uploadedBy: user)
-            let vm = try await builder.createVM(name: "quota-boot-vm", project: project)
+            var vm = try await builder.createVM(name: "quota-boot-vm", project: project)
             vm.hypervisorId = agentId
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let requestedSize: Int64 = 2 << 30
             let materializedSize: Int64 = 3_758_096_384
             let bootVolume = try await self.makeVolume(
                 app: app, user: user, project: project, agentId: agentId,
-                size: requestedSize, generation: 1, observedGeneration: 0)
-            bootVolume.volumeType = .boot
-            bootVolume.$sourceImage.id = try image.requireID()
-            bootVolume.$vm.id = try vm.requireID()
-            bootVolume.deviceName = "disk0"
-            bootVolume.bootOrder = 0
-            try await bootVolume.save(on: app.db)
+                size: requestedSize, generation: 1, observedGeneration: 0
+            ).replacing(
+                volumeType: .boot,
+                vmID: try vm.requireID(),
+                deviceName: "disk0",
+                bootOrder: 0,
+                sourceImageID: try image.requireID()
+            )
+            try await bootVolume.save(on: app.testPostgres)
 
             _ = try await app.observedStateApplier.apply(
                 self.report(
@@ -330,7 +332,7 @@ final class VolumeObservedSizeTests {
                     ]))
 
             let refused = try #require(
-                try await Volume.find(try bootVolume.requireID(), on: app.db))
+                try await Volume.find(try bootVolume.requireID(), on: app.testPostgres))
             #expect(refused.size == requestedSize)
             #expect(refused.observedSizeBytes == materializedSize)
             #expect(refused.generation == 1)
@@ -352,7 +354,7 @@ final class VolumeObservedSizeTests {
                     ]))
 
             let unsupported = try #require(
-                try await Volume.find(try bootVolume.requireID(), on: app.db))
+                try await Volume.find(try bootVolume.requireID(), on: app.testPostgres))
             #expect(unsupported.size == requestedSize)
             #expect(unsupported.observedSizeBytes == unsupportedSize)
             #expect(unsupported.generation == 1)
@@ -389,7 +391,7 @@ final class VolumeObservedSizeTests {
                             failedGeneration: 3)
                     ]))
 
-            let stored = try #require(try await Volume.find(volume.id!, on: app.db))
+            let stored = try #require(try await Volume.find(volume.id!, on: app.testPostgres))
             let response = VolumeResponse(from: stored)
             #expect(response.size == 3 << 30)
             #expect(response.observedSize == 1 << 30)
@@ -425,7 +427,7 @@ final class VolumeObservedSizeTests {
                             observedGeneration: 1)
                     ]))
 
-            let stored = try #require(try await Volume.find(volume.id!, on: app.db))
+            let stored = try #require(try await Volume.find(volume.id!, on: app.testPostgres))
             #expect(stored.observedSizeBytes == 3 << 30)
         }
     }

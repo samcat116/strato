@@ -1,27 +1,22 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 import SwiftSCIM
 
-/// Fluent's database handle predates checked sendability. It is immutable here;
-/// every mutable model is created or reloaded inside one method and never sent
-/// to a child task or retained by the handler.
 struct UserSCIMHandler: SCIMResourceHandler, Sendable {
     typealias Resource = SCIMUser
 
     static let endpoint = "Users"
     static let schemaURI = "urn:ietf:params:scim:schemas:core:2.0:User"
 
-    let db: Database
+    let users: UserDirectoryPersistence
+    let externalIDs: SCIMExternalIDsPersistence
     let organizationID: UUID
 
     // MARK: - Create
 
     func create(_ resource: SCIMUser, context: SCIMRequestContext) async throws -> SCIMUser {
         // Check for existing user with same username
-        if let _ = try await User.query(on: db)
-            .filter(\.$username == resource.userName)
-            .first()
-        {
+        if try await users.user(username: resource.userName) != nil {
             throw SCIMServerError.conflict(detail: "User with username '\(resource.userName)' already exists")
         }
 
@@ -32,35 +27,32 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
             ?? "\(resource.userName)@scim.local"
 
         // Create user
-        let user = User(
+        let write = UserDirectoryWrite(
             username: resource.userName,
             email: email,
             displayName: resource.displayName ?? resource.name?.formatted ?? resource.userName,
-            source: .scim,
+            source: "scim",
             scimProvisioned: true,
             scimActive: resource.active ?? true
         )
-        try await user.save(on: db)
-
-        guard let userID = user.id else {
+        let user: UserDirectorySnapshot
+        switch try await users.createSCIMUser(write, organizationID: organizationID) {
+        case .saved(let saved): user = saved
+        case .identifierConflict:
+            throw SCIMServerError.conflict(
+                detail: "User with username '\(resource.userName)' already exists")
+        case .notMember:
             throw SCIMServerError.internalError(detail: "Failed to create user")
         }
-
-        // Add user to organization as member
-        let membership = UserOrganization(
-            userID: userID,
-            organizationID: organizationID
-        )
-        try await membership.save(on: db)
+        let userID = user.id
 
         // Store external ID mapping if provided
         if let externalId = resource.externalId {
-            try await SCIMExternalID.upsert(
-                organizationID: organizationID,
+            try await externalIDs.assign(
+                externalID: externalId,
+                to: userID,
                 resourceType: .user,
-                externalId: externalId,
-                internalId: userID,
-                on: db
+                organizationID: organizationID
             )
         }
 
@@ -74,22 +66,7 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
-        guard
-            let user = try await User.query(on: db)
-                .filter(\.$id == uuid)
-                .first()
-        else {
-            throw SCIMServerError.notFound(resourceType: "User", id: id)
-        }
-
-        // Verify user is in this organization
-        let isMember =
-            try await UserOrganization.query(on: db)
-            .filter(\.$user.$id == uuid)
-            .filter(\.$organization.$id == organizationID)
-            .first() != nil
-
-        guard isMember else {
+        guard let user = try await users.scimUser(id: uuid, organizationID: organizationID) else {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
@@ -103,72 +80,61 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
-        guard
-            let user = try await User.query(on: db)
-                .filter(\.$id == uuid)
-                .first()
-        else {
-            throw SCIMServerError.notFound(resourceType: "User", id: id)
-        }
-
-        // Verify user is in this organization
-        let isMember =
-            try await UserOrganization.query(on: db)
-            .filter(\.$user.$id == uuid)
-            .filter(\.$organization.$id == organizationID)
-            .first() != nil
-
-        guard isMember else {
+        guard let current = try await users.scimUser(id: uuid, organizationID: organizationID) else {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
         // Check if new username is already taken by another user
-        if user.username != resource.userName {
-            let existingUser = try await User.query(on: db)
-                .filter(\.$username == resource.userName)
-                .filter(\.$id != uuid)
-                .first()
-            if existingUser != nil {
-                throw SCIMServerError.conflict(detail: "User with username '\(resource.userName)' already exists")
-            }
-        }
-
-        // Update user fields
-        user.username = resource.userName
-        user.displayName = resource.displayName ?? resource.name?.formatted ?? resource.userName
-        let wasActive = user.scimActive
-        user.scimActive = resource.active ?? true
+        let wasActive = current.scimActive
+        let active = resource.active ?? true
+        var disabledAt = current.disabledAt
+        var sessionEpoch = current.sessionEpoch
 
         // SCIM deactivation is the IdP's offboarding/suspension signal, so it
         // must revoke access immediately — `scimActive` alone is only checked
         // at OIDC login. Mirror the SSF disable path: `disabledAt` makes
         // `UserSecurityMiddleware` and the passkey login path reject the user,
         // and the `sessionEpoch` bump invalidates existing sessions.
-        if wasActive && !user.scimActive {
-            if user.disabledAt == nil {
-                user.disabledAt = Date()
-            }
-            user.sessionEpoch += 1
-        } else if !wasActive && user.scimActive {
-            user.disabledAt = nil
+        if wasActive && !active {
+            disabledAt = disabledAt ?? Date()
+            sessionEpoch += 1
+        } else if !wasActive && active {
+            disabledAt = nil
         }
 
-        if let email = resource.emails?.first(where: { $0.primary == true })?.value
-            ?? resource.emails?.first?.value
-        {
-            user.email = email
+        let email = resource.emails?.first(where: { $0.primary == true })?.value
+            ?? resource.emails?.first?.value ?? current.email
+        let write = UserDirectoryWrite(
+            id: current.id,
+            username: resource.userName,
+            email: email,
+            displayName: resource.displayName ?? resource.name?.formatted ?? resource.userName,
+            currentOrganizationID: current.currentOrganizationID,
+            isSystemAdmin: current.isSystemAdmin,
+            source: current.source,
+            oidcProviderID: current.oidcProviderID,
+            oidcSubject: current.oidcSubject,
+            scimProvisioned: current.scimProvisioned,
+            scimActive: active,
+            sessionEpoch: sessionEpoch,
+            disabledAt: disabledAt)
+        let user: UserDirectorySnapshot
+        switch try await users.updateSCIMUser(write, organizationID: organizationID) {
+        case .saved(let saved): user = saved
+        case .identifierConflict:
+            throw SCIMServerError.conflict(
+                detail: "User with username '\(resource.userName)' already exists")
+        case .notMember:
+            throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
-
-        try await user.save(on: db)
 
         // Update external ID mapping if provided
         if let externalId = resource.externalId {
-            try await SCIMExternalID.upsert(
-                organizationID: organizationID,
+            try await externalIDs.assign(
+                externalID: externalId,
+                to: uuid,
                 resourceType: .user,
-                externalId: externalId,
-                internalId: uuid,
-                on: db
+                organizationID: organizationID
             )
         }
 
@@ -182,51 +148,20 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
-        guard
-            let user = try await User.query(on: db)
-                .filter(\.$id == uuid)
-                .first()
-        else {
+        guard try await users.scimUser(id: uuid, organizationID: organizationID) != nil else {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
-        // Verify user is in this organization
-        guard
-            let membership = try await UserOrganization.query(on: db)
-                .filter(\.$user.$id == uuid)
-                .filter(\.$organization.$id == organizationID)
-                .first()
-        else {
-            throw SCIMServerError.notFound(resourceType: "User", id: id)
-        }
-
-        // Soft delete - set scimActive to false, and revoke access immediately
-        // (mirrors the SSF disable path): `disabledAt` makes the security
-        // middleware and passkey login reject the user, and the epoch bump
-        // invalidates existing sessions.
-        user.scimActive = false
-        if user.disabledAt == nil {
-            user.disabledAt = Date()
-        }
-        user.sessionEpoch += 1
-        try await user.save(on: db)
-
-        // Remove the organization membership and everything held inside the
-        // org — group memberships and role bindings
-        // across the org's whole subtree (issue #485). Bindings the user
-        // holds in other orgs are those orgs' grants and stay.
-        try await db.transaction { transaction in
-            try await membership.delete(on: transaction)
-            try await OffboardingSweep.userLeftOrganization(
-                userID: uuid, organizationID: organizationID, on: transaction)
-        }
+        guard try await users.offboardSCIMUser(
+            id: uuid,
+            organizationID: organizationID) != nil
+        else { throw SCIMServerError.notFound(resourceType: "User", id: id) }
 
         // Delete external ID mapping
-        try await SCIMExternalID.deleteMapping(
-            internalId: uuid,
+        _ = try await externalIDs.remove(
+            internalID: uuid,
             resourceType: .user,
-            organizationID: organizationID,
-            on: db
+            organizationID: organizationID
         )
     }
 
@@ -234,28 +169,16 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
 
     func search(query: SCIMServerQuery, context: SCIMRequestContext) async throws -> SCIMListResponse<SCIMUser> {
         // Get all users in this organization
-        var userQuery = User.query(on: db)
-            .join(UserOrganization.self, on: \User.$id == \UserOrganization.$user.$id)
-            .filter(UserOrganization.self, \.$organization.$id == organizationID)
-
-        // Apply filter if present
+        var rows = try await users.scimUsers(organizationID: organizationID)
         if let filter = query.filter {
-            userQuery = try applyFilter(filter, to: userQuery)
+            rows = try rows.filter { try matches(filter, user: $0) }
         }
-
-        // Get total count before pagination
-        let totalCount = try await userQuery.count()
-
-        // Apply pagination
-        let users =
-            try await userQuery
-            .offset(query.offset)
-            .limit(query.count)
-            .all()
+        let totalCount = rows.count
+        rows = Array(rows.dropFirst(query.offset).prefix(query.count))
 
         // Convert to SCIM resources
         var scimUsers: [SCIMUser] = []
-        for user in users {
+        for user in rows {
             let scimUser = try await userToSCIMUser(user, context: context)
             scimUsers.append(scimUser)
         }
@@ -270,24 +193,23 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
 
     // MARK: - Helpers
 
-    private func userToSCIMUser(_ user: User, context: SCIMRequestContext) async throws -> SCIMUser {
-        guard let userID = user.id else {
-            throw SCIMServerError.internalError(detail: "User has no ID")
-        }
+    private func userToSCIMUser(
+        _ user: UserDirectorySnapshot,
+        context: SCIMRequestContext
+    ) async throws -> SCIMUser {
+        let userID = user.id
 
         let location = context.resourceLocation(endpoint: Self.endpoint, id: userID.uuidString)
 
         // Get external ID if exists
-        let externalId = try await SCIMExternalID.findExternalID(
-            internalId: userID,
+        let externalId = try await externalIDs.externalID(
+            internalID: userID,
             resourceType: .user,
-            organizationID: organizationID,
-            on: db
+            organizationID: organizationID
         )
 
-        // Note: Groups field is omitted from user responses to avoid Swift type naming
-        // conflicts between App.UserGroup and SwiftSCIM.UserGroup. IdPs typically
-        // track group membership through the Groups endpoint, not the Users endpoint.
+        // Groups are omitted because IdPs track membership through the Groups
+        // endpoint and the existing wire contract does not embed them here.
 
         let meta = SCIMResourceMeta(
             resourceType: "User",
@@ -315,18 +237,15 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
         )
     }
 
-    private func applyFilter(_ filter: SCIMFilterExpression, to query: QueryBuilder<User>) throws -> QueryBuilder<User>
-    {
+    private func matches(_ filter: SCIMFilterExpression, user: UserDirectorySnapshot) throws -> Bool {
         switch filter {
         case .attribute(let path, let op, let value):
-            return try applyAttributeFilter(path: path, op: op, value: value, to: query)
+            return try matchesAttribute(path: path, op: op, value: value, user: user)
 
         case .logical(let logicalOp, let left, let right):
             switch logicalOp {
             case .and:
-                var result = try applyFilter(left, to: query)
-                result = try applyFilter(right, to: result)
-                return result
+                return try matches(left, user: user) && matches(right, user: user)
             case .or, .not:
                 throw SCIMServerError.invalidFilter(
                     detail: "SCIM logical filter operator '\(logicalOp)' is not supported"
@@ -339,81 +258,70 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
             )
 
         case .present(let path):
-            // Check if attribute is present (not null)
             if path.lowercased() == "username" {
-                return query.filter(\.$username != "")
+                return !user.username.isEmpty
             }
-            return query
+            return true
 
         case .group(let inner):
-            return try applyFilter(inner, to: query)
+            return try matches(inner, user: user)
 
         case .empty:
-            return query
+            return true
         }
     }
 
-    private func applyAttributeFilter(
+    private func matchesAttribute(
         path: String,
         op: SCIMFilterOperator,
         value: SCIMComparisonValue,
-        to query: QueryBuilder<User>
-    ) throws -> QueryBuilder<User> {
+        user: UserDirectorySnapshot
+    ) throws -> Bool {
         let lowercasePath = path.lowercased()
 
         switch lowercasePath {
         case "username":
-            return applyStringFilter(
-                keyPath: \User.$username, column: "username", op: op,
-                value: try value.requireText(path: path), to: query)
+            return matchesString(user.username, op: op, value: try value.requireText(path: path))
 
         case "displayname":
-            return applyStringFilter(
-                keyPath: \User.$displayName, column: "display_name", op: op,
-                value: try value.requireText(path: path), to: query)
+            return matchesString(user.displayName, op: op, value: try value.requireText(path: path))
 
         case "emails.value", "emails[type eq \"work\"].value":
-            return applyStringFilter(
-                keyPath: \User.$email, column: "email", op: op,
-                value: try value.requireText(path: path), to: query)
+            return matchesString(user.email, op: op, value: try value.requireText(path: path))
 
         case "active":
             if let boolValue = Bool(try value.requireText(path: path).lowercased()) {
-                return query.filter(\.$scimActive == boolValue)
+                return user.scimActive == boolValue
             }
-            return query
+            return true
 
         case "externalid":
-            // Need to join with scim_external_ids table
-            // For now, return unfiltered - this would need a more complex query
-            return query
+            // Preserve the previous behavior until external-ID search is added.
+            return true
 
         default:
-            return query
+            return true
         }
     }
 
-    private func applyStringFilter(
-        keyPath: KeyPath<User, FieldProperty<User, String>>,
-        column: String,
+    private func matchesString(
+        _ candidate: String,
         op: SCIMFilterOperator,
-        value: String,
-        to query: QueryBuilder<User>
-    ) -> QueryBuilder<User> {
+        value: String
+    ) -> Bool {
         switch op {
         case .equal:
-            return query.filter(keyPath == value)
+            return candidate == value
         case .notEqual:
-            return query.filter(keyPath != value)
+            return candidate != value
         case .contains:
-            return query.filter(.caseInsensitiveContains(schema: User.schema, column: column, value: value))
+            return candidate.localizedCaseInsensitiveContains(value)
         case .startsWith:
-            return query.filter(.caseInsensitiveStartsWith(schema: User.schema, column: column, value: value))
+            return candidate.lowercased().hasPrefix(value.lowercased())
         case .endsWith:
-            return query.filter(.caseInsensitiveEndsWith(schema: User.schema, column: column, value: value))
+            return candidate.lowercased().hasSuffix(value.lowercased())
         case .greaterThan, .greaterThanOrEqual, .lessThan, .lessThanOrEqual, .present:
-            // These don't make sense for strings, just return unchanged
-            return query
+            return true
         }
     }
 }

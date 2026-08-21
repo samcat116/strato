@@ -1,7 +1,13 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 struct SCIMTokenController: RouteCollection {
+    private let scimTokens: SCIMTokensPersistence
+
+    init(scimTokens: SCIMTokensPersistence) {
+        self.scimTokens = scimTokens
+    }
+
     func boot(routes: RoutesBuilder) throws {
         // SCIM token management routes: /organizations/:organizationID/settings/scim-tokens
         let tokens = routes.grouped("organizations", ":organizationID", "settings", "scim-tokens")
@@ -26,10 +32,7 @@ struct SCIMTokenController: RouteCollection {
         // Verify user is admin of this organization
         try await requireOrganizationAdmin(organizationID: organizationID, on: req)
 
-        let tokens = try await SCIMToken.query(on: req.db)
-            .filter(\.$organization.$id == organizationID)
-            .sort(\.$createdAt, .descending)
-            .all()
+        let tokens = try await scimTokens.tokens(organizationID: organizationID)
 
         return tokens.map { SCIMTokenResponse(from: $0) }
     }
@@ -47,9 +50,9 @@ struct SCIMTokenController: RouteCollection {
         let request = try req.content.decodeValidated(CreateSCIMTokenRequest.self)
 
         // Generate token
-        let fullToken = SCIMToken.generateToken()
-        let tokenHash = SCIMToken.hashToken(fullToken)
-        let tokenPrefix = SCIMToken.extractPrefix(fullToken)
+        let fullToken = SCIMTokenCredential.generateToken()
+        let tokenHash = SCIMTokenCredential.hashToken(fullToken)
+        let tokenPrefix = SCIMTokenCredential.extractPrefix(fullToken)
 
         // Calculate expiration if specified
         var expiresAt: Date?
@@ -61,17 +64,16 @@ struct SCIMTokenController: RouteCollection {
             throw Abort(.internalServerError, reason: "User has no ID")
         }
 
-        let scimToken = SCIMToken(
-            organizationID: organizationID,
-            name: request.name,
-            tokenHash: tokenHash,
-            tokenPrefix: tokenPrefix,
-            isActive: true,
-            expiresAt: expiresAt,
-            createdByID: userID
-        )
-
-        try await scimToken.save(on: req.db)
+        let scimToken = try await scimTokens.issue(
+            SCIMTokenWrite(
+                organizationID: organizationID,
+                name: request.name,
+                tokenHash: tokenHash,
+                tokenPrefix: tokenPrefix,
+                isActive: true,
+                expiresAt: expiresAt,
+                createdByID: userID
+            ))
 
         return CreateSCIMTokenResponse(scimToken: scimToken, fullToken: fullToken)
     }
@@ -92,12 +94,7 @@ struct SCIMTokenController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid token ID")
         }
 
-        guard
-            let token = try await SCIMToken.query(on: req.db)
-                .filter(\.$id == tokenID)
-                .filter(\.$organization.$id == organizationID)
-                .first()
-        else {
+        guard let token = try await scimTokens.ownedToken(id: tokenID, organizationID: organizationID) else {
             throw Abort(.notFound, reason: "Token not found")
         }
 
@@ -120,26 +117,25 @@ struct SCIMTokenController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid token ID")
         }
 
-        guard
-            let token = try await SCIMToken.query(on: req.db)
-                .filter(\.$id == tokenID)
-                .filter(\.$organization.$id == organizationID)
-                .first()
-        else {
+        guard let existing = try await scimTokens.ownedToken(id: tokenID, organizationID: organizationID) else {
             throw Abort(.notFound, reason: "Token not found")
         }
 
         let request = try req.content.decodeValidated(UpdateSCIMTokenRequest.self)
 
-        if let name = request.name {
-            token.name = name
+        guard request.name != nil || request.isActive != nil else {
+            return SCIMTokenResponse(from: existing)
         }
 
-        if let isActive = request.isActive {
-            token.isActive = isActive
+        guard
+            let token = try await scimTokens.updateOwnedToken(
+                id: tokenID,
+                organizationID: organizationID,
+                changes: SCIMTokenChanges(name: request.name, isActive: request.isActive)
+            )
+        else {
+            throw Abort(.notFound, reason: "Token not found")
         }
-
-        try await token.save(on: req.db)
 
         return SCIMTokenResponse(from: token)
     }
@@ -160,16 +156,9 @@ struct SCIMTokenController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid token ID")
         }
 
-        guard
-            let token = try await SCIMToken.query(on: req.db)
-                .filter(\.$id == tokenID)
-                .filter(\.$organization.$id == organizationID)
-                .first()
-        else {
+        guard try await scimTokens.deleteOwnedToken(id: tokenID, organizationID: organizationID) else {
             throw Abort(.notFound, reason: "Token not found")
         }
-
-        try await token.delete(on: req.db)
 
         return .noContent
     }

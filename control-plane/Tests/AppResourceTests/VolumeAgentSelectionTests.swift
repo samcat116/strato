@@ -21,7 +21,7 @@ struct VolumeAgentSelectionTests {
         status: AgentStatus = .online,
         wireProtocolVersion: Int? = WireProtocol.currentVersion
     ) -> Agent {
-        let agent = Agent(
+        return Agent(
             id: UUID(),
             name: id,
             hostname: "host-\(id)",
@@ -37,9 +37,7 @@ struct VolumeAgentSelectionTests {
             ),
             hypervisors: hypervisors,
             lastHeartbeat: Date()
-        )
-        agent.wireProtocolVersion = wireProtocolVersion
-        return agent
+        ).replacing(wireProtocolVersion: .some(wireProtocolVersion))
     }
 
     @Test("skips a Firecracker-only agent in favor of a QEMU-capable one")

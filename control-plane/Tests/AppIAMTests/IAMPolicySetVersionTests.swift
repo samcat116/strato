@@ -1,9 +1,9 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
 
 import AppTestSupport
+import ControlPlanePostgres
 @testable import App
 
 /// IAM phase 2 (issue #479): the policy-set version log and the per-replica
@@ -15,7 +15,6 @@ final class IAMPolicySetVersionTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -30,28 +29,28 @@ final class IAMPolicySetVersionTests {
             // `configure` runs the role-registry sync, which bumps once on a
             // fresh database. Measure from wherever that left off rather than
             // asserting a fixed starting point.
-            let start = try await PolicySetVersionService.current(on: app.db)
+            let start = try await PolicySetVersionService.current(on: app.testPostgres)
 
-            let first = try await PolicySetVersionService.bump(reason: "guardrail created: a", on: app.db)
-            let second = try await PolicySetVersionService.bump(reason: "guardrail created: b", on: app.db)
+            let first = try await PolicySetVersionService.bump(reason: "guardrail created: a", on: app.testPostgres)
+            let second = try await PolicySetVersionService.bump(reason: "guardrail created: b", on: app.testPostgres)
 
             #expect(first == start + 1)
             #expect(second == start + 2)
 
-            let latest = try await PolicySetVersionService.current(on: app.db)
+            let latest = try await PolicySetVersionService.current(on: app.testPostgres)
             #expect(latest == second)
 
-            let row = try await PolicySetVersion.query(on: app.db)
-                .filter(\.$version == second)
-                .first()
-            #expect(row?.reason == "guardrail created: b")
+            #expect(
+                try await PolicySetVersionService.reason(for: second, on: app.testPostgres)
+                    == "guardrail created: b"
+            )
         }
     }
 
     @Test("Concurrent bumps produce distinct versions rather than one lost update")
     func concurrentBumpsDoNotCollide() async throws {
         try await withApp { app in
-            let start = try await PolicySetVersionService.current(on: app.db)
+            let start = try await PolicySetVersionService.current(on: app.testPostgres)
 
             // Serialized rather than truly parallel: this covers the
             // allocator's arithmetic, and the uniqueness constraint plus the
@@ -59,7 +58,7 @@ final class IAMPolicySetVersionTests {
             var versions: [Int] = []
             for index in 1...5 {
                 versions.append(
-                    try await PolicySetVersionService.bump(reason: "change \(index)", on: app.db))
+                    try await PolicySetVersionService.bump(reason: "change \(index)", on: app.testPostgres))
             }
 
             #expect(versions == Array((start + 1)...(start + 5)))
@@ -70,7 +69,7 @@ final class IAMPolicySetVersionTests {
     @Test("A colliding policy write retries the whole transaction instead of failing the request")
     func collisionRetriesTheWholeTransaction() async throws {
         try await withApp { app in
-            let taken = try await PolicySetVersionService.current(on: app.db)
+            let taken = try await PolicySetVersionService.current(on: app.testPostgres)
             #expect(taken > 0)
             let attempts = AttemptCounter()
 
@@ -78,11 +77,15 @@ final class IAMPolicySetVersionTests {
             // what losing the allocation race looks like. Retrying *inside* the
             // transaction cannot work — Postgres marks it aborted — so the
             // recovery has to be a fresh transaction from the top.
-            let allocated = try await PolicySetVersionService.withPolicySetChange(on: app.db) { db in
+            let allocated = try await PolicySetVersionService.withPolicySetChange(on: app.testPostgres) { db in
                 let attempt = await attempts.next()
                 if attempt == 1 {
-                    try await PolicySetVersion(version: taken, reason: "collision", changedBy: nil)
-                        .save(on: db)
+                    try await PolicySetVersionService.record(
+                        version: taken,
+                        reason: "collision",
+                        changedBy: nil,
+                        on: db
+                    )
                 }
                 return try await PolicySetVersionService.bump(reason: "after collision", on: db)
             }
@@ -92,10 +95,7 @@ final class IAMPolicySetVersionTests {
             #expect(allocated == taken + 1)
 
             // The rolled-back attempt left nothing behind.
-            let rows = try await PolicySetVersion.query(on: app.db)
-                .filter(\.$reason == "collision")
-                .count()
-            #expect(rows == 0)
+            #expect(try await PolicySetVersionService.count(reason: "collision", on: app.testPostgres) == 0)
         }
     }
 
@@ -105,7 +105,7 @@ final class IAMPolicySetVersionTests {
             let attempts = AttemptCounter()
 
             await #expect(throws: GuardrailError.locksOutPolicyAdministration) {
-                try await PolicySetVersionService.withPolicySetChange(on: app.db) { _ in
+                try await PolicySetVersionService.withPolicySetChange(on: app.testPostgres) { _ in
                     _ = await attempts.next()
                     throw GuardrailError.locksOutPolicyAdministration
                 }
@@ -122,12 +122,12 @@ final class IAMPolicySetVersionTests {
             // The first sync ran inside `configure`. A second one has nothing
             // left to reconcile, so it must not cut a version — otherwise every
             // replica restart would invalidate every replica's compiled set.
-            let before = try await PolicySetVersionService.current(on: app.db)
+            let before = try await PolicySetVersionService.current(on: app.testPostgres)
             #expect(before > 0)
 
-            try await RoleRegistrySync.sync(on: app.db, logger: app.logger)
+            try await app.policySetVersion.synchronizeRoleRegistry(logger: app.logger)
 
-            let after = try await PolicySetVersionService.current(on: app.db)
+            let after = try await PolicySetVersionService.current(on: app.testPostgres)
             #expect(after == before)
         }
     }
@@ -135,24 +135,34 @@ final class IAMPolicySetVersionTests {
     @Test("A dropped action is a policy-set change the sync records")
     func registrySyncBumpsWhenRegistryDrifts() async throws {
         try await withApp { app in
-            let before = try await PolicySetVersionService.current(on: app.db)
+            let before = try await PolicySetVersionService.current(on: app.testPostgres)
 
             // Simulate the store drifting from the code-side registry, which is
             // what a deploy carrying a registry change looks like to the sync.
-            guard let viewer = try await IAMRoleDefinition.find(IAMRole.viewer.seededID, on: app.db) else {
+            guard let viewer = try await RoleStore.legacyRole(id: IAMRole.viewer.seededID, on: app.testPostgres) else {
                 Issue.record("seeded viewer row missing")
                 return
             }
-            viewer.actions = viewer.actions.filter { $0 != "vm:read" }
-            viewer.cedarText = ""
-            try await viewer.save(on: app.db)
+            _ = try await RoleStore.replaceLegacy(IAMRoleSnapshot(
+                id: viewer.id,
+                name: viewer.name,
+                description: viewer.description,
+                ownerType: viewer.ownerType,
+                ownerID: viewer.ownerID,
+                cedarText: "",
+                actions: viewer.actions.filter { $0 != "vm:read" },
+                managed: viewer.managed,
+                createdBy: viewer.createdBy,
+                createdAt: viewer.createdAt,
+                updatedAt: viewer.updatedAt
+            ), on: app.testPostgres)
 
-            try await RoleRegistrySync.sync(on: app.db, logger: app.logger)
+            try await app.policySetVersion.synchronizeRoleRegistry(logger: app.logger)
 
-            let after = try await PolicySetVersionService.current(on: app.db)
+            let after = try await PolicySetVersionService.current(on: app.testPostgres)
             #expect(after == before + 1)
 
-            let restored = try await IAMRoleDefinition.find(IAMRole.viewer.seededID, on: app.db)
+            let restored = try await RoleStore.legacyRole(id: IAMRole.viewer.seededID, on: app.testPostgres)
             #expect(restored?.actions.contains("vm:read") == true)
             #expect(restored?.cedarText.isEmpty == false)
         }
@@ -161,15 +171,15 @@ final class IAMPolicySetVersionTests {
     @Test("The replica cache picks up a new version")
     func cacheRefreshTracksVersion() async throws {
         try await withApp { app in
-            let cache = PolicySetVersionCache(logger: app.logger)
+            let cache = app.policySetVersion
 
-            await cache.refresh(on: app.db)
+            await cache.refresh()
             let afterFirst = await cache.currentVersion
-            let expected = try await PolicySetVersionService.current(on: app.db)
+            let expected = try await PolicySetVersionService.current(on: app.testPostgres)
             #expect(afterFirst == expected)
 
-            let bumped = try await PolicySetVersionService.bump(reason: "guardrail created: c", on: app.db)
-            await cache.refresh(on: app.db)
+            let bumped = try await PolicySetVersionService.bump(reason: "guardrail created: c", on: app.testPostgres)
+            await cache.refresh()
             #expect(await cache.currentVersion == bumped)
         }
     }
@@ -177,7 +187,7 @@ final class IAMPolicySetVersionTests {
     @Test("Refresh listeners fire on every successful re-read, changed or not")
     func refreshListenersAreLevelTriggered() async throws {
         try await withApp { app in
-            let cache = PolicySetVersionCache(logger: app.logger)
+            let cache = app.policySetVersion
             let observed = ObservedVersions()
             // This hook exists for work that must converge even when the
             // version already advanced — a compiled-set rebuild that failed
@@ -186,9 +196,9 @@ final class IAMPolicySetVersionTests {
                 await observed.record(version)
             }
 
-            let expected = try await PolicySetVersionService.current(on: app.db)
-            await cache.refresh(on: app.db)
-            await cache.refresh(on: app.db)
+            let expected = try await PolicySetVersionService.current(on: app.testPostgres)
+            await cache.refresh()
+            await cache.refresh()
             let recorded = await observed.all()
             #expect(recorded == [expected, expected])
         }

@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import NIOCore
 import SPIREServerAPI
@@ -18,8 +18,8 @@ struct GuestJWTSVIDMintTests {
 
     private struct Fixture {
         let agent: Agent
-        let vm: VM
-        let registration: WorkloadRegistration
+        var vm: VM
+        let registration: LegacyWorkloadRegistrationRecord
         let fake: FakeSPIREServerAPI
     }
 
@@ -60,7 +60,7 @@ struct GuestJWTSVIDMintTests {
                 availableMemory: 1 << 33,
                 totalDisk: 1 << 40,
                 availableDisk: 1 << 40))
-        try await agent.save(on: app.db)
+        try await agent.save(on: app.testPostgres)
         return agent
     }
 
@@ -74,18 +74,18 @@ struct GuestJWTSVIDMintTests {
         if installSPIRE { installFakeSPIRE(on: app, fake: fake) }
 
         let agent = try await registerAgent(on: app)
-        let builder = TestDataBuilder(db: app.db)
+        let builder = TestDataBuilder(db: app.testPostgres)
         let org = try await builder.createOrganization(name: "Mint Org")
         let project = try await builder.createProject(
             name: "Mint Project", description: "guest identity tests", organization: org)
-        let vm = try await builder.createVM(name: "mint-vm", project: project)
+        var vm = try await builder.createVM(name: "mint-vm", project: project)
         vm.hypervisorId = try agent.requireID().uuidString
-        try await vm.save(on: app.db)
+        try await vm.save(on: app.testPostgres)
         let registration = try await GuestIdentity.register(
             vmID: try vm.requireID(),
             organizationID: try org.requireID(),
             createdBy: nil,
-            on: app.db)
+            on: app.testPostgres)
         return Fixture(agent: agent, vm: vm, registration: registration, fake: fake)
     }
 
@@ -161,20 +161,20 @@ struct GuestJWTSVIDMintTests {
         try await withRunningMintApp { app, port in
             let first = try await fixture(on: app)
             let secondAgent = try await registerAgent(on: app, name: "mint-agent-2")
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let secondOrg = try await builder.createOrganization(name: "Second Mint Org")
             let secondProject = try await builder.createProject(
                 name: "Second Mint Project",
                 description: "guest identity rate-limit tests",
                 organization: secondOrg)
-            let secondVM = try await builder.createVM(name: "second-mint-vm", project: secondProject)
+            var secondVM = try await builder.createVM(name: "second-mint-vm", project: secondProject)
             secondVM.hypervisorId = try secondAgent.requireID().uuidString
-            try await secondVM.save(on: app.db)
+            try await secondVM.save(on: app.testPostgres)
             _ = try await GuestIdentity.register(
                 vmID: try secondVM.requireID(),
                 organizationID: try secondOrg.requireID(),
                 createdBy: nil,
-                on: app.db)
+                on: app.testPostgres)
 
             app.agentGuestIdentityRateLimiter = AgentGuestIdentityRateLimiter(
                 config: rateLimitConfig(apiLimit: 1),
@@ -195,9 +195,12 @@ struct GuestJWTSVIDMintTests {
             #expect(firstThrottled.headers.first(name: "Retry-After") != nil)
 
             let refusalEvent = try #require(
-                try await AuditEvent.query(on: app.db)
-                    .filter(\.$eventType == AuditEventType.guestIdentityRefused.rawValue)
-                    .first())
+                try await app.audit.events.events(
+                    matching: AuditEventFilter(
+                        eventType: AuditEventType.guestIdentityRefused.rawValue
+                    ),
+                    limit: 1
+                ).events.first)
             #expect(refusalEvent.status == Int(HTTPResponseStatus.tooManyRequests.code))
             #expect(refusalEvent.username == "spiffe://strato.local/agent/mint-agent")
             #expect(refusalEvent.resourceID == first.vm.id?.uuidString)
@@ -217,22 +220,23 @@ struct GuestJWTSVIDMintTests {
     @Test("Unknown, unplaced, nil-placement, and revoked identities collapse to one 404")
     func placementOracleIsCollapsed() async throws {
         try await withRunningMintApp { app, port in
-            let fixture = try await fixture(on: app)
+            var fixture = try await fixture(on: app)
             let vmID = try fixture.vm.requireID()
 
             fixture.vm.hypervisorId = UUID().uuidString
-            try await fixture.vm.save(on: app.db)
+            try await fixture.vm.save(on: app.testPostgres)
             let unplaced = try await mint(app: app, port: port, vmID: vmID.uuidString)
 
             let unknown = try await mint(app: app, port: port, vmID: UUID().uuidString)
 
             fixture.vm.hypervisorId = nil
-            try await fixture.vm.save(on: app.db)
+            try await fixture.vm.save(on: app.testPostgres)
             let noPlacement = try await mint(app: app, port: port, vmID: vmID.uuidString)
 
             fixture.vm.hypervisorId = try fixture.agent.requireID().uuidString
-            try await fixture.vm.save(on: app.db)
-            try await fixture.registration.delete(on: app.db)
+            try await fixture.vm.save(on: app.testPostgres)
+            try await LegacyWorkloadRegistrationStore.delete(
+                id: fixture.registration.id, on: app.testPostgres)
             let revoked = try await mint(app: app, port: port, vmID: vmID.uuidString)
 
             for response in [unplaced, unknown, noPlacement, revoked] {
@@ -249,17 +253,17 @@ struct GuestJWTSVIDMintTests {
     @Test("Audience policy is evaluated only for a VM placed on the caller")
     func audiencePolicy() async throws {
         try await withRunningMintApp { app, port in
-            let fixture = try await fixture(on: app)
+            var fixture = try await fixture(on: app)
             let denied = GuestJWTSVIDRequest(audiences: ["strato-api"])
 
             fixture.vm.hypervisorId = UUID().uuidString
-            try await fixture.vm.save(on: app.db)
+            try await fixture.vm.save(on: app.testPostgres)
             let unplaced = try await mint(
                 app: app, port: port, vmID: try fixture.vm.requireID().uuidString, request: denied)
             #expect(unplaced.status == .notFound)
 
             fixture.vm.hypervisorId = try fixture.agent.requireID().uuidString
-            try await fixture.vm.save(on: app.db)
+            try await fixture.vm.save(on: app.testPostgres)
             let forbidden = try await mint(
                 app: app, port: port, vmID: try fixture.vm.requireID().uuidString, request: denied)
             #expect(forbidden.status == .forbidden)
@@ -392,14 +396,12 @@ struct GuestJWTSVIDMintTests {
                 request: GuestJWTSVIDRequest(audiences: ["denied"]))
             _ = try await mint(app: app, port: port, vmID: vmID)
 
-            let events = try await AuditEvent.query(on: app.db)
-                .filter(
-                    \.$eventType ~~ [
-                        AuditEventType.guestIdentityMinted.rawValue,
-                        AuditEventType.guestIdentityRefused.rawValue,
-                    ]
-                )
-                .all()
+            let events = try await app.audit.events.events(limit: 500).events.filter {
+                [
+                    AuditEventType.guestIdentityMinted.rawValue,
+                    AuditEventType.guestIdentityRefused.rawValue,
+                ].contains($0.eventType)
+            }
             #expect(events.count == 2)
             #expect(
                 Set(events.map(\.eventType)) == [
@@ -412,7 +414,10 @@ struct GuestJWTSVIDMintTests {
                     $0.username == "spiffe://strato.local/agent/mint-agent"
                 })
             #expect(events.allSatisfy { $0.action == "mint_jwt_svid" })
-            #expect(events.allSatisfy { !($0.metadataJSON ?? "").contains("fake-jwt-svid") })
+            #expect(
+                events.allSatisfy { event in
+                    !(event.metadata?.values.contains { $0.contains("fake-jwt-svid") } ?? false)
+                })
         }
     }
 }

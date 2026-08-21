@@ -1,15 +1,358 @@
-import Fluent
-import FluentPostgresDriver
+import ControlPlanePostgres
 import NIOCore
 import NIOPosix
 import PostgresNIO
-import SQLKit
+import StratoShared
 import Vapor
 import VaporTesting
 
 @testable import App
 
-// MARK: - Test Database Templates
+package struct TestAgentEnrollment: Sendable {
+    package let id: UUID
+    package let agentName: String
+    package let trustDomain: String
+    package let spiffeID: String
+    package var bootstrapTokenHash: String?
+    package var isUsed: Bool
+    package let siteID: UUID?
+    package let organizationID: UUID?
+    package let organizationalUnitID: UUID?
+    package var expiresAt: Date
+    package let createdAt: Date?
+    package var usedAt: Date?
+
+    package init(
+        id: UUID = UUID(),
+        agentName: String,
+        spiffeID: String,
+        trustDomain: String = PlatformTrustDomain.current,
+        bootstrapTokenHash: String? = nil,
+        expirationHours: Int = 1,
+        expiresAt: Date? = nil,
+        siteID: UUID? = nil,
+        organizationScope: OrganizationScope? = nil,
+        isUsed: Bool = false,
+        createdAt: Date? = nil,
+        usedAt: Date? = nil
+    ) {
+        self.id = id
+        self.agentName = agentName
+        self.trustDomain = trustDomain
+        self.spiffeID = spiffeID
+        self.bootstrapTokenHash = bootstrapTokenHash
+        self.isUsed = isUsed
+        self.siteID = siteID
+        self.organizationID = organizationScope?.organizationID
+        self.organizationalUnitID = organizationScope?.organizationalUnitID
+        self.expiresAt =
+            expiresAt
+            ?? Date().addingTimeInterval(TimeInterval(expirationHours * 3600))
+        self.createdAt = createdAt
+        self.usedAt = usedAt
+    }
+
+    package func requireID() -> UUID { id }
+
+    package var isValid: Bool {
+        bootstrapTokenHash != nil && !isUsed && expiresAt > Date()
+    }
+
+    package mutating func markAsUsed() {
+        isUsed = true
+        bootstrapTokenHash = nil
+        usedAt = Date()
+    }
+}
+
+@discardableResult
+package func saveTestAgentEnrollment(
+    _ enrollment: TestAgentEnrollment,
+    on db: PostgresStoreContext
+) async throws -> TestAgentEnrollment {
+    let sql = try sqlDatabaseForTest(db)
+    try await sql.raw(
+        """
+        INSERT INTO agent_enrollments (
+            id, agent_name, trust_domain, spiffe_id, bootstrap_token_hash, is_used,
+            site_id, organization_id, organizational_unit_id, expires_at, created_at, used_at
+        ) VALUES (
+            \(bind: enrollment.id), \(bind: enrollment.agentName),
+            \(bind: enrollment.trustDomain), \(bind: enrollment.spiffeID),
+            \(bind: enrollment.bootstrapTokenHash), \(bind: enrollment.isUsed),
+            \(bind: enrollment.siteID), \(bind: enrollment.organizationID),
+            \(bind: enrollment.organizationalUnitID), \(bind: enrollment.expiresAt),
+            COALESCE(\(bind: enrollment.createdAt), CURRENT_TIMESTAMP),
+            \(bind: enrollment.usedAt)
+        )
+        ON CONFLICT (id) DO UPDATE SET
+            agent_name = EXCLUDED.agent_name,
+            trust_domain = EXCLUDED.trust_domain,
+            spiffe_id = EXCLUDED.spiffe_id,
+            bootstrap_token_hash = EXCLUDED.bootstrap_token_hash,
+            is_used = EXCLUDED.is_used,
+            site_id = EXCLUDED.site_id,
+            organization_id = EXCLUDED.organization_id,
+            organizational_unit_id = EXCLUDED.organizational_unit_id,
+            expires_at = EXCLUDED.expires_at,
+            used_at = EXCLUDED.used_at
+        """
+    ).run()
+    return enrollment
+}
+
+@discardableResult
+package func seedTestAgentEnrollment(
+    _ enrollment: TestAgentEnrollment,
+    on db: PostgresStoreContext
+) async throws -> TestAgentEnrollment {
+    try await saveTestAgentEnrollment(enrollment, on: db)
+}
+
+package func findTestAgentEnrollment(
+    _ id: UUID?,
+    on db: PostgresStoreContext
+) async throws -> TestAgentEnrollment? {
+    guard let id else { return nil }
+    let sql = try sqlDatabaseForTest(db)
+    guard
+        let row = try await sql.raw(
+            """
+            SELECT id, agent_name, trust_domain, spiffe_id, bootstrap_token_hash,
+                   is_used, site_id, organization_id, organizational_unit_id,
+                   expires_at, created_at, used_at
+            FROM agent_enrollments WHERE id = \(bind: id)
+            """
+        ).first()
+    else { return nil }
+    return try decodeTestAgentEnrollment(row)
+}
+
+package func findTestAgentEnrollment(
+    agentName: String,
+    trustDomain: String? = nil,
+    on db: PostgresStoreContext
+) async throws -> TestAgentEnrollment? {
+    let sql = try sqlDatabaseForTest(db)
+    let row: PostgresStoreRow?
+    if let trustDomain {
+        row = try await sql.raw(
+            """
+            SELECT id, agent_name, trust_domain, spiffe_id, bootstrap_token_hash,
+                   is_used, site_id, organization_id, organizational_unit_id,
+                   expires_at, created_at, used_at
+            FROM agent_enrollments
+            WHERE agent_name = \(bind: agentName) AND trust_domain = \(bind: trustDomain)
+            ORDER BY created_at DESC, id DESC LIMIT 1
+            """
+        ).first()
+    } else {
+        row = try await sql.raw(
+            """
+            SELECT id, agent_name, trust_domain, spiffe_id, bootstrap_token_hash,
+                   is_used, site_id, organization_id, organizational_unit_id,
+                   expires_at, created_at, used_at
+            FROM agent_enrollments
+            WHERE agent_name = \(bind: agentName)
+            ORDER BY created_at DESC, id DESC LIMIT 1
+            """
+        ).first()
+    }
+    guard let row else { return nil }
+    return try decodeTestAgentEnrollment(row)
+}
+
+package func testAgentEnrollmentCount(
+    agentName: String? = nil,
+    on db: PostgresStoreContext
+) async throws -> Int {
+    let sql = try sqlDatabaseForTest(db)
+    if let agentName {
+        return try await sql.raw(
+            "SELECT COUNT(*) AS count FROM agent_enrollments WHERE agent_name = \(bind: agentName)"
+        ).first(decodingColumn: "count", as: Int.self) ?? 0
+    }
+    return try await sql.raw("SELECT COUNT(*) AS count FROM agent_enrollments")
+        .first(decodingColumn: "count", as: Int.self) ?? 0
+}
+
+private func decodeTestAgentEnrollment(_ row: PostgresStoreRow) throws -> TestAgentEnrollment {
+    TestAgentEnrollment(
+        id: try row.decode(column: "id", as: UUID.self),
+        agentName: try row.decode(column: "agent_name", as: String.self),
+        spiffeID: try row.decode(column: "spiffe_id", as: String.self),
+        trustDomain: try row.decode(column: "trust_domain", as: String.self),
+        bootstrapTokenHash: try row.decode(column: "bootstrap_token_hash", as: String?.self),
+        expiresAt: try row.decode(column: "expires_at", as: Date.self),
+        siteID: try row.decode(column: "site_id", as: UUID?.self),
+        organizationScope: try {
+            if let organizationID = try row.decode(column: "organization_id", as: UUID?.self) {
+                return .organization(organizationID)
+            }
+            if let organizationalUnitID = try row.decode(
+                column: "organizational_unit_id", as: UUID?.self)
+            {
+                return .organizationalUnit(organizationalUnitID)
+            }
+            return nil
+        }(),
+        isUsed: try row.decode(column: "is_used", as: Bool.self),
+        createdAt: try row.decode(column: "created_at", as: Date?.self),
+        usedAt: try row.decode(column: "used_at", as: Date?.self)
+    )
+}
+
+package struct TestAccountClaim: Sendable {
+    package let rawToken: String
+    package let id: UUID
+    package let userID: UUID
+    package let tokenHash: String
+    package let expiresAt: Date?
+    package let claimedAt: Date?
+
+    package func isValid(at now: Date = Date()) -> Bool {
+        claimedAt == nil && expiresAt.map { now <= $0 } ?? true
+    }
+}
+
+private func accountClaimTestDatabase(_ app: Application) -> PostgresStoreContext {
+    app.testPostgres
+}
+
+/// Seed invitation states that cannot be reached through a public production
+/// operation (expired, already consumed, or superseded claims). Production
+/// behavior reads them through the native account-claim module.
+@discardableResult
+package func seedTestAccountClaim(
+    userID: UUID,
+    rawToken: String = AccountClaimSecret.generateToken(),
+    expiresAt: Date? = Date().addingTimeInterval(3600),
+    claimedAt: Date? = nil,
+    createdByID: UUID? = nil,
+    on app: Application
+) async throws -> TestAccountClaim {
+    let sql = accountClaimTestDatabase(app)
+    let id = UUID()
+    let tokenHash = AccountClaimSecret.hashToken(rawToken)
+    try await sql.raw(
+        """
+        INSERT INTO account_claim_tokens (
+            id, user_id, token_hash, token_prefix, expires_at, claimed_at,
+            created_by_id, created_at
+        ) VALUES (
+            \(bind: id), \(bind: userID), \(bind: tokenHash),
+            \(bind: AccountClaimSecret.extractPrefix(rawToken)),
+            \(bind: expiresAt), \(bind: claimedAt), \(bind: createdByID),
+            CURRENT_TIMESTAMP
+        )
+        """
+    ).run()
+    return TestAccountClaim(
+        rawToken: rawToken,
+        id: id,
+        userID: userID,
+        tokenHash: tokenHash,
+        expiresAt: expiresAt,
+        claimedAt: claimedAt
+    )
+}
+
+package func consumeTestAccountClaim(
+    id: UUID,
+    at claimedAt: Date = Date(),
+    on app: Application
+) async throws {
+    let sql = accountClaimTestDatabase(app)
+    try await sql.raw(
+        "UPDATE account_claim_tokens SET claimed_at = \(bind: claimedAt) WHERE id = \(bind: id)"
+    ).run()
+}
+
+package func testAccountClaimCount(on app: Application) async throws -> Int {
+    struct Count: Decodable { let value: Int }
+    let sql = accountClaimTestDatabase(app)
+    return try await sql.raw("SELECT COUNT(*)::int AS value FROM account_claim_tokens")
+        .first(decoding: Count.self)?.value ?? 0
+}
+
+package func testAccountClaims(on app: Application) async throws -> [TestAccountClaim] {
+    struct Row: Decodable {
+        let id: UUID
+        let userID: UUID
+        let tokenHash: String
+        let expiresAt: Date?
+        let claimedAt: Date?
+
+        private enum CodingKeys: String, CodingKey {
+            case id
+            case userID = "user_id"
+            case tokenHash = "token_hash"
+            case expiresAt = "expires_at"
+            case claimedAt = "claimed_at"
+        }
+    }
+    let sql = accountClaimTestDatabase(app)
+    return try await sql.raw(
+        "SELECT id, user_id, token_hash, expires_at, claimed_at FROM account_claim_tokens ORDER BY created_at"
+    ).all(decoding: Row.self).map {
+        TestAccountClaim(
+            rawToken: "",
+            id: $0.id,
+            userID: $0.userID,
+            tokenHash: $0.tokenHash,
+            expiresAt: $0.expiresAt,
+            claimedAt: $0.claimedAt
+        )
+    }
+}
+
+package func findTestAccountClaim(
+    rawToken: String,
+    on app: Application
+) async throws -> TestAccountClaim? {
+    let hash = AccountClaimSecret.hashToken(rawToken)
+    return try await testAccountClaims(on: app).first { $0.tokenHash == hash }.map {
+        TestAccountClaim(
+            rawToken: rawToken,
+            id: $0.id,
+            userID: $0.userID,
+            tokenHash: $0.tokenHash,
+            expiresAt: $0.expiresAt,
+            claimedAt: $0.claimedAt
+        )
+    }
+}
+
+/// Enroll a persistence-valid passkey fixture through the same native module
+/// production uses. Cryptographic ceremony verification belongs to the
+/// WebAuthn service and is intentionally outside persistence tests.
+@discardableResult
+package func createTestPasskey(
+    userID: UUID,
+    on app: Application,
+    credentialID: Data = Data(UUID().uuidString.utf8),
+    publicKey: Data = Data("test-public-key".utf8),
+    name: String? = nil
+) async throws -> PasskeySnapshot {
+    let challenge = "test-passkey-\(UUID())"
+    _ = try await app.passkeysPersistence.storeChallenge(
+        challenge,
+        userID: userID,
+        operation: "test_fixture"
+    )
+    return try await app.passkeysPersistence.registerCredential(
+        challenge: challenge,
+        operation: "test_fixture",
+        expectedUserID: userID,
+        credential: PasskeyWrite(
+            credentialID: credentialID,
+            publicKey: publicKey,
+            name: name
+        )
+    )
+}
+
+// MARK: - Test PostgresStoreContext Templates
 //
 // The suite runs against Postgres — the engine production uses — so migrations
 // and Postgres-specific SQL are validated everywhere, not just in CI (issue
@@ -47,25 +390,27 @@ private func isTestProcessAlive(_ pid: Int32) -> Bool {
 package actor PostgresTestDatabases {
     package static let shared = PostgresTestDatabases()
 
-    /// Small event-loop group shared by every test app in the suite.
-    /// Fluent's pool opens at most one connection per event loop, so this caps
-    /// each app at two connections and keeps the fully parallel suite well
-    /// under the server's default max_connections=100 — the constraint that
-    /// used to force CI's Postgres run to be --no-parallel.
+    /// Small event-loop group shared by every test app in the suite. Native
+    /// application pools are independently capped at one connection.
     package static let appEventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 2)
 
-    /// Connection parameters from the environment. `DATABASE_NAME` is only the
-    /// anchor database the admin connection logs into — tests themselves run
-    /// in throwaway clones of the template.
-    package static func configuration(database: String) -> SQLPostgresConfiguration {
-        SQLPostgresConfiguration(
+    package static func nativeConfiguration(
+        database: String,
+        maximumConnections: Int = 1
+    ) throws
+        -> ControlPlanePostgres.PostgresDatabase.Configuration
+    {
+        try .init(
             hostname: Environment.get("DATABASE_HOST") ?? "localhost",
             port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:))
-                ?? SQLPostgresConfiguration.ianaPortNumber,
+                ?? 5432,
             username: Environment.get("DATABASE_USERNAME") ?? "strato",
             password: Environment.get("DATABASE_PASSWORD") ?? "strato_password",
             database: database,
-            tls: .disable
+            tls: .disable,
+            maximumConnections: maximumConnections,
+            connectionAcquireTimeout: .seconds(10),
+            statementTimeoutMilliseconds: 300_000
         )
     }
 
@@ -166,7 +511,7 @@ package actor PostgresTestDatabases {
         env.arguments = ["vapor"]
         let app = try await Application.make(env, .shared(Self.appEventLoopGroup))
         app.logger.logLevel = .error
-        app.databases.use(.postgres(configuration: Self.configuration(database: templateName)), as: .psql)
+        app.nativePostgresConfigurationOverride = try Self.nativeConfiguration(database: templateName)
         do {
             try await configure(app)
             try await app.asyncShutdown()
@@ -217,7 +562,7 @@ package actor PostgresTestDatabases {
         let configuration = PostgresConnection.Configuration(
             host: Environment.get("DATABASE_HOST") ?? "localhost",
             port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:))
-                ?? SQLPostgresConfiguration.ianaPortNumber,
+                ?? 5432,
             username: Environment.get("DATABASE_USERNAME") ?? "strato",
             password: Environment.get("DATABASE_PASSWORD") ?? "strato_password",
             database: Environment.get("DATABASE_NAME") ?? "strato_test",
@@ -237,14 +582,18 @@ package actor PostgresTestDatabases {
 // MARK: - Test Extensions
 
 extension Application {
-    package static func makeForTesting(_ environment: Environment = .testing) async throws -> Application {
+    package static func makeForTesting(
+        _ environment: Environment = .testing,
+        maximumConnections: Int = 1
+    ) async throws -> Application {
         var env = environment
         env.arguments = ["vapor"]
 
         // Each test gets its own server-side clone of the migrated template
         // database.
         let databaseName = try await PostgresTestDatabases.shared.createDatabaseForTest()
-        return try await make(env, database: databaseName)
+        return try await make(
+            env, database: databaseName, maximumConnections: maximumConnections)
     }
 
     /// Like `makeForTesting`, but on an EMPTY database with no migrations
@@ -281,14 +630,16 @@ extension Application {
     private static func make(
         _ env: Environment,
         database databaseName: String,
-        owningDatabase: Bool = true
+        owningDatabase: Bool = true,
+        maximumConnections: Int = 1
     ) async throws -> Application {
         let app = try await Application.make(env, .shared(PostgresTestDatabases.appEventLoopGroup))
-        app.logger.logLevel = .debug
-        app.databases.use(
-            .postgres(configuration: PostgresTestDatabases.configuration(database: databaseName)),
-            as: .psql
-        )
+        // A full Swift Testing run creates hundreds of short-lived apps. Debug
+        // logging can fill SwiftPM's child-process pipe before it is drained,
+        // stalling the suite independently of application or database state.
+        app.logger.logLevel = .error
+        app.nativePostgresConfigurationOverride = try PostgresTestDatabases.nativeConfiguration(
+            database: databaseName, maximumConnections: maximumConnections)
         if owningDatabase {
             app.storage[TestDatabaseNameKey.self] = databaseName
         }
@@ -345,8 +696,12 @@ package struct PermissiveGuardrailAnalyzer: GuardrailAnalyzer {
     }
 }
 
-package func withTestApp(_ test: (Application) async throws -> Void) async throws {
-    let app = try await Application.makeForTesting()
+package func withTestApp(
+    maximumConnections: Int = 1,
+    _ test: (Application) async throws -> Void
+) async throws {
+    let app = try await Application.makeForTesting(
+        maximumConnections: maximumConnections)
 
     do {
         try await configure(app)
@@ -362,8 +717,11 @@ package func withTestApp(_ test: (Application) async throws -> Void) async throw
 
 // Historical alias: the two helpers only differed in a teardown-time
 // autoRevert(), which per-test database clones made obsolete.
-package func withApp(_ test: (Application) async throws -> Void) async throws {
-    try await withTestApp(test)
+package func withApp(
+    maximumConnections: Int = 1,
+    _ test: (Application) async throws -> Void
+) async throws {
+    try await withTestApp(maximumConnections: maximumConnections, test)
 }
 
 extension User {
@@ -374,24 +732,24 @@ extension User {
     }
 
     package func generateAPIKey(
-        on db: Database,
+        on app: Application,
         name: String = "Test API Key",
         restriction: CredentialRestriction = .unrestricted
     ) async throws -> String {
-        // Generate a proper API key for testing
-        let apiKeyString = APIKey.generateAPIKey()
-        let keyHash = APIKey.hashAPIKey(apiKeyString)
+        let apiKeyString = APIKeyCredential.generate()
+        let keyHash = APIKeyCredential.hash(apiKeyString)
         let keyPrefix = String(apiKeyString.prefix(16))
 
-        let apiKey = APIKey(
-            userID: self.id!,
-            name: name,
-            keyHash: keyHash,
-            keyPrefix: keyPrefix,
-            restriction: restriction,
-            isActive: true
+        _ = try await app.apiKeysPersistence.issue(
+            APIKeyWrite(
+                userID: self.id!,
+                name: name,
+                keyHash: keyHash,
+                keyPrefix: keyPrefix,
+                restriction: restriction.stored
+            ),
+            maximumKeysPerUser: 10
         )
-        try await apiKey.save(on: db)
 
         return apiKeyString
     }
@@ -399,10 +757,67 @@ extension User {
 
 // MARK: - Test Data Builders
 
-package struct TestDataBuilder {
-    package let db: Database
+/// Immutable test-facing view of a persisted group. The optional `id` shape
+/// keeps older fixture call sites readable while the backing write and every
+/// subsequent operation use the production PostgresNIO module.
+package struct TestGroup: Sendable {
+    package let snapshot: GroupSnapshot
 
-    package init(db: Database) { self.db = db }
+    package var id: UUID? { snapshot.id }
+    package var name: String { snapshot.name }
+    package var description: String { snapshot.description }
+    package var organizationID: UUID { snapshot.organizationID }
+
+    package func requireID() -> UUID { snapshot.id }
+}
+
+package struct TestDataBuilder {
+    package let db: PostgresStoreContext
+    private let groups: GroupsPersistence?
+    private let floatingIPPools: FloatingIPPoolsPersistence?
+
+    package init(db: PostgresStoreContext) {
+        self.db = db
+        self.groups = nil
+        self.floatingIPPools = nil
+    }
+
+    /// Use this initializer for fixtures that exercise migrated persistence.
+    /// It keeps the existing Fluent builder surface available to unmigrated
+    /// cohorts while routing group intent through the production module.
+    package init(app: Application) {
+        self.db = app.testPostgres
+        self.groups = app.groupsPersistence
+        self.floatingIPPools = app.floatingIPPoolsPersistence
+    }
+
+    package func createFloatingIPPool(
+        name: String,
+        cidr: String,
+        gateway: String? = nil,
+        siteID: UUID,
+        organizationID: UUID? = nil,
+        organizationalUnitID: UUID? = nil
+    ) async throws -> FloatingIPPoolSnapshot {
+        guard let floatingIPPools else {
+            throw Abort(.internalServerError, reason: "Native floating-IP pool persistence is unavailable")
+        }
+        switch try await floatingIPPools.create(FloatingIPPoolWrite(
+            name: name,
+            cidr: cidr,
+            gateway: gateway,
+            siteID: siteID,
+            organizationID: organizationID,
+            organizationalUnitID: organizationalUnitID
+        )) {
+        case .created(let pool): return pool
+        case .siteNotFound: throw Abort(.internalServerError, reason: "Fixture site does not exist")
+        case .scopeNotFound: throw Abort(.internalServerError, reason: "Fixture scope does not exist")
+        case .overlaps(let name, let cidr):
+            throw Abort(.internalServerError, reason: "Fixture pool overlaps \(name) (\(cidr))")
+        case .duplicateName: throw Abort(.internalServerError, reason: "Fixture pool name is duplicated")
+        }
+    }
 
     package func createUser(
         username: String = "testuser",
@@ -450,12 +865,18 @@ package struct TestDataBuilder {
             }
             roleID = customRoleID
         }
-        let userOrg = UserOrganization(
-            userID: user.id!,
-            organizationID: organization.id!,
-            roleID: roleID
-        )
-        try await userOrg.save(on: db)
+        guard let sql = Optional(db) else {
+            throw TestSetupError.message("Organization membership fixtures require PostgreSQL")
+        }
+        try await sql.raw(
+            """
+            INSERT INTO user_organizations (id, user_id, organization_id, role_id, created_at)
+            VALUES (
+                \(bind: UUID()), \(bind: user.id!), \(bind: organization.id!),
+                \(bind: roleID), CURRENT_TIMESTAMP
+            )
+            """
+        ).run()
 
         // Organization membership remains relational, while any role grant is
         // represented only by its authoritative binding.
@@ -478,7 +899,7 @@ package struct TestDataBuilder {
         organization: Organization,
         parentOU: OrganizationalUnit? = nil
     ) async throws -> OrganizationalUnit {
-        let ou = OrganizationalUnit(
+        var ou = OrganizationalUnit(
             name: name,
             description: description,
             organizationID: organization.id!,
@@ -487,7 +908,11 @@ package struct TestDataBuilder {
             depth: parentOU != nil ? (parentOU!.depth + 1) : 0
         )
         try await ou.save(on: db)
-        ou.path = try await ou.buildPath(on: db)
+        ou = OrganizationalUnit(
+            id: ou.id, name: ou.name, description: ou.description,
+            organizationID: ou.organizationID, parentOUID: ou.parentOUID,
+            path: try await ou.buildPath(on: db), depth: ou.depth,
+            createdAt: ou.createdAt, updatedAt: ou.updatedAt)
         try await ou.save(on: db)
         return ou
     }
@@ -498,10 +923,10 @@ package struct TestDataBuilder {
         guard let organizationID = try await project.getRootOrganizationId(on: db) else {
             throw Abort(.internalServerError, reason: "Test project has no owning organization")
         }
-        if let existing = try await Site.query(on: db)
-            .filter(\.$organization.$id == organizationID)
-            .first()
-        {
+        if let existing = try await LegacySiteStore.sites(
+            organizationID: organizationID,
+            on: db
+        ).first {
             return existing
         }
         let site = Site(
@@ -556,7 +981,7 @@ package struct TestDataBuilder {
         environments: [String] = ["development", "staging", "production"],
         defaultEnvironment: String = "development"
     ) async throws -> Project {
-        let project = Project(
+        var project = Project(
             name: name,
             description: description,
             organizationID: organization?.id,
@@ -566,7 +991,7 @@ package struct TestDataBuilder {
             environments: environments
         )
         try await project.save(on: db)
-        project.path = try await project.buildPath(on: db)
+        project = project.replacingPath(try await project.buildPath(on: db))
         try await project.save(on: db)
         return project
     }
@@ -575,14 +1000,36 @@ package struct TestDataBuilder {
         name: String,
         description: String,
         organization: Organization
-    ) async throws -> Group {
-        let group = Group(
-            name: name,
-            description: description,
-            organizationID: organization.id!
+    ) async throws -> TestGroup {
+        guard let groups else {
+            preconditionFailure("Group fixtures require TestDataBuilder(app:)")
+        }
+        return TestGroup(
+            snapshot: try await groups.create(GroupWrite(
+                organizationID: try organization.requireID(),
+                name: name,
+                description: description
+            ))
         )
-        try await group.save(on: db)
-        return group
+    }
+
+    package func addUserToGroup(user: User, group: TestGroup) async throws {
+        guard let groups else {
+            preconditionFailure("Group fixtures require TestDataBuilder(app:)")
+        }
+        let result = try await groups.addMembers(
+            [try user.requireID()],
+            to: group.requireID(),
+            organizationID: group.organizationID
+        )
+        guard result.groupFound else {
+            throw TestSetupError.message("Cannot add a fixture member to a group that does not exist")
+        }
+        guard result.ineligibleUserIDs.isEmpty else {
+            throw TestSetupError.message(
+                "Group fixture users must belong to the group's organization"
+            )
+        }
     }
 
     package func createResourceQuota(
@@ -698,9 +1145,10 @@ package struct TestDataBuilder {
         )
         try await image.save(on: db)
 
+        var result = image
         if status == .ready || storagePath != nil || sourceURL != nil {
             let imageID = try image.requireID()
-            let artifact = ImageArtifact(
+            let artifact = try await LegacyImageArtifactStore.insert(
                 imageID: imageID,
                 kind: .diskImage,
                 format: format,
@@ -716,12 +1164,12 @@ package struct TestDataBuilder {
                         filename: filename),
                 status: status == .ready ? .ready : .pending,
                 sourceURL: sourceURL,
-                expectedChecksum: status == .ready ? nil : checksum
+                expectedChecksum: status == .ready ? nil : checksum,
+                on: db
             )
-            try await artifact.save(on: db)
-            image.$artifacts.value = [artifact]
+            result = image.loading(artifacts: [artifact])
         }
-        return image
+        return result
     }
 }
 
@@ -764,11 +1212,11 @@ package actor MockImageFetchService: ImageFetchServiceProtocol {
 /// dropping it in place also exercises the migration's idempotent
 /// drop-then-add.)
 package func withConditionedRoleBindingsAllowed<T>(
-    on db: any Database,
+    on db: PostgresStoreContext,
     _ body: () async throws -> T
 ) async throws -> T {
     let sql = try sqlDatabaseForTest(db)
-    let constraint = RoleBinding.conditionConstraintName
+    let constraint = conditionedRoleBindingConstraintName
     try await sql.raw(
         "ALTER TABLE \"role_bindings\" DROP CONSTRAINT IF EXISTS \(unsafeRaw: constraint)"
     ).run()
@@ -803,18 +1251,22 @@ package func insertConditionedRoleBinding(
     nodeType: IAMNodeType,
     nodeID: UUID,
     condition: String,
-    on db: any Database
+    on db: PostgresStoreContext
 ) async throws {
     try await withConditionedRoleBindingsAllowed(on: db) {
-        let binding = RoleBinding(
-            principalType: principalType,
-            principalID: principalID,
-            role: role,
-            nodeType: nodeType,
-            nodeID: nodeID
-        )
-        binding.condition = condition
-        try await binding.save(on: db)
+        let sql = try sqlDatabaseForTest(db)
+        try await sql.raw(
+            """
+            INSERT INTO role_bindings (
+                id, principal_type, principal_id, role_id, node_type, node_id,
+                condition, created_at
+            ) VALUES (
+                \(bind: UUID()), \(bind: principalType.rawValue), \(bind: principalID),
+                \(bind: role.seededID), \(bind: nodeType.rawValue), \(bind: nodeID),
+                \(bind: condition), CURRENT_TIMESTAMP
+            )
+            """
+        ).run()
     }
 }
 
@@ -831,14 +1283,14 @@ package enum ConditionedRoleBindingConstraintState: Equatable, Sendable {
 }
 
 package func conditionedRoleBindingConstraint(
-    on db: any Database
+    on db: PostgresStoreContext
 ) async throws -> ConditionedRoleBindingConstraintState {
     let sql = try sqlDatabaseForTest(db)
     let rows = try await sql.raw(
         """
         SELECT convalidated FROM pg_constraint
         WHERE conrelid = 'role_bindings'::regclass
-          AND conname = \(bind: RoleBinding.conditionConstraintName)
+          AND conname = \(bind: conditionedRoleBindingConstraintName)
         """
     ).all()
     guard let row = rows.first else { return .absent }
@@ -847,42 +1299,47 @@ package func conditionedRoleBindingConstraint(
 
 /// Whether the schema refuses a conditioned write — either constraint state
 /// does, validated or not.
-package func conditionedRoleBindingsAreRefused(on db: any Database) async throws -> Bool {
+package func conditionedRoleBindingsAreRefused(on db: PostgresStoreContext) async throws -> Bool {
     try await conditionedRoleBindingConstraint(on: db) != .absent
 }
+
+private let conditionedRoleBindingConstraintName = "ck_role_bindings_condition_unsupported"
 
 /// Give a saved test volume its authoritative physical placement. Passing no
 /// agent deliberately leaves the volume unplaced for tests that exercise that
 /// state.
-@discardableResult
 package func placeVolume(
     _ volume: Volume,
     on agentID: String?,
     at filePath: String? = "/var/lib/strato/volumes/test/volume.qcow2",
     state: VolumeReplicaState = .healthy,
-    using db: any Database
-) async throws -> VolumeReplica? {
-    guard let agentID else { return nil }
-    let replica = VolumeReplica(
-        volumeID: try volume.requireID(),
-        agentId: agentID,
-        diskAttachment: filePath.map {
+    using db: PostgresStoreContext
+) async throws {
+    guard let agentID else { return }
+    let diskAttachment: DiskAttachment? = filePath.map {
             .file(
                 path: $0,
                 format: $0.lowercased().hasSuffix(".raw") ? .raw : .qcow2)
-        },
-        state: state,
-        generation: volume.observedGeneration
-    )
-    try await replica.create(on: db)
-    return replica
+        }
+    let attachmentJSON = try diskAttachment.map {
+        String(decoding: try JSONEncoder().encode($0), as: UTF8.self)
+    }
+    try await sqlDatabaseForTest(db).raw(
+        """
+        INSERT INTO volume_replicas (
+            id, volume_id, agent_id, disk_attachment, state, generation,
+            created_at, updated_at
+        ) VALUES (
+            \(bind: UUID()), \(bind: try volume.requireID()), \(bind: agentID),
+            CAST(\(bind: attachmentJSON) AS jsonb), \(bind: state.rawValue),
+            \(bind: volume.observedGeneration), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
+        """
+    ).run()
 }
 
-private func sqlDatabaseForTest(_ db: any Database) throws -> any SQLDatabase {
-    guard let sql = db as? any SQLDatabase else {
-        throw TestSetupError.message("conditioned binding fixtures need a SQL database")
-    }
-    return sql
+private func sqlDatabaseForTest(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+    db
 }
 
 package enum TestSetupError: Error, CustomStringConvertible {

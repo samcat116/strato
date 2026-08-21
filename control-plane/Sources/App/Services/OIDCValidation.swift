@@ -1,6 +1,18 @@
 import Crypto
+import ControlPlanePostgres
 import Foundation
 import Vapor
+
+protocol OIDCProviderURLConfiguration {
+    var discoveryURL: String? { get }
+    var authorizationEndpoint: String? { get }
+    var tokenEndpoint: String? { get }
+    var userinfoEndpoint: String? { get }
+    var jwksURI: String? { get }
+    var endSessionEndpoint: String? { get }
+}
+
+extension OIDCProviderSnapshot: OIDCProviderURLConfiguration {}
 
 /// Pure validation and parsing helpers for the OIDC flow, extracted from
 /// `OIDCController` so the security-sensitive URL/allow-list/base64 logic can be
@@ -22,7 +34,7 @@ struct OIDCValidation {
     /// validates the resulting model state with this before saving — otherwise
     /// an edit could store an http:// token endpoint that later receives the
     /// client secret.
-    static func validateURLFields(provider: OIDCProvider) throws {
+    static func validateURLFields(provider: some OIDCProviderURLConfiguration) throws {
         try validateOptionalHTTPSURL(provider.discoveryURL, label: "Discovery URL")
         try validateOptionalHTTPSURL(provider.authorizationEndpoint, label: "Authorization endpoint")
         try validateOptionalHTTPSURL(provider.tokenEndpoint, label: "Token endpoint")
@@ -383,7 +395,7 @@ struct OIDCValidation {
     /// the root of trust, so nothing else may widen it. `perProviderHosts` is
     /// the delegated trust for the remaining fetches: hosts an already
     /// allow-listed discovery document named as its own endpoints (see
-    /// `OIDCProvider.setDiscoveredHosts`). Without that delegation any IdP
+    /// the provider's persisted discovery-host set). Without that delegation any IdP
     /// serving JWKS off a second domain — Google's keys live on
     /// `www.googleapis.com`, not `accounts.google.com` — would fail every login
     /// until an operator hand-edited the environment.

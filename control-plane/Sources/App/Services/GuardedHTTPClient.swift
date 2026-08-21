@@ -89,15 +89,20 @@ final class GuardedHTTPClient: Sendable {
     ) {
         self.app = app
         self.tlsConfiguration = tlsConfiguration
-        self.validator =
-            validator
-            ?? { url in
+        if let validator {
+            self.validator = validator
+        } else {
+            let configuration = app.controlPlaneConfiguration
+            let environment = app.environment
+            let threadPool = app.threadPool
+            self.validator = { url in
                 try await SSRFGuard.validate(
                     url: url,
-                    configuration: app.controlPlaneConfiguration,
-                    environment: app.environment,
-                    on: app.threadPool)
+                    configuration: configuration,
+                    environment: environment,
+                    on: threadPool)
             }
+        }
     }
 
     // MARK: - Buffered fetches

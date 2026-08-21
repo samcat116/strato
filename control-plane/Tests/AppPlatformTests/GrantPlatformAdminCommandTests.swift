@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Testing
 import Vapor
@@ -25,7 +25,7 @@ struct GrantPlatformAdminCommandTests {
     private func makeUser(_ app: Application, username: String = "morpheus") async throws -> User {
         let user = User(
             username: username, email: "\(username)@example.com", displayName: username)
-        try await user.save(on: app.db)
+        try await user.save(on: app.testPostgres)
         return user
     }
 
@@ -37,10 +37,10 @@ struct GrantPlatformAdminCommandTests {
 
             try await run(app, arguments: ["--email", "morpheus@example.com"])
 
-            let promoted = try #require(try await User.find(user.id, on: app.db))
+            let promoted = try #require(try await User.find(user.id, on: app.testPostgres))
             #expect(promoted.isSystemAdmin)
             // No invite unless asked for: a promotion is not an enrollment.
-            let claimCount = try await AccountClaimToken.query(on: app.db).count()
+            let claimCount = try await testAccountClaimCount(on: app)
             #expect(claimCount == 0)
         }
     }
@@ -50,7 +50,7 @@ struct GrantPlatformAdminCommandTests {
         try await withTestApp { app in
             let user = try await makeUser(app)
             try await run(app, arguments: ["--username", "morpheus"])
-            let promoted = try #require(try await User.find(user.id, on: app.db))
+            let promoted = try #require(try await User.find(user.id, on: app.testPostgres))
             #expect(promoted.isSystemAdmin)
         }
     }
@@ -69,11 +69,11 @@ struct GrantPlatformAdminCommandTests {
             let claimURL = try #require(console.lines.first).trimmingCharacters(in: .whitespacesAndNewlines)
             let rawToken = try #require(claimURL.split(separator: "=").last.map(String.init))
 
-            let claim = try #require(try await AccountClaimToken.query(on: app.db).first())
-            #expect(claim.tokenHash == AccountClaimToken.hashToken(rawToken))
-            #expect(claim.$user.id == user.id)
-            #expect(claim.isValid)
-            let promoted = try #require(try await User.find(user.id, on: app.db))
+            let claim = try #require(try await findTestAccountClaim(rawToken: rawToken, on: app))
+            #expect(claim.tokenHash == AccountClaimSecret.hashToken(rawToken))
+            #expect(claim.userID == user.id)
+            #expect(claim.isValid())
+            let promoted = try #require(try await User.find(user.id, on: app.testPostgres))
             #expect(promoted.isSystemAdmin)
         }
     }
@@ -84,20 +84,17 @@ struct GrantPlatformAdminCommandTests {
     func claimSupersedesOlderInvite() async throws {
         try await withTestApp { app in
             let user = try await makeUser(app)
-            let stale = AccountClaimToken(
+            _ = try await seedTestAccountClaim(
                 userID: try user.requireID(),
-                tokenHash: AccountClaimToken.hashToken("claim_stale"),
-                tokenPrefix: "claim_stale",
+                rawToken: "claim_stale",
                 expiresAt: Date().addingTimeInterval(3600),
-                createdByID: nil
+                on: app
             )
-            try await stale.save(on: app.db)
 
             try await run(app, arguments: ["--claim", "--quiet", "--email", "morpheus@example.com"])
 
-            let live = try await AccountClaimToken.query(on: app.db).all()
-            #expect(live.count == 1)
-            #expect(live.first?.tokenHash != AccountClaimToken.hashToken("claim_stale"))
+            #expect(try await testAccountClaimCount(on: app) == 1)
+            #expect(try await findTestAccountClaim(rawToken: "claim_stale", on: app) == nil)
         }
     }
 
@@ -107,21 +104,21 @@ struct GrantPlatformAdminCommandTests {
     func claimRefusesEnrolledAccount() async throws {
         try await withTestApp { app in
             let user = try await makeUser(app)
-            let credential = UserCredential(
-                userID: try user.requireID(),
+            _ = try await createTestPasskey(
+                userID: user.requireID(),
+                on: app,
                 credentialID: Data("credential".utf8),
                 publicKey: Data("key".utf8)
             )
-            try await credential.save(on: app.db)
 
             await #expect(throws: GrantPlatformAdminCommand.AlreadyEnrolledError.self) {
                 try await run(app, arguments: ["--claim", "--email", "morpheus@example.com"])
             }
             // Refusal is total: no promotion either, so the operator retries
             // deliberately rather than discovering a half-applied change.
-            let untouched = try #require(try await User.find(user.id, on: app.db))
+            let untouched = try #require(try await User.find(user.id, on: app.testPostgres))
             #expect(!untouched.isSystemAdmin)
-            let claimCount = try await AccountClaimToken.query(on: app.db).count()
+            let claimCount = try await testAccountClaimCount(on: app)
             #expect(claimCount == 0)
         }
     }
@@ -136,9 +133,9 @@ struct GrantPlatformAdminCommandTests {
             let console = try await run(app, arguments: ["--quiet", "--email", "morpheus@example.com"])
 
             #expect(console.lines.isEmpty)
-            let promoted = try #require(try await User.find(user.id, on: app.db))
+            let promoted = try #require(try await User.find(user.id, on: app.testPostgres))
             #expect(promoted.isSystemAdmin)
-            let claimCount = try await AccountClaimToken.query(on: app.db).count()
+            let claimCount = try await testAccountClaimCount(on: app)
             #expect(claimCount == 0)
         }
     }
@@ -149,16 +146,16 @@ struct GrantPlatformAdminCommandTests {
     func quietPromotesEnrolledAccount() async throws {
         try await withTestApp { app in
             let user = try await makeUser(app)
-            let credential = UserCredential(
-                userID: try user.requireID(),
+            _ = try await createTestPasskey(
+                userID: user.requireID(),
+                on: app,
                 credentialID: Data("credential".utf8),
                 publicKey: Data("key".utf8)
             )
-            try await credential.save(on: app.db)
 
             try await run(app, arguments: ["--quiet", "--email", "morpheus@example.com"])
 
-            let promoted = try #require(try await User.find(user.id, on: app.db))
+            let promoted = try #require(try await User.find(user.id, on: app.testPostgres))
             #expect(promoted.isSystemAdmin)
         }
     }
@@ -169,13 +166,12 @@ struct GrantPlatformAdminCommandTests {
     func claimRefusesDisabledAccount() async throws {
         try await withTestApp { app in
             let user = try await makeUser(app)
-            user.disabledAt = Date()
-            try await user.save(on: app.db)
+            try await user.replacing(disabledAt: .some(Date())).save(on: app.testPostgres)
 
             await #expect(throws: GrantPlatformAdminCommand.DisabledAccountError.self) {
                 try await run(app, arguments: ["--claim", "--email", "morpheus@example.com"])
             }
-            let claimCount = try await AccountClaimToken.query(on: app.db).count()
+            let claimCount = try await testAccountClaimCount(on: app)
             #expect(claimCount == 0)
         }
     }
@@ -185,15 +181,14 @@ struct GrantPlatformAdminCommandTests {
     func claimRefusesNonLocalAccount() async throws {
         try await withTestApp { app in
             let user = try await makeUser(app)
-            user.source = .oidc
-            try await user.save(on: app.db)
+            try await user.replacing(source: .oidc).save(on: app.testPostgres)
 
             await #expect(throws: GrantPlatformAdminCommand.NonLocalAccountError.self) {
                 try await run(app, arguments: ["--claim", "--email", "morpheus@example.com"])
             }
             // Promotion itself stays available for federated identities.
             try await run(app, arguments: ["--email", "morpheus@example.com"])
-            let promoted = try #require(try await User.find(user.id, on: app.db))
+            let promoted = try #require(try await User.find(user.id, on: app.testPostgres))
             #expect(promoted.isSystemAdmin)
         }
     }
@@ -205,9 +200,10 @@ struct GrantPlatformAdminCommandTests {
             try await run(app, arguments: ["--claim", "--quiet", "--email", "morpheus@example.com"])
 
             let event = try #require(
-                try await AuditEvent.query(on: app.db)
-                    .filter(\.$eventType == "iam.platform_admin_granted")
-                    .first())
+                try await app.audit.events.events(
+                    matching: AuditEventFilter(eventType: "iam.platform_admin_granted"),
+                    limit: 1
+                ).events.first)
             #expect(event.userID == user.id)
             #expect(event.resourceID == user.id?.uuidString)
             #expect(event.metadata?["claim_minted"] == "true")
@@ -242,11 +238,11 @@ struct GrantPlatformAdminCommandTests {
         try await withTestApp { app in
             let user = User(
                 username: "oracle", email: "oracle@example.com", displayName: "Oracle", isSystemAdmin: true)
-            try await user.save(on: app.db)
+            try await user.save(on: app.testPostgres)
 
             let console = try await run(app, arguments: ["--email", "oracle@example.com"])
 
-            let promoted = try #require(try await User.find(user.id, on: app.db))
+            let promoted = try #require(try await User.find(user.id, on: app.testPostgres))
             #expect(promoted.isSystemAdmin)
             #expect(console.lines.contains { $0.contains("was already a system administrator") })
         }

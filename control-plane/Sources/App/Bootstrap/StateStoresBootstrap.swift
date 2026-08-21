@@ -1,4 +1,3 @@
-import Fluent
 import Valkey
 import Vapor
 
@@ -24,11 +23,11 @@ extension Application {
         // deployment that only ever set `VALKEY_HOST` upgrades untouched, down to
         // opening the same single connection pool.
         //
-        // Tests run without external services and use an in-process coordination
-        // store (and Fluent sessions) instead.
+        // Tests run without external services and use in-process coordination and
+        // session stores instead.
         if environment == .testing {
             coordination = CoordinationService(store: InMemoryCoordinationStore(), logger: logger)
-            sessions.use(.fluent)
+            sessions.use(.memory)
         } else {
             guard let valkeyConfig = ValkeyStoreConfiguration.fromConfiguration(controlPlaneConfiguration) else {
                 let error = ValkeyConfigurationError.notConfigured

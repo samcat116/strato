@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -26,9 +25,8 @@ final class WorkloadTombstoneTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let admin = try await builder.createUser(
                 username: "tombstoneadmin",
                 email: "tombstone@example.com",
@@ -37,11 +35,10 @@ final class WorkloadTombstoneTests {
             )
             let org = try await builder.createOrganization(name: "Tombstone Org")
             try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
-            admin.currentOrganizationId = org.id
-            try await admin.save(on: app.db)
+            try await admin.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
             let project = try await builder.createProject(
                 name: "Tombstone Project", description: "STR-98", organization: org)
-            let token = try await admin.generateAPIKey(on: app.db)
+            let token = try await admin.generateAPIKey(on: app)
 
             try await test(app, builder, org, project, token)
         } catch {
@@ -65,10 +62,10 @@ final class WorkloadTombstoneTests {
             ),
             architecture: .x86_64,
             lastHeartbeat: Date()
-        )
-        agent.wireProtocolVersion = WireProtocol.currentVersion
-        agent.organizationScope = .organization(try org.requireID())
-        try await agent.save(on: app.db)
+        ).replacing(
+            wireProtocolVersion: .some(WireProtocol.currentVersion)
+        ).replacingOrganizationScope(.organization(try org.requireID()))
+        try await agent.save(on: app.testPostgres)
         return agent
     }
 
@@ -91,10 +88,9 @@ final class WorkloadTombstoneTests {
         )
     }
 
-    private func claims(for agentId: String, on app: Application) async throws -> [AgentWorkloadClaim] {
-        try await AgentWorkloadClaim.query(on: app.db)
-            .filter(\.$agentId == agentId)
-            .all()
+    private func claims(for agentId: String, on app: Application) async throws -> [AgentWorkloadClaimRecord] {
+        try await app.workloadsPersistence.claims(agentID: agentId)
+            .map(AgentWorkloadClaimRecord.init)
     }
 
     // MARK: - The three verdicts
@@ -136,9 +132,9 @@ final class WorkloadTombstoneTests {
         try await withTombstoneApp { app, builder, org, project, _ in
             let agent = try await self.makeAgent(app: app, org: org, name: "ts-agent")
             let agentId = try agent.requireID().uuidString
-            let vm = try await builder.createVM(name: "held-vm", project: project)
+            var vm = try await builder.createVM(name: "held-vm", project: project)
             vm.hypervisorId = agentId
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             // Reported unrecognized even though the record says it belongs
             // here: the sync that omitted it is the thing that is wrong.
@@ -161,7 +157,7 @@ final class WorkloadTombstoneTests {
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(sync.tombstones.isEmpty)
             // And the VM itself is untouched — no teardown, no error status.
-            let refreshed = try await VM.find(vm.id, on: app.db)
+            let refreshed = try await VM.find(vm.id, on: app.testPostgres)
             #expect(refreshed?.status != .error)
         }
     }
@@ -177,9 +173,9 @@ final class WorkloadTombstoneTests {
             // The node re-enrolled under a new record; its VM stayed placed on
             // the old one. Before STR-98 the new record's first sync listed
             // nothing and the host destroyed every VM it had.
-            let vm = try await builder.createVM(name: "migrated-vm", project: project)
+            var vm = try await builder.createVM(name: "migrated-vm", project: project)
             vm.hypervisorId = oldId
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let authorized = try await app.observedStateApplier.apply(
                 self.report(
@@ -238,7 +234,7 @@ final class WorkloadTombstoneTests {
             let vmID = try vm.requireID()
             // The record was missing when the agent last reported, so its
             // teardown was authorized.
-            try await vm.delete(on: app.db)
+            try await vm.delete(on: app.testPostgres)
             _ = try await app.observedStateApplier.apply(
                 self.report(
                     agentId: agentId,
@@ -251,7 +247,7 @@ final class WorkloadTombstoneTests {
             // and the sync now describes the VM, so the agent stops reporting
             // it as unrecognized. The authorization has to be withdrawn, or
             // every sync would carry "keep this" and "destroy this" together.
-            let restored = VM(
+            var restored = VM(
                 id: vmID,
                 name: "restored-vm",
                 description: "Test VM",
@@ -263,7 +259,7 @@ final class WorkloadTombstoneTests {
                 disk: 10 * 1024 * 1024 * 1024
             )
             restored.hypervisorId = agentId
-            try await restored.create(on: app.db)
+            try await restored.save(on: app.testPostgres)
 
             _ = try await app.observedStateApplier.apply(
                 self.report(
@@ -347,7 +343,7 @@ final class WorkloadTombstoneTests {
                     message: self.report(agentId: agentId, teardownRefusal: refusal)),
                 fromAgentKey: agent.identity.key)
 
-            var row = try #require(await Agent.find(agent.id, on: app.db))
+            var row = try #require(await Agent.find(agent.id, on: app.testPostgres))
             #expect(row.teardownRefusalReason == refusal.reason)
             #expect(row.teardownRefusedAt != nil)
 
@@ -355,7 +351,7 @@ final class WorkloadTombstoneTests {
                 try MessageEnvelope(message: self.report(agentId: agentId)),
                 fromAgentKey: agent.identity.key)
 
-            row = try #require(await Agent.find(agent.id, on: app.db))
+            row = try #require(await Agent.find(agent.id, on: app.testPostgres))
             #expect(row.teardownRefusalReason == nil)
             #expect(row.teardownRefusedAt == nil)
         }
@@ -366,9 +362,9 @@ final class WorkloadTombstoneTests {
         try await withTombstoneApp { app, builder, org, project, _ in
             let agent = try await self.makeAgent(app: app, org: org, name: "ts-agent")
             let agentId = try agent.requireID().uuidString
-            let vm = try await builder.createVM(name: "held-vm", project: project)
+            var vm = try await builder.createVM(name: "held-vm", project: project)
             vm.hypervisorId = agentId
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             let entry = UnrecognizedWorkload(
                 kind: .vm, workloadId: try vm.requireID(), observedGeneration: 1, status: "Running")
 
@@ -409,7 +405,7 @@ final class WorkloadTombstoneTests {
                         message: self.report(agentId: agentId, teardownRefusal: refusal)),
                     fromAgentKey: agent.identity.key)
             }
-            var row = try #require(await Agent.find(agent.id, on: app.db))
+            var row = try #require(await Agent.find(agent.id, on: app.testPostgres))
             #expect(row.teardownRefusalReason == "guard tripped")
             let firstRefusedAt = try #require(row.teardownRefusedAt)
 
@@ -421,7 +417,7 @@ final class WorkloadTombstoneTests {
             await app.agentService.applyObservedStateReport(
                 try MessageEnvelope(message: self.report(agentId: agentId, teardownRefusal: next)),
                 fromAgentKey: agent.identity.key)
-            row = try #require(await Agent.find(agent.id, on: app.db))
+            row = try #require(await Agent.find(agent.id, on: app.testPostgres))
             #expect(row.teardownRefusalReason == "guard tripped again")
             #expect(row.teardownRefusedAt ?? .distantPast >= firstRefusedAt)
         }
@@ -437,14 +433,14 @@ final class WorkloadTombstoneTests {
             let oldId = try oldAgent.requireID().uuidString
             let newId = try newAgent.requireID().uuidString
 
-            let held = try await builder.createVM(name: "held-vm", project: project)
+            var held = try await builder.createVM(name: "held-vm", project: project)
             held.hypervisorId = oldId
-            try await held.save(on: app.db)
+            try await held.save(on: app.testPostgres)
             // A second VM on the old record that the node does *not* report
             // holding — it must stay put, whatever the operator clicks.
-            let unheld = try await builder.createVM(name: "unheld-vm", project: project)
+            var unheld = try await builder.createVM(name: "unheld-vm", project: project)
             unheld.hypervisorId = oldId
-            try await unheld.save(on: app.db)
+            try await unheld.save(on: app.testPostgres)
 
             _ = try await app.observedStateApplier.apply(
                 self.report(
@@ -468,8 +464,8 @@ final class WorkloadTombstoneTests {
                     #expect(body.skippedUnclaimed == 1)
                 })
 
-            #expect(try await VM.find(held.id, on: app.db)?.hypervisorId == newId)
-            #expect(try await VM.find(unheld.id, on: app.db)?.hypervisorId == oldId)
+            #expect(try await VM.find(held.id, on: app.testPostgres)?.hypervisorId == newId)
+            #expect(try await VM.find(unheld.id, on: app.testPostgres)?.hypervisorId == oldId)
             // The claim is consumed; the VM now appears in the new agent's own
             // sync rather than as something it holds unaccounted for.
             #expect(try await self.claims(for: newId, on: app).isEmpty)
@@ -486,35 +482,41 @@ final class WorkloadTombstoneTests {
             let oldId = try oldAgent.requireID().uuidString
             let newId = try newAgent.requireID().uuidString
             let user = try #require(
-                await User.query(on: app.db).filter(\.$username == "tombstoneadmin").first())
+                await LegacyUserStore.users(username: "tombstoneadmin", on: app.testPostgres).first)
 
-            let vm = try await builder.createVM(name: "held-vm", project: project)
+            var vm = try await builder.createVM(name: "held-vm", project: project)
             vm.hypervisorId = oldId
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             // An attached volume, and a detached one — both live on the same
             // physical host as the VM, and both are dispatched through the
             // replica row rather than `hypervisorId`.
             let attached = Volume(
                 name: "attached-vol", description: "", projectID: try project.requireID(), environment: "development",
-                size: 1 << 30, createdByID: try user.requireID())
-            attached.attachedAgentId = oldId
-            attached.$vm.id = try vm.requireID()
+                size: 1 << 30, createdByID: try user.requireID(), attachedAgentId: oldId,
+                vmID: try vm.requireID(), deviceName: "disk0")
             // An attached row names its device; the schema enforces that as a
             // check constraint (STR-129).
-            attached.deviceName = "disk0"
-            try await attached.save(on: app.db)
-            try await VolumeReplica(
-                volumeID: try attached.requireID(), agentId: oldId, diskAttachment: nil, state: .healthy
-            ).create(on: app.db)
+            try await attached.save(on: app.testPostgres)
+            _ = try await LegacyVolumeReplicaStore.insert(
+                volumeID: try attached.requireID(),
+                agentId: oldId,
+                diskAttachment: nil,
+                state: .healthy,
+                on: app.testPostgres
+            )
 
             let detached = Volume(
                 name: "detached-vol", description: "", projectID: try project.requireID(), environment: "development",
                 size: 1 << 30, createdByID: try user.requireID())
-            try await detached.save(on: app.db)
-            try await VolumeReplica(
-                volumeID: try detached.requireID(), agentId: oldId, diskAttachment: nil, state: .healthy
-            ).create(on: app.db)
+            try await detached.save(on: app.testPostgres)
+            _ = try await LegacyVolumeReplicaStore.insert(
+                volumeID: try detached.requireID(),
+                agentId: oldId,
+                diskAttachment: nil,
+                state: .healthy,
+                on: app.testPostgres
+            )
 
             _ = try await app.observedStateApplier.apply(
                 self.report(
@@ -539,12 +541,11 @@ final class WorkloadTombstoneTests {
 
             // Replica placement is the dispatch source, so this proves future
             // operations on both disks reach the adopting host.
-            let replicaAgents = try await VolumeReplica.query(on: app.db)
-                .all()
+            let replicaAgents = try await LegacyVolumeReplicaStore.replicas(on: app.testPostgres)
                 .map(\.agentId)
             #expect(Set(replicaAgents) == [newId])
 
-            let reloadedAttached = try #require(await Volume.find(attached.id, on: app.db))
+            let reloadedAttached = try #require(await Volume.find(attached.id, on: app.testPostgres))
             #expect(reloadedAttached.attachedAgentId == newId)
         }
     }
@@ -557,24 +558,23 @@ final class WorkloadTombstoneTests {
             let oldId = try oldAgent.requireID().uuidString
             let newId = try newAgent.requireID().uuidString
             let user = try #require(
-                await User.query(on: app.db).filter(\.$username == "tombstoneadmin").first())
+                await LegacyUserStore.users(username: "tombstoneadmin", on: app.testPostgres).first)
 
-            let held = try await builder.createVM(name: "held-vm", project: project)
+            var held = try await builder.createVM(name: "held-vm", project: project)
             held.hypervisorId = oldId
-            try await held.save(on: app.db)
-            let stayed = try await builder.createVM(name: "stayed-vm", project: project)
+            try await held.save(on: app.testPostgres)
+            var stayed = try await builder.createVM(name: "stayed-vm", project: project)
             stayed.hypervisorId = oldId
-            try await stayed.save(on: app.db)
+            try await stayed.save(on: app.testPostgres)
 
             let stayedVolume = Volume(
                 name: "stayed-vol", description: "", projectID: try project.requireID(), environment: "development",
-                size: 1 << 30, createdByID: try user.requireID())
-            stayedVolume.$vm.id = try stayed.requireID()
+                size: 1 << 30, createdByID: try user.requireID(),
+                vmID: try stayed.requireID(), deviceName: "disk0")
             // An attached row names its device; the schema enforces that as a
             // check constraint (STR-129).
-            stayedVolume.deviceName = "disk0"
-            try await stayedVolume.save(on: app.db)
-            try await placeVolume(stayedVolume, on: oldId, using: app.db)
+            try await stayedVolume.save(on: app.testPostgres)
+            try await placeVolume(stayedVolume, on: oldId, using: app.testPostgres)
 
             _ = try await app.observedStateApplier.apply(
                 self.report(
@@ -596,7 +596,7 @@ final class WorkloadTombstoneTests {
                     #expect(body.adoptedVolumes == 0)
                 })
 
-            #expect(try await VolumeService.agentHolding(stayedVolume, on: app.db) == oldId)
+            #expect(try await VolumeService.agentHolding(stayedVolume, on: app.testPostgres) == oldId)
         }
     }
 
@@ -609,9 +609,9 @@ final class WorkloadTombstoneTests {
             let oldId = try oldAgent.requireID().uuidString
             let newId = try newAgent.requireID().uuidString
 
-            let vm = try await builder.createVM(name: "foreign-vm", project: project)
+            var vm = try await builder.createVM(name: "foreign-vm", project: project)
             vm.hypervisorId = oldId
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             _ = try await app.observedStateApplier.apply(
                 self.report(
                     agentId: newId,
@@ -632,7 +632,7 @@ final class WorkloadTombstoneTests {
                     #expect(res.status == .conflict)
                 })
 
-            #expect(try await VM.find(vm.id, on: app.db)?.hypervisorId == oldId)
+            #expect(try await VM.find(vm.id, on: app.testPostgres)?.hypervisorId == oldId)
         }
     }
 
@@ -664,9 +664,9 @@ final class WorkloadTombstoneTests {
 
             // A VM on the old record that nobody reports holding: the endpoint
             // must not be usable to move it.
-            let vm = try await builder.createVM(name: "someone-elses-vm", project: project)
+            var vm = try await builder.createVM(name: "someone-elses-vm", project: project)
             vm.hypervisorId = oldId
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             try await app.test(
                 .POST, "/api/agents/\(newId)/actions/adopt-workloads",
@@ -678,7 +678,7 @@ final class WorkloadTombstoneTests {
                     #expect(res.status == .conflict)
                 })
 
-            #expect(try await VM.find(vm.id, on: app.db)?.hypervisorId == oldId)
+            #expect(try await VM.find(vm.id, on: app.testPostgres)?.hypervisorId == oldId)
         }
     }
 
@@ -689,9 +689,9 @@ final class WorkloadTombstoneTests {
             let newAgent = try await self.makeAgent(app: app, org: org, name: "ts-new")
             let oldId = try oldAgent.requireID().uuidString
             let newId = try newAgent.requireID().uuidString
-            let vm = try await builder.createVM(name: "held-vm", project: project)
+            var vm = try await builder.createVM(name: "held-vm", project: project)
             vm.hypervisorId = oldId
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             _ = try await app.observedStateApplier.apply(
                 self.report(

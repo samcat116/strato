@@ -8,7 +8,7 @@ import Vapor
 /// Vapor's `TracingMiddleware` opens the server span with `withSpan`, which
 /// binds `ServiceContext.$current` for its operation closure *and* stores the
 /// span's context on `request.serviceContext`. Every tracer we depend on —
-/// `withSpan` at our own call sites, FluentKit's `fluent.query`, valkey-swift's
+/// `withSpan` at our own call sites, PostgresNIO persistence, valkey-swift's
 /// per-command spans, async-http-client's per-request spans — reads the
 /// task-local, not the request property, to find its parent.
 ///
@@ -27,7 +27,7 @@ import Vapor
 /// with no enclosing task to inherit from, and `ServiceContext.current` reads
 /// back `nil` for the whole rest of the request. Anything that starts a span
 /// from there — the rate limiter's Valkey `EVAL`, `iam.authorize`, every
-/// controller's Fluent queries — becomes a root span in its own trace.
+/// controller's PostgreSQL queries — becomes a root span in its own trace.
 ///
 /// `request.serviceContext` is unaffected: it lives on the `Request` object and
 /// `TracingMiddleware` only restores it after the whole chain returns. So this
