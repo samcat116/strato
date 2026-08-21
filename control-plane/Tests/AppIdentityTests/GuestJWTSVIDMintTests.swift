@@ -1,4 +1,3 @@
-import Fluent
 import ControlPlanePostgres
 import Foundation
 import NIOCore
@@ -61,7 +60,7 @@ struct GuestJWTSVIDMintTests {
                 availableMemory: 1 << 33,
                 totalDisk: 1 << 40,
                 availableDisk: 1 << 40))
-        try await agent.save(on: app.db)
+        try await agent.save(on: app.testPostgres)
         return agent
     }
 
@@ -75,18 +74,18 @@ struct GuestJWTSVIDMintTests {
         if installSPIRE { installFakeSPIRE(on: app, fake: fake) }
 
         let agent = try await registerAgent(on: app)
-        let builder = TestDataBuilder(db: app.db)
+        let builder = TestDataBuilder(db: app.testPostgres)
         let org = try await builder.createOrganization(name: "Mint Org")
         let project = try await builder.createProject(
             name: "Mint Project", description: "guest identity tests", organization: org)
         var vm = try await builder.createVM(name: "mint-vm", project: project)
         vm.hypervisorId = try agent.requireID().uuidString
-        try await vm.save(on: app.db)
+        try await vm.save(on: app.testPostgres)
         let registration = try await GuestIdentity.register(
             vmID: try vm.requireID(),
             organizationID: try org.requireID(),
             createdBy: nil,
-            on: app.db)
+            on: app.testPostgres)
         return Fixture(agent: agent, vm: vm, registration: registration, fake: fake)
     }
 
@@ -162,7 +161,7 @@ struct GuestJWTSVIDMintTests {
         try await withRunningMintApp { app, port in
             let first = try await fixture(on: app)
             let secondAgent = try await registerAgent(on: app, name: "mint-agent-2")
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let secondOrg = try await builder.createOrganization(name: "Second Mint Org")
             let secondProject = try await builder.createProject(
                 name: "Second Mint Project",
@@ -170,12 +169,12 @@ struct GuestJWTSVIDMintTests {
                 organization: secondOrg)
             var secondVM = try await builder.createVM(name: "second-mint-vm", project: secondProject)
             secondVM.hypervisorId = try secondAgent.requireID().uuidString
-            try await secondVM.save(on: app.db)
+            try await secondVM.save(on: app.testPostgres)
             _ = try await GuestIdentity.register(
                 vmID: try secondVM.requireID(),
                 organizationID: try secondOrg.requireID(),
                 createdBy: nil,
-                on: app.db)
+                on: app.testPostgres)
 
             app.agentGuestIdentityRateLimiter = AgentGuestIdentityRateLimiter(
                 config: rateLimitConfig(apiLimit: 1),
@@ -225,19 +224,19 @@ struct GuestJWTSVIDMintTests {
             let vmID = try fixture.vm.requireID()
 
             fixture.vm.hypervisorId = UUID().uuidString
-            try await fixture.vm.save(on: app.db)
+            try await fixture.vm.save(on: app.testPostgres)
             let unplaced = try await mint(app: app, port: port, vmID: vmID.uuidString)
 
             let unknown = try await mint(app: app, port: port, vmID: UUID().uuidString)
 
             fixture.vm.hypervisorId = nil
-            try await fixture.vm.save(on: app.db)
+            try await fixture.vm.save(on: app.testPostgres)
             let noPlacement = try await mint(app: app, port: port, vmID: vmID.uuidString)
 
             fixture.vm.hypervisorId = try fixture.agent.requireID().uuidString
-            try await fixture.vm.save(on: app.db)
+            try await fixture.vm.save(on: app.testPostgres)
             try await LegacyWorkloadRegistrationStore.delete(
-                id: fixture.registration.id, on: app.db)
+                id: fixture.registration.id, on: app.testPostgres)
             let revoked = try await mint(app: app, port: port, vmID: vmID.uuidString)
 
             for response in [unplaced, unknown, noPlacement, revoked] {
@@ -258,13 +257,13 @@ struct GuestJWTSVIDMintTests {
             let denied = GuestJWTSVIDRequest(audiences: ["strato-api"])
 
             fixture.vm.hypervisorId = UUID().uuidString
-            try await fixture.vm.save(on: app.db)
+            try await fixture.vm.save(on: app.testPostgres)
             let unplaced = try await mint(
                 app: app, port: port, vmID: try fixture.vm.requireID().uuidString, request: denied)
             #expect(unplaced.status == .notFound)
 
             fixture.vm.hypervisorId = try fixture.agent.requireID().uuidString
-            try await fixture.vm.save(on: app.db)
+            try await fixture.vm.save(on: app.testPostgres)
             let forbidden = try await mint(
                 app: app, port: port, vmID: try fixture.vm.requireID().uuidString, request: denied)
             #expect(forbidden.status == .forbidden)

@@ -13,9 +13,11 @@ import Vapor
 /// route.
 struct OAuthController: RouteCollection {
     private let oauth: OAuthDeviceSessionsPersistence
+    private let iam: IAMPersistence
 
-    init(oauth: OAuthDeviceSessionsPersistence) {
+    init(oauth: OAuthDeviceSessionsPersistence, iam: IAMPersistence) {
         self.oauth = oauth
+        self.iam = iam
     }
 
     /// Device authorization requests expire after 15 minutes.
@@ -110,7 +112,7 @@ struct OAuthController: RouteCollection {
         if let payload = request.restriction {
             do {
                 restriction = try await CredentialRestriction.resolve(
-                    payload, issuedUnder: .unrestricted, on: req.db)
+                    payload, issuedUnder: .unrestricted, using: iam)
             } catch let abort as AbortError {
                 throw OAuthError.invalidScope(abort.reason)
             }
@@ -406,7 +408,7 @@ struct OAuthController: RouteCollection {
             let narrowed = try await CredentialRestriction.resolve(
                 payload,
                 issuedUnder: requested,
-                on: req.db
+                using: iam
             )
             _ = try await oauth.approve(
                 authorizationID: authorization.id,

@@ -1,6 +1,4 @@
 import ControlPlanePostgres
-import Fluent
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -17,6 +15,13 @@ import Vapor
 struct SecurityGroupController: RouteCollection {
     let iam: IAMPersistence
     let projects: ProjectsPersistence
+    let database: PostgresStoreContext
+
+    init(iam: IAMPersistence, projects: ProjectsPersistence, database: PostgresStoreContext) {
+        self.iam = iam
+        self.projects = projects
+        self.database = database
+    }
     func boot(routes: RoutesBuilder) throws {
         let groups = routes.grouped("api", "security-groups").grouped(User.guardMiddleware())
         groups.get(use: listGroups)
@@ -72,15 +77,15 @@ struct SecurityGroupController: RouteCollection {
         }
 
         var groups = try await LegacySecurityGroupStore.groups(
-            projectIDs: projectIDs, on: req.db)
+            projectIDs: projectIDs, on: database)
         if let visibility {
             groups = try await visibility.readableRows(groups, projectID: \.projectID, on: req)
         }
         // Two membership queries for the whole page instead of a COUNT per group.
         let groupIds = groups.map(\.id)
-        let counts = try await SecurityGroupService.attachmentCounts(forGroups: groupIds, on: req.db)
+        let counts = try await SecurityGroupService.attachmentCounts(forGroups: groupIds, on: database)
         let rules = try await LegacySecurityGroupRuleStore.rules(
-            securityGroupIDs: groupIds, on: req.db)
+            securityGroupIDs: groupIds, on: database)
         let rulesByGroup = Dictionary(grouping: rules, by: \.securityGroupID)
         return groups.map { group in
             SecurityGroupResponse(
@@ -98,7 +103,7 @@ struct SecurityGroupController: RouteCollection {
 
         let project = try await req.authorizedProjectForCreate(
             requested: request.projectId,
-            action: "securitygroup:create", resourceKind: "security groups")
+            action: "securitygroup:create", resourceKind: "security groups", on: database)
         let projectId = try project.requireID()
 
         // Trimmed and bounded by `CreateSecurityGroupRequest.validate()`.
@@ -108,7 +113,7 @@ struct SecurityGroupController: RouteCollection {
         }
 
         let existingCount = try await LegacySecurityGroupStore.count(
-            projectID: projectId, on: req.db)
+            projectID: projectId, on: database)
         guard existingCount < SecurityGroup.maxGroupsPerProject else {
             throw Abort(
                 .forbidden,
@@ -118,7 +123,7 @@ struct SecurityGroupController: RouteCollection {
         let creatorID = user.id!
         let group: SecurityGroupSnapshot
         do {
-            group = try await req.db.transaction { db in
+            group = try await database.transaction { db in
                 let group = try await LegacySecurityGroupStore.insert(
                     projectID: projectId, name: name, description: request.description,
                     createdByID: creatorID, on: db)
@@ -134,7 +139,7 @@ struct SecurityGroupController: RouteCollection {
                 )
                 return group
             }
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A security group named '\(name)' already exists in this project")
         }
 
@@ -154,9 +159,9 @@ struct SecurityGroupController: RouteCollection {
     func getGroup(req: Request) async throws -> SecurityGroupResponse {
         let group = try await fetchGroupWithAction(req: req, action: "securitygroup:read")
         let rules = try await LegacySecurityGroupRuleStore.rules(
-            securityGroupID: group.id, on: req.db)
+            securityGroupID: group.id, on: database)
         let count = try await SecurityGroupService.attachmentCount(
-            forGroup: group.id, on: req.db)
+            forGroup: group.id, on: database)
         return SecurityGroupResponse(from: group, rules: rules, attachmentCount: count)
     }
 
@@ -186,17 +191,17 @@ struct SecurityGroupController: RouteCollection {
         let updated: SecurityGroupSnapshot
         do {
             guard let saved = try await LegacySecurityGroupStore.update(
-                id: group.id, name: name, description: description, on: req.db)
+                id: group.id, name: name, description: description, on: database)
             else { throw Abort(.notFound, reason: "Security group no longer exists") }
             updated = saved
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A security group named '\(name)' already exists in this project")
         }
 
         let rules = try await LegacySecurityGroupRuleStore.rules(
-            securityGroupID: group.id, on: req.db)
+            securityGroupID: group.id, on: database)
         let count = try await SecurityGroupService.attachmentCount(
-            forGroup: group.id, on: req.db)
+            forGroup: group.id, on: database)
         return SecurityGroupResponse(from: updated, rules: rules, attachmentCount: count)
     }
 
@@ -209,7 +214,7 @@ struct SecurityGroupController: RouteCollection {
         guard !group.isDefault else {
             throw Abort(.conflict, reason: "The default security group cannot be deleted")
         }
-        let attachments = try await SecurityGroupService.attachmentCount(forGroup: groupId, on: req.db)
+        let attachments = try await SecurityGroupService.attachmentCount(forGroup: groupId, on: database)
         guard attachments == 0 else {
             throw Abort(.conflict, reason: "Security group is attached to \(attachments) interface(s); detach first")
         }
@@ -219,7 +224,7 @@ struct SecurityGroupController: RouteCollection {
         let references = try await LegacySecurityGroupRuleStore.externalReferenceCount(
             remoteGroupID: groupId,
             excludingSecurityGroupID: groupId,
-            on: req.db)
+            on: database)
         guard references == 0 else {
             throw Abort(
                 .conflict,
@@ -227,7 +232,7 @@ struct SecurityGroupController: RouteCollection {
         }
 
         do {
-            try await req.db.transaction { db in
+            try await database.transaction { db in
                 // PostgreSQL checks the self-reference's NO ACTION FK before
                 // the owner-side CASCADE can remove the same rule. Delete the
                 // group's own rules explicitly so a self rule does not make a
@@ -237,7 +242,7 @@ struct SecurityGroupController: RouteCollection {
                 _ = try await LegacySecurityGroupStore.delete(id: groupId, on: db)
                 try await RoleBindingService.revokeAll(nodeType: .securityGroup, nodeID: groupId, on: db)
             }
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             // The pre-checks above race concurrent attach/rule-create: the FK
             // NO ACTION constraints are the authority, so a lost race surfaces
             // as the same 409 the friendly path gives.
@@ -262,17 +267,17 @@ struct SecurityGroupController: RouteCollection {
         let request = try req.content.decodeValidated(CreateSecurityGroupRuleRequest.self)
 
         let protocolName = try await SecurityGroupService.validateRule(
-            request, groupProjectID: group.projectID, on: req.db)
+            request, groupProjectID: group.projectID, on: database)
 
         let ruleCount = try await LegacySecurityGroupRuleStore.count(
-            securityGroupID: groupId, on: req.db)
+            securityGroupID: groupId, on: database)
         guard ruleCount < SecurityGroup.maxRulesPerGroup else {
             throw Abort(
                 .forbidden,
                 reason: "Rule limit reached: \(SecurityGroup.maxRulesPerGroup) rules per security group")
         }
 
-        let rule = try await req.db.transaction { db in
+        let rule = try await database.transaction { db in
             let rule = try await LegacySecurityGroupRuleStore.insert(
                 securityGroupID: groupId,
                 direction: request.direction,
@@ -302,12 +307,12 @@ struct SecurityGroupController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid rule ID")
         }
         guard try await LegacySecurityGroupRuleStore.rule(
-            id: ruleId, securityGroupID: groupId, on: req.db) != nil
+            id: ruleId, securityGroupID: groupId, on: database) != nil
         else {
             throw Abort(.notFound, reason: "Rule not found in this security group")
         }
 
-        try await req.db.transaction { db in
+        try await database.transaction { db in
             guard try await LegacySecurityGroupRuleStore.delete(
                 id: ruleId, securityGroupID: groupId, on: db) != nil
             else { throw Abort(.notFound, reason: "Rule not found in this security group") }
@@ -324,7 +329,7 @@ struct SecurityGroupController: RouteCollection {
     /// sync, the second mutation's ACLs would never be written (the agent's
     /// generation guard sees "already applied"). `generation = generation + 1`
     /// makes the row's lock serialize the increments instead.
-    private static func bumpGeneration(of groupId: UUID, on db: Database) async throws {
+    private static func bumpGeneration(of groupId: UUID, on db: PostgresStoreContext) async throws {
         switch try await DesiredStateGenerationWriter.advance(
             schema: SecurityGroup.schema, id: groupId, on: db)
         {
@@ -368,12 +373,12 @@ struct SecurityGroupController: RouteCollection {
             try await Self.assertRealizersSupportSecurityGroups(
                 for: vm,
                 offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
-                on: req.db)
+                on: database)
         case .sandbox(let sandbox):
             try await Self.assertSandboxNICCanBeFiltered(
                 sandbox,
                 offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
-                on: req.db)
+                on: database)
         }
 
         // Read-guard-write under one transaction and one per-NIC lock, so the
@@ -381,7 +386,7 @@ struct SecurityGroupController: RouteCollection {
         // `SecurityGroupService.lockMembership`).
         let changed: Bool
         do {
-            changed = try await req.db.transaction { db -> Bool in
+            changed = try await database.transaction { db -> Bool in
                 try await SecurityGroupService.lockMembership(interfaceID: target.interfaceID, on: db)
                 let existing = try await target.attachedGroupIDs(on: db)
                 if existing.contains(groupId) { return false }
@@ -393,7 +398,7 @@ struct SecurityGroupController: RouteCollection {
                 try await target.attach(groupID: groupId, on: db)
                 return true
             }
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             // Backstop only: the lock above already serializes duplicates, and
             // a non-Postgres database (where the advisory lock is a no-op)
             // still lands on the unique pair index. Either way a duplicate
@@ -431,7 +436,7 @@ struct SecurityGroupController: RouteCollection {
         // concurrent detaches of a NIC's last two groups would otherwise both
         // observe two and both proceed, emptying the set. That state never
         // heals — see `SecurityGroupService.lockMembership`.
-        let changed = try await req.db.transaction { db -> Bool in
+        let changed = try await database.transaction { db -> Bool in
             try await SecurityGroupService.lockMembership(interfaceID: target.interfaceID, on: db)
             let attached = try await target.attachedGroupIDs(on: db)
             guard attached.contains(groupId) else { return false }
@@ -486,7 +491,7 @@ struct SecurityGroupController: RouteCollection {
             }
         }
 
-        func attachedGroupIDs(on db: Database) async throws -> [UUID] {
+        func attachedGroupIDs(on db: PostgresStoreContext) async throws -> [UUID] {
             switch workload {
             case .vm:
                 return try await LegacyInterfaceSecurityGroupStore.memberships(
@@ -499,7 +504,7 @@ struct SecurityGroupController: RouteCollection {
             }
         }
 
-        func attach(groupID: UUID, on db: Database) async throws {
+        func attach(groupID: UUID, on db: PostgresStoreContext) async throws {
             switch workload {
             case .vm:
                 try await LegacyInterfaceSecurityGroupStore.insert(
@@ -510,7 +515,7 @@ struct SecurityGroupController: RouteCollection {
             }
         }
 
-        func detach(groupID: UUID, on db: Database) async throws {
+        func detach(groupID: UUID, on db: PostgresStoreContext) async throws {
             switch workload {
             case .vm:
                 _ = try await LegacyInterfaceSecurityGroupStore.delete(
@@ -543,7 +548,7 @@ struct SecurityGroupController: RouteCollection {
         // Owning the group is not enough, and an unreachable VM is answered as
         // absent whether it is missing or merely forbidden — see
         // `reachableVM` (issue #881).
-        let vm = try await req.reachableVM(vmId, action: "vm:update")
+        let vm = try await req.reachableVM(vmId, action: "vm:update", on: database)
         // After the VM check, never before: a containment refusal handed to a
         // caller who can't touch the VM would tell them it exists in another
         // project (issue #777).
@@ -552,7 +557,7 @@ struct SecurityGroupController: RouteCollection {
             sameProjectAs: "the security group", in: group.projectID)
 
         let interfaces = try await LegacyVMNetworkInterfaceStore.interfaces(
-            vmID: vmId, on: req.db)
+            vmID: vmId, on: database)
         if let interfaceId = request.interfaceId {
             guard let match = interfaces.first(where: { $0.id == interfaceId }) else {
                 throw Abort(.badRequest, reason: "Interface \(interfaceId) does not belong to VM \(vmId)")
@@ -572,13 +577,13 @@ struct SecurityGroupController: RouteCollection {
     private func resolveSandboxNIC(
         req: Request, sandboxId: UUID, request: AttachSecurityGroupRequest, group: SecurityGroupSnapshot
     ) async throws -> NICTarget {
-        let sandbox = try await req.authorizedSandbox(sandboxId, action: "sandbox:update")
+        let sandbox = try await req.authorizedSandbox(sandboxId, action: "sandbox:update", on: database)
         try ProjectContainment.require(
             "Sandbox", in: sandbox.projectID,
             sameProjectAs: "the security group", in: group.projectID)
 
         let interfaces = try await LegacySandboxNetworkInterfaceStore.interfaces(
-            sandboxID: sandboxId, on: req.db)
+            sandboxID: sandboxId, on: database)
         if let interfaceId = request.interfaceId {
             guard let match = interfaces.first(where: { $0.id == interfaceId }) else {
                 throw Abort(.badRequest, reason: "Interface \(interfaceId) does not belong to sandbox \(sandboxId)")
@@ -600,7 +605,7 @@ struct SecurityGroupController: RouteCollection {
     static func assertRealizersSupportSecurityGroups(
         for vm: VM,
         offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try assertRealizersSupportSecurityGroups(
             try await SecurityGroupService.realization(
@@ -616,7 +621,7 @@ struct SecurityGroupController: RouteCollection {
     static func assertSandboxNICCanBeFiltered(
         _ sandbox: Sandbox,
         offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         guard let hypervisorId = sandbox.hypervisorId,
             let hostID = UUID(uuidString: hypervisorId),
@@ -655,7 +660,7 @@ struct SecurityGroupController: RouteCollection {
         guard let groupId = req.parameters.get("groupId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid security group ID")
         }
-        guard let group = try await LegacySecurityGroupStore.group(id: groupId, on: req.db) else {
+        guard let group = try await LegacySecurityGroupStore.group(id: groupId, on: database) else {
             throw Abort(.notFound, reason: "Security group not found")
         }
         let allowed = try await req.can(

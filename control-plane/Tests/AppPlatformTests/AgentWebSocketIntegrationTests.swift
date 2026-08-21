@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import NIOConcurrencyHelpers
 import NIOCore
@@ -25,7 +24,7 @@ struct AgentWebSocketIntegrationTests {
     /// New agents take their owning organization from their enrollment row.
     private func makeOrg(app: Application) async throws -> Organization {
         let org = Organization(name: "WS Org", description: "org for WS tests")
-        try await org.save(on: app.db)
+        try await org.save(on: app.testPostgres)
         return org
     }
 
@@ -60,7 +59,7 @@ struct AgentWebSocketIntegrationTests {
             let agentName = "mtls-agent"
             let org = try await self.makeOrg(app: app)
             let site = Site(name: "ws-dc", organizationScope: .organization(try org.requireID()))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
 
             // An SVID authenticates the node's identity but carries neither the
             // owning org nor the site: both come from the enrollment an operator
@@ -72,7 +71,7 @@ struct AgentWebSocketIntegrationTests {
                 expirationHours: 1,
                 siteID: try site.requireID(),
                 organizationScope: .organization(try org.requireID()))
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             let client = try await AgentTestClient.connect(
                 app: app, port: port, name: agentName, headers: self.xfccHeaders(agentName: agentName))
@@ -86,14 +85,14 @@ struct AgentWebSocketIntegrationTests {
             #expect(response.name == agentName)
 
             let agent = try #require(
-                try await LegacyAgentStore.agents(name: agentName, on: app.db).first)
+                try await LegacyAgentStore.agents(name: agentName, on: app.testPostgres).first)
             #expect(agent.organizationID == org.id)
             #expect(agent.siteID == site.id)
 
             // The scope record survives, while registration consumes the
             // bootstrap bearer by erasing its hash.
             let reloaded = try #require(
-                try await findTestAgentEnrollment(enrollment.id, on: app.db)
+                try await findTestAgentEnrollment(enrollment.id, on: app.testPostgres)
             )
             #expect(reloaded.isUsed == true)
             #expect(reloaded.usedAt != nil)
@@ -115,14 +114,14 @@ struct AgentWebSocketIntegrationTests {
             let site = Site(
                 name: "ws-buffered-dc",
                 organizationScope: .organization(try org.requireID()))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
             let enrollment = TestAgentEnrollment(
                 agentName: agentName,
                 spiffeID: "spiffe://strato.local/agent/\(agentName)",
                 expirationHours: 1,
                 siteID: try site.requireID(),
                 organizationScope: .organization(try org.requireID()))
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             // Send the register frame from inside the upgrade callback — the
             // earliest possible moment, while the server's SPIFFE identity
@@ -159,7 +158,7 @@ struct AgentWebSocketIntegrationTests {
                     spiffeID: "spiffe://strato.local/agent/\(agentName)",
                     expirationHours: 1,
                     organizationScope: .organization(try org.requireID()))
-                _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+                _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
                 let client = try await AgentTestClient.connect(
                     app: app, port: port, name: agentName,
@@ -176,7 +175,7 @@ struct AgentWebSocketIntegrationTests {
                 try await client.close()
             }
 
-            #expect(try await Agent.count(on: app.db) == 0)
+            #expect(try await Agent.count(on: app.testPostgres) == 0)
         }
     }
 
@@ -191,7 +190,7 @@ struct AgentWebSocketIntegrationTests {
                 spiffeID: "spiffe://strato.local/agent/\(agentName)",
                 expirationHours: 1,
                 organizationScope: .organization(try org.requireID()))
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             let client = try await AgentTestClient.connect(
                 app: app, port: port, name: agentName,
@@ -203,7 +202,7 @@ struct AgentWebSocketIntegrationTests {
             #expect(envelope.type == .error)
             #expect(error.code == ErrorMessage.ErrorCode.unsupportedProtocolVersion)
             #expect(error.error.contains("omitted the required wire protocol version"))
-            #expect(try await Agent.count(on: app.db) == 0)
+            #expect(try await Agent.count(on: app.testPostgres) == 0)
 
             try await client.close()
         }
@@ -221,14 +220,14 @@ struct AgentWebSocketIntegrationTests {
             let site = Site(
                 name: "ws-reconnect-dc",
                 organizationScope: .organization(try org.requireID()))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
             let enrollment = TestAgentEnrollment(
                 agentName: agentName,
                 spiffeID: "spiffe://strato.local/agent/\(agentName)",
                 expirationHours: 1,
                 siteID: try site.requireID(),
                 organizationScope: .organization(try org.requireID()))
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             let first = try await AgentTestClient.connect(
                 app: app, port: port, name: agentName,
@@ -310,7 +309,7 @@ struct AgentWebSocketIntegrationTests {
             #expect(closeCode == .policyViolation)
 
             // Nothing registered: the register frame never gets a chance to run.
-            let agentCount = try await Agent.count(on: app.db)
+            let agentCount = try await Agent.count(on: app.testPostgres)
             #expect(agentCount == 0)
         }
     }
@@ -327,7 +326,7 @@ struct AgentWebSocketIntegrationTests {
                 spiffeID: "spiffe://strato.local/agent/\(agentName)",
                 expirationHours: 1,
                 organizationScope: .organization(try org.requireID()))
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             // No XFCC header at all. With token auth gone there is nothing to
             // downgrade to, so this is fatal regardless of SPIRE_REQUIRE_CLIENT_CERT.
@@ -340,7 +339,7 @@ struct AgentWebSocketIntegrationTests {
             let closeCode = try await client.waitForClose()
             #expect(closeCode == .unacceptableData)
 
-            let agentCount = try await Agent.count(on: app.db)
+            let agentCount = try await Agent.count(on: app.testPostgres)
             #expect(agentCount == 0)
         }
     }
@@ -382,7 +381,7 @@ private func drainAndStopServer(_ app: Application) async {
     // read-only teardown task on a never-registered agent also drains.
     for iteration in 0..<200 {
         try? await Task.sleep(for: .milliseconds(10))
-        let agents = (try? await Agent.all(on: app.db)) ?? []
+        let agents = (try? await Agent.all(on: app.testPostgres)) ?? []
         let stillOnline = agents.contains { $0.status == .online }
         if !stillOnline && iteration >= 3 {
             break

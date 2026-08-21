@@ -1,5 +1,4 @@
-import Fluent
-import SQLKit
+import ControlPlanePostgres
 import StratoShared
 import Testing
 import Vapor
@@ -26,9 +25,8 @@ final class SandboxExpiryTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "expiryuser",
                 email: "expiry@example.com",
@@ -37,7 +35,7 @@ final class SandboxExpiryTests {
             )
             let org = try await builder.createOrganization(name: "Expiry Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "member")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Expiry Project",
@@ -57,7 +55,7 @@ final class SandboxExpiryTests {
 
     /// `@Timestamp(on: .create)` overwrites `createdAt` on insert, so ageing a
     /// row means saving it first and backdating afterwards.
-    private func backdateCreation(_ sandbox: inout Sandbox, bySeconds seconds: TimeInterval, on db: any Database)
+    private func backdateCreation(_ sandbox: inout Sandbox, bySeconds seconds: TimeInterval, on db: PostgresStoreContext)
         async throws
     {
         sandbox.createdAt = Date().addingTimeInterval(-seconds)
@@ -66,7 +64,7 @@ final class SandboxExpiryTests {
 
     /// The direct deletion runs in a background task, so the row disappears
     /// asynchronously after the sweep returns.
-    private func pollSandboxDeleted(_ sandboxID: UUID, on db: any Database) async throws {
+    private func pollSandboxDeleted(_ sandboxID: UUID, on db: PostgresStoreContext) async throws {
         for _ in 0..<100 {
             if try await Sandbox.find(sandboxID, on: db) == nil { return }
             try await Task.sleep(for: .milliseconds(50))
@@ -77,7 +75,7 @@ final class SandboxExpiryTests {
     /// Whether the sweep recorded a deletion for the sandbox at all — the
     /// `resource_events` row an expiry appends, which replaced the operation
     /// row it used to insert (STR-147).
-    private func deletionRequested(for sandboxID: UUID, on db: any Database) async throws -> Bool {
+    private func deletionRequested(for sandboxID: UUID, on db: PostgresStoreContext) async throws -> Bool {
         try await ResourceEvent.matching(
             resourceKind: .sandbox,
             resourceID: sandboxID,
@@ -92,7 +90,7 @@ final class SandboxExpiryTests {
     /// appended once the last finalizer cleared (STR-147). Together they are
     /// what makes an unattended deletion auditable after its row is gone.
     private func deletionEvents(
-        for sandboxID: UUID, on db: any Database
+        for sandboxID: UUID, on db: PostgresStoreContext
     ) async throws -> (requested: ResourceEvent?, completed: ResourceEvent?) {
         for _ in 0..<100 {
             let requested = try await ResourceEvent.latest(
@@ -115,7 +113,7 @@ final class SandboxExpiryTests {
             #expect(sandbox.isExpired() == false)
 
             sandbox.ttlSeconds = 3600
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             let createdAt = try #require(sandbox.createdAt)
             let expiresAt = try #require(sandbox.expiresAt)
@@ -123,7 +121,7 @@ final class SandboxExpiryTests {
             #expect(sandbox.isExpired() == false)
 
             // A sandbox created before its own budget elapsed is expired now.
-            try await backdateCreation(&sandbox, bySeconds: 7200, on: app.db)
+            try await backdateCreation(&sandbox, bySeconds: 7200, on: app.testPostgres)
             #expect(sandbox.isExpired())
         }
     }
@@ -134,7 +132,7 @@ final class SandboxExpiryTests {
             #expect(SandboxDetailResponse(from: sandbox).expiresAt == nil)
 
             sandbox.ttlSeconds = 600
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             let response = SandboxDetailResponse(from: sandbox)
             #expect(response.ttlSeconds == 600)
@@ -149,16 +147,16 @@ final class SandboxExpiryTests {
         try await withSandboxTestApp { app, _, _, sandbox in
             let sandboxID = try sandbox.requireID()
             sandbox.ttlSeconds = 60
-            try await backdateCreation(&sandbox, bySeconds: 120, on: app.db)
+            try await backdateCreation(&sandbox, bySeconds: 120, on: app.testPostgres)
 
             await app.agentService.sweepExpiredSandboxes()
 
-            try await pollSandboxDeleted(sandboxID, on: app.db)
+            try await pollSandboxDeleted(sandboxID, on: app.testPostgres)
 
             // The events outlive the row they name — that is what makes an
             // unattended deletion auditable, and what a client polling the
             // delete reads as "done".
-            let events = try await deletionEvents(for: sandboxID, on: app.db)
+            let events = try await deletionEvents(for: sandboxID, on: app.testPostgres)
             let requested = try #require(events.requested)
             #expect(requested.mutation == .delete)
             #expect(requested.actorType == .system)
@@ -171,13 +169,13 @@ final class SandboxExpiryTests {
         try await withSandboxTestApp { app, _, _, sandbox in
             let sandboxID = try sandbox.requireID()
             sandbox.ttlSeconds = 3600
-            try await backdateCreation(&sandbox, bySeconds: 60, on: app.db)
+            try await backdateCreation(&sandbox, bySeconds: 60, on: app.testPostgres)
 
             await app.agentService.sweepExpiredSandboxes()
 
-            let refreshed = try #require(await Sandbox.find(sandboxID, on: app.db))
+            let refreshed = try #require(await Sandbox.find(sandboxID, on: app.testPostgres))
             #expect(refreshed.desiredStatus == .stopped)
-            #expect(try await deletionRequested(for: sandboxID, on: app.db) == false)
+            #expect(try await deletionRequested(for: sandboxID, on: app.testPostgres) == false)
         }
     }
 
@@ -185,13 +183,13 @@ final class SandboxExpiryTests {
     func sweepIgnoresSandboxWithoutTTL() async throws {
         try await withSandboxTestApp { app, _, _, sandbox in
             let sandboxID = try sandbox.requireID()
-            try await backdateCreation(&sandbox, bySeconds: 86400 * 30, on: app.db)
+            try await backdateCreation(&sandbox, bySeconds: 86400 * 30, on: app.testPostgres)
 
             await app.agentService.sweepExpiredSandboxes()
 
-            let survivor = try await Sandbox.find(sandboxID, on: app.db)
+            let survivor = try await Sandbox.find(sandboxID, on: app.testPostgres)
             #expect(survivor != nil)
-            #expect(try await deletionRequested(for: sandboxID, on: app.db) == false)
+            #expect(try await deletionRequested(for: sandboxID, on: app.testPostgres) == false)
         }
     }
 
@@ -209,7 +207,7 @@ final class SandboxExpiryTests {
                 status: .ready,
                 agentId: nil,
                 createdByID: try user.requireID())
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             let fork = Sandbox(
                 name: "expiry-lineage-fork",
@@ -219,24 +217,24 @@ final class SandboxExpiryTests {
                 cpus: sandbox.cpus,
                 memory: sandbox.memory,
                 restoredFromSnapshotId: try snapshot.requireID())
-            try await fork.save(on: app.db)
+            try await fork.save(on: app.testPostgres)
 
             if useTTL {
                 sandbox.ttlSeconds = 60
-            try await backdateCreation(&sandbox, bySeconds: 120, on: app.db)
+            try await backdateCreation(&sandbox, bySeconds: 120, on: app.testPostgres)
             } else {
                 let window = TimeInterval(AgentService.defaultSandboxRetentionHours) * 3600
                 sandbox.setStatus(.exited, at: Date().addingTimeInterval(-window - 60))
-                try await sandbox.save(on: app.db)
+                try await sandbox.save(on: app.testPostgres)
             }
 
             await app.agentService.sweepExpiredSandboxes()
 
-            let source = try #require(await Sandbox.find(sandboxID, on: app.db))
+            let source = try #require(await Sandbox.find(sandboxID, on: app.testPostgres))
             #expect(source.desiredStatus != .absent)
-            #expect(try await SandboxSnapshot.find(snapshot.requireID(), on: app.db) != nil)
-            #expect(try await Sandbox.find(fork.requireID(), on: app.db) != nil)
-            #expect(try await deletionRequested(for: sandboxID, on: app.db) == false)
+            #expect(try await SandboxSnapshot.find(snapshot.requireID(), on: app.testPostgres) != nil)
+            #expect(try await Sandbox.find(fork.requireID(), on: app.testPostgres) != nil)
+            #expect(try await deletionRequested(for: sandboxID, on: app.testPostgres) == false)
         }
     }
 
@@ -249,12 +247,12 @@ final class SandboxExpiryTests {
             let window = TimeInterval(AgentService.defaultSandboxRetentionHours) * 3600
             sandbox.setStatus(status, at: Date().addingTimeInterval(-window - 60))
             sandbox.exitCode = 0
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             await app.agentService.sweepExpiredSandboxes()
 
-            try await pollSandboxDeleted(sandboxID, on: app.db)
-            let events = try await deletionEvents(for: sandboxID, on: app.db)
+            try await pollSandboxDeleted(sandboxID, on: app.testPostgres)
+            let events = try await deletionEvents(for: sandboxID, on: app.testPostgres)
             #expect(events.requested?.mutation == .delete)
             #expect(events.completed?.mutation == .delete)
         }
@@ -266,13 +264,13 @@ final class SandboxExpiryTests {
             let sandboxID = try sandbox.requireID()
             sandbox.setStatus(.exited, at: Date().addingTimeInterval(-3600))
             sandbox.exitCode = 137
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             await app.agentService.sweepExpiredSandboxes()
 
             // The whole point of the retention window: status and exit code
             // stay readable after the workload is gone.
-            let refreshed = try #require(await Sandbox.find(sandboxID, on: app.db))
+            let refreshed = try #require(await Sandbox.find(sandboxID, on: app.testPostgres))
             #expect(refreshed.status == .exited)
             #expect(refreshed.exitCode == 137)
             #expect(refreshed.desiredStatus != .absent)
@@ -285,12 +283,12 @@ final class SandboxExpiryTests {
             let sandboxID = try sandbox.requireID()
             sandbox.setStatus(.exited)
             sandbox.exitCode = 0
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             // Rows predating `status_changed_at` carry NULL. The retention
             // window is a SQL predicate now, so this fallback branch is what
             // keeps those rows from being retained forever.
-            let sql = try #require(app.db as? any SQLDatabase)
+            let sql = try #require(Optional(app.testPostgres))
             let window = TimeInterval(AgentService.defaultSandboxRetentionHours) * 3600
             let past = Date().addingTimeInterval(-window - 60)
             try await sql.raw(
@@ -302,7 +300,7 @@ final class SandboxExpiryTests {
 
             await app.agentService.sweepExpiredSandboxes()
 
-            try await pollSandboxDeleted(sandboxID, on: app.db)
+            try await pollSandboxDeleted(sandboxID, on: app.testPostgres)
         }
     }
 
@@ -311,11 +309,11 @@ final class SandboxExpiryTests {
         try await withSandboxTestApp { app, _, _, sandbox in
             let sandboxID = try sandbox.requireID()
             sandbox.setStatus(.running, at: Date().addingTimeInterval(-86400 * 30))
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             await app.agentService.sweepExpiredSandboxes()
 
-            let survivor = try await Sandbox.find(sandboxID, on: app.db)
+            let survivor = try await Sandbox.find(sandboxID, on: app.testPostgres)
             #expect(survivor != nil)
         }
     }
@@ -326,7 +324,7 @@ final class SandboxExpiryTests {
     func expiryReleasesQuota() async throws {
         try await withSandboxTestApp { app, _, project, sandbox in
             let sandboxID = try sandbox.requireID()
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let quota = try await builder.createResourceQuota(
                 name: "expiry-quota", maxVCPUs: 10, project: project)
 
@@ -339,15 +337,15 @@ final class SandboxExpiryTests {
                 reservedVCPUs: sandbox.cpus,
                 reservedMemory: sandbox.memory,
                 sandboxCount: 1)
-            try await occupiedQuota.save(on: app.db)
+            try await occupiedQuota.save(on: app.testPostgres)
 
             sandbox.ttlSeconds = 60
-            try await backdateCreation(&sandbox, bySeconds: 120, on: app.db)
+            try await backdateCreation(&sandbox, bySeconds: 120, on: app.testPostgres)
 
             await app.agentService.sweepExpiredSandboxes()
-            try await pollSandboxDeleted(sandboxID, on: app.db)
+            try await pollSandboxDeleted(sandboxID, on: app.testPostgres)
 
-            let released = try #require(await ResourceQuota.find(quota.id, on: app.db))
+            let released = try #require(await ResourceQuota.find(quota.id, on: app.testPostgres))
             #expect(released.sandboxCount == 0)
             #expect(released.reservedVCPUs == 0)
             #expect(released.reservedMemory == 0)
@@ -361,7 +359,7 @@ final class SandboxExpiryTests {
         try await withSandboxTestApp { app, _, _, sandbox in
             let sandboxID = try sandbox.requireID()
             sandbox.ttlSeconds = 60
-            try await backdateCreation(&sandbox, bySeconds: 120, on: app.db)
+            try await backdateCreation(&sandbox, bySeconds: 120, on: app.testPostgres)
 
             // Stand in for another replica's in-flight pass.
             let acquired = await app.coordination.acquireSweepLock("sandbox_expiry")
@@ -369,9 +367,9 @@ final class SandboxExpiryTests {
 
             await app.agentService.sweepExpiredSandboxes()
 
-            let survivor = try await Sandbox.find(sandboxID, on: app.db)
+            let survivor = try await Sandbox.find(sandboxID, on: app.testPostgres)
             #expect(survivor != nil)
-            #expect(try await deletionRequested(for: sandboxID, on: app.db) == false)
+            #expect(try await deletionRequested(for: sandboxID, on: app.testPostgres) == false)
         }
     }
 
@@ -380,7 +378,7 @@ final class SandboxExpiryTests {
         try await withSandboxTestApp { app, user, _, sandbox in
             let sandboxID = try sandbox.requireID()
             sandbox.ttlSeconds = 60
-            try await backdateCreation(&sandbox, bySeconds: 120, on: app.db)
+            try await backdateCreation(&sandbox, bySeconds: 120, on: app.testPostgres)
 
             // A capture in flight: its own resource, with its own generation
             // (STR-150), so it neither blocks nor is blocked by the sandbox's
@@ -392,7 +390,7 @@ final class SandboxExpiryTests {
                 environment: sandbox.environment,
                 agentId: nil,
                 createdByID: try user.requireID())
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             await app.agentService.sweepExpiredSandboxes()
 
@@ -400,8 +398,8 @@ final class SandboxExpiryTests {
             // operation row (STR-147), and is not missed: marking `.absent` is
             // idempotent and level-triggered, so the expiry proceeds and the
             // capture's own convergence is untouched.
-            try await pollSandboxDeleted(sandboxID, on: app.db)
-            let events = try await deletionEvents(for: sandboxID, on: app.db)
+            try await pollSandboxDeleted(sandboxID, on: app.testPostgres)
+            let events = try await deletionEvents(for: sandboxID, on: app.testPostgres)
             #expect(events.requested?.actorType == .system)
         }
     }

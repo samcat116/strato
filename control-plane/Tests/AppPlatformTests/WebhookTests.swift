@@ -1,6 +1,5 @@
 import Crypto
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import NIOConcurrencyHelpers
 import StratoShared
@@ -24,7 +23,7 @@ private struct WebhookFixture {
 private func makeFixture(
     _ app: Application, role: String = "admin"
 ) async throws -> WebhookFixture {
-    let builder = TestDataBuilder(db: app.db)
+    let builder = TestDataBuilder(db: app.testPostgres)
     let user = try await builder.createUser(username: "hookuser", email: "hooks@example.com")
     let org = try await builder.createOrganization(name: "Webhook Org")
     try await builder.addUserToOrganization(user: user, organization: org, role: role)
@@ -219,7 +218,7 @@ struct WebhookSubscriptionAPITests {
             }
 
             // A project from another organization.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let otherOrg = try await builder.createOrganization(name: "Other Org")
             let foreignProject = try await builder.createProject(
                 name: "Foreign", description: "", organization: otherOrg)
@@ -442,21 +441,21 @@ struct WebhookOutboxTests {
         try await withTestApp { app in
             let fixture = try await makeFixture(app)
             _ = try await makeSubscription(app, fixture: fixture)
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             var vm = try await builder.createVM(name: "converging-vm", project: fixture.project)
 
             // A lifecycle mutation as `ResourceMutation.accept` leaves it: the
             // desired-state change, the deadline, and the attribution event.
             vm.setFixtureDesiredStatus(.running)
             vm = vm.extendingConvergenceDeadline(by: 180)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .boot, resourceKind: .virtualMachine, resourceID: vm.requireID(),
-                actor: .user(fixture.user.requireID()), on: app.db)
+                actor: .user(fixture.user.requireID()), on: app.testPostgres)
 
             vm.observedGeneration = vm.generation
             vm.setStatus(.running)
-            vm = try await ResourceConvergence.recordValueSuccess(vm, on: app.db).resource
+            vm = try await ResourceConvergence.recordValueSuccess(vm, on: app.testPostgres).resource
 
             let deliveries = try await app.webhookDeliveriesPersistence.all()
             #expect(deliveries.count == 1)
@@ -467,7 +466,7 @@ struct WebhookOutboxTests {
 
             // The transition is what fires, not the state: the deadline is
             // cleared, so a repeat is a no-op rather than a second delivery.
-            vm = try await ResourceConvergence.recordValueSuccess(vm, on: app.db).resource
+            vm = try await ResourceConvergence.recordValueSuccess(vm, on: app.testPostgres).resource
             #expect(try await app.webhookDeliveriesPersistence.count() == 1)
         }
     }
@@ -477,18 +476,18 @@ struct WebhookOutboxTests {
         try await withTestApp { app in
             let fixture = try await makeFixture(app)
             _ = try await makeSubscription(app, fixture: fixture)
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             var vm = try await builder.createVM(name: "failing-vm", project: fixture.project)
 
             vm.setFixtureDesiredStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .boot, resourceKind: .virtualMachine, resourceID: vm.requireID(),
-                actor: .user(fixture.user.requireID()), on: app.db)
+                actor: .user(fixture.user.requireID()), on: app.testPostgres)
 
             let failure = try await ResourceConvergence.recordValueFailure(
                 vm, mutation: .boot, reason: "no bootable device",
-                telemetryReason: "convergence_failed", on: app.db)
+                telemetryReason: "convergence_failed", on: app.testPostgres)
             vm = failure.resource
             #expect(failure.outcome == .recorded)
 
@@ -505,21 +504,21 @@ struct WebhookOutboxTests {
         try await withTestApp { app in
             let fixture = try await makeFixture(app)
             _ = try await makeSubscription(app, fixture: fixture)
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             var vm = try await builder.createVM(name: "reaped-vm", project: fixture.project)
             let vmID = try vm.requireID()
 
-            vm = try await ResourceFinalizerService.stampForDeletion(vm, on: app.db)
+            vm = try await ResourceFinalizerService.stampForDeletion(vm, on: app.testPostgres)
             vm.setFixtureDesiredStatus(.absent)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             // The request event is where the reap reads its delivery context —
             // by the time it runs there is no resource left to resolve one.
             _ = try await ResourceEvent.record(
                 .delete, resourceKind: .virtualMachine, resourceID: vmID,
-                actor: .user(fixture.user.requireID()), on: app.db)
+                actor: .user(fixture.user.requireID()), on: app.testPostgres)
 
-            _ = try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: app.db, app: app)
-            #expect(try await VM.find(vmID, on: app.db) == nil)
+            _ = try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: app.testPostgres, app: app)
+            #expect(try await VM.find(vmID, on: app.testPostgres) == nil)
 
             let delivery = try #require(
                 try await app.webhookDeliveriesPersistence.all().first)
@@ -534,7 +533,7 @@ struct WebhookOutboxTests {
     func fanOutFilters() async throws {
         try await withTestApp { app in
             let fixture = try await makeFixture(app)
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let otherProject = try await builder.createProject(
                 name: "Other Project", description: "", organization: fixture.organization)
 
@@ -557,13 +556,13 @@ struct WebhookOutboxTests {
             var vm = try await builder.createVM(name: "hook-vm", project: fixture.project)
             vm.setFixtureDesiredStatus(.running)
             vm = vm.extendingConvergenceDeadline(by: 180)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .boot, resourceKind: .virtualMachine, resourceID: vm.requireID(),
-                actor: .user(fixture.user.requireID()), on: app.db)
+                actor: .user(fixture.user.requireID()), on: app.testPostgres)
             vm.observedGeneration = vm.generation
             vm.setStatus(.running)
-            vm = try await ResourceConvergence.recordValueSuccess(vm, on: app.db).resource
+            vm = try await ResourceConvergence.recordValueSuccess(vm, on: app.testPostgres).resource
 
             let deliveries = try await app.webhookDeliveriesPersistence.all()
             let recipients = Set(deliveries.map(\.subscriptionID))
@@ -580,11 +579,11 @@ struct WebhookOutboxTests {
         try await withTestApp { app in
             let fixture = try await makeFixture(app)
             _ = try await makeSubscription(app, fixture: fixture, eventTypes: [.vmStateChanged])
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let vm = try await builder.createVM(name: "hook-vm", project: fixture.project)
 
             await WebhookEvents.emitVMStateChanged(
-                vm: vm, previous: .running, current: .shutdown, on: app.db, logger: app.logger)
+                vm: vm, previous: .running, current: .shutdown, on: app.testPostgres, logger: app.logger)
 
             let delivery = try #require(
                 try await app.webhookDeliveriesPersistence.all().first)
@@ -600,7 +599,7 @@ struct WebhookOutboxTests {
             let fixture = try await makeFixture(app)
             _ = try await makeSubscription(
                 app, fixture: fixture, eventTypes: [.quotaThresholdExceeded])
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let quota = try await builder.createResourceQuota(
                 name: "hook-quota", maxVCPUs: 10, organization: fixture.organization)
 
@@ -609,7 +608,7 @@ struct WebhookOutboxTests {
             let baseline = QuotaUsageSnapshot(of: quotaAt70)
             let quotaAt90 = quota.replacingCounters(reservedVCPUs: 9)
             try await WebhookEvents.enqueueQuotaThresholds(
-                quota: quotaAt90, baseline: baseline, project: fixture.project, on: app.db)
+                quota: quotaAt90, baseline: baseline, project: fixture.project, on: app.testPostgres)
 
             var deliveries = try await app.webhookDeliveriesPersistence.all()
             #expect(deliveries.count == 1)
@@ -620,7 +619,7 @@ struct WebhookOutboxTests {
             try await app.webhookDeliveriesPersistence.deleteAll()
             let quotaAt100 = quota.replacingCounters(reservedVCPUs: 10)
             try await WebhookEvents.enqueueQuotaThresholds(
-                quota: quotaAt100, baseline: baseline, project: fixture.project, on: app.db)
+                quota: quotaAt100, baseline: baseline, project: fixture.project, on: app.testPostgres)
             deliveries = try await app.webhookDeliveriesPersistence.all()
             #expect(deliveries.count == 1)
             #expect(deliveries[0].payload.contains("\"threshold\":100"))
@@ -629,7 +628,7 @@ struct WebhookOutboxTests {
             try await app.webhookDeliveriesPersistence.deleteAll()
             let highBaseline = QuotaUsageSnapshot(of: quotaAt90)
             try await WebhookEvents.enqueueQuotaThresholds(
-                quota: quotaAt100, baseline: highBaseline, project: fixture.project, on: app.db)
+                quota: quotaAt100, baseline: highBaseline, project: fixture.project, on: app.testPostgres)
             deliveries = try await app.webhookDeliveriesPersistence.all()
             #expect(deliveries.count == 1)
             #expect(deliveries[0].payload.contains("\"threshold\":100"))

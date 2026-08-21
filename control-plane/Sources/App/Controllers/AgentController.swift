@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import StratoShared
 import Vapor
 
@@ -8,17 +7,23 @@ struct AgentController: RouteCollection {
     private let agents: AgentsPersistence?
     private let workloads: WorkloadsPersistence?
     private let hierarchy: HierarchyPersistence?
+    private let sites: SitesPersistence?
+    private let trustDomains: OrgTrustDomainsPersistence?
 
     init(
         enrollments: AgentEnrollmentsPersistence? = nil,
         agents: AgentsPersistence? = nil,
         workloads: WorkloadsPersistence? = nil,
-        hierarchy: HierarchyPersistence? = nil
+        hierarchy: HierarchyPersistence? = nil,
+        sites: SitesPersistence? = nil,
+        trustDomains: OrgTrustDomainsPersistence? = nil
     ) {
         self.enrollments = enrollments
         self.agents = agents
         self.workloads = workloads
         self.hierarchy = hierarchy
+        self.sites = sites
+        self.trustDomains = trustDomains
     }
 
     func boot(routes: RoutesBuilder) throws {
@@ -90,6 +95,16 @@ struct AgentController: RouteCollection {
         }
     }
 
+    private func rootOrganizationID(
+        for agent: AgentSnapshot,
+        using hierarchy: HierarchyPersistence
+    ) async throws -> UUID? {
+        if let organizationID = agent.organizationID { return organizationID }
+        guard let organizationalUnitID = agent.organizationalUnitID else { return nil }
+        return try await hierarchy.organizationalUnit(id: organizationalUnitID)?
+            .organizationalUnit.organizationID
+    }
+
     /// Whether SPIRE mTLS authentication is enabled but the registration API
     /// is not configured — the state in which agents may hold SPIRE-issued
     /// identities that this control plane cannot revoke. Revocation paths must
@@ -142,10 +157,9 @@ struct AgentController: RouteCollection {
         _ req: Request,
         registry: OrgSPIREClientRegistry,
         trustDomain: String,
-        action: String,
-        on db: any Database
+        action: String
     ) async throws -> SPIRERegistrationService? {
-        if let service = try await registry.service(forTrustDomain: trustDomain, on: db) {
+        if let service = try await registry.service(forTrustDomain: trustDomain) {
             return service
         }
         guard req.query[Bool.self, at: "skipSpireDeprovision"] == true else {
@@ -262,7 +276,8 @@ struct AgentController: RouteCollection {
     /// independent credentials for the same node. The installer persists the
     /// winning response locally for same-host recovery.
     func redeemEnrollment(req: Request) async throws -> Response {
-        guard let enrollments, let bearer = req.headers.bearerAuthorization,
+        guard let enrollments, let hierarchy, let trustDomains,
+            let bearer = req.headers.bearerAuthorization,
             bearer.token.hasPrefix("enroll_v1_")
         else {
             throw Abort(.unauthorized, reason: "Enrollment token is invalid, expired, or already used")
@@ -272,12 +287,16 @@ struct AgentController: RouteCollection {
             return try await enrollments.redeemBootstrapToken(
                 tokenHash: AgentEnrollment.hashBootstrapToken(bearer.token),
                 prepare: { lockedEnrollment in
-                    guard let registry = OrgSPIREClientRegistry.fromApplication(req.application) else {
+                    guard let registry = OrgSPIREClientRegistry.fromApplication(
+                        req.application,
+                        hierarchy: hierarchy,
+                        trustDomains: trustDomains)
+                    else {
                         throw Abort(.serviceUnavailable, reason: "Agent enrollment requires SPIRE")
                     }
                     guard
                         let selection = try await registry.bootstrapSelection(
-                            forTrustDomain: lockedEnrollment.trustDomain, on: req.db)
+                            forTrustDomain: lockedEnrollment.trustDomain)
                     else {
                         throw Abort(
                             .serviceUnavailable,
@@ -329,7 +348,7 @@ struct AgentController: RouteCollection {
     }
 
     func createEnrollment(req: Request) async throws -> AgentEnrollmentResponse {
-        guard let enrollments else {
+        guard let enrollments, let agents, let hierarchy, let sites, let trustDomains else {
             throw Abort(.internalServerError, reason: "Agent enrollment persistence is unavailable")
         }
         let createRequest = try req.content.decode(CreateAgentEnrollmentRequest.self)
@@ -339,7 +358,11 @@ struct AgentController: RouteCollection {
         // SPIRE server means there is no way to enroll an agent at all. Fail
         // naming the missing configuration rather than with an opaque 502 out
         // of the provisioning call below.
-        guard let registry = OrgSPIREClientRegistry.fromApplication(req.application) else {
+        guard let registry = OrgSPIREClientRegistry.fromApplication(
+            req.application,
+            hierarchy: hierarchy,
+            trustDomains: trustDomains)
+        else {
             throw Abort(
                 .serviceUnavailable,
                 reason:
@@ -350,14 +373,14 @@ struct AgentController: RouteCollection {
         // Resolve and authorize the owning scope before anything else: the
         // enrollment's org is what the registering agent becomes dedicated to.
         let scope = try createRequest.organizationScope()
-        try await scope.validateExists(on: req.db)
+        try await scope.validateExists(using: hierarchy)
         try await requireManageAgents(req, scope: scope)
 
         // Which SPIRE instance owns this organization's identities. With
         // per-org trust domains (issue #615) that is the organization's own
         // instance; otherwise — and while its domain is still being
         // provisioned, if legacy enrollments are allowed — the platform one.
-        let selection = try await registry.resolve(scope: scope, on: req.db)
+        let selection = try await registry.resolve(scope: scope)
         let spire = selection.service
         if let fallback = selection.platformFallback {
             req.logger.info(
@@ -376,9 +399,9 @@ struct AgentController: RouteCollection {
         let trustDomain = spire.trustDomain
 
         // Check if agent name is already in use by an existing agent
-        let existingAgent = try await LegacyAgentStore.agents(
-            trustDomain: trustDomain, name: createRequest.agentName, on: req.db
-        ).first
+        let existingAgent = try await agents.agent(
+            trustDomain: trustDomain,
+            name: createRequest.agentName)
 
         if existingAgent != nil {
             throw Abort(.conflict, reason: "Agent name '\(createRequest.agentName)' is already registered")
@@ -413,11 +436,13 @@ struct AgentController: RouteCollection {
         guard let siteId = createRequest.siteId else {
             throw Abort(.badRequest, reason: "A site is required to enroll an agent")
         }
-        guard let site = try await LegacySiteStore.site(id: siteId, on: req.db) else {
+        guard let site = try await sites.site(id: siteId) else {
             throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
         }
-        guard let siteScope = site.organizationScope,
-            try await siteScope.contains(scope, on: req.db)
+        guard let siteScope = try OrganizationScope.from(
+            organizationID: site.organizationID,
+            organizationalUnitID: site.organizationalUnitID),
+            try await siteScope.contains(scope, using: hierarchy)
         else {
             throw Abort(
                 .badRequest,
@@ -537,7 +562,11 @@ struct AgentController: RouteCollection {
             throw Abort(.internalServerError, reason: "Agent enrollment persistence is unavailable")
         }
         _ = try req.auth.require(User.self)
-        let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req)
+        guard let hierarchy else {
+            throw Abort(.internalServerError, reason: "Hierarchy persistence is unavailable")
+        }
+        let orgFilter = try await OrganizationAccessService.organizationListFilter(
+            on: req, using: hierarchy)
 
         let enrollmentRows = try await enrollments.list(
             filter: orgFilter.map {
@@ -587,7 +616,7 @@ struct AgentController: RouteCollection {
     }
 
     func revokeEnrollment(req: Request) async throws -> HTTPStatus {
-        guard let enrollments else {
+        guard let enrollments, let workloads, let hierarchy, let trustDomains else {
             throw Abort(.internalServerError, reason: "Agent enrollment persistence is unavailable")
         }
         guard let enrollmentId = req.parameters.get("enrollmentId", as: UUID.self) else {
@@ -635,7 +664,12 @@ struct AgentController: RouteCollection {
                 // (issue #615) may not be the platform one. Deprovisioning against the
                 // wrong server deletes nothing and reports success, leaving the node
                 // able to keep renewing SVIDs.
-                if enrollmentOwnsGrant, let registry = OrgSPIREClientRegistry.fromApplication(req.application) {
+                if enrollmentOwnsGrant,
+                    let registry = OrgSPIREClientRegistry.fromApplication(
+                        req.application,
+                        hierarchy: hierarchy,
+                        trustDomains: trustDomains)
+                {
                     // Resolved outside the catch below so an unknown trust domain
                     // reaches the operator as itself — and is overridable — rather than
                     // as a generic "retry when the server is reachable". The remedies
@@ -644,8 +678,7 @@ struct AgentController: RouteCollection {
                         req,
                         registry: registry,
                         trustDomain: enrollment.trustDomain,
-                        action: "agent enrollment",
-                        on: req.db)
+                        action: "agent enrollment")
                     do {
                         try await spire?.deprovisionAgent(named: enrollment.agentName)
                     } catch {
@@ -666,9 +699,12 @@ struct AgentController: RouteCollection {
                 if enrollmentOwnsGrant {
                     // No agent row exists, so any workload-registry row for the
                     // identity is an orphan of the just-revoked SPIRE grant (#491).
-                    try await WorkloadRegistry.deregisterAgent(
-                        identity: AgentIdentity(trustDomain: enrollment.trustDomain, name: enrollment.agentName),
-                        on: req.db)
+                    let identity = AgentIdentity(
+                        trustDomain: enrollment.trustDomain,
+                        name: enrollment.agentName)
+                    if let registration = try await workloads.registration(spiffeID: identity.key) {
+                        _ = try await workloads.deleteRegistration(id: registration.id)
+                    }
                 }
                 return enrollment.agentName
             }
@@ -814,16 +850,16 @@ struct AgentController: RouteCollection {
     /// are *currently placed* on `fromAgentId` move. There is no way to use
     /// this to point a workload at a host that isn't running it.
     func adoptWorkloads(req: Request) async throws -> AdoptWorkloadsResponse {
-        guard let workloads else {
+        guard let agents, let workloads, let hierarchy else {
             throw Abort(.internalServerError, reason: "Native workload persistence is unavailable")
         }
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
-        guard let agent = try await Agent.find(agentId, on: req.db) else {
+        guard let agent = try await agents.agent(id: agentId) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
-        try await req.requireAgentAction("agent:manage", on: agent)
+        try await requireAgentAction("agent:manage", agent: agent, req: req)
 
         let body = try req.content.decode(AdoptWorkloadsRequest.self)
         let targetId = agentId.uuidString
@@ -837,16 +873,16 @@ struct AgentController: RouteCollection {
         // refuse to move workloads across an organization boundary — the
         // trust-domain migration this exists for keeps a node in its own org,
         // so a mismatch here is an operator mistake, not a supported case.
-        guard let sourceAgent = try await Agent.find(body.fromAgentId, on: req.db) else {
+        guard let sourceAgent = try await agents.agent(id: body.fromAgentId) else {
             throw Abort(.notFound, reason: "Source agent not found")
         }
-        try await req.requireAgentAction("agent:manage", on: sourceAgent)
+        try await requireAgentAction("agent:manage", agent: sourceAgent, req: req)
         // Compared at the root org, not the exact scope node: re-enrolling a
         // node into a different OU of the same organization is a legitimate
         // move, while landing one tenant's workload rows on another tenant's
         // agent record is not.
-        let sourceOrg = try await sourceAgent.rootOrganizationID(on: req.db)
-        let targetOrg = try await agent.rootOrganizationID(on: req.db)
+        let sourceOrg = try await rootOrganizationID(for: sourceAgent, using: hierarchy)
+        let targetOrg = try await rootOrganizationID(for: agent, using: hierarchy)
         guard sourceOrg == targetOrg else {
             throw Abort(
                 .conflict,
@@ -897,11 +933,14 @@ struct AgentController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }
 
-        guard let agent = try await Agent.find(agentId, on: req.db) else {
+        guard let agents, let hierarchy, let trustDomains else {
+            throw Abort(.internalServerError, reason: "Native agent persistence is unavailable")
+        }
+        guard let agent = try await agents.agent(id: agentId) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
 
-        try await req.requireAgentAction("agent:manage", on: agent)
+        try await requireAgentAction("agent:manage", agent: agent, req: req)
 
         // Never delete a site's designated network controller while the site
         // still has other members: the controller reference deliberately has
@@ -914,19 +953,12 @@ struct AgentController: RouteCollection {
         // nothing left to reconcile. Its designation is cleared below instead.
         // Checked before SPIRE deprovisioning so the refusal has no side
         // effects.
-        let controlledSites = try await LegacySiteStore.sites(
-            networkControllerAgentID: agentId,
-            on: req.db)
-        for site in controlledSites {
-            let remainingMembers = try await LegacyAgentStore.count(
-                siteID: site.requireID(), excludingID: agentId, on: req.db)
-            guard remainingMembers == 0 else {
-                throw Abort(
-                    .conflict,
-                    reason:
-                        "Agent is a site's network controller; designate a replacement controller before deregistering it"
-                )
-            }
+        if try await agents.deregistrationBlocker(id: agentId) != nil {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent is a site's network controller; designate a replacement controller before deregistering it"
+            )
         }
 
         // Remove the SPIRE workload entry before anything else, and fail
@@ -940,7 +972,11 @@ struct AgentController: RouteCollection {
         // Against the SPIRE instance that issued this agent's identity: the
         // agent row records its trust domain, which with per-org domains
         // (issue #615) may not be the platform one.
-        if let registry = OrgSPIREClientRegistry.fromApplication(req.application) {
+        if let registry = OrgSPIREClientRegistry.fromApplication(
+            req.application,
+            hierarchy: hierarchy,
+            trustDomains: trustDomains)
+        {
             // Resolved outside the catch below so an unknown trust domain is
             // reported as itself — and is overridable — rather than as an
             // unreachable server that retrying would fix.
@@ -948,8 +984,7 @@ struct AgentController: RouteCollection {
                 req,
                 registry: registry,
                 trustDomain: agent.trustDomain,
-                action: "agent",
-                on: req.db)
+                action: "agent")
             do {
                 try await spire?.deprovisionAgent(named: agent.name)
             } catch {
@@ -968,24 +1003,20 @@ struct AgentController: RouteCollection {
         }
 
         // Remove from in-memory registry if present
-        await req.agentService.forceUnregisterAgent(agent.identity)
+        let identity = AgentIdentity(trustDomain: agent.trustDomain, name: agent.name)
+        await req.agentService.forceUnregisterAgent(identity)
 
-        // Give up the designations the guard above allowed — only sites this
-        // agent was the last member of get here — so none is left pointing at
-        // the row that is about to vanish.
-        for site in controlledSites {
-            _ = try await LegacySiteStore.setNetworkController(
-                siteID: site.requireID(),
-                agentID: nil,
-                condition: .equals(agentId),
-                on: req.db)
+        switch try await agents.deregister(id: agentId, spiffeID: identity.key) {
+        case .deleted:
+            break
+        case .notFound:
+            throw Abort(.notFound, reason: "Agent not found")
+        case .controlsPopulatedSite:
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent is a site's network controller; designate a replacement controller before deregistering it")
         }
-
-        // Delete from database, along with the workload-registry rows mapping
-        // the agent's SPIFFE identity to it (issue #491) — the SPIRE entries
-        // behind them were just deprovisioned.
-        try await agent.delete(on: req.db)
-        try await WorkloadRegistry.deregisterAgent(identity: agent.identity, on: req.db)
 
         // Deregistration retires the node: delete its enrollment so the name can
         // be enrolled again. Left behind, the row would block a fresh enrollment

@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -50,7 +49,7 @@ final class OIDCControllerTests: BaseTestCase {
     /// An org-owned custom role bindable at `organizationID`.
     @discardableResult
     private func makeOrgRole(
-        name: String, organizationID: UUID, actions: [String] = ["vm:read"], on db: Database
+        name: String, organizationID: UUID, actions: [String] = ["vm:read"], on db: PostgresStoreContext
     ) async throws -> LegacyIAMRoleRecord {
         let id = UUID()
         return try await RoleStore.insertLegacy(IAMRoleSnapshot(
@@ -66,7 +65,7 @@ final class OIDCControllerTests: BaseTestCase {
     func testCreateProviderAcceptsScopedRoleMapping() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app)
-            let role = try await makeOrgRole(name: "auditor", organizationID: testOrganization.id!, on: app.db)
+            let role = try await makeOrgRole(name: "auditor", organizationID: testOrganization.id!, on: app.testPostgres)
 
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -95,7 +94,7 @@ final class OIDCControllerTests: BaseTestCase {
     func testCreateProviderRejectsDefaultRoleByName() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app)
-            try await makeOrgRole(name: "auditor", organizationID: testOrganization.id!, on: app.db)
+            try await makeOrgRole(name: "auditor", organizationID: testOrganization.id!, on: app.testPostgres)
 
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -119,9 +118,9 @@ final class OIDCControllerTests: BaseTestCase {
     func testCreateProviderRejectsOutOfScopeDefaultRoleName() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app)
-            let otherOrg = try await TestDataBuilder(db: app.db).createOrganization(name: "Name Owner Org")
+            let otherOrg = try await TestDataBuilder(db: app.testPostgres).createOrganization(name: "Name Owner Org")
             let foreignRole = try await makeOrgRole(
-                name: "foreign", organizationID: otherOrg.id!, on: app.db)
+                name: "foreign", organizationID: otherOrg.id!, on: app.testPostgres)
 
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -147,8 +146,8 @@ final class OIDCControllerTests: BaseTestCase {
     func testCreateProviderRejectsOutOfScopeRoleMapping() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app)
-            let otherOrg = try await TestDataBuilder(db: app.db).createOrganization(name: "Other Org")
-            let foreignRole = try await makeOrgRole(name: "foreign", organizationID: otherOrg.id!, on: app.db)
+            let otherOrg = try await TestDataBuilder(db: app.testPostgres).createOrganization(name: "Other Org")
+            let foreignRole = try await makeOrgRole(name: "foreign", organizationID: otherOrg.id!, on: app.testPostgres)
 
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -267,11 +266,11 @@ final class OIDCControllerTests: BaseTestCase {
                 email: "member@example.com",
                 displayName: "Member User"
             )
-            try await memberUser.save(on: app.db)
+            try await memberUser.save(on: app.testPostgres)
             _ = try await OrganizationMembershipStore.insert(
                 userID: memberUser.id!,
                 organizationID: testOrganization.id!,
-                on: app.db
+                on: app.testPostgres
             )
             let memberToken = try await memberUser.generateAPIKey(on: app)
 
@@ -315,11 +314,11 @@ final class OIDCControllerTests: BaseTestCase {
                 email: "member@example.com",
                 displayName: "Member User"
             )
-            try await memberUser.save(on: app.db)
+            try await memberUser.save(on: app.testPostgres)
             _ = try await OrganizationMembershipStore.insert(
                 userID: memberUser.id!,
                 organizationID: testOrganization.id!,
-                on: app.db
+                on: app.testPostgres
             )
             let memberToken = try await memberUser.generateAPIKey(on: app)
 
@@ -696,7 +695,7 @@ final class OIDCControllerTests: BaseTestCase {
                 oidcProviderID: provider.id,
                 oidcSubject: "subject-1"
             )
-            try await linkedUser.save(on: app.db)
+            try await linkedUser.save(on: app.testPostgres)
 
             try await app.test(
                 .DELETE, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id)"
@@ -707,7 +706,7 @@ final class OIDCControllerTests: BaseTestCase {
             }
 
             // Unlink and retry
-            try await linkedUser.replacing(oidcProviderID: .some(nil)).save(on: app.db)
+            try await linkedUser.replacing(oidcProviderID: .some(nil)).save(on: app.testPostgres)
 
             try await app.test(
                 .DELETE, "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id)"
@@ -822,7 +821,7 @@ final class OIDCControllerTests: BaseTestCase {
 
             // A second org whose name differs from "Test Organization" only by case
             let shoutyOrg = Organization(name: "TEST ORGANIZATION", description: "case twin")
-            try await shoutyOrg.save(on: app.db)
+            try await shoutyOrg.save(on: app.testPostgres)
             try await makeProvider(on: app, organizationID: shoutyOrg.id!, name: "Entra")
 
             // A third casing matches both orgs case-insensitively — refusing is
@@ -860,10 +859,12 @@ final class OIDCControllerTests: BaseTestCase {
                 on: app, organizationID: testOrganization.id!, name: "Okta")
 
             let identity = OIDCIdentityService(
-                db: app.db,
                 providers: app.oidcProvidersPersistence,
                 groups: app.groupsPersistence,
                 externalIDs: app.scimExternalIDsPersistence,
+                users: app.userDirectoryPersistence,
+                hierarchy: app.hierarchyPersistence,
+                iam: app.iamPersistence,
                 logger: app.logger
             )
             let user = try await identity.resolveUser(
@@ -884,7 +885,7 @@ final class OIDCControllerTests: BaseTestCase {
             #expect(user.currentOrganizationId == testOrganization.id)
 
             let membership = try await OrganizationMembershipStore.membership(
-                userID: user.id!, organizationID: testOrganization.id!, on: app.db)
+                userID: user.id!, organizationID: testOrganization.id!, on: app.testPostgres)
             #expect(membership?.roleID == nil)
 
             // A bare "member" membership carries its own access (org:read +
@@ -895,7 +896,7 @@ final class OIDCControllerTests: BaseTestCase {
                 principalID: user.id!,
                 nodeType: IAMNodeType.organization.rawValue,
                 nodeID: testOrganization.id!,
-                on: app.db).count
+                on: app.testPostgres).count
             #expect(orgBindings == 0)
 
             // Second login with the same subject reuses the user, no new rows
@@ -1085,7 +1086,10 @@ final class OIDCControllerTests: BaseTestCase {
             let controller = OIDCController(
                 providers: app.oidcProvidersPersistence,
                 groups: app.groupsPersistence,
-                externalIDs: app.scimExternalIDsPersistence
+                externalIDs: app.scimExternalIDsPersistence,
+                hierarchy: app.hierarchyPersistence,
+                users: app.userDirectoryPersistence,
+                iam: app.iamPersistence
             )
             let provider = try await makeProvider(
                 on: app, organizationID: testOrganization.id!, name: "Okta",

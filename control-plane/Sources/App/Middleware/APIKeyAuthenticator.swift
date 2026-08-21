@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Vapor
 
 struct APIKeyAuthenticator: AsyncBearerAuthenticator {
@@ -125,15 +124,18 @@ struct BearerAuthorizationHeaderAuthenticator: AsyncMiddleware {
     private let apiKeys: APIKeysPersistence
     private let oauthSessions: OAuthDeviceSessionsPersistence
     private let users: UserDirectoryPersistence
+    private let workloads: WorkloadsPersistence
 
     init(
         apiKeys: APIKeysPersistence,
         oauthSessions: OAuthDeviceSessionsPersistence,
-        users: UserDirectoryPersistence
+        users: UserDirectoryPersistence,
+        workloads: WorkloadsPersistence
     ) {
         self.apiKeys = apiKeys
         self.oauthSessions = oauthSessions
         self.users = users
+        self.workloads = workloads
     }
 
     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
@@ -149,7 +151,8 @@ struct BearerAuthorizationHeaderAuthenticator: AsyncMiddleware {
                 bearer: authorization,
                 for: request
             )
-            try await JWTSVIDAuthenticator().authenticate(bearer: authorization, for: request)
+            try await JWTSVIDAuthenticator(workloads: workloads).authenticate(
+                bearer: authorization, for: request)
         }
 
         return try await next.respond(to: request)

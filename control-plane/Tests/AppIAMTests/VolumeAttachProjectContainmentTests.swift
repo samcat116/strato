@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -31,7 +30,7 @@ struct VolumeAttachProjectContainmentTests {
         _ test: (Application, Volume, VM, String) async throws -> Void
     ) async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let admin = try await builder.createUser(
                 username: "attach-containment-admin",
                 email: "attach-containment-admin@example.com",
@@ -40,7 +39,7 @@ struct VolumeAttachProjectContainmentTests {
             let token = try await admin.generateAPIKey(on: app)
             let org = try await builder.createOrganization(name: "Attach Containment Org")
             try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
-            try await admin.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await admin.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let volumeProject = try await builder.createProject(
                 name: "Volume Project",
@@ -61,18 +60,18 @@ struct VolumeAttachProjectContainmentTests {
                 size: 10 * 1024 * 1024 * 1024,
                 status: .available,
                 createdByID: admin.id!)
-            try await volume.save(on: app.db)
+            try await volume.save(on: app.testPostgres)
             try await placeVolume(
                 volume,
                 on: "agent-that-is-not-connected",
                 at: "/var/lib/strato/volumes/containment/volume.qcow2",
-                using: app.db
+                using: app.testPostgres
             )
 
             var vm = try await builder.createVM(
                 name: "containment-vm", project: vmProject, environment: vmEnvironment)
             vm.hypervisorId = "agent-that-is-not-connected"
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             try await test(app, volume, vm, token)
         }
@@ -94,7 +93,7 @@ struct VolumeAttachProjectContainmentTests {
 
             // The refused request leaves the volume untouched: still available,
             // still unbound.
-            let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
+            let reloaded = try #require(try await Volume.find(volume.id, on: app.testPostgres))
             #expect(reloaded.status == .available)
             #expect(reloaded.vmID == nil)
             #expect(reloaded.deviceName == nil)
@@ -127,10 +126,10 @@ struct VolumeAttachProjectContainmentTests {
             // replay on every later sync. A rejected attach is therefore still
             // indistinguishable from never having been requested, just by a
             // different mechanism than the old in-band revert.
-            var reloaded = try #require(try await Volume.find(volume.id, on: app.db))
+            var reloaded = try #require(try await Volume.find(volume.id, on: app.testPostgres))
             for _ in 0..<100 where reloaded.conditions.degraded == nil {
                 try await Task.sleep(for: .milliseconds(50))
-                reloaded = try #require(try await Volume.find(volume.id, on: app.db))
+                reloaded = try #require(try await Volume.find(volume.id, on: app.testPostgres))
             }
             #expect(reloaded.conditions.degraded != nil)
             #expect(reloaded.vmID == nil)
@@ -154,7 +153,7 @@ struct VolumeAttachProjectContainmentTests {
                 #expect(res.body.string.contains("same environment"))
             }
 
-            let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
+            let reloaded = try #require(try await Volume.find(volume.id, on: app.testPostgres))
             #expect(reloaded.vmID == nil)
             #expect(reloaded.deviceName == nil)
         }

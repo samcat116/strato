@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -20,15 +19,14 @@ final class VMMetadataOptOutTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "mduser", email: "md@example.com", displayName: "Metadata User",
                 isSystemAdmin: false)
             let org = try await builder.createOrganization(name: "Metadata Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
             let project = try await builder.createProject(
                 name: "Metadata Project", description: "Project for kill-switch tests",
                 organization: org)
@@ -60,7 +58,7 @@ final class VMMetadataOptOutTests {
             ],
             protocolVersion: protocolVersion
         )
-        let orgID = try await Organization.all(on: app.db).first?.id
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let uuid = try await app.agentService.registerAgent(
             message, agentName: name, siteID: nil,
             organizationScope: orgID.map { .organization($0) })
@@ -70,9 +68,9 @@ final class VMMetadataOptOutTests {
     private func placeVM(
         app: Application, project: Project, named name: String, onAgent agentId: String?
     ) async throws -> VM {
-        let vm = try await TestDataBuilder(db: app.db).createVM(name: name, project: project)
+        var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: name, project: project)
         vm.hypervisorId = agentId
-        try await vm.save(on: app.db)
+        try await vm.save(on: app.testPostgres)
         return vm
     }
 
@@ -91,7 +89,7 @@ final class VMMetadataOptOutTests {
             // datasource the moment the migration landed.
             let vm = try await self.placeVM(app: app, project: project, named: "vm-default", onAgent: nil)
             #expect(vm.metadataEnabled)
-            let reloaded = try await VM.find(vm.id, on: app.db)
+            let reloaded = try await VM.find(vm.id, on: app.testPostgres)
             #expect(reloaded?.metadataEnabled == true)
         }
     }
@@ -106,7 +104,7 @@ final class VMMetadataOptOutTests {
             let vm = try await self.placeVM(
                 app: app, project: project, named: "vm-toggle", onAgent: agentId)
             let vmID = try vm.requireID()
-            let startGeneration = try #require(await VM.find(vmID, on: app.db)?.generation)
+            let startGeneration = try #require(await VM.find(vmID, on: app.testPostgres)?.generation)
 
             try await app.test(.PUT, "/api/vms/\(vmID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -120,7 +118,7 @@ final class VMMetadataOptOutTests {
                 #expect(body.metadataEnabled == false)
             }
 
-            let off = try await VM.find(vmID, on: app.db)
+            let off = try await VM.find(vmID, on: app.testPostgres)
             #expect(off?.metadataEnabled == false)
             // Deliberately no bump, like the network's switch: nothing about
             // how the VM is realized changes, both enforcement points are
@@ -134,7 +132,7 @@ final class VMMetadataOptOutTests {
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
-            let backOn = try await VM.find(vmID, on: app.db)
+            let backOn = try await VM.find(vmID, on: app.testPostgres)
             #expect(backOn?.metadataEnabled == true)
             #expect(backOn?.generation == startGeneration)
         }
@@ -146,7 +144,7 @@ final class VMMetadataOptOutTests {
             var vm = try await self.placeVM(
                 app: app, project: project, named: "vm-omit", onAgent: nil)
             vm.metadataEnabled = false
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             let vmID = try vm.requireID()
 
             struct RenameBody: Content { let name: String }
@@ -159,7 +157,7 @@ final class VMMetadataOptOutTests {
 
             // An absent key is silence, not "turn it back on" — otherwise every
             // unrelated edit would quietly undo an operator's hardening.
-            let after = try await VM.find(vmID, on: app.db)
+            let after = try await VM.find(vmID, on: app.testPostgres)
             #expect(after?.metadataEnabled == false)
             #expect(after?.name == "vm-omit-renamed")
         }

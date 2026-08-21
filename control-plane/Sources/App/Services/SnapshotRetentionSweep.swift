@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import StratoShared
 import Vapor
@@ -25,13 +25,13 @@ import Vapor
 /// the next tick recomputes the deadline from the row.
 enum SnapshotRetentionSweep {
 
-    static func run(app: Application) async {
+    static func run(app: Application, database: PostgresStoreContext) async {
         guard await app.coordination.acquireSweepLock("snapshot_retention") else {
             app.logger.debug("Skipping snapshot retention sweep; lock held by another control-plane instance")
             return
         }
 
-        let db = app.db
+        let db = database
         let now = Date()
 
         do {
@@ -44,7 +44,7 @@ enum SnapshotRetentionSweep {
     }
 
     private static func expire<A: SnapshotArtifactResource>(
-        _ type: A.Type, at now: Date, on db: any Database, app: Application
+        _ type: A.Type, at now: Date, on db: PostgresStoreContext, app: Application
     ) async throws {
         for artifact in try await A.expired(at: now, on: db) {
             guard let artifactID = artifact.id else { continue }

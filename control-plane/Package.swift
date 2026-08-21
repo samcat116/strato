@@ -13,10 +13,6 @@ let package = Package(
         .package(path: "../shared"),
         // 💧 A server-side Swift web framework.
         .package(url: "https://github.com/vapor/vapor.git", from: "4.122.0"),
-        // 🗄 An ORM for SQL and NoSQL databases.
-        .package(url: "https://github.com/vapor/fluent.git", from: "4.13.0"),
-        // 🐘 Fluent driver for Postgres.
-        .package(url: "https://github.com/vapor/fluent-postgres-driver.git", from: "2.12.0"),
         .package(url: "https://github.com/vapor/postgres-nio.git", exact: "1.33.0"),
         // 🔵 Non-blocking, event-driven networking for Swift. Used for custom executors
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.101.0"),
@@ -127,8 +123,6 @@ let package = Package(
                 .target(name: "ControlPlanePostgres"),
                 .target(name: "SPIREServerAPI"),
                 .product(name: "StratoShared", package: "shared"),
-                .product(name: "Fluent", package: "fluent"),
-                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
                 .product(name: "Vapor", package: "vapor"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
@@ -180,7 +174,6 @@ let package = Package(
                 .target(name: "App"),
                 .target(name: "ControlPlanePostgres"),
                 .product(name: "VaporTesting", package: "vapor"),
-                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
             ],
             path: "Tests/AppTestSupport",
             swiftSettings: testSwiftSettings
@@ -210,7 +203,6 @@ let package = Package(
                 .target(name: "SPIREServerAPI"),
                 .target(name: "AppTestSupport"),
                 .product(name: "VaporTesting", package: "vapor"),
-                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
                 .product(name: "X509", package: "swift-certificates"),
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "GRPCNIOTransportHTTP2Posix", package: "grpc-swift-nio-transport"),
@@ -225,7 +217,6 @@ let package = Package(
                 .target(name: "ControlPlanePostgres"),
                 .target(name: "AppTestSupport"),
                 .product(name: "VaporTesting", package: "vapor"),
-                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
             ],
             swiftSettings: testSwiftSettings
         ),
@@ -236,7 +227,6 @@ let package = Package(
                 .target(name: "ControlPlanePostgres"),
                 .target(name: "AppTestSupport"),
                 .product(name: "VaporTesting", package: "vapor"),
-                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
             ],
             swiftSettings: testSwiftSettings
         ),
@@ -247,7 +237,6 @@ let package = Package(
                 .target(name: "ControlPlanePostgres"),
                 .target(name: "AppTestSupport"),
                 .product(name: "VaporTesting", package: "vapor"),
-                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
                 .product(name: "MetricsTestKit", package: "swift-metrics"),
                 // Mints the throwaway server certificate GuardedHTTPClientTests
                 // uses to prove TLS is still verified against the hostname when

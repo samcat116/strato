@@ -1,6 +1,6 @@
+import ControlPlanePostgres
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import StratoShared
 import AppTestSupport
@@ -29,9 +29,8 @@ final class SandboxTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "sandboxuser",
                 email: "sandbox@example.com",
@@ -40,7 +39,7 @@ final class SandboxTests {
             )
             let org = try await builder.createOrganization(name: "Sandbox Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Sandbox Project",
@@ -98,13 +97,13 @@ final class SandboxTests {
             sandboxCapable: sandboxCapable,
             sandboxNetworkingCapable: sandboxNetworkingCapable
         )
-        let orgID = try await Organization.all(on: app.db).first?.id
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: agentName,
             organizationScope: orgID.map { .organization($0) })
-        if let sandbox {
+        if var sandbox {
             sandbox.hypervisorId = agentUUID.uuidString
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
         }
         return agentUUID.uuidString
     }
@@ -130,7 +129,7 @@ final class SandboxTests {
     /// The operation row and the sandbox row are written separately, so tests
     /// must poll the row they assert on.
     private func pollSandboxStatus(
-        _ sandboxID: UUID, until expected: SandboxStatus, on db: any Database
+        _ sandboxID: UUID, until expected: SandboxStatus, on db: PostgresStoreContext
     ) async throws {
         for _ in 0..<100 {
             if let sandbox = try await Sandbox.find(sandboxID, on: db), sandbox.status == expected {
@@ -144,7 +143,7 @@ final class SandboxTests {
     /// Waits for the background dispatch to degrade the sandbox — the shape a
     /// failed mutation takes now that there is no operation row to fail
     /// (STR-147).
-    private func pollSandboxDegraded(_ sandboxID: UUID, on db: any Database) async throws {
+    private func pollSandboxDegraded(_ sandboxID: UUID, on db: PostgresStoreContext) async throws {
         for _ in 0..<100 {
             if let sandbox = try await Sandbox.find(sandboxID, on: db),
                 sandbox.conditions.degraded != nil
@@ -157,7 +156,7 @@ final class SandboxTests {
     }
 
     /// Waits for the delete's background dispatch to reap the row.
-    private func pollSandboxRemoved(_ sandboxID: UUID, on db: any Database) async throws {
+    private func pollSandboxRemoved(_ sandboxID: UUID, on db: PostgresStoreContext) async throws {
         for _ in 0..<100 {
             if try await Sandbox.find(sandboxID, on: db) == nil { return }
             try await Task.sleep(for: .milliseconds(50))
@@ -170,6 +169,7 @@ final class SandboxTests {
     @Test("New sandboxes rest at desired stopped with generation zero")
     func modelDefaults() async throws {
         try await withSandboxTestApp { _, _, _, sandbox, _ in
+            var sandbox = sandbox
             #expect(sandbox.status == .stopped)
             #expect(sandbox.desiredStatus == .stopped)
             #expect(sandbox.generation == 0)
@@ -183,6 +183,7 @@ final class SandboxTests {
     @Test("revertDesiredToObserved leaves a satisfied desired state alone")
     func revertRespectsExited() async throws {
         try await withSandboxTestApp { _, _, _, sandbox, _ in
+            var sandbox = sandbox
             // `.exited` satisfies desired `.running`, so a failed unrelated
             // operation must not flip desired to `.stopped`.
             sandbox.setFixtureDesiredStatus(.running)
@@ -209,13 +210,13 @@ final class SandboxTests {
     func registrationPersistsSandboxCapability() async throws {
         try await withSandboxTestApp { app, _, _, _, _ in
             let agentId = try await registerAgent(app: app, named: "capable-agent", sandboxCapable: true)
-            let registered = try await Agent.find(UUID(uuidString: agentId), on: app.db)
+            let registered = try await Agent.find(UUID(uuidString: agentId), on: app.testPostgres)
             #expect(registered?.sandboxCapable == true)
 
             // Re-registration without the flag (e.g. the guest image was
             // removed, or the agent was downgraded) must clear it.
             _ = try await registerAgent(app: app, named: "capable-agent", sandboxCapable: nil)
-            let reRegistered = try await Agent.find(UUID(uuidString: agentId), on: app.db)
+            let reRegistered = try await Agent.find(UUID(uuidString: agentId), on: app.testPostgres)
             #expect(reRegistered?.sandboxCapable == false)
         }
     }
@@ -225,9 +226,9 @@ final class SandboxTests {
         try await withSandboxTestApp { app, _, _, sandbox, _ in
             let agentId = try await registerAgent(app: app, named: "runtime-agent", sandboxCapable: true)
 
-            try await app.agentService.createSandbox(sandbox: sandbox, db: app.db)
+            try await app.agentService.createSandbox(sandbox: sandbox, db: app.testPostgres)
 
-            let placed = try await Sandbox.find(sandbox.id, on: app.db)
+            let placed = try await Sandbox.find(sandbox.id, on: app.testPostgres)
             #expect(placed?.hypervisorId == agentId)
         }
     }
@@ -240,7 +241,7 @@ final class SandboxTests {
             _ = try await registerAgent(app: app, named: "runtimeless-agent", sandboxCapable: nil)
 
             do {
-                try await app.agentService.createSandbox(sandbox: sandbox, db: app.db)
+                try await app.agentService.createSandbox(sandbox: sandbox, db: app.testPostgres)
                 Issue.record("Expected schedulingFailed error")
             } catch let error as AgentServiceError {
                 guard case .schedulingFailed(let reason) = error else {
@@ -250,7 +251,7 @@ final class SandboxTests {
                 #expect(reason.contains("sandbox runtime"))
             }
 
-            let unplaced = try await Sandbox.find(sandbox.id, on: app.db)
+            let unplaced = try await Sandbox.find(sandbox.id, on: app.testPostgres)
             #expect(unplaced?.hypervisorId == nil)
         }
     }
@@ -262,7 +263,7 @@ final class SandboxTests {
         try await withSandboxTestApp { app, _, _, _, _ in
             let agentId = try await registerAgent(
                 app: app, named: "networked-agent", sandboxCapable: true, sandboxNetworkingCapable: true)
-            let registered = try await Agent.find(UUID(uuidString: agentId), on: app.db)
+            let registered = try await Agent.find(UUID(uuidString: agentId), on: app.testPostgres)
             #expect(registered?.sandboxNetworkingCapable == true)
 
             // A guest-image rollback, OVN going down, or the jailer no longer
@@ -271,7 +272,7 @@ final class SandboxTests {
             // signals rather than one.
             _ = try await registerAgent(
                 app: app, named: "networked-agent", sandboxCapable: true, sandboxNetworkingCapable: nil)
-            let reRegistered = try await Agent.find(UUID(uuidString: agentId), on: app.db)
+            let reRegistered = try await Agent.find(UUID(uuidString: agentId), on: app.testPostgres)
             #expect(reRegistered?.sandboxNetworkingCapable == false)
             #expect(reRegistered?.sandboxCapable == true)
         }
@@ -285,14 +286,14 @@ final class SandboxTests {
             _ = try await registerAgent(
                 app: app, named: "no-sandbox-net", sandboxCapable: true, sandboxNetworkingCapable: nil)
 
-            let network = try await self.projectNetwork(project: project, on: app.db)
+            let network = try await self.projectNetwork(project: project, on: app.testPostgres)
             try await SandboxNetworkInterface(
                 sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: "00:0c:29:ab:cd:22"
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             do {
-                try await app.agentService.createSandbox(sandbox: sandbox, db: app.db)
+                try await app.agentService.createSandbox(sandbox: sandbox, db: app.testPostgres)
                 Issue.record("Expected schedulingFailed error")
             } catch let error as AgentServiceError {
                 guard case .schedulingFailed(let reason) = error else {
@@ -304,7 +305,7 @@ final class SandboxTests {
 
             // Refused, not degraded: booting it unnetworked would leave the API
             // reporting an address the workload never gets.
-            let unplaced = try await Sandbox.find(sandbox.id, on: app.db)
+            let unplaced = try await Sandbox.find(sandbox.id, on: app.testPostgres)
             #expect(unplaced?.hypervisorId == nil)
         }
     }
@@ -317,9 +318,9 @@ final class SandboxTests {
             let agentId = try await registerAgent(
                 app: app, named: "no-sandbox-net", sandboxCapable: true, sandboxNetworkingCapable: nil)
 
-            try await app.agentService.createSandbox(sandbox: sandbox, db: app.db)
+            try await app.agentService.createSandbox(sandbox: sandbox, db: app.testPostgres)
 
-            let placed = try await Sandbox.find(sandbox.id, on: app.db)
+            let placed = try await Sandbox.find(sandbox.id, on: app.testPostgres)
             #expect(placed?.hypervisorId == agentId)
         }
     }
@@ -332,15 +333,15 @@ final class SandboxTests {
             let capableId = try await registerAgent(
                 app: app, named: "sandbox-net", sandboxCapable: true, sandboxNetworkingCapable: true)
 
-            let network = try await self.projectNetwork(project: project, on: app.db)
+            let network = try await self.projectNetwork(project: project, on: app.testPostgres)
             try await SandboxNetworkInterface(
                 sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: "00:0c:29:ab:cd:33"
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
-            try await app.agentService.createSandbox(sandbox: sandbox, db: app.db)
+            try await app.agentService.createSandbox(sandbox: sandbox, db: app.testPostgres)
 
-            let placed = try await Sandbox.find(sandbox.id, on: app.db)
+            let placed = try await Sandbox.find(sandbox.id, on: app.testPostgres)
             #expect(placed?.hypervisorId == capableId)
         }
     }
@@ -369,7 +370,7 @@ final class SandboxTests {
             #expect(body.targetGeneration == 1)
             #expect(body.resource.conditions.targetGeneration == 1)
 
-            let sandbox = try #require(await Sandbox.find(body.resource.id!, on: app.db))
+            let sandbox = try #require(await Sandbox.find(body.resource.id!, on: app.testPostgres))
             #expect(sandbox.name == "worker")
             #expect(sandbox.image == "ghcr.io/acme/worker:v3")
             #expect(sandbox.desiredStatus == .stopped)
@@ -385,13 +386,13 @@ final class SandboxTests {
                 roleID: IAMRole.admin.seededID,
                 nodeType: IAMNodeType.sandbox.rawValue,
                 nodeID: body.resource.id!,
-                on: app.db).count
+                on: app.testPostgres).count
             #expect(ownerBindings == 1)
 
             // No schedulable agent exists, so background placement must degrade
             // the sandbox and surface it as error.
-            try await self.pollSandboxStatus(body.resource.id!, until: .error, on: app.db)
-            let degraded = try #require(await Sandbox.find(body.resource.id!, on: app.db))
+            try await self.pollSandboxStatus(body.resource.id!, until: .error, on: app.testPostgres)
+            let degraded = try #require(await Sandbox.find(body.resource.id!, on: app.testPostgres))
             #expect(degraded.conditions.degraded != nil)
         }
     }
@@ -418,14 +419,14 @@ final class SandboxTests {
             source.cmd = ["--serve"]
             source.env = ["MODE": "source"]
             source.workingDir = "/srv"
-            try await source.save(on: app.db)
+            try await source.save(on: app.testPostgres)
 
-            let sourceNetwork = try await self.projectNetwork(project: project, on: app.db)
+            let sourceNetwork = try await self.projectNetwork(project: project, on: app.testPostgres)
             let sourceNIC = SandboxNetworkInterface(
                 sandboxID: source.id!,
                 logicalNetworkID: try sourceNetwork.requireID(),
                 macAddress: "52:54:00:00:00:01")
-            try await sourceNIC.save(on: app.db)
+            try await sourceNIC.save(on: app.testPostgres)
 
             let snapshot = SandboxSnapshot(
                 name: "fork-point",
@@ -438,7 +439,7 @@ final class SandboxTests {
                 guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
                 forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion,
                 createdByID: user.id!)
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             var accepted: AcceptedSandbox?
             try await app.test(.POST, "/api/sandboxes") { req in
@@ -456,7 +457,7 @@ final class SandboxTests {
 
             let body = try #require(accepted)
             let forkID = body.resource.id!
-            var fork = try #require(await Sandbox.find(forkID, on: app.db))
+            var fork = try #require(await Sandbox.find(forkID, on: app.testPostgres))
             #expect(fork.restoredFromSnapshotId == snapshot.id)
             #expect(fork.image == source.image)
             #expect(fork.imageDigest == source.imageDigest)
@@ -471,7 +472,7 @@ final class SandboxTests {
 
             for _ in 0..<100 where fork.hypervisorId == nil {
                 try await Task.sleep(for: .milliseconds(20))
-                fork = try #require(await Sandbox.find(forkID, on: app.db))
+                fork = try #require(await Sandbox.find(forkID, on: app.testPostgres))
             }
             #expect(fork.hypervisorId == agentId)
 
@@ -485,7 +486,7 @@ final class SandboxTests {
 
             let forkNIC = try #require(
                 await LegacySandboxNetworkInterfaceStore.interfaces(
-                    sandboxID: forkID, on: app.db).first)
+                    sandboxID: forkID, on: app.testPostgres).first)
             #expect(forkNIC.macAddress != sourceNIC.macAddress)
             #expect(forkNIC.deviceName == "net0")
         }
@@ -508,7 +509,7 @@ final class SandboxTests {
                 status: .ready,
                 agentId: agent,
                 createdByID: user.id!)
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             // A fork resumes the checkpointed machine, so a spec override the
             // restore cannot honor is refused outright.
@@ -545,7 +546,7 @@ final class SandboxTests {
                 guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion - 1,
                 forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion,
                 createdByID: user.id!)
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -574,10 +575,10 @@ final class SandboxTests {
                 app: app, sandbox: source, named: "networkless-source-agent",
                 sandboxCapable: true, sandboxNetworkingCapable: true)
             // `source` is created without a NIC.
-            let network = try await self.projectNetwork(project: project, on: app.db)
+            let network = try await self.projectNetwork(project: project, on: app.testPostgres)
             let snapshot = try await self.readySnapshot(
                 named: "networkless-checkpoint", source: source, project: project, user: user,
-                agentId: agentId, on: app.db)
+                agentId: agentId, on: app.testPostgres)
 
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -607,15 +608,15 @@ final class SandboxTests {
                 app: app, sandbox: source, named: "networked-source-agent",
                 sandboxCapable: true, sandboxNetworkingCapable: true,
                 architecture: CPUArchitecture.current)
-            let network = try await self.projectNetwork(project: project, on: app.db)
+            let network = try await self.projectNetwork(project: project, on: app.testPostgres)
             let sourceNIC = SandboxNetworkInterface(
                 sandboxID: source.id!,
                 logicalNetworkID: try network.requireID(),
                 macAddress: "52:54:00:00:00:11")
-            try await sourceNIC.save(on: app.db)
+            try await sourceNIC.save(on: app.testPostgres)
             let snapshot = try await self.readySnapshot(
                 named: "networked-checkpoint", source: source, project: project, user: user,
-                agentId: agentId, on: app.db)
+                agentId: agentId, on: app.testPostgres)
 
             var accepted: AcceptedSandbox?
             try await app.test(.POST, "/api/sandboxes") { req in
@@ -633,7 +634,7 @@ final class SandboxTests {
             let forkID = try #require(accepted).resource.id!
             let forkNIC = try #require(
                 await LegacySandboxNetworkInterfaceStore.interfaces(
-                    sandboxID: forkID, on: app.db).first)
+                    sandboxID: forkID, on: app.testPostgres).first)
             #expect(forkNIC.logicalNetworkID == (try network.requireID()))
             #expect(forkNIC.macAddress != sourceNIC.macAddress)
         }
@@ -650,15 +651,15 @@ final class SandboxTests {
                 app: app, sandbox: source, named: "pre-1-12-firecracker-agent",
                 sandboxCapable: true, sandboxNetworkingCapable: true,
                 firecrackerVersion: "1.11.0")
-            let network = try await self.projectNetwork(project: project, on: app.db)
+            let network = try await self.projectNetwork(project: project, on: app.testPostgres)
             try await SandboxNetworkInterface(
                 sandboxID: source.id!,
                 logicalNetworkID: try network.requireID(),
                 macAddress: "52:54:00:00:00:13"
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
             let snapshot = try await self.readySnapshot(
                 named: "old-vmm-checkpoint", source: source, project: project, user: user,
-                agentId: agentId, on: app.db)
+                agentId: agentId, on: app.testPostgres)
 
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -685,7 +686,7 @@ final class SandboxTests {
                 sandboxCapable: true, firecrackerVersion: "1.11.0")
             let snapshot = try await self.readySnapshot(
                 named: "old-vmm-networkless-checkpoint", source: source, project: project,
-                user: user, agentId: agentId, on: app.db)
+                user: user, agentId: agentId, on: app.testPostgres)
 
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -717,7 +718,7 @@ final class SandboxTests {
                 agentId: agentId,
                 guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
                 createdByID: user.id!)
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -755,7 +756,7 @@ final class SandboxTests {
                         kind: $0, sizeBytes: 16, sha256: String(repeating: "0", count: 64))
                 },
                 createdByID: user.id!)
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             var accepted: AcceptedSandbox?
             try await app.test(.POST, "/api/sandboxes") { req in
@@ -770,7 +771,7 @@ final class SandboxTests {
                 accepted = try res.content.decode(AcceptedSandbox.self)
             }
             let body = try #require(accepted)
-            let fork = try #require(await Sandbox.find(body.resource.id!, on: app.db))
+            let fork = try #require(await Sandbox.find(body.resource.id!, on: app.testPostgres))
             #expect(fork.restoredFromSnapshotId == snapshot.id)
         }
     }
@@ -788,7 +789,7 @@ final class SandboxTests {
                 guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
                 forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion,
                 createdByID: user.id!)
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -834,7 +835,7 @@ final class SandboxTests {
                 accepted = try res.content.decode(AcceptedSandbox.self)
             }
             let body = try #require(accepted)
-            let created = try #require(await Sandbox.find(body.resource.id!, on: app.db))
+            let created = try #require(await Sandbox.find(body.resource.id!, on: app.testPostgres))
             #expect(created.cpuTemplate == "T2")
 
             // The template travels on the wire spec (issue #428).
@@ -861,10 +862,10 @@ final class SandboxTests {
                 guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
                 forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion,
                 createdByID: user.id!)
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             source.desiredStatus = .absent
-            try await source.save(on: app.db)
+            try await source.save(on: app.testPostgres)
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
@@ -883,10 +884,10 @@ final class SandboxTests {
             // the latter. That window is what used to be a pending `restore`
             // operation row (STR-152).
             source.requestFixtureRestore(snapshotID: snapshot.id!)
-            try await source.save(on: app.db)
+            try await source.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .restore, resourceKind: .sandbox, resourceID: source.requireID(),
-                actor: .user(try user.requireID()), on: app.db)
+                actor: .user(try user.requireID()), on: app.testPostgres)
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
@@ -926,25 +927,25 @@ final class SandboxTests {
                 guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
                 forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion,
                 createdByID: user.id!)
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             let sourceID = try source.requireID()
             let userID = try user.requireID()
 
             // The restore is requested first...
             source.requestFixtureRestore(snapshotID: snapshot.id!)
-            try await source.save(on: app.db)
+            try await source.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .restore, resourceKind: .sandbox, resourceID: sourceID,
-                actor: .user(userID), on: app.db)
+                actor: .user(userID), on: app.testPostgres)
 
             // ...then a stop lands on top of it, making `.shutdown` the newest
             // recorded mutation while the restore is still unapplied.
             source.setFixtureDesiredStatus(.stopped)
-            try await source.save(on: app.db)
+            try await source.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .shutdown, resourceKind: .sandbox, resourceID: sourceID,
-                actor: .user(userID), on: app.db)
+                actor: .user(userID), on: app.testPostgres)
 
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -983,16 +984,16 @@ final class SandboxTests {
                 guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
                 forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion,
                 createdByID: user.id!)
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             source.setStatus(.running)
             source.requestFixtureRestore(snapshotID: snapshot.id!)
             // The agent applied the nonce and reported the generation back.
             source.observedGeneration = source.generation
-            try await source.save(on: app.db)
+            try await source.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .restore, resourceKind: .sandbox, resourceID: source.requireID(),
-                actor: .user(try user.requireID()), on: app.db)
+                actor: .user(try user.requireID()), on: app.testPostgres)
 
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1045,14 +1046,14 @@ final class SandboxTests {
             _ = mutationId
 
             for _ in 0..<100 {
-                if let refreshed = try await Sandbox.find(sandbox.id, on: app.db),
+                if let refreshed = try await Sandbox.find(sandbox.id, on: app.testPostgres),
                     refreshed.desiredStatus == .stopped
                 {
                     break
                 }
                 try await Task.sleep(for: .milliseconds(50))
             }
-            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.testPostgres))
             #expect(refreshed.desiredStatus == .stopped)
             #expect(refreshed.conditions.degraded?.reason.isEmpty == false)
         }
@@ -1061,8 +1062,9 @@ final class SandboxTests {
     @Test("POST start is rejected (400) while the sandbox is running")
     func startRejectedWhileRunning() async throws {
         try await withSandboxTestApp { app, _, _, sandbox, token in
+            var sandbox = sandbox
             sandbox.setStatus(.running)
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!)/start") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1079,8 +1081,9 @@ final class SandboxTests {
     @Test("POST stop is accepted for a sandbox whose state could not be confirmed")
     func stopAcceptedWhileErrored() async throws {
         try await withSandboxTestApp { app, _, _, sandbox, token in
+            var sandbox = sandbox
             sandbox.setStatus(.error)
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!)/stop") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1089,7 +1092,7 @@ final class SandboxTests {
             }
 
             let shutdown = try await ResourceEvent.latest(
-                .requested, resourceKind: .sandbox, resourceID: sandbox.id!, on: app.db)
+                .requested, resourceKind: .sandbox, resourceID: sandbox.id!, on: app.testPostgres)
             #expect(shutdown?.mutation == .shutdown)
         }
     }
@@ -1097,15 +1100,16 @@ final class SandboxTests {
     @Test("A pending snapshot operation no longer blocks a lifecycle mutation")
     func pendingOperationDoesNotBlockLifecycleMutation() async throws {
         try await withSandboxTestApp { app, user, _, sandbox, token in
+            var sandbox = sandbox
             // Running, so the stop below passes its state guard.
             sandbox.setStatus(.running)
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             // A mutation in flight: desired state moved and the agent has not
             // confirmed it, which is what the operation mutex used to key on.
             sandbox.setFixtureDesiredStatus(.running)
             sandbox = sandbox.extendingConvergenceDeadline(by: 600)
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             // The double-submit `409` went with the operation row (STR-147):
             // desired state is level-triggered, so the stop is accepted and the
@@ -1117,7 +1121,7 @@ final class SandboxTests {
             }
 
             let shutdown = try await ResourceEvent.latest(
-                .requested, resourceKind: .sandbox, resourceID: sandbox.id!, on: app.db)
+                .requested, resourceKind: .sandbox, resourceID: sandbox.id!, on: app.testPostgres)
             #expect(shutdown?.mutation == .shutdown)
         }
     }
@@ -1132,15 +1136,15 @@ final class SandboxTests {
             // binding (STR-112).
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .sandbox, nodeID: sandboxID, createdBy: user.id!, on: app.db)
+                nodeType: .sandbox, nodeID: sandboxID, createdBy: user.id!, on: app.testPostgres)
             let snapshot = SandboxSnapshot(
                 name: "snap", sandboxID: sandboxID, projectID: sandbox.projectID,
                 environment: sandbox.environment, agentId: nil, createdByID: user.id!)
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
             let snapshotID = try snapshot.requireID()
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .sandboxSnapshot, nodeID: snapshotID, createdBy: user.id!, on: app.db)
+                nodeType: .sandboxSnapshot, nodeID: snapshotID, createdBy: user.id!, on: app.testPostgres)
 
             var mutationId: UUID?
             try await app.test(.DELETE, "/api/sandboxes/\(sandboxID)") { req in
@@ -1150,8 +1154,8 @@ final class SandboxTests {
                 mutationId = try res.content.decode(AcceptedSandbox.self).mutationId
             }
 
-            try await self.pollSandboxRemoved(sandboxID, on: app.db)
-            let gone = try await Sandbox.find(sandboxID, on: app.db)
+            try await self.pollSandboxRemoved(sandboxID, on: app.testPostgres)
+            let gone = try await Sandbox.find(sandboxID, on: app.testPostgres)
             #expect(gone == nil)
 
             // The reap's terminal event is what lets the façade answer a delete
@@ -1168,12 +1172,12 @@ final class SandboxTests {
             let sandboxBindings = try await LegacyRoleBindingStore.bindings(
                 nodeType: IAMNodeType.sandbox.rawValue,
                 nodeID: sandboxID,
-                on: app.db).count
+                on: app.testPostgres).count
             #expect(sandboxBindings == 0)
             let snapshotBindings = try await LegacyRoleBindingStore.bindings(
                 nodeType: IAMNodeType.sandboxSnapshot.rawValue,
                 nodeID: snapshotID,
-                on: app.db).count
+                on: app.testPostgres).count
             #expect(snapshotBindings == 0)
         }
     }
@@ -1183,7 +1187,7 @@ final class SandboxTests {
         try await withSandboxTestApp { app, user, _, sandbox, token in
             let event = try await ResourceEvent.record(
                 .boot, resourceKind: .sandbox, resourceID: try sandbox.requireID(),
-                actor: .user(try user.requireID()), on: app.db)
+                actor: .user(try user.requireID()), on: app.testPostgres)
 
             try await app.test(.GET, "/api/operations/\(try event.requireID())") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1205,9 +1209,9 @@ final class SandboxTests {
             // append-only (its trigger rejects an `UPDATE`), so the insert
             // order is the only way to age one row relative to another.
             _ = try await ResourceEvent.record(
-                .boot, resourceKind: .sandbox, resourceID: sandboxID, actor: .user(userID), on: app.db)
+                .boot, resourceKind: .sandbox, resourceID: sandboxID, actor: .user(userID), on: app.testPostgres)
             let newer = try await ResourceEvent.record(
-                .shutdown, resourceKind: .sandbox, resourceID: sandboxID, actor: .user(userID), on: app.db)
+                .shutdown, resourceKind: .sandbox, resourceID: sandboxID, actor: .user(userID), on: app.testPostgres)
 
             try await app.test(.GET, "/api/sandboxes/\(sandbox.id!)/operations?limit=1") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1248,7 +1252,7 @@ final class SandboxTests {
             // below reach the sandbox guard (the default is unremovable, and
             // no VMs exist to trip the VM guard first).
             sandbox.environment = "staging"
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/projects/\(project.id!)/environments/staging") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1273,7 +1277,7 @@ final class SandboxTests {
     @Test("GET /api/sandboxes/:id is denied (403) when no binding grants read")
     func showDeniedWhenNoPermission() async throws {
         try await withSandboxTestApp { app, _, _, sandbox, _ in
-            let outsider = try await TestDataBuilder(db: app.db).createUser(
+            let outsider = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "sandbox-outsider", email: "sandbox-outsider@example.com")
             let outsiderToken = try await outsider.generateAPIKey(on: app)
 
@@ -1288,7 +1292,7 @@ final class SandboxTests {
     @Test("POST /api/sandboxes/:id/start is denied (403) when no binding grants start")
     func startDeniedWhenNoPermission() async throws {
         try await withSandboxTestApp { app, _, _, sandbox, _ in
-            let outsider = try await TestDataBuilder(db: app.db).createUser(
+            let outsider = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "sandbox-outsider2", email: "sandbox-outsider2@example.com")
             let outsiderToken = try await outsider.generateAPIKey(on: app)
 
@@ -1319,10 +1323,11 @@ final class SandboxTests {
     @Test("the desired-state assembly carries the agent's sandboxes")
     func assemblyIncludesSandboxes() async throws {
         try await withSandboxTestApp { app, _, _, sandbox, _ in
+            var sandbox = sandbox
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
             sandbox.setFixtureDesiredStatus(.running)
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(message.sandboxes.count == 1)
@@ -1346,7 +1351,7 @@ final class SandboxTests {
     /// single gate override the one field they are about.
     private func readySnapshot(
         named name: String, source: Sandbox, project: Project, user: User, agentId: String?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> SandboxSnapshot {
         let snapshot = SandboxSnapshot(
             name: name,
@@ -1363,7 +1368,7 @@ final class SandboxTests {
         return snapshot
     }
 
-    private func projectNetwork(project: Project, on db: any Database) async throws -> LogicalNetwork {
+    private func projectNetwork(project: Project, on db: PostgresStoreContext) async throws -> LogicalNetwork {
         if let existing = try await LegacyLogicalNetworkStore.networks(
             projectID: project.requireID(), name: "default", on: db
         ).first
@@ -1376,7 +1381,7 @@ final class SandboxTests {
     @Test("Creating a sandbox on a named network allocates one NIC with an IPv4 address")
     func createAllocatesNIC() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
-            let network = try await self.projectNetwork(project: project, on: app.db)
+            let network = try await self.projectNetwork(project: project, on: app.testPostgres)
 
             var accepted: AcceptedSandbox?
             try await app.test(.POST, "/api/sandboxes") { req in
@@ -1395,8 +1400,8 @@ final class SandboxTests {
             let sandboxID = try #require(accepted?.resource.id)
             let interfaces = try await LegacyInterfaceAddressStore.loading(
                 LegacySandboxNetworkInterfaceStore.interfaces(
-                    sandboxID: sandboxID, on: app.db),
-                on: app.db)
+                    sandboxID: sandboxID, on: app.testPostgres),
+                on: app.testPostgres)
             #expect(interfaces.count == 1)
             let nic = try #require(interfaces.first)
             #expect(nic.logicalNetworkID == network.id)
@@ -1432,7 +1437,7 @@ final class SandboxTests {
 
             let sandboxID = try #require(accepted?.resource.id)
             let interfaces = try await LegacySandboxNetworkInterfaceStore.interfaces(
-                sandboxID: sandboxID, on: app.db)
+                sandboxID: sandboxID, on: app.testPostgres)
             #expect(interfaces.isEmpty)
         }
     }
@@ -1440,33 +1445,33 @@ final class SandboxTests {
     @Test("IPAM's used set unions VM and sandbox addresses on the same network")
     func ipamUnionsVMAndSandboxAddresses() async throws {
         try await withSandboxTestApp { app, _, project, sandbox, _ in
-            let network = try await self.projectNetwork(project: project, on: app.db)
+            let network = try await self.projectNetwork(project: project, on: app.testPostgres)
 
             // A VM holds .2 and a sandbox holds .3 on the same network. The next
             // allocation must skip both — proving the used set unions the two
             // address tables.
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "peer-vm", project: project)
+            let vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "peer-vm", project: project)
             let vmNIC = VMNetworkInterface(
                 vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: VMNetworkInterface.generateMACAddress())
-            try await vmNIC.save(on: app.db)
+            try await vmNIC.save(on: app.testPostgres)
             try await LegacyInterfaceAddressStore.insert(
                 kind: .vm,
                 interfaceID: try vmNIC.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
                 address: "192.168.1.2", prefixLength: 24, gateway: network.gateway,
-                on: app.db)
+                on: app.testPostgres)
 
             let sbNIC = SandboxNetworkInterface(
                 sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: VMNetworkInterface.generateMACAddress())
-            try await sbNIC.save(on: app.db)
+            try await sbNIC.save(on: app.testPostgres)
             try await LegacyInterfaceAddressStore.insert(
                 kind: .sandbox,
                 interfaceID: try sbNIC.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
                 address: "192.168.1.3", prefixLength: 24, gateway: network.gateway,
-                on: app.db)
+                on: app.testPostgres)
 
-            let allocation = try await IPAMService.allocateIP(for: network, on: app.db)
+            let allocation = try await IPAMService.allocateIP(for: network, on: app.testPostgres)
             #expect(allocation.ipAddress == "192.168.1.4")
         }
     }
@@ -1474,7 +1479,7 @@ final class SandboxTests {
     @Test("the desired-state assembly puts a NIC on the wire for a sandbox-networking agent")
     func assemblyCarriesNICSpecForCapableAgent() async throws {
         try await withSandboxTestApp { app, _, project, sandbox, _ in
-            let network = try await self.projectNetwork(project: project, on: app.db)
+            let network = try await self.projectNetwork(project: project, on: app.testPostgres)
             let agentId = try await self.registerAgent(
                 app: app, sandbox: sandbox, sandboxCapable: true, sandboxNetworkingCapable: true)
 
@@ -1482,12 +1487,12 @@ final class SandboxTests {
             let nic = SandboxNetworkInterface(
                 sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: "00:0c:29:ab:cd:ef")
-            try await nic.save(on: app.db)
+            try await nic.save(on: app.testPostgres)
             try await LegacyInterfaceAddressStore.insert(
                 kind: .sandbox,
                 interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
                 address: "192.168.1.7", prefixLength: 24, gateway: network.gateway,
-                on: app.db)
+                on: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let entry = try #require(message.sandboxes.first)
@@ -1509,19 +1514,19 @@ final class SandboxTests {
     @Test("the assembly withholds the NIC from an agent that does not advertise sandbox networking")
     func assemblyWithholdsNICFromIncapableAgent() async throws {
         try await withSandboxTestApp { app, _, project, sandbox, _ in
-            let network = try await self.projectNetwork(project: project, on: app.db)
+            let network = try await self.projectNetwork(project: project, on: app.testPostgres)
             let agentId = try await self.registerAgent(
                 app: app, sandbox: sandbox, sandboxCapable: true, sandboxNetworkingCapable: nil)
 
             let nic = SandboxNetworkInterface(
                 sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: "00:0c:29:ab:cd:ee")
-            try await nic.save(on: app.db)
+            try await nic.save(on: app.testPostgres)
             try await LegacyInterfaceAddressStore.insert(
                 kind: .sandbox,
                 interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
                 address: "192.168.1.8", prefixLength: 24, gateway: network.gateway,
-                on: app.db)
+                on: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let entry = try #require(message.sandboxes.first)
@@ -1534,7 +1539,7 @@ final class SandboxTests {
     @Test("A freshly created sandbox converges with the NIC its create reserved")
     func createdSandboxWireSpecCarriesItsNetwork() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
-            let network = try await self.projectNetwork(project: project, on: app.db)
+            let network = try await self.projectNetwork(project: project, on: app.testPostgres)
             var accepted: AcceptedSandbox?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1552,8 +1557,8 @@ final class SandboxTests {
             // Drain the background placement attempt (it fails — no
             // sandbox-capable agent is registered yet) so its save cannot race
             // the manual placement below.
-            try await self.pollSandboxDegraded(sandboxID, on: app.db)
-            let created = try #require(await Sandbox.find(sandboxID, on: app.db))
+            try await self.pollSandboxDegraded(sandboxID, on: app.testPostgres)
+            let created = try #require(await Sandbox.find(sandboxID, on: app.testPostgres))
             let agentId = try await self.registerAgent(
                 app: app, sandbox: created, sandboxCapable: true, sandboxNetworkingCapable: true)
 
@@ -1564,8 +1569,8 @@ final class SandboxTests {
             let nic = try #require(
                 await LegacyInterfaceAddressStore.loading(
                     LegacySandboxNetworkInterfaceStore.interfaces(
-                        sandboxID: sandboxID, on: app.db),
-                    on: app.db).first)
+                        sandboxID: sandboxID, on: app.testPostgres),
+                    on: app.testPostgres).first)
             #expect(spec.ipAddress == nic.ipv4Address?.address)
             // The default group the create transaction attached rides with it,
             // so the port is filtered from the moment it exists (STR-102).
@@ -1579,18 +1584,18 @@ final class SandboxTests {
     @Test("Security-group ids reach a sandbox NIC's wire spec, and the per-agent gate still withholds it")
     func sandboxNICSpecCarriesSecurityGroups() async throws {
         try await withSandboxTestApp { app, _, project, sandbox, _ in
-            let network = try await self.projectNetwork(project: project, on: app.db)
+            let network = try await self.projectNetwork(project: project, on: app.testPostgres)
             let nic = SandboxNetworkInterface(
                 sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: "00:0c:29:ab:cd:11")
-            try await nic.save(on: app.db)
+            try await nic.save(on: app.testPostgres)
             try await LegacyInterfaceAddressStore.insert(
                 kind: .sandbox,
                 interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
                 address: "192.168.1.9", prefixLength: 24, gateway: network.gateway,
-                on: app.db)
+                on: app.testPostgres)
             let loadedNIC = try #require(
-                await LegacyInterfaceAddressStore.loading([nic], on: app.db).first)
+                await LegacyInterfaceAddressStore.loading([nic], on: app.testPostgres).first)
 
             let groupIDs = [UUID(), UUID()]
             // The gate is the outermost check: ids or no ids.
@@ -1616,7 +1621,7 @@ final class SandboxTests {
     @Test("A sandbox's NIC response carries its network, addresses and groups")
     func sandboxDetailReportsNIC() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
-            let network = try await self.projectNetwork(project: project, on: app.db)
+            let network = try await self.projectNetwork(project: project, on: app.testPostgres)
             var accepted: AcceptedSandbox?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1631,7 +1636,7 @@ final class SandboxTests {
                 accepted = try res.content.decode(AcceptedSandbox.self)
             }
             let sandboxID = try #require(accepted?.resource.id)
-            try await self.pollSandboxDegraded(sandboxID, on: app.db)
+            try await self.pollSandboxDegraded(sandboxID, on: app.testPostgres)
 
             try await app.test(.GET, "/api/sandboxes/\(sandboxID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1661,30 +1666,32 @@ final class SandboxTests {
     @Test("The flat security-group ids come from the same NIC the list orders first")
     func sandboxDetailFlatIDsMatchFirstOrderedNIC() async throws {
         try await withSandboxTestApp { app, _, project, sandbox, _ in
-            let network = try await self.projectNetwork(project: project, on: app.db)
+            let network = try await self.projectNetwork(project: project, on: app.testPostgres)
             let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: try project.requireID(), on: app.db)
+                projectID: try project.requireID(), on: app.testPostgres)
             let other = try await LegacySecurityGroupStore.insert(
-                projectID: try project.requireID(), name: "sbx-second", on: app.db)
+                projectID: try project.requireID(), name: "sbx-second", on: app.testPostgres)
 
             // Saved net1 first, so insertion order and device-name order differ.
             for (deviceName, group) in [("net1", other), ("net0", defaultGroup)] {
                 let nic = SandboxNetworkInterface(
                     sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
                     macAddress: VMNetworkInterface.generateMACAddress(), deviceName: deviceName)
-                try await nic.save(on: app.db)
+                try await nic.save(on: app.testPostgres)
                 try await LegacyInterfaceSecurityGroupStore.insert(
                     kind: .sandbox,
                     interfaceID: try nic.requireID(),
                     securityGroupID: group.id,
-                    on: app.db)
+                    on: app.testPostgres)
             }
 
-            try await LegacySandboxNetworkInterfaceStore.load([sandbox], on: app.db)
+            let sandbox = try #require(
+                try await LegacySandboxNetworkInterfaceStore.loading(
+                    [sandbox], on: app.testPostgres).first)
             let memberships = try await LegacyInterfaceSecurityGroupStore.securityGroupIDsByInterface(
                 kind: .sandbox,
                 interfaceIDs: sandbox.networkInterfaces.compactMap(\.id),
-                on: app.db)
+                on: app.testPostgres)
             let detail = SandboxDetailResponse(
                 from: sandbox, securityGroupIDsByInterfaceID: memberships)
             #expect(detail.networkInterfaces.map(\.deviceName) == ["net0", "net1"])
@@ -1696,7 +1703,7 @@ final class SandboxTests {
     @Test("Deleting a sandbox cascades its NIC and address rows")
     func deleteCascadesNIC() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
-            let network = try await self.projectNetwork(project: project, on: app.db)
+            let network = try await self.projectNetwork(project: project, on: app.testPostgres)
             var accepted: AcceptedSandbox?
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1713,17 +1720,17 @@ final class SandboxTests {
 
             // Sanity: rows exist before deletion.
             let nicIDs = try await LegacySandboxNetworkInterfaceStore.interfaces(
-                sandboxID: sandboxID, on: app.db).map { try $0.requireID() }
+                sandboxID: sandboxID, on: app.testPostgres).map { try $0.requireID() }
             #expect(nicIDs.count == 1)
 
-            let sandbox = try #require(await Sandbox.find(sandboxID, on: app.db))
-            try await sandbox.delete(on: app.db)
+            let sandbox = try #require(await Sandbox.find(sandboxID, on: app.testPostgres))
+            try await sandbox.delete(on: app.testPostgres)
 
             let remainingNICs = try await LegacySandboxNetworkInterfaceStore.interfaces(
-                sandboxID: sandboxID, on: app.db)
+                sandboxID: sandboxID, on: app.testPostgres)
             #expect(remainingNICs.isEmpty)
             let remainingAddresses = try await LegacyInterfaceAddressStore.count(
-                kind: .sandbox, interfaceIDs: nicIDs, on: app.db)
+                kind: .sandbox, interfaceIDs: nicIDs, on: app.testPostgres)
             #expect(remainingAddresses == 0)
         }
     }
@@ -1738,7 +1745,7 @@ final class SandboxTests {
 
             sandbox.setFixtureDesiredStatus(.running)
             sandbox = sandbox.extendingConvergenceDeadline(by: 600)
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             let envelope = try self.report(
                 agentId: agentId,
@@ -1749,7 +1756,7 @@ final class SandboxTests {
                 ])
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
 
-            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.testPostgres))
             #expect(refreshed.status == .running)
             #expect(refreshed.observedGeneration == sandbox.generation)
             #expect(refreshed.conditions.converged)
@@ -1766,7 +1773,7 @@ final class SandboxTests {
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
             sandbox.setFixtureDesiredStatus(.running)
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             let envelope = try self.report(
                 agentId: agentId,
@@ -1777,7 +1784,7 @@ final class SandboxTests {
                 ])
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
 
-            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.testPostgres))
             #expect(refreshed.status == .exited)
             #expect(refreshed.exitCode == 0)
             #expect(refreshed.conditions.converged)
@@ -1792,11 +1799,11 @@ final class SandboxTests {
 
             sandbox.setFixtureDesiredStatus(.running)
             sandbox = sandbox.extendingConvergenceDeadline(by: 600)
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
             let generation = sandbox.generation
             _ = try await ResourceEvent.record(
                 .boot, resourceKind: .sandbox, resourceID: sandbox.id!,
-                actor: .user(user.id!), on: app.db)
+                actor: .user(user.id!), on: app.testPostgres)
 
             let envelope = try self.report(
                 agentId: agentId,
@@ -1809,7 +1816,7 @@ final class SandboxTests {
                 ])
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
 
-            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.testPostgres))
             let degraded = try #require(refreshed.conditions.degraded)
             #expect(degraded.reason == "image pull failed")
             #expect(degraded.sinceGeneration == generation)
@@ -1824,12 +1831,12 @@ final class SandboxTests {
             var sandbox = sandbox
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
-            sandbox = try await ResourceFinalizerService.stampForDeletion(sandbox, on: app.db)
+            sandbox = try await ResourceFinalizerService.stampForDeletion(sandbox, on: app.testPostgres)
             sandbox.setFixtureDesiredStatus(.absent)
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
             let request = try await ResourceEvent.record(
                 .delete, resourceKind: .sandbox, resourceID: sandbox.id!,
-                actor: .user(user.id!), on: app.db)
+                actor: .user(user.id!), on: app.testPostgres)
 
             // The creator binding sandbox creation writes, plus a snapshot
             // whose row cascades away with the sandbox: bindings have no FK to
@@ -1837,39 +1844,39 @@ final class SandboxTests {
             // and the snapshot's only if the revoke reads it before the delete.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .sandbox, nodeID: sandbox.id!, createdBy: user.id!, on: app.db)
+                nodeType: .sandbox, nodeID: sandbox.id!, createdBy: user.id!, on: app.testPostgres)
             let snapshot = SandboxSnapshot(
                 name: "snap", sandboxID: sandbox.id!, projectID: sandbox.projectID,
                 environment: sandbox.environment, agentId: agentId, createdByID: user.id!)
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
             let snapshotID = try snapshot.requireID()
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .sandboxSnapshot, nodeID: snapshotID, createdBy: user.id!, on: app.db)
+                nodeType: .sandboxSnapshot, nodeID: snapshotID, createdBy: user.id!, on: app.testPostgres)
 
             let envelope = try self.report(agentId: agentId, sandboxes: [])
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
 
-            let gone = try await Sandbox.find(sandbox.id, on: app.db)
+            let gone = try await Sandbox.find(sandbox.id, on: app.testPostgres)
             #expect(gone == nil)
 
             // The reap appended the terminal event the operations façade — and
             // any client polling a delete — reads as "done" (STR-147).
             let terminal = try #require(
                 await ResourceEvent.latest(
-                    .completed, resourceKind: .sandbox, resourceID: sandbox.id!, on: app.db))
+                    .completed, resourceKind: .sandbox, resourceID: sandbox.id!, on: app.testPostgres))
             #expect(terminal.mutation == .delete)
             #expect(terminal.id != request.id)
 
             let bindings = try await LegacyRoleBindingStore.bindings(
                 nodeType: IAMNodeType.sandbox.rawValue,
                 nodeID: sandbox.id!,
-                on: app.db).count
+                on: app.testPostgres).count
             #expect(bindings == 0)
             let snapshotBindings = try await LegacyRoleBindingStore.bindings(
                 nodeType: IAMNodeType.sandboxSnapshot.rawValue,
                 nodeID: snapshotID,
-                on: app.db).count
+                on: app.testPostgres).count
             #expect(snapshotBindings == 0)
         }
     }
@@ -1877,16 +1884,17 @@ final class SandboxTests {
     @Test("Absence does not escalate a never-confirmed sandbox")
     func absenceToleratesUnconfirmedCreate() async throws {
         try await withSandboxTestApp { app, _, _, sandbox, _ in
+            var sandbox = sandbox
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
             // Mid-create: desired stopped at generation 1, never confirmed.
             sandbox.setFixtureDesiredStatus(.stopped)
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             let envelope = try self.report(agentId: agentId, sandboxes: [])
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
 
-            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.testPostgres))
             #expect(refreshed.status == .stopped)
         }
     }
@@ -1894,17 +1902,18 @@ final class SandboxTests {
     @Test("Absence escalates an established sandbox to error")
     func absenceEscalatesEstablishedSandbox() async throws {
         try await withSandboxTestApp { app, _, _, sandbox, _ in
+            var sandbox = sandbox
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
             sandbox.setFixtureDesiredStatus(.running)
             sandbox.setStatus(.running)
             sandbox.observedGeneration = sandbox.generation
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             let envelope = try self.report(agentId: agentId, sandboxes: [])
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
 
-            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.testPostgres))
             #expect(refreshed.status == .error)
         }
     }
@@ -1926,16 +1935,16 @@ final class SandboxTests {
             sandbox.setStatus(.running)
             sandbox.setFixtureDesiredStatus(.absent)
             sandbox.convergenceDeadline = Date(timeIntervalSinceNow: -100)
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .delete, resourceKind: .sandbox, resourceID: try sandbox.requireID(),
-                actor: .user(try user.requireID()), on: app.db)
+                actor: .user(try user.requireID()), on: app.testPostgres)
 
             await app.agentService.sweepStuckConvergence()
 
             // The timeout must not abandon the deletion (issue #734) — a live
             // desired state would have the agent recreate a blank sandbox.
-            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.testPostgres))
             #expect(refreshed.conditions.degraded?.sinceGeneration == sandbox.generation)
             #expect(refreshed.desiredStatus == .absent)
             #expect(refreshed.generation == sandbox.generation)
@@ -1944,7 +1953,7 @@ final class SandboxTests {
             let envelope = try self.report(agentId: agentId, sandboxes: [])
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("sandbox-agent"))
 
-            let gone = try await Sandbox.find(sandbox.id, on: app.db)
+            let gone = try await Sandbox.find(sandbox.id, on: app.testPostgres)
             #expect(gone == nil)
         }
     }

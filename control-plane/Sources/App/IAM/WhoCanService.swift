@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -219,25 +218,28 @@ enum WhoCanService {
         node: IAMNode,
         app: Application,
         using iam: IAMPersistence,
-        on db: any Database
+        groups: GroupsPersistence,
+        hierarchy: HierarchyPersistence,
+        users: UserDirectoryPersistence,
+        serviceAccounts: ServiceAccountsPersistence,
+        workloads: WorkloadsPersistence
     ) async throws -> WhoCanResult {
         let built = try await IAMDecisionEngine.compiledSet(app)
         let chain = try await IAMResourceTree.ancestors(of: node, using: iam)
         var entries: [WhoCanEntry] = []
 
-        entries += try await bindingEntries(action: action, chain: chain, using: iam, on: db)
-        entries += try await membershipEntries(action: action, chain: chain, on: db)
-        entries += try await systemAdminEntries(on: db)
+        entries += try await bindingEntries(action: action, chain: chain, using: iam, groups: groups)
+        entries += try await membershipEntries(action: action, chain: chain, hierarchy: hierarchy)
+        entries += try await systemAdminEntries(users: users)
 
-        var principals = try await markingDisabledPrincipals(dedupedAndSorted(entries), on: db)
-        principals = try await markingExternalPrincipals(principals, chain: chain, on: db)
+        var principals = try await markingDisabledPrincipals(dedupedAndSorted(entries), users: users)
+        principals = try await markingExternalPrincipals(principals, chain: chain, using: iam)
         principals = try await markingCeilingedPrincipals(
             principals,
             action: action,
             node: node,
             built: built,
-            using: iam,
-            on: db
+            using: iam
         )
 
         // Only authored *permits* are a caveat now — they widen access to
@@ -253,24 +255,11 @@ enum WhoCanService {
 
         return WhoCanResult(
             principals: principals,
-            openToAllAuthenticatedUsers: try await isOpenToAllAuthenticatedUsers(
-                action: action, node: node, on: db),
+            openToAllAuthenticatedUsers: isOpenToAllAuthenticatedUsers(action: action, node: node),
             authoredPolicies: authoredPermits,
             authoredPolicyCaveat: !authoredPermits.isEmpty,
             ceilings: ceilings
         )
-    }
-
-    @available(*, deprecated, message: "Inject IAMPersistence into the caller")
-    static func whoCan(
-        action: String,
-        node: IAMNode,
-        app: Application,
-        on db: any Database
-    ) async throws -> WhoCanResult {
-        try await app.policySetVersion.withIAMPersistence { iam in
-            try await whoCan(action: action, node: node, app: app, using: iam, on: db)
-        }
     }
 
     /// Flag entries a ceiling denies, so the list agrees with the enforcer:
@@ -290,8 +279,7 @@ enum WhoCanService {
     private static func markingCeilingedPrincipals(
         _ entries: [WhoCanEntry], action: String, node: IAMNode,
         built: CedarPolicySetCache.Built,
-        using iam: IAMPersistence,
-        on db: any Database
+        using iam: IAMPersistence
     ) async throws -> [WhoCanEntry] {
         let targets = entries.compactMap { entry in
             IAMPrincipal.requestPrincipal(type: entry.principal.type, id: entry.principal.id)
@@ -302,8 +290,7 @@ enum WhoCanService {
             targets,
             action: action,
             built: built,
-            using: iam,
-            on: db
+            using: iam
         )
 
         return entries.map { entry in
@@ -408,65 +395,34 @@ enum WhoCanService {
     /// cross-org grants are deliberately loud everywhere they surface
     /// (issue #485). No org in the chain means nothing to be external to.
     private static func markingExternalPrincipals(
-        _ entries: [WhoCanEntry], chain: [IAMNode], on db: any Database
+        _ entries: [WhoCanEntry], chain: [IAMNode], using iam: IAMPersistence
     ) async throws -> [WhoCanEntry] {
         guard let root = chain.last, root.type == .organization else { return entries }
         let orgID = root.id
-
-        let userIDs = Set(entries.filter { $0.principal.type == .user }.map(\.principal.id))
-        var internalUsers: Set<UUID> = []
-        if !userIDs.isEmpty {
-            internalUsers = Set(
-                try await OrganizationMembershipStore.memberships(
-                    organizationID: orgID, userIDs: Array(userIDs), on: db
-                ).map(\.userID)
-            )
+        var external: Set<WhoCanPrincipalRef> = []
+        for principal in Set(entries.map(\.principal)) {
+            if try await iam.principalIsExternal(
+                type: principal.type.rawValue, id: principal.id, organizationID: orgID)
+            {
+                external.insert(principal)
+            }
         }
-
-        let groupIDs = Set(entries.filter { $0.principal.type == .group }.map(\.principal.id))
-        var internalGroups: Set<UUID> = []
-        if !groupIDs.isEmpty {
-            internalGroups = Set(
-                try await LegacyGroupSQLBridge.groups(ids: Array(groupIDs), on: db)
-                    .filter { $0.organizationID == orgID }
-                    .map(\.id)
-            )
-        }
-
-        // Machine principals (issue #491): a service account is internal when
-        // its project's chain reaches this org; a registered workload when
-        // its registration row is scoped to it. Same rules as the write-time
-        // gate (`CrossOrgBindingGate.isExternal`).
-        var internalMachines: Set<UUID> = []
-        for entry in entries where entry.principal.type == .serviceAccount || entry.principal.type == .workload {
-            let external = try await CrossOrgBindingGate.isExternal(
-                principalType: entry.principal.type, principalID: entry.principal.id,
-                organizationID: orgID, on: db)
-            if !external { internalMachines.insert(entry.principal.id) }
-        }
-
         return entries.map { entry in
-            let isInternal =
-                switch entry.principal.type {
-                case .user: internalUsers.contains(entry.principal.id)
-                case .group: internalGroups.contains(entry.principal.id)
-                case .serviceAccount, .workload: internalMachines.contains(entry.principal.id)
-                }
-            return isInternal ? entry : entry.markingPrincipalExternal()
+            external.contains(entry.principal) ? entry.markingPrincipalExternal() : entry
         }
     }
 
     /// Flag entries whose holder's account is disabled, so the list agrees with
     /// `can()` about who may actually act.
     private static func markingDisabledPrincipals(
-        _ entries: [WhoCanEntry], on db: any Database
+        _ entries: [WhoCanEntry], users: UserDirectoryPersistence
     ) async throws -> [WhoCanEntry] {
         let userIDs = Set(entries.filter { $0.principal.type == .user }.map(\.principal.id))
         guard !userIDs.isEmpty else { return entries }
 
         let disabled = Set(
-            try await LegacyUserStore.users(ids: Array(userIDs), disabled: true, on: db)
-                .compactMap(\.id)
+            try await users.users(filter: UserDirectoryFilter(ids: Array(userIDs), disabled: true))
+                .map(\.id)
         )
         guard !disabled.isEmpty else { return entries }
 
@@ -486,9 +442,7 @@ enum WhoCanService {
     /// away with global networks themselves (issue #765). The hook and the
     /// result field stay so the next unconstrained permit has somewhere to
     /// render, and so the API shape does not churn.
-    static func isOpenToAllAuthenticatedUsers(
-        action: String, node: IAMNode, on db: any Database
-    ) async throws -> Bool {
+    static func isOpenToAllAuthenticatedUsers(action: String, node: IAMNode) -> Bool {
         false
     }
 
@@ -513,7 +467,7 @@ enum WhoCanService {
         action: String,
         chain: [IAMNode],
         using iam: IAMPersistence,
-        on db: any Database
+        groups: GroupsPersistence
     ) async throws -> [WhoCanEntry] {
         guard !chain.isEmpty else { return [] }
         let grantingRoles = Set(
@@ -550,8 +504,8 @@ enum WhoCanService {
         let groupBindings = bindings.filter { $0.principalType == IAMPrincipalType.group.rawValue }
         guard !groupBindings.isEmpty else { return entries }
 
-        let memberships = try await LegacyGroupSQLBridge.memberships(
-            groupIDs: Array(Set(groupBindings.map(\.principalID))), on: db)
+        let memberships = try await groups.memberships(
+            groupIDs: Array(Set(groupBindings.map(\.principalID))))
         let membersByGroup = Dictionary(grouping: memberships, by: \.groupID)
 
         for binding in groupBindings {
@@ -575,14 +529,13 @@ enum WhoCanService {
 
     /// Org members, for the two actions membership grants directly.
     private static func membershipEntries(
-        action: String, chain: [IAMNode], on db: any Database
+        action: String, chain: [IAMNode], hierarchy: HierarchyPersistence
     ) async throws -> [WhoCanEntry] {
         guard IAMRoleRegistry.membershipDerivedActions.contains(action),
             let orgNode = chain.first(where: { $0.type == .organization })
         else { return [] }
 
-        let members = try await OrganizationMembershipStore.memberships(
-            organizationID: orgNode.id, on: db)
+        let members = try await hierarchy.members(organizationID: orgNode.id)
         return members.map { membership in
             WhoCanEntry(
                 principal: WhoCanPrincipalRef(type: .user, id: membership.userID),
@@ -596,12 +549,11 @@ enum WhoCanService {
     }
 
     /// System admins can perform any action on any resource.
-    private static func systemAdminEntries(on db: any Database) async throws -> [WhoCanEntry] {
-        let admins = try await LegacyUserStore.users(isSystemAdmin: true, on: db)
-        return admins.compactMap { admin in
-            guard let id = admin.id else { return nil }
+    private static func systemAdminEntries(users: UserDirectoryPersistence) async throws -> [WhoCanEntry] {
+        let admins = try await users.users(filter: UserDirectoryFilter(isSystemAdmin: true))
+        return admins.map { admin in
             return WhoCanEntry(
-                principal: WhoCanPrincipalRef(type: .user, id: id),
+                principal: WhoCanPrincipalRef(type: .user, id: admin.id),
                 source: .systemAdmin,
                 role: nil,
                 grantedOn: nil,
@@ -654,35 +606,15 @@ enum WhoCanService {
         app: Application,
         cache: IAMRequestCache? = nil,
         using iam: IAMPersistence,
-        on db: any Database
+        groups: GroupsPersistence,
+        users: UserDirectoryPersistence,
+        serviceAccounts: ServiceAccountsPersistence,
+        workloads: WorkloadsPersistence
     ) async throws -> Bool {
         try await can(
             principalType: principalType, principalID: principalID, action: action, nodes: [node],
-            app: app, cache: cache, using: iam, on: db)[node] ?? false
-    }
-
-    @available(*, deprecated, message: "Inject IAMPersistence into the caller")
-    static func can(
-        principalType: IAMPrincipalType,
-        principalID: UUID,
-        action: String,
-        node: IAMNode,
-        app: Application,
-        cache: IAMRequestCache? = nil,
-        on db: any Database
-    ) async throws -> Bool {
-        try await app.policySetVersion.withIAMPersistence { iam in
-            try await can(
-                principalType: principalType,
-                principalID: principalID,
-                action: action,
-                node: node,
-                app: app,
-                cache: cache,
-                using: iam,
-                on: db
-            )
-        }
+            app: app, cache: cache, using: iam, groups: groups, users: users,
+            serviceAccounts: serviceAccounts, workloads: workloads)[node] ?? false
     }
 
     /// The same answer for many resources at once (#687), so the batch check
@@ -693,7 +625,10 @@ enum WhoCanService {
         app: Application,
         cache: IAMRequestCache? = nil,
         using iam: IAMPersistence,
-        on db: any Database
+        groups: GroupsPersistence,
+        users: UserDirectoryPersistence,
+        serviceAccounts: ServiceAccountsPersistence,
+        workloads: WorkloadsPersistence
     ) async throws -> [IAMNode: Bool] {
         let distinct = Set(nodes)
         guard !distinct.isEmpty else { return [:] }
@@ -710,8 +645,7 @@ enum WhoCanService {
                         groupID: principalID,
                         action: action,
                         node: node,
-                        using: iam,
-                        on: db
+                        using: iam
                     )
                 else {
                     answers[node] = false
@@ -719,13 +653,15 @@ enum WhoCanService {
                 }
                 let forbidding = try await GuardrailStore.forbidding(
                     action: action, principalType: principalType, principalID: principalID,
-                    node: node, using: iam, hierarchyDB: db)
+                    node: node, using: iam, groups: groups)
                 answers[node] = forbidding.isEmpty
             }
             return answers
         }
 
-        guard try await principalMayAct(principal, on: db) else {
+        guard try await principalMayAct(
+            principal, users: users, serviceAccounts: serviceAccounts, workloads: workloads)
+        else {
             return Dictionary(uniqueKeysWithValues: distinct.map { ($0, false) })
         }
 
@@ -735,37 +671,12 @@ enum WhoCanService {
             action: action,
             built: built,
             cache: cache,
-            using: iam,
-            on: db
+            using: iam
         )
         return Dictionary(
             uniqueKeysWithValues: distinct.map {
                 ($0, decisions[IAMCheckTarget(principal: principal, node: $0)]?.verdict.allowed ?? false)
             })
-    }
-
-    @available(*, deprecated, message: "Inject IAMPersistence into the caller")
-    static func can(
-        principalType: IAMPrincipalType,
-        principalID: UUID,
-        action: String,
-        nodes: [IAMNode],
-        app: Application,
-        cache: IAMRequestCache? = nil,
-        on db: any Database
-    ) async throws -> [IAMNode: Bool] {
-        try await app.policySetVersion.withIAMPersistence { iam in
-            try await can(
-                principalType: principalType,
-                principalID: principalID,
-                action: action,
-                nodes: nodes,
-                app: app,
-                cache: cache,
-                using: iam,
-                on: db
-            )
-        }
     }
 
     /// Whether the principal can reach the evaluator at all: its row exists,
@@ -776,16 +687,20 @@ enum WhoCanService {
     /// `platform-open-network-read`, went away with global networks in issue
     /// #765. The guard stays, since the next unconstrained permit must not
     /// silently reintroduce the hole.)
-    private static func principalMayAct(_ principal: IAMPrincipal, on db: any Database) async throws -> Bool {
+    private static func principalMayAct(
+        _ principal: IAMPrincipal,
+        users: UserDirectoryPersistence,
+        serviceAccounts: ServiceAccountsPersistence,
+        workloads: WorkloadsPersistence
+    ) async throws -> Bool {
         switch principal.type {
         case .user:
-            guard let user = try await User.find(principal.id, on: db) else { return false }
+            guard let user = try await users.user(id: principal.id) else { return false }
             return user.disabledAt == nil
         case .serviceAccount:
-            return try await LegacyServiceAccountStore.account(id: principal.id, on: db) != nil
+            return try await serviceAccounts.account(id: principal.id) != nil
         case .workload:
-            return try await LegacyWorkloadRegistrationStore.registration(
-                id: principal.id, on: db) != nil
+            return try await workloads.registration(id: principal.id) != nil
         case .group:
             return false
         }
@@ -799,8 +714,7 @@ enum WhoCanService {
         groupID: UUID,
         action: String,
         node: IAMNode,
-        using iam: IAMPersistence,
-        on db: any Database
+        using iam: IAMPersistence
     ) async throws -> Bool {
         let chain = try await IAMResourceTree.ancestors(of: node, using: iam)
         guard !chain.isEmpty else { return false }
@@ -817,6 +731,48 @@ enum WhoCanService {
                 && $0.principalID == groupID
         }
     }
+
+#if DEBUG
+    package static func whoCan(
+        action: String, node: IAMNode, app: Application,
+        on _: PostgresStoreContext
+    ) async throws -> WhoCanResult {
+        try await whoCan(
+            action: action, node: node, app: app,
+            using: app.iamPersistence, groups: app.groupsPersistence,
+            hierarchy: app.hierarchyPersistence, users: app.userDirectoryPersistence,
+            serviceAccounts: app.serviceAccountsPersistence,
+            workloads: app.workloadsPersistence)
+    }
+
+    package static func can(
+        principalType: IAMPrincipalType, principalID: UUID,
+        action: String, node: IAMNode, app: Application,
+        cache: IAMRequestCache? = nil, on _: PostgresStoreContext
+    ) async throws -> Bool {
+        try await can(
+            principalType: principalType, principalID: principalID, action: action,
+            node: node, app: app, cache: cache,
+            using: app.iamPersistence, groups: app.groupsPersistence,
+            users: app.userDirectoryPersistence,
+            serviceAccounts: app.serviceAccountsPersistence,
+            workloads: app.workloadsPersistence)
+    }
+
+    package static func can(
+        principalType: IAMPrincipalType, principalID: UUID,
+        action: String, nodes: [IAMNode], app: Application,
+        cache: IAMRequestCache? = nil, on _: PostgresStoreContext
+    ) async throws -> [IAMNode: Bool] {
+        try await can(
+            principalType: principalType, principalID: principalID, action: action,
+            nodes: nodes, app: app, cache: cache,
+            using: app.iamPersistence, groups: app.groupsPersistence,
+            users: app.userDirectoryPersistence,
+            serviceAccounts: app.serviceAccountsPersistence,
+            workloads: app.workloadsPersistence)
+    }
+#endif
 }
 
 extension WhoCanSource {

@@ -1,4 +1,3 @@
-import Fluent
 import ControlPlanePostgres
 import Vapor
 import Foundation
@@ -247,23 +246,23 @@ struct Volume: Sendable {
         return id
     }
 
-    func persisted(on db: any Database) async throws -> Self {
+    func persisted(on db: PostgresStoreContext) async throws -> Self {
         try await LegacyVolumeStore.upsert(self, on: db)
     }
-    func persist(on db: any Database) async throws { _ = try await persisted(on: db) }
-    func save(on db: any Database) async throws { try await persist(on: db) }
-    func remove(on db: any Database) async throws {
+    func persist(on db: PostgresStoreContext) async throws { _ = try await persisted(on: db) }
+    func save(on db: PostgresStoreContext) async throws { try await persist(on: db) }
+    func remove(on db: PostgresStoreContext) async throws {
         guard let id else { return }
         _ = try await LegacyVolumeStore.delete(id: id, on: db)
     }
-    func delete(on db: any Database) async throws { try await remove(on: db) }
-    static func load(_ id: UUID?, on db: any Database) async throws -> Self? {
+    func delete(on db: PostgresStoreContext) async throws { try await remove(on: db) }
+    static func load(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await LegacyVolumeStore.volume(id: id, on: db)
     }
-    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+    static func find(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await load(id, on: db)
     }
-    static func all(on db: any Database) async throws -> [Self] {
+    static func all(on db: PostgresStoreContext) async throws -> [Self] {
         try await LegacyVolumeStore.volumes(on: db)
     }
 

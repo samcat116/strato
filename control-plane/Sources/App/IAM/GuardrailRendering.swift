@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -166,7 +165,7 @@ struct GuardrailRendering: Sendable {
         principalType: IAMPrincipalType,
         principalID: UUID,
         organizationID: UUID?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Bool {
         switch match {
         case .any:
@@ -205,7 +204,7 @@ struct GuardrailRendering: Sendable {
     }
 
     func covers(
-        principalType: IAMPrincipalType, principalID: UUID, organizationID: UUID?, on db: any Database
+        principalType: IAMPrincipalType, principalID: UUID, organizationID: UUID?, on db: PostgresStoreContext
     ) async throws -> Bool {
         try await Self.covers(
             principalMatch, principalType: principalType, principalID: principalID,
@@ -412,7 +411,7 @@ struct GuardrailRendering: Sendable {
     /// first — the one database read the forbid projection needs.
     static func forbids(
         for rows: [IAMGuardrailSnapshot],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> RenderedForbids {
         var organizationIDsByGuardrail: [UUID: UUID] = [:]
         for row in rows
@@ -454,7 +453,7 @@ struct GuardrailRendering: Sendable {
     /// cannot drift.
     static func cedarText(
         for row: IAMGuardrailSnapshot,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> String? {
         try await forbids(for: [row], on: db).policies.first?.text
     }

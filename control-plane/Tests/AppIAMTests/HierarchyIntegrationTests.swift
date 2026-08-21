@@ -1,6 +1,5 @@
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import AppTestSupport
 @testable import App
@@ -16,7 +15,6 @@ final class HierarchyIntegrationTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(app: app)
 
@@ -24,7 +22,7 @@ final class HierarchyIntegrationTests {
             let testUser = try await builder.createUser()
             let testOrganization = try await builder.createOrganization()
             try await builder.addUserToOrganization(user: testUser, organization: testOrganization, role: "admin")
-            try await testUser.replacingCurrentOrganization(testOrganization.id).save(on: app.db)
+            try await testUser.replacingCurrentOrganization(testOrganization.id).save(on: app.testPostgres)
 
             let authToken = try await testUser.generateAPIKey(on: app)
 
@@ -98,7 +96,7 @@ final class HierarchyIntegrationTests {
             #expect(apiProject.organizationalUnitID == backend.id)
 
             // Test hierarchy navigation
-            let engineeringProjects = try await engineering.getAllProjects(on: app.db)
+            let engineeringProjects = try await engineering.getAllProjects(on: app.testPostgres)
             #expect(engineeringProjects.count == 2)
             #expect(engineeringProjects.contains { $0.name == "API Service" })
             #expect(engineeringProjects.contains { $0.name == "Web App" })
@@ -154,7 +152,7 @@ final class HierarchyIntegrationTests {
                 organizationID: try testOrganization.requireID(),
                 organizationalUnitIDs: [],
                 projectIDs: [try project.requireID()],
-                on: app.db).first { $0.projectID == project.id }
+                on: app.testPostgres).first { $0.projectID == project.id }
             #expect(savedQuota != nil)
             #expect(savedQuota?.maxVCPUs == 20)
         }
@@ -311,7 +309,7 @@ final class HierarchyIntegrationTests {
             #expect(vm.environment == "dev")
 
             // Verify the project-owned VM through the explicit foreign key.
-            let projectVMs = try await VM.all(on: app.db).filter { $0.projectID == project.id! }
+            let projectVMs = try await VM.all(on: app.testPostgres).filter { $0.projectID == project.id! }
             #expect(projectVMs.count == 1)
             #expect(projectVMs.first?.name == "Test VM")
         }
@@ -380,11 +378,11 @@ final class HierarchyIntegrationTests {
             }
 
             // Test bulk retrieval
-            let allProjects = try await testOrganization.getAllProjects(on: app.db)
+            let allProjects = try await testOrganization.getAllProjects(on: app.testPostgres)
             #expect(allProjects.count >= 5)
 
             // Test filtering by OU
-            let firstOUProjects = try await ous[0].getAllProjects(on: app.db)
+            let firstOUProjects = try await ous[0].getAllProjects(on: app.testPostgres)
             #expect(firstOUProjects.count >= 1)
             #expect(firstOUProjects.first?.name.contains("Department 1") == true)
         }

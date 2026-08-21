@@ -1,5 +1,3 @@
-import Fluent
-import SQLKit
 import StratoShared
 import Testing
 import Vapor
@@ -39,9 +37,8 @@ final class SecurityGroupControllerTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "sguser",
                 email: "sg@example.com",
@@ -50,7 +47,7 @@ final class SecurityGroupControllerTests {
             )
             let org = try await builder.createOrganization(name: "SG Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "SG Project",
@@ -88,14 +85,14 @@ final class SecurityGroupControllerTests {
     private func createVMWithNIC(
         app: Application, org: Organization, project: Project, protocolVersion: Int?
     ) async throws -> (VM, VMNetworkInterface) {
-        let builder = TestDataBuilder(db: app.db)
-        let vm = try await builder.createVM(name: "sg-vm-\(UUID().uuidString.prefix(8))", project: project)
+        let builder = TestDataBuilder(db: app.testPostgres)
+        var vm = try await builder.createVM(name: "sg-vm-\(UUID().uuidString.prefix(8))", project: project)
         let network = try await builder.createNetwork(
             name: "sg-net-\(UUID().uuidString.prefix(8))", project: project)
         let nic = VMNetworkInterface(
             vmID: vm.id!, logicalNetworkID: try network.requireID(),
             macAddress: VMNetworkInterface.generateMACAddress())
-        try await nic.save(on: app.db)
+        try await nic.save(on: app.testPostgres)
         if let protocolVersion {
             let message = AgentRegisterMessage(
                 agentId: "sg-agent-\(UUID().uuidString.prefix(8))",
@@ -114,7 +111,7 @@ final class SecurityGroupControllerTests {
                 message, agentName: message.agentId, siteID: network.siteID,
                 organizationScope: .organization(org.id!))
             vm.hypervisorId = agentUUID.uuidString
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
         }
         return (vm, nic)
     }
@@ -127,15 +124,15 @@ final class SecurityGroupControllerTests {
         app: Application, org: Organization, project: Project, protocolVersion: Int? = nil,
         sandboxNetworkingCapable: Bool = false
     ) async throws -> (Sandbox, SandboxNetworkInterface) {
-        let builder = TestDataBuilder(db: app.db)
-        let sandbox = try await builder.createSandbox(
+        let builder = TestDataBuilder(db: app.testPostgres)
+        var sandbox = try await builder.createSandbox(
             name: "sg-sbx-\(UUID().uuidString.prefix(8))", project: project)
         let network = try await builder.createNetwork(
             name: "sg-sbx-net-\(UUID().uuidString.prefix(8))", project: project)
         let nic = SandboxNetworkInterface(
             sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
             macAddress: VMNetworkInterface.generateMACAddress())
-        try await nic.save(on: app.db)
+        try await nic.save(on: app.testPostgres)
         if let protocolVersion {
             let message = AgentRegisterMessage(
                 agentId: "sg-sbx-agent-\(UUID().uuidString.prefix(8))",
@@ -157,26 +154,23 @@ final class SecurityGroupControllerTests {
                 message, agentName: message.agentId, siteID: network.siteID,
                 organizationScope: .organization(org.id!))
             sandbox.hypervisorId = agentUUID.uuidString
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
         }
         return (sandbox, nic)
     }
 
     private func attachBootVolume(app: Application, vm: VM, agentID: String) async throws {
-        let owner = try #require(try await User.all(on: app.db).first)
+        let owner = try #require(try await User.all(on: app.testPostgres).first)
         let boot = Volume(
             name: "\(vm.name)-boot", description: "", projectID: vm.projectID,
             environment: vm.environment, size: vm.disk, format: .qcow2,
-            volumeType: .boot, status: .attached, createdByID: try owner.requireID())
-        boot.$vm.id = try vm.requireID()
-        boot.deviceName = VolumeDeviceName.disk(0).rawValue
-        boot.bootOrder = 0
-        boot.generation = 1
-        boot.observedGeneration = 1
-        try await boot.save(on: app.db)
+            volumeType: .boot, status: .attached, generation: 1, observedGeneration: 1,
+            createdByID: try owner.requireID(), vmID: try vm.requireID(),
+            deviceName: VolumeDeviceName.disk(0).rawValue, bootOrder: 0)
+        try await boot.save(on: app.testPostgres)
         try await placeVolume(
             boot, on: agentID, at: "/var/lib/strato/volumes/\(try boot.requireID())/volume.qcow2",
-            state: .healthy, using: app.db)
+            state: .healthy, using: app.testPostgres)
     }
 
     // MARK: - Default group
@@ -185,12 +179,12 @@ final class SecurityGroupControllerTests {
     func defaultGroupProvisioning() async throws {
         try await withSecurityGroupTestApp { app, _, _, project, _ in
             let group = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: project.id!, on: app.db)
+                projectID: project.id!, on: app.testPostgres)
             #expect(group.isDefault)
             #expect(group.name == SecurityGroup.defaultGroupName)
 
             let rules = try await LegacySecurityGroupRuleStore.rules(
-                securityGroupID: group.id, on: app.db)
+                securityGroupID: group.id, on: app.testPostgres)
             // Two families × (ingress-from-self + egress-any), no blanket
             // ingress: fresh projects get the pure AWS posture.
             #expect(rules.count == 4)
@@ -202,10 +196,10 @@ final class SecurityGroupControllerTests {
             #expect(egress.allSatisfy { $0.remoteGroupID == nil && $0.remoteCIDR == nil })
 
             let again = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: project.id!, on: app.db)
+                projectID: project.id!, on: app.testPostgres)
             #expect(again.id == group.id)
             let count = try await LegacySecurityGroupStore.count(
-                projectID: project.id!, on: app.db)
+                projectID: project.id!, on: app.testPostgres)
             #expect(count == 1)
         }
     }
@@ -214,7 +208,7 @@ final class SecurityGroupControllerTests {
     func defaultGroupImmutability() async throws {
         try await withSecurityGroupTestApp { app, _, _, project, token in
             let group = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: project.id!, on: app.db)
+                projectID: project.id!, on: app.testPostgres)
 
             try await app.test(.PUT, "/api/security-groups/\(group.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -230,13 +224,13 @@ final class SecurityGroupControllerTests {
             // Its rules stay editable (AWS semantics): deleting one works and
             // bumps the generation.
             let rule = try await LegacySecurityGroupRuleStore.rules(
-                securityGroupID: group.id, on: app.db).first
+                securityGroupID: group.id, on: app.testPostgres).first
             try await app.test(.DELETE, "/api/security-groups/\(group.id)/rules/\(rule!.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            let reloaded = try await LegacySecurityGroupStore.group(id: group.id, on: app.db)
+            let reloaded = try await LegacySecurityGroupStore.group(id: group.id, on: app.testPostgres)
             #expect(reloaded?.generation == 1)
         }
     }
@@ -293,7 +287,7 @@ final class SecurityGroupControllerTests {
                 #expect(res.status == .noContent)
             }
             let remaining = try await LegacySecurityGroupStore.count(
-                projectID: project.id!, on: app.db)
+                projectID: project.id!, on: app.testPostgres)
             #expect(remaining == 0)
         }
     }
@@ -306,11 +300,11 @@ final class SecurityGroupControllerTests {
             let group = try await self.createGroup(app: app, project: project, token: token, name: "rules")
 
             // A group in another project, for the cross-project reference case.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let otherProject = try await builder.createProject(
                 name: "Other Project", description: "p", organization: org)
             let foreign = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: otherProject.id!, on: app.db)
+                projectID: otherProject.id!, on: app.testPostgres)
 
             let badRules: [CreateSecurityGroupRuleRequest] = [
                 // Both peers at once.
@@ -372,7 +366,7 @@ final class SecurityGroupControllerTests {
                     #expect(res.status == .ok)
                 }
             }
-            let reloaded = try await LegacySecurityGroupStore.group(id: group.id, on: app.db)
+            let reloaded = try await LegacySecurityGroupStore.group(id: group.id, on: app.testPostgres)
             #expect(reloaded?.generation == Int64(goodRules.count))
         }
     }
@@ -407,12 +401,12 @@ final class SecurityGroupControllerTests {
                 protocolVersion: WireProtocol.currentVersion)
             // Give the NIC a second group so `app` is not load-bearing later.
             let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: project.id!, on: app.db)
+                projectID: project.id!, on: app.testPostgres)
             try await LegacyInterfaceSecurityGroupStore.insert(
                 kind: .vm,
                 interfaceID: nic.id!,
                 securityGroupID: defaultGroup.id,
-                on: app.db)
+                on: app.testPostgres)
             try await app.test(.POST, "/api/security-groups/\(app_.id)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(AttachSecurityGroupRequest(vmId: vm.id!))
@@ -452,12 +446,12 @@ final class SecurityGroupControllerTests {
                 app: app, org: org, project: project,
                 protocolVersion: WireProtocol.currentVersion)
             let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: project.id!, on: app.db)
+                projectID: project.id!, on: app.testPostgres)
             try await LegacyInterfaceSecurityGroupStore.insert(
                 kind: .vm,
                 interfaceID: nic.id!,
                 securityGroupID: defaultGroup.id,
-                on: app.db)
+                on: app.testPostgres)
 
             let web = try await self.createGroup(app: app, project: project, token: token, name: "web")
 
@@ -471,16 +465,16 @@ final class SecurityGroupControllerTests {
                 }
             }
             let memberships = try await LegacyInterfaceSecurityGroupStore.count(
-                kind: .vm, interfaceIDs: [nic.id!], on: app.db)
+                kind: .vm, interfaceIDs: [nic.id!], on: app.testPostgres)
             #expect(memberships == 2)
 
             // Cross-project attach → 400, the one status every cross-project
             // refusal answers with (issue #777); was 409.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let otherProject = try await builder.createProject(
                 name: "Elsewhere", description: "p", organization: org)
             let foreign = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: otherProject.id!, on: app.db)
+                projectID: otherProject.id!, on: app.testPostgres)
             try await app.test(.POST, "/api/security-groups/\(foreign.id)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(AttachSecurityGroupRequest(vmId: vm.id!))
@@ -534,9 +528,9 @@ final class SecurityGroupControllerTests {
                 protocolVersion: WireProtocol.currentVersion)
 
             let site = Site(name: "SG Offline Site", organizationScope: .organization(org.id!))
-            try await site.save(on: app.db)
-            let host = try #require(try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.db))
-            try await host.replacing(siteID: try site.requireID()).save(on: app.db)
+            try await site.save(on: app.testPostgres)
+            let host = try #require(try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.testPostgres))
+            try await host.replacing(siteID: try site.requireID()).save(on: app.testPostgres)
 
             let controllerUUID = try await app.agentService.registerAgent(
                 AgentRegisterMessage(
@@ -548,13 +542,13 @@ final class SecurityGroupControllerTests {
                     dependencyObservations: [Self.healthyOverlayObservation()]),
                 agentName: "sg-offline-ctl", siteID: site.id,
                 organizationScope: .organization(org.id!))
-            let controller = try #require(try await Agent.find(controllerUUID, on: app.db))
+            let controller = try #require(try await Agent.find(controllerUUID, on: app.testPostgres))
             _ = try await LegacySiteStore.setNetworkController(
-                siteID: try site.requireID(), agentID: controllerUUID, on: app.db)
+                siteID: try site.requireID(), agentID: controllerUUID, on: app.testPostgres)
             try await controller.replacing(
                 lastHeartbeat: .some(Date().addingTimeInterval(
                     -(SiteNetworkAuthority.controllerOfflineGrace + 600)))
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/security-groups/\(web.id)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -568,18 +562,18 @@ final class SecurityGroupControllerTests {
             // the gate and the indicator resolve through one code path, so a
             // group already attached before the controller went bad cannot be
             // reported as filtering.
-            #expect(try await SecurityGroupService.enforcement(for: vm, on: app.db) == false)
-            #expect(try await SecurityGroupService.enforcementByVM([vm], on: app.db)[vm.id!] == false)
+            #expect(try await SecurityGroupService.enforcement(for: vm, on: app.testPostgres) == false)
+            #expect(try await SecurityGroupService.enforcementByVM([vm], on: app.testPostgres)[vm.id!] == false)
 
             // A heartbeat from the controller unblocks the same attach.
-            try await controller.replacing(lastHeartbeat: .some(Date())).save(on: app.db)
+            try await controller.replacing(lastHeartbeat: .some(Date())).save(on: app.testPostgres)
             try await app.test(.POST, "/api/security-groups/\(web.id)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(AttachSecurityGroupRequest(vmId: vm.id!))
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            #expect(try await SecurityGroupService.enforcement(for: vm, on: app.db) == true)
+            #expect(try await SecurityGroupService.enforcement(for: vm, on: app.testPostgres) == true)
         }
     }
 
@@ -588,7 +582,7 @@ final class SecurityGroupControllerTests {
     @Test("POST /api/vms attaches the default group when none specified, explicit groups otherwise")
     func vmCreateAttachesGroups() async throws {
         try await withSecurityGroupTestApp { app, user, org, project, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(project: project, uploadedBy: user)
             let web = try await self.createGroup(app: app, project: project, token: token, name: "web")
 
@@ -618,14 +612,14 @@ final class SecurityGroupControllerTests {
                 #expect(res.status == .accepted)
             }
             let defaultGroup = try await LegacySecurityGroupStore.defaultGroup(
-                projectID: project.id!, on: app.db)
-            let vm1 = try await LegacyVMStore.vms(on: app.db).first {
+                projectID: project.id!, on: app.testPostgres)
+            let vm1 = try await LegacyVMStore.vms(on: app.testPostgres).first {
                 $0.name == "sg-default-vm"
             }
             let nic1 = try await LegacyVMNetworkInterfaceStore.interfaces(
-                vmID: vm1!.id!, on: app.db).first
+                vmID: vm1!.id!, on: app.testPostgres).first
             let groups1 = try await LegacyInterfaceSecurityGroupStore.memberships(
-                kind: .vm, interfaceIDs: [nic1!.id!], on: app.db)
+                kind: .vm, interfaceIDs: [nic1!.id!], on: app.testPostgres)
             #expect(groups1.map(\.securityGroupID) == [defaultGroup!.id])
 
             // Explicit group → exactly that group.
@@ -638,13 +632,13 @@ final class SecurityGroupControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .accepted)
             }
-            let vm2 = try await LegacyVMStore.vms(on: app.db).first {
+            let vm2 = try await LegacyVMStore.vms(on: app.testPostgres).first {
                 $0.name == "sg-explicit-vm"
             }
             let nic2 = try await LegacyVMNetworkInterfaceStore.interfaces(
-                vmID: vm2!.id!, on: app.db).first
+                vmID: vm2!.id!, on: app.testPostgres).first
             let groups2 = try await LegacyInterfaceSecurityGroupStore.memberships(
-                kind: .vm, interfaceIDs: [nic2!.id!], on: app.db)
+                kind: .vm, interfaceIDs: [nic2!.id!], on: app.testPostgres)
             #expect(groups2.map(\.securityGroupID) == [web.id])
 
             // A group from another project is resolved out of existence rather
@@ -654,7 +648,7 @@ final class SecurityGroupControllerTests {
             let otherProject = try await builder.createProject(
                 name: "Wrong Project", description: "p", organization: org)
             let foreign = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: otherProject.id!, on: app.db)
+                projectID: otherProject.id!, on: app.testPostgres)
             try await app.test(.POST, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -664,7 +658,7 @@ final class SecurityGroupControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .notFound)
             }
-            let vm3 = try await LegacyVMStore.vms(name: "sg-foreign-vm", on: app.db).first
+            let vm3 = try await LegacyVMStore.vms(name: "sg-foreign-vm", on: app.testPostgres).first
             #expect(vm3 == nil)
         }
     }
@@ -680,12 +674,12 @@ final class SecurityGroupControllerTests {
                 protocolVersion: WireProtocol.currentVersion)
 
             // A real (non-system-admin) user in a different organization.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let outsider = try await builder.createUser(
                 username: "outsider", email: "outsider@example.com")
             let otherOrg = try await builder.createOrganization(name: "Other Org")
             try await builder.addUserToOrganization(user: outsider, organization: otherOrg, role: "member")
-            try await outsider.replacingCurrentOrganization(otherOrg.id).save(on: app.db)
+            try await outsider.replacingCurrentOrganization(otherOrg.id).save(on: app.testPostgres)
             let outsiderToken = try await outsider.generateAPIKey(on: app)
 
             // Every per-resource endpoint denies.
@@ -779,7 +773,7 @@ final class SecurityGroupControllerTests {
                     securityGroupID: target.id,
                     direction: .egress,
                     ethertype: .ipv4,
-                    on: app.db)
+                    on: app.testPostgres)
             }
             try await app.test(.POST, "/api/security-groups/\(target.id)/rules") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -791,10 +785,10 @@ final class SecurityGroupControllerTests {
 
             // Per-project cap: fill via direct inserts, then the API.
             let existing = try await LegacySecurityGroupStore.count(
-                projectID: project.id!, on: app.db)
+                projectID: project.id!, on: app.testPostgres)
             for index in 0..<(SecurityGroup.maxGroupsPerProject - existing) {
                 _ = try await LegacySecurityGroupStore.insert(
-                    projectID: project.id!, name: "filler-\(index)", on: app.db)
+                    projectID: project.id!, name: "filler-\(index)", on: app.testPostgres)
             }
             try await app.test(.POST, "/api/security-groups") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -830,7 +824,7 @@ final class SecurityGroupControllerTests {
                 protocolVersion: WireProtocol.currentVersion)
             try await self.attachBootVolume(app: app, vm: vm, agentID: vm.hypervisorId!)
             try await LegacyInterfaceSecurityGroupStore.insert(
-                kind: .vm, interfaceID: nic.id!, securityGroupID: web.id, on: app.db)
+                kind: .vm, interfaceID: nic.id!, securityGroupID: web.id, on: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: vm.hypervisorId!)
             let groups = try #require(message.securityGroups)
@@ -851,7 +845,7 @@ final class SecurityGroupControllerTests {
         try await withSecurityGroupTestApp { app, _, org, project, token in
             let web = try await self.createGroup(app: app, project: project, token: token, name: "web")
             let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: project.id!, on: app.db)
+                projectID: project.id!, on: app.testPostgres)
 
             // Unplaced: enforcement is unknown, not "no".
             let (unplaced, unplacedNIC) = try await self.createVMWithNIC(
@@ -860,12 +854,12 @@ final class SecurityGroupControllerTests {
                 kind: .vm,
                 interfaceID: unplacedNIC.id!,
                 securityGroupID: defaultGroup.id,
-                on: app.db)
+                on: app.testPostgres)
             try await LegacyInterfaceSecurityGroupStore.insert(
                 kind: .vm,
                 interfaceID: unplacedNIC.id!,
                 securityGroupID: web.id,
-                on: app.db)
+                on: app.testPostgres)
 
             try await app.test(.GET, "/api/vms/\(unplaced.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -886,7 +880,7 @@ final class SecurityGroupControllerTests {
                 kind: .vm,
                 interfaceID: currentNIC.id!,
                 securityGroupID: web.id,
-                on: app.db)
+                on: app.testPostgres)
             try await app.test(.GET, "/api/vms/\(current.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
@@ -943,7 +937,7 @@ final class SecurityGroupControllerTests {
                 protocolVersion: WireProtocol.currentVersion)
             try await self.attachBootVolume(app: app, vm: vm, agentID: vm.hypervisorId!)
             try await LegacyInterfaceSecurityGroupStore.insert(
-                kind: .vm, interfaceID: nic.id!, securityGroupID: web.id, on: app.db)
+                kind: .vm, interfaceID: nic.id!, securityGroupID: web.id, on: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: vm.hypervisorId!)
             let rules = try #require(message.securityGroups?.first { $0.id == web.id }?.rules)
@@ -1021,7 +1015,7 @@ final class SecurityGroupControllerTests {
                 #expect(res.status == .noContent)
             }
             let remaining = try await LegacyInterfaceSecurityGroupStore.memberships(
-                kind: .sandbox, interfaceIDs: [nic.id!], on: app.db)
+                kind: .sandbox, interfaceIDs: [nic.id!], on: app.testPostgres)
             #expect(remaining.map(\.securityGroupID) == [second.id])
 
             try await app.test(.GET, "/api/sandboxes/\(sandbox.id!)") { req in
@@ -1068,7 +1062,7 @@ final class SecurityGroupControllerTests {
                 kind: .sandbox,
                 interfaceID: nic.requireID(),
                 securityGroupID: web.id,
-                on: app.db)
+                on: app.testPostgres)
 
             let message = try await app.desiredStateAssembler.assemble(
                 agentId: try #require(sandbox.hypervisorId))
@@ -1086,7 +1080,7 @@ final class SecurityGroupControllerTests {
     @Test("A sandbox with no NIC reports enforcement as unknown, not unenforced")
     func sandboxWithoutNICHasNoEnforcementVerdict() async throws {
         try await withSecurityGroupTestApp { app, _, _, project, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let sandbox = try await builder.createSandbox(name: "sbx-no-nic", project: project)
 
             try await app.test(.GET, "/api/sandboxes/\(try sandbox.requireID())") { req in
@@ -1118,7 +1112,7 @@ final class SecurityGroupControllerTests {
                 kind: .sandbox,
                 interfaceID: incapableNIC.requireID(),
                 securityGroupID: group.id,
-                on: app.db)
+                on: app.testPostgres)
 
             let (capable, capableNIC) = try await self.createSandboxWithNIC(
                 app: app, org: org, project: project,
@@ -1127,7 +1121,7 @@ final class SecurityGroupControllerTests {
                 kind: .sandbox,
                 interfaceID: capableNIC.requireID(),
                 securityGroupID: group.id,
-                on: app.db)
+                on: app.testPostgres)
 
             for (sandbox, expected) in [(incapable, false), (capable, true)] {
                 try await app.test(.GET, "/api/sandboxes/\(try sandbox.requireID())") { req in
@@ -1199,7 +1193,7 @@ final class SecurityGroupControllerTests {
                 app: app, org: org, project: project,
                 protocolVersion: WireProtocol.currentVersion, sandboxNetworkingCapable: true)
             let placed = try await SecurityGroupService.realization(
-                forHypervisorId: sandbox.hypervisorId, on: app.db)
+                forHypervisorId: sandbox.hypervisorId, on: app.testPostgres)
             guard case .realizers(let agents) = placed else {
                 Issue.record("expected a placed sandbox to have realizers")
                 return
@@ -1208,7 +1202,7 @@ final class SecurityGroupControllerTests {
 
             // An unplaced sandbox is "unknown", never "unenforced".
             let realization = try await SecurityGroupService.realization(
-                forHypervisorId: nil, on: app.db)
+                forHypervisorId: nil, on: app.testPostgres)
             guard case .unplaced = realization else {
                 Issue.record("expected an unplaced verdict for a sandbox with no host")
                 return
@@ -1237,7 +1231,7 @@ final class SecurityGroupControllerTests {
                     kind: .vm,
                     interfaceID: nic.requireID(),
                     securityGroupID: group.id,
-                    on: app.db)
+                    on: app.testPostgres)
             }
 
             let vmID = try vm.requireID()
@@ -1265,7 +1259,7 @@ final class SecurityGroupControllerTests {
             #expect(statuses.filter { $0 == .conflict }.count == 1)
 
             let remaining = try await LegacyInterfaceSecurityGroupStore.count(
-                kind: .vm, interfaceIDs: [interfaceID], on: app.db)
+                kind: .vm, interfaceIDs: [interfaceID], on: app.testPostgres)
             #expect(remaining == 1)
         }
     }
@@ -1279,12 +1273,12 @@ final class SecurityGroupControllerTests {
                 app: app, org: org, project: project,
                 protocolVersion: WireProtocol.currentVersion)
             let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: project.id!, on: app.db)
+                projectID: project.id!, on: app.testPostgres)
             try await LegacyInterfaceSecurityGroupStore.insert(
                 kind: .vm,
                 interfaceID: nic.requireID(),
                 securityGroupID: defaultGroup.id,
-                on: app.db)
+                on: app.testPostgres)
 
             // One seat left under the cap, contested by three attaches.
             var contenders: [UUID] = []
@@ -1296,7 +1290,7 @@ final class SecurityGroupControllerTests {
                         kind: .vm,
                         interfaceID: nic.requireID(),
                         securityGroupID: filler.id,
-                        on: app.db)
+                        on: app.testPostgres)
                 } else {
                     contenders.append(filler.id)
                 }
@@ -1329,7 +1323,7 @@ final class SecurityGroupControllerTests {
             }
 
             let total = try await LegacyInterfaceSecurityGroupStore.count(
-                kind: .vm, interfaceIDs: [interfaceID], on: app.db)
+                kind: .vm, interfaceIDs: [interfaceID], on: app.testPostgres)
             #expect(total == SecurityGroup.maxGroupsPerNIC)
         }
     }
@@ -1361,19 +1355,19 @@ final class SecurityGroupControllerTests {
     @Test("Sandbox create attaches the project default, or exactly the groups asked for")
     func sandboxCreateAttachesGroups() async throws {
         try await withSecurityGroupTestApp { app, _, _, project, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let network = try await builder.createNetwork(name: "sbx-create-net", project: project)
             let explicit = try await self.createGroup(
                 app: app, project: project, token: token, name: "sbx-explicit")
 
             func groupIDs(ofSandbox id: UUID) async throws -> [UUID] {
                 let nics = try await LegacySandboxNetworkInterfaceStore.interfaces(
-                    sandboxID: id, on: app.db)
+                    sandboxID: id, on: app.testPostgres)
                 guard let nic = nics.first else { return [] }
                 return try await LegacyInterfaceSecurityGroupStore.memberships(
                     kind: .sandbox,
                     interfaceIDs: [nic.requireID()],
-                    on: app.db
+                    on: app.testPostgres
                 ).map(\.securityGroupID)
             }
 
@@ -1391,7 +1385,7 @@ final class SecurityGroupControllerTests {
                 defaulted = try res.content.decode(AcceptedMutation<SandboxDetailResponse>.self)
             }
             let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: project.id!, on: app.db)
+                projectID: project.id!, on: app.testPostgres)
             #expect(
                 try await groupIDs(ofSandbox: try #require(defaulted?.resource.id)) == [
                     defaultGroup.id

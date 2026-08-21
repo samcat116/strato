@@ -1,4 +1,3 @@
-import Fluent
 import ControlPlanePostgres
 import StratoShared
 import Testing
@@ -28,14 +27,13 @@ final class VolumeQuotaTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "volquotauser", email: "volquota@example.com")
             let org = try await builder.createOrganization(name: "Volume Quota Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Volume Quota Project", description: "p", organization: org)
@@ -73,7 +71,7 @@ final class VolumeQuotaTests {
                     type: .qemu, available: true, accelerated: true, capabilities: .qemu)
             ],
             protocolVersion: WireProtocol.currentVersion)
-        let orgID = try await Organization.all(on: app.db).first?.id
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let uuid = try await app.agentService.registerAgent(
             message, agentName: name, organizationScope: orgID.map { .organization($0) })
         return uuid.uuidString
@@ -92,7 +90,7 @@ final class VolumeQuotaTests {
             name: name, description: "seeded", projectID: try project.requireID(),
             environment: environment, size: gb(sizeGB), status: .available,
             createdByID: try user.requireID(), poolID: pool.id)
-        try await app.db.transaction { db in
+        try await app.testPostgres.transaction { db in
             try await volume.save(on: db)
             try await placeVolume(
                 volume,
@@ -108,7 +106,7 @@ final class VolumeQuotaTests {
         return volume
     }
 
-    private func measure(_ quota: ResourceQuota, on db: Database) async throws -> QuotaMeasuredUsage {
+    private func measure(_ quota: ResourceQuota, on db: PostgresStoreContext) async throws -> QuotaMeasuredUsage {
         try await QuotaUsageAggregator.measure(quota: quota, on: db)
     }
 
@@ -118,26 +116,26 @@ final class VolumeQuotaTests {
     func volumeAndSnapshotAreMeasured() async throws {
         try await withVolumeQuotaApp { app, builder, user, project, _ in
             let quota = try await builder.createResourceQuota(name: "q", project: project)
-            #expect(try await measure(quota, on: app.db).storageBytes == 0)
+            #expect(try await measure(quota, on: app.testPostgres).storageBytes == 0)
 
             let volume = try await seedVolume(
                 app: app, user: user, project: project, name: "measured", sizeGB: 100)
-            #expect(try await measure(quota, on: app.db).storageBytes == gb(100))
-            #expect(try await measure(quota, on: app.db).volumeCount == 1)
+            #expect(try await measure(quota, on: app.testPostgres).storageBytes == gb(100))
+            #expect(try await measure(quota, on: app.testPostgres).volumeCount == 1)
 
             var snapshot = VolumeSnapshot(
                 name: "snap", description: "", volumeID: try volume.requireID(),
                 projectID: try project.requireID(), environment: "development",
                 size: volume.size, createdByID: try user.requireID())
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             // The snapshot has no reported footprint yet, so it is charged its
             // parent's size: 100 GiB of volume plus 100 GiB of estimate.
-            #expect(try await measure(quota, on: app.db).storageBytes == gb(200))
+            #expect(try await measure(quota, on: app.testPostgres).storageBytes == gb(200))
 
-            try await snapshot.delete(on: app.db)
-            try await volume.delete(on: app.db)
-            let empty = try await measure(quota, on: app.db)
+            try await snapshot.delete(on: app.testPostgres)
+            try await volume.delete(on: app.testPostgres)
+            let empty = try await measure(quota, on: app.testPostgres)
             #expect(empty.storageBytes == 0)
             #expect(empty.volumeCount == 0)
         }
@@ -154,15 +152,15 @@ final class VolumeQuotaTests {
                 name: "snap", description: "", volumeID: try volume.requireID(),
                 projectID: try project.requireID(), environment: "development",
                 size: volume.size, createdByID: try user.requireID())
-            try await snapshot.save(on: app.db)
-            #expect(try await measure(quota, on: app.db).storageBytes == gb(200))
+            try await snapshot.save(on: app.testPostgres)
+            #expect(try await measure(quota, on: app.testPostgres).storageBytes == gb(200))
 
             // What a v39 agent reports for an overlay that has barely diverged
             // remains visible on the row, but the no-later-admission bound must
             // stay reserved.
             snapshot = snapshot.replacing(observedSizeBytes: .some(4 * 1024 * 1024))
-            try await snapshot.save(on: app.db)
-            #expect(try await measure(quota, on: app.db).storageBytes == gb(200))
+            try await snapshot.save(on: app.testPostgres)
+            #expect(try await measure(quota, on: app.testPostgres).storageBytes == gb(200))
         }
     }
 
@@ -222,22 +220,22 @@ final class VolumeQuotaTests {
                 deviceName: "disk0",
                 bootOrder: 0
             )
-            try await bootVolume.save(on: app.db)
+            try await bootVolume.save(on: app.testPostgres)
 
-            let attached = try await measure(quota, on: app.db)
+            let attached = try await measure(quota, on: app.testPostgres)
             #expect(attached.storageBytes == gb(10))
             #expect(attached.volumeCount == 1)
 
             // Attachment is lifecycle state, not accounting identity.
             bootVolume = bootVolume.replacing(vmID: .some(nil))
-            try await bootVolume.save(on: app.db)
-            let detached = try await measure(quota, on: app.db)
+            try await bootVolume.save(on: app.testPostgres)
+            let detached = try await measure(quota, on: app.testPostgres)
             #expect(detached.storageBytes == gb(10))
             #expect(detached.volumeCount == 1)
 
             bootVolume = bootVolume.replacing(size: gb(15))
-            try await bootVolume.save(on: app.db)
-            let grown = try await measure(quota, on: app.db)
+            try await bootVolume.save(on: app.testPostgres)
+            let grown = try await measure(quota, on: app.testPostgres)
             #expect(grown.storageBytes == gb(15))
             #expect(grown.volumeCount == 1)
         }
@@ -257,8 +255,8 @@ final class VolumeQuotaTests {
                 app: app, user: user, project: project, name: "prod-vol", sizeGB: 40,
                 environment: "production")
 
-            #expect(try await measure(devQuota, on: app.db).storageBytes == gb(10))
-            #expect(try await measure(prodQuota, on: app.db).storageBytes == gb(40))
+            #expect(try await measure(devQuota, on: app.testPostgres).storageBytes == gb(10))
+            #expect(try await measure(prodQuota, on: app.testPostgres).storageBytes == gb(40))
         }
     }
 
@@ -279,8 +277,8 @@ final class VolumeQuotaTests {
             }
 
             // Nothing was written and nothing was reserved.
-            #expect(try await Volume.all(on: app.db).count == 0)
-            let refreshed = try #require(try await ResourceQuota.find(quota.id, on: app.db))
+            #expect(try await Volume.all(on: app.testPostgres).count == 0)
+            let refreshed = try #require(try await ResourceQuota.find(quota.id, on: app.testPostgres))
             #expect(refreshed.reservedStorage == 0)
             #expect(refreshed.volumeCount == 0)
         }
@@ -299,11 +297,11 @@ final class VolumeQuotaTests {
                 #expect(res.status == .accepted)
             }
 
-            let volume = try #require(try await Volume.all(on: app.db).first)
+            let volume = try #require(try await Volume.all(on: app.testPostgres).first)
             #expect(volume.environment == "development")
             // Placement runs in the background and has no agent to land on, so
             // the row's own convergence may degrade — the accounting does not.
-            let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
+            let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.testPostgres)
             #expect(synchronized.reservedStorage == gb(30))
             #expect(synchronized.volumeCount == 1)
         }
@@ -320,7 +318,7 @@ final class VolumeQuotaTests {
             } afterResponse: { res in
                 #expect(res.status == .accepted)
             }
-            let volume = try #require(try await Volume.all(on: app.db).first)
+            let volume = try #require(try await Volume.all(on: app.testPostgres).first)
             #expect(volume.environment == "production")
 
             try await app.test(.POST, "/api/volumes") { req in
@@ -353,7 +351,7 @@ final class VolumeQuotaTests {
             } afterResponse: { res in
                 #expect(res.status == .accepted)
             }
-            let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
+            let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.testPostgres)
             #expect(synchronized.reservedStorage == gb(20))
 
             // 20 → 30 needs 10 more than the 25 ceiling allows.
@@ -364,7 +362,7 @@ final class VolumeQuotaTests {
                 #expect(res.status == .forbidden)
                 #expect(res.body.string.range(of: "quota", options: .caseInsensitive) != nil)
             }
-            let unchanged = try #require(try await Volume.find(volumeID, on: app.db))
+            let unchanged = try #require(try await Volume.find(volumeID, on: app.testPostgres))
             #expect(unchanged.size == gb(20), "a refused resize must not move the desired size")
         }
     }
@@ -379,7 +377,7 @@ final class VolumeQuotaTests {
             let agentId = try await registerAgent(app: app, named: "image-volume-host")
             var vm = try await builder.createVM(name: "image-volume-vm", project: project)
             vm.hypervisorId = agentId
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             let image = try await builder.createImage(project: project, uploadedBy: user)
             let volume = try await seedVolume(
                 app: app, user: user, project: project, name: "image-volume", sizeGB: 10,
@@ -388,7 +386,7 @@ final class VolumeQuotaTests {
                 observedSizeBytes: gb(30),
                 sourceImageID: try image.requireID()
             )
-            try await volume.save(on: app.db)
+            try await volume.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/volumes/\(try volume.requireID())/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -399,9 +397,9 @@ final class VolumeQuotaTests {
                 #expect(res.status == .accepted)
             }
 
-            let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
+            let reloaded = try #require(try await Volume.find(volume.id, on: app.testPostgres))
             #expect(reloaded.size == gb(30), "the desired size must adopt the materialized image")
-            let refreshedQuota = try #require(try await ResourceQuota.find(quota.id, on: app.db))
+            let refreshedQuota = try #require(try await ResourceQuota.find(quota.id, on: app.testPostgres))
             #expect(refreshedQuota.reservedStorage == gb(40))
         }
     }
@@ -414,13 +412,13 @@ final class VolumeQuotaTests {
             let agentId = try await registerAgent(app: app, named: "guarded-image-volume-host")
             var vm = try await builder.createVM(name: "guarded-image-volume-vm", project: project)
             vm.hypervisorId = agentId
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             let image = try await builder.createImage(project: project, uploadedBy: user)
             var volume = try await seedVolume(
                 app: app, user: user, project: project, name: "guarded-image-volume", sizeGB: 10,
                 agentId: agentId
             ).replacing(sourceImageID: try image.requireID())
-            try await volume.save(on: app.db)
+            try await volume.save(on: app.testPostgres)
 
             func attach(expecting expected: HTTPStatus) async throws {
                 try await app.test(.POST, "/api/volumes/\(try volume.requireID())/attach") { req in
@@ -441,10 +439,10 @@ final class VolumeQuotaTests {
             // Once reported, the 30 GiB materialization plus the VM's 10 GiB
             // boot disk exceeds the 30 GiB quota and is refused atomically.
             volume = volume.replacing(observedSizeBytes: gb(30))
-            try await volume.save(on: app.db)
+            try await volume.save(on: app.testPostgres)
             try await attach(expecting: .forbidden)
 
-            let unchanged = try #require(try await Volume.find(volume.id, on: app.db))
+            let unchanged = try #require(try await Volume.find(volume.id, on: app.testPostgres))
             #expect(unchanged.size == gb(10))
             #expect(unchanged.vmID == nil)
         }
@@ -467,7 +465,7 @@ final class VolumeQuotaTests {
                 projectID: try project.requireID(), environment: "development",
                 size: volume.size, observedSizeBytes: 4 * 1024 * 1024,
                 createdByID: try user.requireID())
-            try await first.save(on: app.db)
+            try await first.save(on: app.testPostgres)
 
             // 50 GiB volume + 50 GiB first-snapshot bound leaves only 10 GiB,
             // so another 50 GiB bound must fail. Replacing the first bound with
@@ -480,7 +478,7 @@ final class VolumeQuotaTests {
                 #expect(res.status == .forbidden)
                 #expect(res.body.string.range(of: "quota", options: .caseInsensitive) != nil)
             }
-            #expect(try await VolumeSnapshot.all(on: app.db).count == 1)
+            #expect(try await VolumeSnapshot.all(on: app.testPostgres).count == 1)
         }
     }
 
@@ -502,7 +500,7 @@ final class VolumeQuotaTests {
                 #expect(res.status == .forbidden)
                 #expect(res.body.string.range(of: "quota", options: .caseInsensitive) != nil)
             }
-            #expect(try await Volume.all(on: app.db).count == 1)
+            #expect(try await Volume.all(on: app.testPostgres).count == 1)
         }
     }
 
@@ -524,7 +522,7 @@ final class VolumeQuotaTests {
             }
 
             let limitedQuota = quota.withMaxVolumes(3)
-            try await limitedQuota.save(on: app.db)
+            try await limitedQuota.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/volumes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -536,8 +534,8 @@ final class VolumeQuotaTests {
 
             // Room reappears when one goes away.
             let victim = try #require(
-                try await Volume.all(on: app.db).first { $0.name == "unlimited-0" })
-            try await victim.delete(on: app.db)
+                try await Volume.all(on: app.testPostgres).first { $0.name == "unlimited-0" })
+            try await victim.delete(on: app.testPostgres)
 
             try await app.test(.POST, "/api/volumes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -559,18 +557,18 @@ final class VolumeQuotaTests {
                 app: app, user: user, project: project, name: "keeper", sizeGB: 30)
             let doomed = try await seedVolume(
                 app: app, user: user, project: project, name: "doomed", sizeGB: 20)
-            let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
-            try await synchronized.save(on: app.db)
+            let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.testPostgres)
+            try await synchronized.save(on: app.testPostgres)
             #expect(synchronized.reservedStorage == gb(50))
 
             let terminating = doomed.replacingDesiredStatus(.absent)
-            try await terminating.save(on: app.db)
-            #expect(try await Volume.reap(terminating, on: app.db, app: app))
+            try await terminating.save(on: app.testPostgres)
+            #expect(try await Volume.reap(terminating, on: app.testPostgres, app: app))
 
-            let refreshed = try #require(try await ResourceQuota.find(quota.id, on: app.db))
+            let refreshed = try #require(try await ResourceQuota.find(quota.id, on: app.testPostgres))
             #expect(refreshed.reservedStorage == gb(30), "recount, not decrement")
             #expect(refreshed.volumeCount == 1)
-            #expect(try await Volume.find(keeper.id, on: app.db) != nil)
+            #expect(try await Volume.find(keeper.id, on: app.testPostgres) != nil)
         }
     }
 
@@ -585,16 +583,16 @@ final class VolumeQuotaTests {
                 name: "snap", description: "", volumeID: try volume.requireID(),
                 projectID: try project.requireID(), environment: "development",
                 size: volume.size, createdByID: try user.requireID())
-            try await snapshot.save(on: app.db)
-            let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
-            try await synchronized.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
+            let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.testPostgres)
+            try await synchronized.save(on: app.testPostgres)
             #expect(synchronized.reservedStorage == gb(200))
 
             let terminating = volume.replacingDesiredStatus(.absent)
-            try await terminating.save(on: app.db)
-            #expect(try await Volume.reap(terminating, on: app.db, app: app))
+            try await terminating.save(on: app.testPostgres)
+            #expect(try await Volume.reap(terminating, on: app.testPostgres, app: app))
 
-            let refreshed = try #require(try await ResourceQuota.find(quota.id, on: app.db))
+            let refreshed = try #require(try await ResourceQuota.find(quota.id, on: app.testPostgres))
             #expect(refreshed.reservedStorage == 0)
         }
     }
@@ -629,7 +627,7 @@ final class VolumeQuotaTests {
 
             #expect(statuses.filter { $0 == .accepted }.count == 1)
             #expect(statuses.filter { $0 == .forbidden }.count == 1)
-            #expect(try await Volume.all(on: app.db).count == 1)
+            #expect(try await Volume.all(on: app.testPostgres).count == 1)
         }
     }
 }

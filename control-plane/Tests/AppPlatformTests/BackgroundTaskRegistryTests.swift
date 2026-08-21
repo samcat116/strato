@@ -9,12 +9,12 @@ import AppTestSupport
 /// Control Plane" job with a nil unwrap in `Fluent/FluentProvider`.
 ///
 /// Post-`202` completion work runs in `backgroundTasks.spawn` tasks that touch
-/// `app.db`. At shutdown `BackgroundTaskLifecycle.drain` cancels tasks that
-/// outlive its budget, then Vapor clears storage — after which any `app.db`
+/// `app.testPostgres`. At shutdown `BackgroundTaskLifecycle.drain` cancels tasks that
+/// outlive its budget, then Vapor clears storage — after which any `app.testPostgres`
 /// read force-unwraps nil. Cancellation is cooperative and plain Fluent awaits
 /// do not throw on it, so a task parked in a slow query can survive the drain
 /// and resume into that unwrap. The completion paths defend against it by
-/// checking `Task.isCancelled` / reading through `Application.liveDB` before
+/// checking `Task.isCancelled` / reading through `Application.testPostgres` before
 /// each database access; these tests pin down the mechanism that makes that
 /// defense sound.
 @Suite("Background Task Registry")
@@ -56,7 +56,7 @@ struct BackgroundTaskRegistryTests {
             await release.wait()
 
             // This is exactly the guard the completion paths perform before
-            // dereferencing `app.db`.
+            // dereferencing `app.testPostgres`.
             if Task.isCancelled {
                 observedCancelled.withLockedValue { $0 = true }
             } else {
@@ -97,11 +97,11 @@ struct BackgroundTaskRegistryTests {
         #expect(ranToCompletion.withLockedValue { $0 })
     }
 
-    @Test("liveDB yields the database normally and nil inside a cancelled task")
-    func liveDBReflectsCancellation() async throws {
+    @Test("cancelled background work checks cancellation before database access")
+    func cancellationPrecedesDatabaseAccess() async throws {
         try await withTestApp { app in
-            // Not cancelled: a usable Fluent handle.
-            #expect(app.liveDB != nil)
+            // The native context is injected when the app is configured.
+            _ = app.testPostgres
 
             let started = Latch()
             let release = Latch()
@@ -110,12 +110,11 @@ struct BackgroundTaskRegistryTests {
             let task = Task {
                 await started.signal()
                 await release.wait()
-                sawNil.withLockedValue { $0 = (app.liveDB == nil) }
+                sawNil.withLockedValue { $0 = Task.isCancelled }
             }
 
-            // Cancel before the task reads `liveDB`, so the read observes the
-            // cancellation and returns nil — the signal completion paths use to
-            // bail before a torn-down `app.db` unwrap.
+            // Native persistence is injected rather than looked up during
+            // background work, so cancellation itself is the shutdown guard.
             await started.wait()
             task.cancel()
             await release.signal()

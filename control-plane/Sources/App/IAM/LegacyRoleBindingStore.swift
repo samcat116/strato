@@ -1,7 +1,5 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
-import SQLKit
 import Vapor
 
 struct LegacyRoleBindingRecord: Decodable, Equatable, Sendable {
@@ -68,12 +66,12 @@ enum LegacyRoleBindingStore {
         subjects: [IAMOwnerReference] = [],
         nodes: [IAMNodeReference] = [],
         activeAt: Date? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [LegacyRoleBindingRecord] {
         if let principalIDs, principalIDs.isEmpty { return [] }
         if let nodeIDs, nodeIDs.isEmpty { return [] }
         let sql = try requireSQL(db)
-        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM role_bindings WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT \(unsafeRaw: columns) FROM role_bindings WHERE TRUE"
         if let principalType { query += " AND principal_type = \(bind: principalType)" }
         if let principalID { query += " AND principal_id = \(bind: principalID)" }
         if let excludingPrincipalID { query += " AND principal_id != \(bind: excludingPrincipalID)" }
@@ -109,7 +107,7 @@ enum LegacyRoleBindingStore {
         roleID: UUID,
         nodeType: String,
         nodeID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LegacyRoleBindingRecord? {
         try await bindings(
             principalType: principalType,
@@ -123,7 +121,7 @@ enum LegacyRoleBindingStore {
     @discardableResult
     static func insert(
         _ write: LegacyRoleBindingWrite,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LegacyRoleBindingRecord {
         guard let binding = try await requireSQL(db).raw(
             """
@@ -147,14 +145,14 @@ enum LegacyRoleBindingStore {
     static func updateExpiry(
         id: UUID,
         expiresAt: Date?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws {
         try await requireSQL(db).raw(
             "UPDATE role_bindings SET expires_at = \(bind: expiresAt) WHERE id = \(bind: id)"
         ).run()
     }
 
-    static func delete(ids: [UUID], on db: any Database) async throws {
+    static func delete(ids: [UUID], on db: PostgresStoreContext) async throws {
         guard !ids.isEmpty else { return }
         try await requireSQL(db).raw(
             "DELETE FROM role_bindings WHERE id = ANY(\(bind: ids))"
@@ -166,7 +164,7 @@ enum LegacyRoleBindingStore {
         organizationID: UUID,
         adminRoleID: UUID,
         activeAt: Date = Date(),
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Int {
         struct CountRow: Decodable { let count: Int }
         return try await requireSQL(db).raw(
@@ -199,8 +197,8 @@ enum LegacyRoleBindingStore {
         created_at AS "createdAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "IAM role bindings require PostgreSQL")
         }
         return sql

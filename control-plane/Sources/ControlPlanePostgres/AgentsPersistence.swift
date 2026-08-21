@@ -94,6 +94,12 @@ public struct AgentUpdateCancellationResult: Sendable {
     public let cancelledVersion: String?
 }
 
+public enum AgentDeregistrationResult: Equatable, Sendable {
+    case deleted
+    case notFound
+    case controlsPopulatedSite(UUID)
+}
+
 public struct AgentsPersistence: Sendable {
     private let database: PostgresDatabase
 
@@ -250,6 +256,43 @@ public struct AgentsPersistence: Sendable {
         }
     }
 
+    public func deregistrationBlocker(id: UUID) async throws -> UUID? {
+        try await database.withSession(operation: "agents.deregister.preflight") { session in
+            try oneOrNone(await session.execute(
+                FindControlledPopulatedSite(agentID: id),
+                operation: "agents.deregister.preflight.query"))
+        }
+    }
+
+    /// Clears only last-member site controller designations and removes the
+    /// agent plus its registry identity in one transaction. The populated-site
+    /// check is repeated here after the external SPIRE revocation preflight so
+    /// a concurrent site membership cannot leave a dangling controller id.
+    public func deregister(id: UUID, spiffeID: String) async throws -> AgentDeregistrationResult {
+        try await database.withTransaction(operation: "agents.deregister") { session in
+            guard try oneOrNone(await session.execute(
+                LockAgent(id: id), operation: "agents.deregister.lock")) != nil
+            else { return .notFound }
+
+            if let siteID = try oneOrNone(await session.execute(
+                FindControlledPopulatedSite(agentID: id),
+                operation: "agents.deregister.check_site"))
+            {
+                return .controlsPopulatedSite(siteID)
+            }
+            _ = try await session.execute(
+                ClearLastMemberSiteController(agentID: id),
+                operation: "agents.deregister.clear_site_controller")
+            _ = try await session.execute(
+                DeleteAgentWorkloadRegistration(spiffeID: spiffeID),
+                operation: "agents.deregister.registry")
+            let deleted = try await session.execute(
+                DeleteAgent(id: id),
+                operation: "agents.deregister.delete")
+            return deleted.count == 1 ? .deleted : .notFound
+        }
+    }
+
     private func oneOrNone<T>(_ rows: [T]) throws -> T? {
         guard rows.count <= 1 else {
             throw AgentsPersistenceError.unexpectedRowCount(expected: 1, actual: rows.count)
@@ -367,6 +410,85 @@ private struct FindAgentByIdentity: AgentStatement {
         bindings.append(trustDomain)
         bindings.append(name)
         return bindings
+    }
+}
+
+private struct FindControlledPopulatedSite: PostgresPreparedStatement {
+    static let sql = """
+        SELECT s.id
+        FROM sites AS s
+        WHERE s.network_controller_agent_id = $1
+          AND EXISTS (
+              SELECT 1 FROM agents AS other
+              WHERE other.site_id = s.id AND other.id <> $1
+          )
+        ORDER BY s.id
+        LIMIT 1
+        """
+    typealias Row = UUID
+    let agentID: UUID
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 1)
+        bindings.append(agentID)
+        return bindings
+    }
+    func decodeRow(_ row: PostgresRow) throws -> UUID {
+        try row.makeRandomAccess()["id"].decode(UUID.self)
+    }
+}
+
+private struct ClearLastMemberSiteController: PostgresPreparedStatement {
+    static let sql = """
+        UPDATE sites AS s
+        SET network_controller_agent_id = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE s.network_controller_agent_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM agents AS other
+              WHERE other.site_id = s.id AND other.id <> $1
+          )
+        RETURNING s.id
+        """
+    typealias Row = UUID
+    let agentID: UUID
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 1)
+        bindings.append(agentID)
+        return bindings
+    }
+    func decodeRow(_ row: PostgresRow) throws -> UUID {
+        try row.makeRandomAccess()["id"].decode(UUID.self)
+    }
+}
+
+private struct DeleteAgentWorkloadRegistration: PostgresPreparedStatement {
+    static let sql = """
+        DELETE FROM workload_registrations
+        WHERE kind = 'agent' AND spiffe_id = $1
+        RETURNING id
+        """
+    typealias Row = UUID
+    let spiffeID: String
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 1)
+        bindings.append(spiffeID)
+        return bindings
+    }
+    func decodeRow(_ row: PostgresRow) throws -> UUID {
+        try row.makeRandomAccess()["id"].decode(UUID.self)
+    }
+}
+
+private struct DeleteAgent: PostgresPreparedStatement {
+    static let sql = "DELETE FROM agents WHERE id = $1 RETURNING id"
+    typealias Row = UUID
+    let id: UUID
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 1)
+        bindings.append(id)
+        return bindings
+    }
+    func decodeRow(_ row: PostgresRow) throws -> UUID {
+        try row.makeRandomAccess()["id"].decode(UUID.self)
     }
 }
 
@@ -525,7 +647,7 @@ private struct AssignAgentManualUpdate: AgentStatement {
         SELECT \(agentColumns) FROM updated AS a
         """
     }
-    static let bindingDataTypes: [PostgresDataType] = [.uuid, .text, .jsonb]
+    static let bindingDataTypes: [PostgresDataType] = [.uuid, .text, .text]
     let id: UUID
     let version: String
     let artifactOverrideJSON: String?

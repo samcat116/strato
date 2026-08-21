@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -14,7 +13,7 @@ enum VolumeAttachmentFilter {
 /// Explicit SQL access for the immutable volume cohort while surrounding
 /// multi-resource transactions still use Fluent's transaction handle.
 enum LegacyVolumeStore {
-    static func volume(id: UUID?, on db: any Database) async throws -> Volume? {
+    static func volume(id: UUID?, on db: PostgresStoreContext) async throws -> Volume? {
         guard let id else { return nil }
         return try await volumes(ids: [id], on: db).first
     }
@@ -29,10 +28,10 @@ enum LegacyVolumeStore {
         desiredStatus: DesiredVolumeStatus? = nil,
         overdueAt: Date? = nil,
         terminatingBefore: Date? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [Volume] {
         if ids?.isEmpty == true || projectIDs?.isEmpty == true { return [] }
-        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM volumes AS v WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT \(unsafeRaw: columns) FROM volumes AS v WHERE TRUE"
         if let ids { query += " AND v.id = ANY(\(bind: ids))" }
         if let projectID { query += " AND v.project_id = \(bind: projectID)" }
         if let projectIDs { query += " AND v.project_id = ANY(\(bind: projectIDs))" }
@@ -59,7 +58,7 @@ enum LegacyVolumeStore {
     }
 
     @discardableResult
-    static func upsert(_ volume: Volume, on db: any Database) async throws -> Volume {
+    static func upsert(_ volume: Volume, on db: PostgresStoreContext) async throws -> Volume {
         let id = try volume.requireID()
         guard let row = try await volumeSQL(db).raw(
             """
@@ -118,7 +117,7 @@ enum LegacyVolumeStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await volumeSQL(db).raw(
             "DELETE FROM volumes WHERE id = \(bind: id) RETURNING id"
@@ -206,8 +205,8 @@ enum LegacyVolumeStore {
     private static let returningColumns = columns.replacingOccurrences(of: "v.", with: "")
 }
 
-private func volumeSQL(_ db: any Database) throws -> any SQLDatabase {
-    guard let sql = db as? any SQLDatabase else {
+private func volumeSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+    guard let sql = db as? PostgresStoreContext else {
         throw Abort(.internalServerError, reason: "PostgreSQL SQL interface is unavailable")
     }
     return sql

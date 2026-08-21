@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -30,12 +29,12 @@ package enum LegacyVolumeReplicaStore {
         volumeIDs: [UUID]? = nil,
         agentId: String? = nil,
         states: [VolumeReplicaState]? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [VolumeReplicaSnapshot] {
         if let volumeIDs, volumeIDs.isEmpty { return [] }
         if let states, states.isEmpty { return [] }
         let sql = try requireSQL(db)
-        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM volume_replicas WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT \(unsafeRaw: columns) FROM volume_replicas WHERE TRUE"
         if let volumeIDs { query += " AND volume_id = ANY(\(bind: volumeIDs))" }
         if let agentId { query += " AND agent_id = \(bind: agentId)" }
         if let states { query += " AND state = ANY(\(bind: states.map(\.rawValue)))" }
@@ -45,7 +44,7 @@ package enum LegacyVolumeReplicaStore {
 
     static func replica(
         id: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> VolumeReplicaSnapshot? {
         guard let row = try await requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM volume_replicas WHERE id = \(bind: id) LIMIT 1"
@@ -56,7 +55,7 @@ package enum LegacyVolumeReplicaStore {
     static func replica(
         volumeID: UUID,
         agentId: String,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> VolumeReplicaSnapshot? {
         guard let row = try await requireSQL(db).raw(
             """
@@ -77,7 +76,7 @@ package enum LegacyVolumeReplicaStore {
         diskAttachment: DiskAttachment? = nil,
         state: VolumeReplicaState = .provisioning,
         generation: Int64 = 0,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> VolumeReplicaSnapshot {
         let attachmentJSON = try encodedAttachment(diskAttachment)
         guard let row = try await requireSQL(db).raw(
@@ -105,7 +104,7 @@ package enum LegacyVolumeReplicaStore {
         diskAttachment: DiskAttachment?,
         state: VolumeReplicaState,
         generation: Int64,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> VolumeReplicaSnapshot {
         let attachmentJSON = try encodedAttachment(diskAttachment)
         guard let row = try await requireSQL(db).raw(
@@ -134,15 +133,15 @@ package enum LegacyVolumeReplicaStore {
     static func delete(
         volumeID: UUID,
         agentId: String? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws {
         let sql = try requireSQL(db)
-        var query: SQLQueryString = "DELETE FROM volume_replicas WHERE volume_id = \(bind: volumeID)"
+        var query: PostgresSQLQuery = "DELETE FROM volume_replicas WHERE volume_id = \(bind: volumeID)"
         if let agentId { query += " AND agent_id = \(bind: agentId)" }
         try await sql.raw(query).run()
     }
 
-    static func count(on db: any Database) async throws -> Int {
+    static func count(on db: PostgresStoreContext) async throws -> Int {
         struct Count: Decodable { let count: Int }
         return try await requireSQL(db).raw(
             "SELECT count(*)::bigint AS count FROM volume_replicas"
@@ -207,8 +206,8 @@ package enum LegacyVolumeReplicaStore {
         return String(decoding: try JSONEncoder().encode(attachment), as: UTF8.self)
     }
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Volume replicas require PostgreSQL")
         }
         return sql

@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Testing
 import Vapor
@@ -84,7 +83,6 @@ final class OIDCIdentityMappingTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(app: app)
             let org = try await builder.createOrganization(name: "IdP Org")
@@ -102,10 +100,12 @@ final class OIDCIdentityMappingTests {
             ))
 
             let service = OIDCIdentityService(
-                db: app.db,
                 providers: app.oidcProvidersPersistence,
                 groups: app.groupsPersistence,
                 externalIDs: app.scimExternalIDsPersistence,
+                users: app.userDirectoryPersistence,
+                hierarchy: app.hierarchyPersistence,
+                iam: app.iamPersistence,
                 logger: app.logger
             )
             try await test(app, org, provider, service)
@@ -128,7 +128,7 @@ final class OIDCIdentityMappingTests {
 
     /// Create an org-owned custom role bindable at `orgID`.
     private func makeOrgRole(
-        name: String, orgID: UUID, actions: [String] = ["vm:read"], on db: Database
+        name: String, orgID: UUID, actions: [String] = ["vm:read"], on db: PostgresStoreContext
     ) async throws -> LegacyIAMRoleRecord {
         let id = UUID()
         return try await RoleStore.insertLegacy(IAMRoleSnapshot(
@@ -138,7 +138,7 @@ final class OIDCIdentityMappingTests {
             actions: actions, managed: false, createdBy: nil), on: db)
     }
 
-    private func orgBindingRoles(_ userID: UUID, _ orgID: UUID, on db: Database) async throws -> [UUID] {
+    private func orgBindingRoles(_ userID: UUID, _ orgID: UUID, on db: PostgresStoreContext) async throws -> [UUID] {
         try await LegacyRoleBindingStore.bindings(
             principalType: IAMPrincipalType.user.rawValue,
             principalID: userID,
@@ -158,7 +158,7 @@ final class OIDCIdentityMappingTests {
                 userInfo: userInfo(), provider: provider, organization: org, groupValues: [])
 
             let membership = try await OrganizationMembershipStore.membership(
-                userID: user.id!, organizationID: org.id!, on: app.db)
+                userID: user.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(membership?.roleID == IAMRole.admin.seededID)
 
             // The admin role binding is written alongside the membership row —
@@ -168,7 +168,7 @@ final class OIDCIdentityMappingTests {
                 principalID: user.id!,
                 nodeType: IAMNodeType.organization.rawValue,
                 nodeID: org.id!,
-                on: app.db)
+                on: app.testPostgres)
             #expect(bindings.map(\.roleID) == [IAMRole.admin.seededID])
         }
     }
@@ -181,14 +181,14 @@ final class OIDCIdentityMappingTests {
                 userInfo: userInfo(subject: "sub-a", email: "a@example.com"),
                 provider: provider, organization: org, groupValues: ["strato-admins", "other"])
             let adminMembership = try await OrganizationMembershipStore.membership(
-                userID: admin.id!, organizationID: org.id!, on: app.db)
+                userID: admin.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(adminMembership?.roleID == IAMRole.admin.seededID)
 
             let member = try await service.resolveUser(
                 userInfo: userInfo(subject: "sub-b", email: "b@example.com"),
                 provider: provider, organization: org, groupValues: ["other"])
             let memberMembership = try await OrganizationMembershipStore.membership(
-                userID: member.id!, organizationID: org.id!, on: app.db)
+                userID: member.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(memberMembership?.roleID == nil)
         }
     }
@@ -201,7 +201,7 @@ final class OIDCIdentityMappingTests {
             let scimUser = User(
                 username: "scimuser", email: "scim@example.com", displayName: "SCIM User",
                 isSystemAdmin: false, scimProvisioned: true, scimActive: true)
-            try await scimUser.save(on: app.db)
+            try await scimUser.save(on: app.testPostgres)
             try await TestDataBuilder(app: app).addUserToOrganization(user: scimUser, organization: org)
             _ = try await app.scimExternalIDsPersistence.assign(
                 externalID: "idp-sub-42", to: scimUser.id!,
@@ -216,7 +216,7 @@ final class OIDCIdentityMappingTests {
             #expect(resolved.oidcProviderID == provider.id)
 
             // No duplicate user was created for the identity.
-            let userCount = try await User.count(on: app.db)
+            let userCount = try await User.count(on: app.testPostgres)
             #expect(userCount == 1)
 
             // A later login resolves via the OIDC link directly.
@@ -243,7 +243,7 @@ final class OIDCIdentityMappingTests {
             let scimUser = User(
                 username: "scimuser", email: "scim@example.com", displayName: "SCIM User",
                 isSystemAdmin: false, scimProvisioned: true, scimActive: true)
-            try await scimUser.save(on: app.db)
+            try await scimUser.save(on: app.testPostgres)
             try await TestDataBuilder(app: app).addUserToOrganization(user: scimUser, organization: org)
             _ = try await app.scimExternalIDsPersistence.assign(
                 externalID: "idp-sub-42", to: scimUser.id!,
@@ -255,7 +255,7 @@ final class OIDCIdentityMappingTests {
 
             // JIT-provisioned as a fresh user, not linked to the SCIM record.
             #expect(resolved.id != scimUser.id)
-            let userCount = try await User.count(on: app.db)
+            let userCount = try await User.count(on: app.testPostgres)
             #expect(userCount == 2)
 
             // A verified email match still converges the identities.
@@ -272,7 +272,7 @@ final class OIDCIdentityMappingTests {
             let existing = User(
                 username: "victim", email: "victim@example.com", displayName: "Victim",
                 isSystemAdmin: false)
-            try await existing.save(on: app.db)
+            try await existing.save(on: app.testPostgres)
             try await TestDataBuilder(app: app).addUserToOrganization(user: existing, organization: org)
 
             // Same email but the IdP has NOT verified it: linking is refused, and
@@ -285,7 +285,7 @@ final class OIDCIdentityMappingTests {
             }
 
             // The victim's account is untouched: no new identity was bound to it.
-            let victim = try await User.find(existing.id!, on: app.db)
+            let victim = try await User.find(existing.id!, on: app.testPostgres)
             #expect(victim?.oidcProviderID == nil)
         }
     }
@@ -296,7 +296,7 @@ final class OIDCIdentityMappingTests {
             let deactivated = User(
                 username: "gone", email: "gone@example.com", displayName: "Gone",
                 isSystemAdmin: false, scimProvisioned: true, scimActive: false)
-            try await deactivated.save(on: app.db)
+            try await deactivated.save(on: app.testPostgres)
 
             #expect(throws: Abort.self) {
                 try service.enforceSCIMActive(deactivated)
@@ -410,7 +410,7 @@ final class OIDCIdentityMappingTests {
                 userID: user.id!, groupID: mappedID)
             #expect(stillMember)
             let membership = try await OrganizationMembershipStore.membership(
-                userID: user.id!, organizationID: org.id!, on: app.db)
+                userID: user.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(membership?.roleID == IAMRole.admin.seededID)
         }
     }
@@ -432,7 +432,7 @@ final class OIDCIdentityMappingTests {
             let removed = User(
                 username: "removed", email: "removed@example.com", displayName: "Removed",
                 isSystemAdmin: false, oidcProviderID: provider.id, oidcSubject: "sub-removed")
-            try await removed.save(on: app.db)
+            try await removed.save(on: app.testPostgres)
 
             try await service.syncGroupMemberships(
                 user: removed, provider: provider, organizationID: org.id!, groupValues: ["idp-mapped"])
@@ -475,13 +475,13 @@ final class OIDCIdentityMappingTests {
                     roleID: IAMRole.admin.seededID,
                     nodeType: IAMNodeType.organization.rawValue,
                     nodeID: org.id!,
-                    on: app.db).count
+                    on: app.testPostgres).count
             }
 
             try await service.reconcileOrganizationRole(
                 user: user, provider: provider, organizationID: org.id!, groupValues: ["strato-admins"])
             let promoted = try await OrganizationMembershipStore.membership(
-                userID: user.id!, organizationID: org.id!, on: app.db)
+                userID: user.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(promoted?.roleID == IAMRole.admin.seededID)
 
             // The admin binding is written alongside the mirror-row update.
@@ -491,7 +491,7 @@ final class OIDCIdentityMappingTests {
             try await service.reconcileOrganizationRole(
                 user: user, provider: provider, organizationID: org.id!, groupValues: [])
             let demoted = try await OrganizationMembershipStore.membership(
-                userID: user.id!, organizationID: org.id!, on: app.db)
+                userID: user.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(demoted?.roleID == nil)
 
             // Demotion revokes the binding again (bare membership has none).
@@ -511,7 +511,7 @@ final class OIDCIdentityMappingTests {
                 user: user, provider: provider, organizationID: org.id!, groupValues: [])
 
             let membership = try await OrganizationMembershipStore.membership(
-                userID: user.id!, organizationID: org.id!, on: app.db)
+                userID: user.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(membership?.roleID == IAMRole.admin.seededID)
         }
     }
@@ -527,20 +527,20 @@ final class OIDCIdentityMappingTests {
             // one deactivated via SCIM. They must not count as available
             // admins, or demoting `user` locks the org out.
             let disabled = try await builder.createUser(username: "ssfdisabled", email: "ssf@example.com")
-            try await disabled.replacing(disabledAt: .some(Date())).save(on: app.db)
+            try await disabled.replacing(disabledAt: .some(Date())).save(on: app.testPostgres)
             try await builder.addUserToOrganization(user: disabled, organization: org, role: "admin")
 
             let deactivated = User(
                 username: "scimgone", email: "scimgone@example.com", displayName: "Gone",
                 isSystemAdmin: false, scimProvisioned: true, scimActive: false)
-            try await deactivated.save(on: app.db)
+            try await deactivated.save(on: app.testPostgres)
             try await builder.addUserToOrganization(user: deactivated, organization: org, role: "admin")
 
             try await service.reconcileOrganizationRole(
                 user: user, provider: provider, organizationID: org.id!, groupValues: [])
 
             let membership = try await OrganizationMembershipStore.membership(
-                userID: user.id!, organizationID: org.id!, on: app.db)
+                userID: user.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(membership?.roleID == IAMRole.admin.seededID)
 
             // With a usable second admin, the demotion proceeds.
@@ -549,7 +549,7 @@ final class OIDCIdentityMappingTests {
             try await service.reconcileOrganizationRole(
                 user: user, provider: provider, organizationID: org.id!, groupValues: [])
             let demoted = try await OrganizationMembershipStore.membership(
-                userID: user.id!, organizationID: org.id!, on: app.db)
+                userID: user.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(demoted?.roleID == nil)
         }
     }
@@ -570,9 +570,9 @@ final class OIDCIdentityMappingTests {
 
             // Membership metadata and the authoritative binding name the same role id.
             let membership = try await OrganizationMembershipStore.membership(
-                userID: user.id!, organizationID: org.id!, on: app.db)
+                userID: user.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(membership?.roleID == auditorID)
-            let bindings = try await orgBindingRoles(user.id!, org.id!, on: app.db)
+            let bindings = try await orgBindingRoles(user.id!, org.id!, on: app.testPostgres)
             #expect(bindings == [auditorID])
         }
     }
@@ -589,9 +589,9 @@ final class OIDCIdentityMappingTests {
                 userInfo: userInfo(), provider: provider, organization: org, groupValues: [])
 
             let membership = try await OrganizationMembershipStore.membership(
-                userID: user.id!, organizationID: org.id!, on: app.db)
+                userID: user.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(membership?.roleID == auditorID)
-            let bindings = try await orgBindingRoles(user.id!, org.id!, on: app.db)
+            let bindings = try await orgBindingRoles(user.id!, org.id!, on: app.testPostgres)
             #expect(bindings == [auditorID])
         }
     }
@@ -612,17 +612,17 @@ final class OIDCIdentityMappingTests {
             try await service.reconcileOrganizationRole(
                 user: user, provider: provider, organizationID: org.id!, groupValues: ["idp-auditors"])
             var membership = try await OrganizationMembershipStore.membership(
-                userID: user.id!, organizationID: org.id!, on: app.db)
+                userID: user.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(membership?.roleID == auditorID)
-            #expect(try await orgBindingRoles(user.id!, org.id!, on: app.db) == [auditorID])
+            #expect(try await orgBindingRoles(user.id!, org.id!, on: app.testPostgres) == [auditorID])
 
             // Claim lost → reset to the provider default (bare "member"), binding revoked.
             try await service.reconcileOrganizationRole(
                 user: user, provider: provider, organizationID: org.id!, groupValues: [])
             membership = try await OrganizationMembershipStore.membership(
-                userID: user.id!, organizationID: org.id!, on: app.db)
+                userID: user.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(membership?.roleID == nil)
-            #expect(try await orgBindingRoles(user.id!, org.id!, on: app.db).isEmpty)
+            #expect(try await orgBindingRoles(user.id!, org.id!, on: app.testPostgres).isEmpty)
         }
     }
 
@@ -641,9 +641,9 @@ final class OIDCIdentityMappingTests {
                 groupValues: ["strato-admins", "idp-auditors"])
 
             let membership = try await OrganizationMembershipStore.membership(
-                userID: user.id!, organizationID: org.id!, on: app.db)
+                userID: user.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(membership?.roleID == IAMRole.admin.seededID)
-            #expect(try await orgBindingRoles(user.id!, org.id!, on: app.db) == [IAMRole.admin.seededID])
+            #expect(try await orgBindingRoles(user.id!, org.id!, on: app.testPostgres) == [IAMRole.admin.seededID])
         }
     }
 
@@ -657,9 +657,9 @@ final class OIDCIdentityMappingTests {
 
             // Fell back to bare membership; no binding, and no crash.
             let membership = try await OrganizationMembershipStore.membership(
-                userID: user.id!, organizationID: org.id!, on: app.db)
+                userID: user.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(membership?.roleID == nil)
-            #expect(try await orgBindingRoles(user.id!, org.id!, on: app.db).isEmpty)
+            #expect(try await orgBindingRoles(user.id!, org.id!, on: app.testPostgres).isEmpty)
         }
     }
 }

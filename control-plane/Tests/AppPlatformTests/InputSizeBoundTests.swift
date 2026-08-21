@@ -1,5 +1,3 @@
-import Fluent
-import SQLKit
 import Testing
 import Vapor
 import VaporTesting
@@ -377,17 +375,16 @@ final class InputSizeBoundTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "bounduser", email: "bound@example.com")
             let org = try await builder.createOrganization(name: "Bound Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .organization, nodeID: org.id!, createdBy: nil, on: app.db)
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+                nodeType: .organization, nodeID: org.id!, createdBy: nil, on: app.testPostgres)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Bound Project", description: "p", organization: org)
@@ -513,9 +510,9 @@ final class InputSizeBoundTests {
                         description: self.string(Validate.textLength + 1)))
                     == .badRequest)
 
-            #expect(try await PolicyStore.count(on: app.db) == 2)
-            #expect(try await RoleStore.legacyRoleCount(managed: false, on: app.db) == 2)
-            #expect(try await LegacyGuardrailStore.count(on: app.db) == 2)
+            #expect(try await PolicyStore.count(on: app.testPostgres) == 2)
+            #expect(try await RoleStore.legacyRoleCount(managed: false, on: app.testPostgres) == 2)
+            #expect(try await LegacyGuardrailStore.count(on: app.testPostgres) == 2)
         }
     }
 
@@ -558,7 +555,7 @@ final class InputSizeBoundTests {
             }
 
             // Only the accepted create left a row.
-            let names = try await LegacyVMStore.vms(on: app.db).map(\.name)
+            let names = try await LegacyVMStore.vms(on: app.testPostgres).map(\.name)
             #expect(names == [atLimit])
         }
     }
@@ -586,7 +583,7 @@ final class InputSizeBoundTests {
                 #expect(res.status == .badRequest)
             }
 
-            let vmCount = try await LegacyVMStore.vms(on: app.db).count
+            let vmCount = try await LegacyVMStore.vms(on: app.testPostgres).count
             #expect(vmCount == 0)
         }
     }
@@ -604,7 +601,7 @@ final class InputSizeBoundTests {
                 #expect(res.status == .accepted)
             }
 
-            let vm = try await LegacyVMStore.vms(name: "keyed-vm", on: app.db).first
+            let vm = try await LegacyVMStore.vms(name: "keyed-vm", on: app.testPostgres).first
             #expect(vm?.sshPublicKey == Self.validSSHKey)
         }
     }
@@ -632,7 +629,7 @@ final class InputSizeBoundTests {
                 }
             }
 
-            let vmCount = try await LegacyVMStore.vms(on: app.db).count
+            let vmCount = try await LegacyVMStore.vms(on: app.testPostgres).count
             #expect(vmCount == 0)
         }
     }
@@ -640,11 +637,11 @@ final class InputSizeBoundTests {
     @Test("PUT /api/vms/:id holds a rename to the same ceiling as create")
     func vmUpdateNameCeiling() async throws {
         try await withApp { app, user, project, _, token in
-            let vm = try await TestDataBuilder(db: app.db).createVM(
+            let vm = try await TestDataBuilder(db: app.testPostgres).createVM(
                 name: "renameable", project: project)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .virtualMachine, nodeID: vm.id!, createdBy: user.id, on: app.db)
+                nodeType: .virtualMachine, nodeID: vm.id!, createdBy: user.id, on: app.testPostgres)
 
             struct UpdateBody: Content { let name: String }
             try await app.test(.PUT, "/api/vms/\(vm.id!)") { req in
@@ -654,7 +651,7 @@ final class InputSizeBoundTests {
                 #expect(res.status == .badRequest)
             }
 
-            let reloaded = try await VM.find(vm.id!, on: app.db)
+            let reloaded = try await VM.find(vm.id!, on: app.testPostgres)
             #expect(reloaded?.name == "renameable")
         }
     }
@@ -669,7 +666,7 @@ final class InputSizeBoundTests {
     @Test("POST /api/networks refuses an oversized name before it can reach OVSDB")
     func networkNameNeverReachesOVSDB() async throws {
         try await withApp { app, _, _, project, _, token in
-            let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
+            let siteID = try await TestDataBuilder(db: app.testPostgres).placementSite(for: project).requireID()
             let oversized = self.string(Validate.nameLength + 1)
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -683,7 +680,7 @@ final class InputSizeBoundTests {
 
             // Nothing was persisted, so nothing can be assembled into a sync,
             // which is the only way a name reaches an agent at all.
-            let persisted = try await LogicalNetwork.all(on: app.db).map(\.name)
+            let persisted = try await LogicalNetwork.all(on: app.testPostgres).map(\.name)
             #expect(persisted == ["default"])
         }
     }
@@ -726,7 +723,7 @@ final class InputSizeBoundTests {
             let oversizedDescription = try await post(
                 name: "ok", description: self.string(Validate.textLength + 1))
             #expect(oversizedDescription == .badRequest)
-            let volumeCount = try await Volume.query(on: app.db).count()
+            let volumeCount = try await LegacyVolumeStore.volumes(on: app.testPostgres).count
             #expect(volumeCount == 0)
         }
     }
@@ -796,7 +793,7 @@ final class InputSizeBoundTests {
                 try await self.postZone(app, token, project, name: self.string(100_000))
                     == .badRequest)
 
-            let names = try await LegacyDNSZoneStore.zones(on: app.db).map(\.name)
+            let names = try await LegacyDNSZoneStore.zones(on: app.testPostgres).map(\.name)
             #expect(names == [atLimit])
         }
     }
@@ -815,7 +812,7 @@ final class InputSizeBoundTests {
                 description: self.string(Validate.textLength + 1))
             #expect(overLimit == .badRequest)
 
-            let names = try await LegacyDNSZoneStore.zones(on: app.db).map(\.name)
+            let names = try await LegacyDNSZoneStore.zones(on: app.testPostgres).map(\.name)
             #expect(names == ["described.internal"])
         }
     }
@@ -824,7 +821,7 @@ final class InputSizeBoundTests {
     func dnsRecordNameCeiling() async throws {
         try await withApp { app, _, project, _, token in
             #expect(try await self.postZone(app, token, project, name: "records.internal") == .ok)
-            let zoneID = try #require(try await LegacyDNSZoneStore.zones(on: app.db).first?.id)
+            let zoneID = try #require(try await LegacyDNSZoneStore.zones(on: app.testPostgres).first?.id)
 
             let atLimit = self.maximalDNSName
             #expect(
@@ -836,7 +833,7 @@ final class InputSizeBoundTests {
                     value: "10.9.0.2") == .badRequest)
 
             let stored = try await LegacyDNSRecordStore.records(
-                zoneID: zoneID, on: app.db).map(\.name)
+                zoneID: zoneID, on: app.testPostgres).map(\.name)
             #expect(stored == [atLimit])
         }
     }
@@ -848,13 +845,13 @@ final class InputSizeBoundTests {
     func dnsRecordEmptyNameIsApex() async throws {
         try await withApp { app, _, project, _, token in
             #expect(try await self.postZone(app, token, project, name: "apex.internal") == .ok)
-            let zoneID = try #require(try await LegacyDNSZoneStore.zones(on: app.db).first?.id)
+            let zoneID = try #require(try await LegacyDNSZoneStore.zones(on: app.testPostgres).first?.id)
 
             #expect(
                 try await self.postRecord(app, token, zone: zoneID, name: "", type: .a, value: "10.9.0.1")
                     == .ok)
             let record = try #require(
-                try await LegacyDNSRecordStore.records(zoneID: zoneID, on: app.db).first)
+                try await LegacyDNSRecordStore.records(zoneID: zoneID, on: app.testPostgres).first)
             #expect(record.name == DNSName.apex)
         }
     }
@@ -868,7 +865,7 @@ final class InputSizeBoundTests {
     func dnsRecordValueCeiling() async throws {
         try await withApp { app, _, project, _, token in
             #expect(try await self.postZone(app, token, project, name: "txt.internal") == .ok)
-            let zoneID = try #require(try await LegacyDNSZoneStore.zones(on: app.db).first?.id)
+            let zoneID = try #require(try await LegacyDNSZoneStore.zones(on: app.testPostgres).first?.id)
 
             let atLimit = self.string(255)
             #expect(
@@ -884,7 +881,7 @@ final class InputSizeBoundTests {
                     value: self.string(Validate.textLength + 1)) == .badRequest)
 
             let record = try #require(
-                try await LegacyDNSRecordStore.records(zoneID: zoneID, on: app.db).first)
+                try await LegacyDNSRecordStore.records(zoneID: zoneID, on: app.testPostgres).first)
             for oversized in [self.string(256), self.string(Validate.textLength + 1)] {
                 try await app.test(.PUT, "/api/dns-zones/\(zoneID)/records/\(record.id)") { req in
                     req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -895,7 +892,7 @@ final class InputSizeBoundTests {
             }
 
             let reloaded = try #require(
-                try await LegacyDNSRecordStore.record(id: record.id, on: app.db))
+                try await LegacyDNSRecordStore.record(id: record.id, on: app.testPostgres))
             #expect(reloaded.value == atLimit)
         }
     }
@@ -911,10 +908,10 @@ final class InputSizeBoundTests {
     func dnsZoneNameNeverReachesOVSDB() async throws {
         try await withApp { app, _, project, _, token in
             #expect(try await self.postZone(app, token, project, name: "acme.internal") == .ok)
-            let zone = try #require(try await LegacyDNSZoneStore.zones(on: app.db).first)
+            let zone = try #require(try await LegacyDNSZoneStore.zones(on: app.testPostgres).first)
             let zoneID = zone.id
             let network = try #require(
-                try await LegacyLogicalNetworkStore.networks(name: "default", on: app.db).first)
+                try await LegacyLogicalNetworkStore.networks(name: "default", on: app.testPostgres).first)
             let networkID = try network.requireID()
 
             #expect(
@@ -938,12 +935,12 @@ final class InputSizeBoundTests {
                 #expect(res.status == .badRequest)
             }
 
-            let stored = try #require(try await LegacyDNSZoneStore.find(id: zoneID, on: app.db))
+            let stored = try #require(try await LegacyDNSZoneStore.find(id: zoneID, on: app.testPostgres))
             #expect(stored.name == "acme.internal")
 
             // The projection an agent receives, which is the last thing between
             // the control plane and an OVSDB transaction.
-            let assembled = try await DNSZoneAssembler.assemble(zone: stored, on: app.db)
+            let assembled = try await DNSZoneAssembler.assemble(zone: stored, on: app.testPostgres)
             let desired = DNSZoneAssembler.desiredZone(assembled, networkIDs: [networkID])
             #expect(desired.zoneName == "acme.internal")
             #expect(!desired.records.isEmpty)
@@ -1002,7 +999,7 @@ final class InputSizeBoundTests {
             #expect(try await create("Duplicate Me ") == .conflict)
             #expect(try await create("  Duplicate Me") == .conflict)
 
-            let named = try await Project.count(name: "Duplicate Me", on: app.db)
+            let named = try await Project.count(name: "Duplicate Me", on: app.testPostgres)
             #expect(named == 1)
         }
     }
@@ -1056,7 +1053,7 @@ final class InputSizeBoundTests {
                 #expect(res.status == .payloadTooLarge)
             }
 
-            let vmCount = try await LegacyVMStore.vms(on: app.db).count
+            let vmCount = try await LegacyVMStore.vms(on: app.testPostgres).count
             #expect(vmCount == 0)
         }
     }
@@ -1090,7 +1087,7 @@ final class InputSizeBoundTests {
                 createdByID: UUID()
             )
             await #expect(throws: (any Error).self) {
-                try await volume.save(on: app.db)
+                try await volume.save(on: app.testPostgres)
             }
         }
     }
@@ -1103,7 +1100,7 @@ final class InputSizeBoundTests {
             await #expect(throws: (any Error).self) {
                 try await LegacyDNSZoneStore.insert(
                     name: self.string(DNSName.maxNameLength + 1),
-                    projectID: project.id!, createdByID: user.id, on: app.db)
+                    projectID: project.id!, createdByID: user.id, on: app.testPostgres)
             }
         }
     }

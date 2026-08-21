@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Testing
 import Vapor
@@ -21,7 +20,7 @@ private struct SCIMProvisioningFixture {
 private func makeSCIMFixture(
     _ app: Application, orgName: String = "SCIM Org", username: String = "scimadmin"
 ) async throws -> SCIMProvisioningFixture {
-    let builder = TestDataBuilder(db: app.db)
+    let builder = TestDataBuilder(db: app.testPostgres)
     let user = try await builder.createUser(username: username, email: "\(username)@example.com")
     let org = try await builder.createOrganization(name: orgName)
     try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
@@ -98,13 +97,13 @@ struct SCIMProvisioningIntegrationTests {
 
             let created = try await LegacyUserStore.users(
                 username: "provisioned.by.idp",
-                on: app.db
+                on: app.testPostgres
             ).first
             let createdUser = try #require(created)
             #expect(createdUser.scimProvisioned == true)
 
             let membership = try await OrganizationMembershipStore.membership(
-                userID: createdUser.id!, organizationID: fixture.organization.id!, on: app.db)
+                userID: createdUser.id!, organizationID: fixture.organization.id!, on: app.testPostgres)
             #expect(membership != nil)
         }
     }

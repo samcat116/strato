@@ -1,7 +1,6 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import NIOCore
-import SQLKit
 import StratoShared
 import Testing
 import Vapor
@@ -55,7 +54,7 @@ struct DesiredStatePollTests {
         ).replacing(
             siteID: siteID,
             organizationID: .some(organizationID))
-        try await agent.save(on: app.db)
+        try await agent.save(on: app.testPostgres)
         return agent
     }
 
@@ -89,13 +88,13 @@ struct DesiredStatePollTests {
             self.enableSPIRE(on: app)
             let agent = try await self.registerAgentRow(app: app, name: "poll-agent")
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Poll Org")
             let project = try await builder.createProject(
                 name: "Poll Project", description: "poll tests", organization: org)
             var vm = try await builder.createVM(name: "poll-vm", project: project)
             vm.hypervisorId = agent.id!.uuidString
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let response = try await self.poll(app: app, port: port)
 
@@ -103,53 +102,6 @@ struct DesiredStatePollTests {
             #expect(response.headers.first(name: .eTag) != nil)
             let sync = try self.decodeSync(response)
             #expect(sync.vms.map(\.vmId) == [vm.id!])
-        }
-    }
-
-    @Test("A preserved pre-guest-agent schema migrates before desired-state polling")
-    func upgradesPreservedSchemaBeforePolling() async throws {
-        try await withRunningPollApp { app, port in
-            self.enableSPIRE(on: app)
-
-            let builder = TestDataBuilder(db: app.db)
-            let org = try await builder.createOrganization(name: "Upgrade Poll Org")
-            let project = try await builder.createProject(
-                name: "Upgrade Poll Project", description: "upgrade poll tests", organization: org)
-            let user = try await builder.createUser(
-                username: "upgrade-poll-user",
-                email: "upgrade-poll@example.com")
-            let site = try await builder.placementSite(for: project)
-            let agent = try await self.registerAgentRow(
-                app: app,
-                name: "poll-agent",
-                siteID: try site.requireID(),
-                organizationID: try org.requireID())
-            var vm = try await builder.createVM(name: "upgrade-poll-vm", project: project)
-            vm.hypervisorId = agent.id!.uuidString
-            try await vm.save(on: app.db)
-            let boot = try await builder.createVolume(
-                name: "upgrade-poll-boot", project: project, createdBy: user
-            ).replacing(
-                volumeType: .boot, vmID: vm.id,
-                deviceName: VolumeDeviceName.disk(0).rawValue, bootOrder: 0)
-            try await boot.save(on: app.db)
-
-            // Recreate a preserved database from the release immediately before
-            // guest_agent_enabled: the baseline is already recorded and contains
-            // live VM rows, but this incremental migration has not run yet.
-            let sql = try #require(app.db as? any SQLDatabase)
-            try await sql.raw("ALTER TABLE vms DROP COLUMN guest_agent_enabled").run()
-            try await MigrationLog.query(on: app.db)
-                .filter(\.$name == AddGuestAgentEnabledToVM().name)
-                .delete()
-
-            try await SchemaMigrator.run(on: app, options: .init())
-
-            let response = try await self.poll(app: app, port: port)
-            #expect(response.status == .ok)
-            let sync = try self.decodeSync(response)
-            #expect(sync.vms.map(\.vmId) == [vm.id!])
-            #expect(sync.vms.first?.spec.guestAgentEnabled == false)
         }
     }
 
@@ -264,13 +216,13 @@ struct DesiredStatePollTests {
             }
             #expect(isParked)
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Doorbell Org")
             let project = try await builder.createProject(
                 name: "Doorbell Project", description: "doorbell tests", organization: org)
             var vm = try await builder.createVM(name: "doorbell-vm", project: project)
             vm.hypervisorId = agent.id!.uuidString
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             await app.agentService.syncDesiredState(agentId: agent.id!.uuidString)
 
@@ -400,13 +352,13 @@ struct DesiredStatePollTests {
             }
             #expect(isParked)
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Burst Org")
             let project = try await builder.createProject(
                 name: "Burst Project", description: "burst tests", organization: org)
             var vm = try await builder.createVM(name: "burst-vm", project: project)
             vm.hypervisorId = agent.id!.uuidString
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             // Twenty rings back to back, well inside the coalescing window.
             for _ in 0..<20 {

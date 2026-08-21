@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -18,7 +17,6 @@ final class IAMGuardrailTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -66,11 +64,11 @@ final class IAMGuardrailTests {
                     principalMatch: .any,
                     resourceMatch: .any,
                     createdBy: nil,
-                    on: app.db
+                    on: app.testPostgres
                 )
             }
 
-            let stored = try await LegacyGuardrailStore.count(on: app.db)
+            let stored = try await LegacyGuardrailStore.count(on: app.testPostgres)
             #expect(stored == 0)
         }
     }
@@ -89,7 +87,7 @@ final class IAMGuardrailTests {
                 principalMatch: .any,
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             #expect(guardrail.effect == GuardrailEffect.forbid.rawValue)
@@ -111,7 +109,7 @@ final class IAMGuardrailTests {
                     principalMatch: .any,
                     resourceMatch: .any,
                     createdBy: nil,
-                    on: app.db
+                    on: app.testPostgres
                 )
             }
         }
@@ -138,7 +136,7 @@ final class IAMGuardrailTests {
                     principalMatch: .any,
                     resourceMatch: .any,
                     createdBy: nil,
-                    on: app.db
+                    on: app.testPostgres
                 )
             }
         }
@@ -155,11 +153,11 @@ final class IAMGuardrailTests {
             let principalScoped = try await GuardrailStore.create(
                 name: "contractors-cannot-set-policy", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["iam:setPolicy"], principalMatch: .group(contractors.id!), resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
             let resourceScoped = try await GuardrailStore.create(
                 name: "no-policy-writes-in-prod", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["iam:*"], principalMatch: .any, resourceMatch: .environment("production"),
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
 
             #expect(principalScoped.id != nil)
             #expect(resourceScoped.id != nil)
@@ -174,7 +172,7 @@ final class IAMGuardrailTests {
             let guardrail = try await GuardrailStore.create(
                 name: "nobody-deletes-vms", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["vm:*"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
 
             #expect(guardrail.actions == ["vm:*"])
         }
@@ -188,13 +186,13 @@ final class IAMGuardrailTests {
             _ = try await GuardrailStore.create(
                 name: "no-deletes", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
 
             await #expect(throws: GuardrailError.duplicateName("no-deletes")) {
                 _ = try await GuardrailStore.create(
                     name: "no-deletes", description: nil, effect: nil, node: tree.orgNode,
                     actions: ["volume:delete"], principalMatch: .any, resourceMatch: .any,
-                    createdBy: nil, on: app.db)
+                    createdBy: nil, on: app.testPostgres)
             }
         }
     }
@@ -234,13 +232,13 @@ final class IAMGuardrailTests {
             _ = try await GuardrailStore.create(
                 name: "org-no-vm-delete", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
             _ = try await GuardrailStore.create(
                 name: "project-no-volume-delete", description: nil, effect: nil, node: tree.projectNode,
                 actions: ["volume:delete"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
 
-            let effective = try await GuardrailStore.effective(at: tree.vmNode, on: app.db)
+            let effective = try await GuardrailStore.effective(at: tree.vmNode, on: app.testPostgres)
 
             #expect(effective.map(\.name) == ["org-no-vm-delete", "project-no-volume-delete"])
         }
@@ -254,15 +252,15 @@ final class IAMGuardrailTests {
             let guardrail = try await GuardrailStore.create(
                 name: "paused-ceiling", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
             _ = try await GuardrailStore.update(
                 guardrail, description: nil, actions: nil, principalMatch: nil, resourceMatch: nil,
-                cedarText: nil, enabled: false, engine: app.cedarEngine, on: app.db)
+                cedarText: nil, enabled: false, engine: app.cedarEngine, on: app.testPostgres)
 
-            let effective = try await GuardrailStore.effective(at: tree.vmNode, on: app.db)
+            let effective = try await GuardrailStore.effective(at: tree.vmNode, on: app.testPostgres)
             #expect(effective.isEmpty)
 
-            let attached = try await GuardrailStore.attached(to: tree.orgNode, on: app.db)
+            let attached = try await GuardrailStore.attached(to: tree.orgNode, on: app.testPostgres)
             #expect(attached.map(\.name) == ["paused-ceiling"])
         }
     }
@@ -279,11 +277,11 @@ final class IAMGuardrailTests {
             _ = try await GuardrailStore.create(
                 name: "only-here", description: nil, effect: nil, node: tree.projectNode,
                 actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
 
-            let here = try await GuardrailStore.effective(at: tree.vmNode, on: app.db)
+            let here = try await GuardrailStore.effective(at: tree.vmNode, on: app.testPostgres)
             let there = try await GuardrailStore.effective(
-                at: IAMNode(type: .virtualMachine, id: otherVM.id!), on: app.db)
+                at: IAMNode(type: .virtualMachine, id: otherVM.id!), on: app.testPostgres)
 
             #expect(here.map(\.name) == ["only-here"])
             #expect(there.isEmpty)
@@ -309,17 +307,17 @@ final class IAMGuardrailTests {
             _ = try await GuardrailStore.create(
                 name: "no-prod-for-contractors", description: nil, effect: nil, node: tree.ouNode,
                 actions: ["vm:delete"], principalMatch: .group(contractors.id!), resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
 
             let againstContractor = try await GuardrailStore.forbidding(
                 action: "vm:delete", principalType: .user, principalID: contractor.id!,
-                node: tree.vmNode, on: app.db)
+                node: tree.vmNode, on: app.testPostgres)
             let againstStaff = try await GuardrailStore.forbidding(
                 action: "vm:delete", principalType: .user, principalID: staff.id!,
-                node: tree.vmNode, on: app.db)
+                node: tree.vmNode, on: app.testPostgres)
             let againstGroupItself = try await GuardrailStore.forbidding(
                 action: "vm:delete", principalType: .group, principalID: contractors.id!,
-                node: tree.vmNode, on: app.db)
+                node: tree.vmNode, on: app.testPostgres)
 
             #expect(againstContractor.map(\.name) == ["no-prod-for-contractors"])
             #expect(againstStaff.isEmpty)
@@ -337,14 +335,14 @@ final class IAMGuardrailTests {
             _ = try await GuardrailStore.create(
                 name: "no-deletes", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
 
             let onDelete = try await GuardrailStore.forbidding(
                 action: "vm:delete", principalType: .user, principalID: user.id!,
-                node: tree.vmNode, on: app.db)
+                node: tree.vmNode, on: app.testPostgres)
             let onStart = try await GuardrailStore.forbidding(
                 action: "vm:start", principalType: .user, principalID: user.id!,
-                node: tree.vmNode, on: app.db)
+                node: tree.vmNode, on: app.testPostgres)
 
             #expect(onDelete.count == 1)
             #expect(onStart.isEmpty)
@@ -365,14 +363,14 @@ final class IAMGuardrailTests {
             _ = try await GuardrailStore.create(
                 name: "no-external-access", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["vm:*"], principalMatch: .externalToOrganization, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
 
             let againstOutsider = try await GuardrailStore.forbidding(
                 action: "vm:read", principalType: .user, principalID: outsider.id!,
-                node: tree.vmNode, on: app.db)
+                node: tree.vmNode, on: app.testPostgres)
             let againstInsider = try await GuardrailStore.forbidding(
                 action: "vm:read", principalType: .user, principalID: insider.id!,
-                node: tree.vmNode, on: app.db)
+                node: tree.vmNode, on: app.testPostgres)
 
             #expect(againstOutsider.map(\.name) == ["no-external-access"])
             #expect(againstInsider.isEmpty)
@@ -394,14 +392,14 @@ final class IAMGuardrailTests {
             _ = try await GuardrailStore.create(
                 name: "no-external-groups", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["vm:*"], principalMatch: .externalToOrganization, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
 
             let againstForeign = try await GuardrailStore.forbidding(
                 action: "vm:read", principalType: .group, principalID: foreignGroup.id!,
-                node: tree.vmNode, on: app.db)
+                node: tree.vmNode, on: app.testPostgres)
             let againstLocal = try await GuardrailStore.forbidding(
                 action: "vm:read", principalType: .group, principalID: localGroup.id!,
-                node: tree.vmNode, on: app.db)
+                node: tree.vmNode, on: app.testPostgres)
 
             #expect(againstForeign.map(\.name) == ["no-external-groups"])
             #expect(againstLocal.isEmpty)
@@ -422,14 +420,14 @@ final class IAMGuardrailTests {
             _ = try await GuardrailStore.create(
                 name: "no-prod-writes", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["vm:delete"], principalMatch: .any, resourceMatch: .environment("production"),
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
 
             let againstProd = try await GuardrailStore.forbidding(
                 action: "vm:delete", principalType: .user, principalID: user.id!,
-                node: tree.vmNode, on: app.db)
+                node: tree.vmNode, on: app.testPostgres)
             let againstStaging = try await GuardrailStore.forbidding(
                 action: "vm:delete", principalType: .user, principalID: user.id!,
-                node: IAMNode(type: .virtualMachine, id: stagingVM.id!), on: app.db)
+                node: IAMNode(type: .virtualMachine, id: stagingVM.id!), on: app.testPostgres)
 
             #expect(againstProd.map(\.name) == ["no-prod-writes"])
             #expect(againstStaging.isEmpty)
@@ -456,16 +454,16 @@ final class IAMGuardrailTests {
                 agentId: nil,
                 createdByID: user.id!
             )
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
 
             _ = try await GuardrailStore.create(
                 name: "no-prod-sandbox-writes", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["sandbox:*"], principalMatch: .any, resourceMatch: .environment("production"),
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
 
             let violations = try await GuardrailStore.forbidding(
                 action: "sandbox:restore", principalType: .user, principalID: user.id!,
-                node: IAMNode(type: .sandboxSnapshot, id: snapshot.id!), on: app.db)
+                node: IAMNode(type: .sandboxSnapshot, id: snapshot.id!), on: app.testPostgres)
 
             #expect(violations.map(\.name) == ["no-prod-sandbox-writes"])
         }
@@ -482,11 +480,11 @@ final class IAMGuardrailTests {
             _ = try await GuardrailStore.create(
                 name: "prod-only", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["project:update"], principalMatch: .any,
-                resourceMatch: .environment("production"), createdBy: nil, on: app.db)
+                resourceMatch: .environment("production"), createdBy: nil, on: app.testPostgres)
 
             let againstProject = try await GuardrailStore.forbidding(
                 action: "project:update", principalType: .user, principalID: user.id!,
-                node: tree.projectNode, on: app.db)
+                node: tree.projectNode, on: app.testPostgres)
 
             #expect(againstProject.isEmpty)
         }
@@ -502,15 +500,15 @@ final class IAMGuardrailTests {
             _ = try await GuardrailStore.create(
                 name: "a-org-ceiling", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["vm:*"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
             _ = try await GuardrailStore.create(
                 name: "b-project-ceiling", description: nil, effect: nil, node: tree.projectNode,
                 actions: ["vm:delete"], principalMatch: .any, resourceMatch: .environment("production"),
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
 
             let violations = try await GuardrailStore.forbidding(
                 action: "vm:delete", principalType: .user, principalID: user.id!,
-                node: tree.vmNode, on: app.db)
+                node: tree.vmNode, on: app.testPostgres)
 
             #expect(violations.map(\.name) == ["a-org-ceiling", "b-project-ceiling"])
         }
@@ -531,7 +529,7 @@ final class IAMGuardrailTests {
             let guardrail = try await GuardrailStore.create(
                 name: "no-vm-delete", description: nil, effect: nil, node: tree.projectNode,
                 actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
             #expect(guardrail.authored == false)
             let stored = guardrail.cedarText
             #expect(stored?.contains("forbid") == true)
@@ -546,7 +544,7 @@ final class IAMGuardrailTests {
             let text = authoredForbid(on: tree.projectNode)
             let guardrail = try await GuardrailStore.createAuthored(
                 name: "authored-no-delete", description: nil, node: tree.projectNode,
-                cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.db)
+                cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.testPostgres)
             #expect(guardrail.authored == true)
             #expect(guardrail.cedarText == text)
             #expect(guardrail.effect == GuardrailEffect.forbid.rawValue)
@@ -562,9 +560,9 @@ final class IAMGuardrailTests {
             await #expect(throws: GuardrailError.authoredMustForbid("permit")) {
                 _ = try await GuardrailStore.createAuthored(
                     name: "nope", description: nil, node: tree.projectNode,
-                    cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.db)
+                    cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.testPostgres)
             }
-            let count = try await LegacyGuardrailStore.count(on: app.db)
+            let count = try await LegacyGuardrailStore.count(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -578,7 +576,7 @@ final class IAMGuardrailTests {
             await #expect(throws: GuardrailError.self) {
                 _ = try await GuardrailStore.createAuthored(
                     name: "out-of-scope", description: nil, node: tree.projectNode,
-                    cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.db)
+                    cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.testPostgres)
             }
         }
     }
@@ -591,7 +589,7 @@ final class IAMGuardrailTests {
             await #expect(throws: GuardrailError.authoredUnscopedResource) {
                 _ = try await GuardrailStore.createAuthored(
                     name: "unscoped", description: nil, node: tree.projectNode,
-                    cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.db)
+                    cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.testPostgres)
             }
         }
     }
@@ -605,7 +603,7 @@ final class IAMGuardrailTests {
             await #expect(throws: GuardrailError.locksOutPolicyAdministration) {
                 _ = try await GuardrailStore.createAuthored(
                     name: "locked", description: nil, node: tree.orgNode,
-                    cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.db)
+                    cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.testPostgres)
             }
         }
     }
@@ -617,12 +615,12 @@ final class IAMGuardrailTests {
             let guardrail = try await GuardrailStore.create(
                 name: "matcher", description: nil, effect: nil, node: tree.projectNode,
                 actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
             await #expect(throws: GuardrailError.self) {
                 _ = try await GuardrailStore.update(
                     guardrail, description: nil, actions: nil, principalMatch: nil, resourceMatch: nil,
                     cedarText: self.authoredForbid(on: tree.projectNode), enabled: nil,
-                    engine: app.cedarEngine, on: app.db)
+                    engine: app.cedarEngine, on: app.testPostgres)
             }
         }
     }
@@ -636,12 +634,12 @@ final class IAMGuardrailTests {
             _ = try await GuardrailStore.createAuthored(
                 name: "authored-ceiling", description: nil, node: tree.projectNode,
                 cedarText: authoredForbid(on: tree.projectNode), createdBy: nil,
-                engine: app.cedarEngine, on: app.db)
+                engine: app.cedarEngine, on: app.testPostgres)
             // `forbidding` reads structured matchers, which an authored row does
             // not carry — it must not match on the placeholder `.any`.
             let forbidding = try await GuardrailStore.forbidding(
                 action: "vm:delete", principalType: .user, principalID: user.id!,
-                node: tree.vmNode, on: app.db)
+                node: tree.vmNode, on: app.testPostgres)
             #expect(forbidding.isEmpty)
         }
     }
@@ -655,7 +653,7 @@ final class IAMGuardrailTests {
             _ = try await GuardrailStore.createAuthored(
                 name: "authored-ceiling", description: nil, node: tree.projectNode,
                 cedarText: authoredForbid(on: tree.projectNode), createdBy: nil,
-                engine: app.cedarEngine, on: app.db)
+                engine: app.cedarEngine, on: app.testPostgres)
             let binding = ProposedBinding(
                 principalType: .user, principalID: user.id!, role: .editor, node: tree.projectNode)
             // An unavailable analyzer throws if consulted; a matcher ceiling
@@ -663,7 +661,7 @@ final class IAMGuardrailTests {
             // throwing proves authored rows are skipped.
             let ceilings = try await GuardrailWriteReport.ceilings(
                 narrowing: binding, analyzer: UnavailableGuardrailAnalyzer(reason: "test"),
-                on: app.db, logger: app.logger)
+                on: app.testPostgres, logger: app.logger)
             #expect(ceilings.isEmpty)
         }
     }
@@ -675,22 +673,22 @@ final class IAMGuardrailTests {
             let guardrail = try await GuardrailStore.create(
                 name: "no-vm-delete", description: nil, effect: nil, node: tree.projectNode,
                 actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
             // Simulate a row written before #610: the column existed but was null.
             try await LegacyGuardrailStore.setCedarText(
                 id: guardrail.id,
                 cedarText: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let filled = try await GuardrailStore.backfillCedarText(
-                on: app.db, logger: app.logger)
+                on: app.testPostgres, logger: app.logger)
             #expect(filled == 1)
-            let reloaded = try await LegacyGuardrailStore.guardrail(id: guardrail.id, on: app.db)
+            let reloaded = try await LegacyGuardrailStore.guardrail(id: guardrail.id, on: app.testPostgres)
             #expect(reloaded?.cedarText?.contains("forbid") == true)
 
             // Idempotent: a second run finds nothing to fill.
-            let again = try await GuardrailStore.backfillCedarText(on: app.db, logger: app.logger)
+            let again = try await GuardrailStore.backfillCedarText(on: app.testPostgres, logger: app.logger)
             #expect(again == 0)
         }
     }

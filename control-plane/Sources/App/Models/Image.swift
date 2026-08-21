@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 import Foundation
 import StratoShared
@@ -124,7 +124,7 @@ package struct Image: Equatable, Sendable {
     }
 
     @discardableResult
-    func save(on database: any Database) async throws -> Self {
+    func save(on database: PostgresStoreContext) async throws -> Self {
         try await LegacyImageStore.insert(self, on: database)
     }
 }
@@ -201,7 +201,7 @@ extension Image {
     /// Recompute the aggregate image status from the authoritative artifact
     /// rows. A complete bootable set wins even when an optional artifact failed;
     /// otherwise expose the most actionable in-progress/error state.
-    func recomputedStatus(on database: any Database) async throws -> Self {
+    func recomputedStatus(on database: PostgresStoreContext) async throws -> Self {
         let loadedImage = try await LegacyImageArtifactStore.loading(self, on: database)
         let loaded = loadedImage.loadedArtifacts ?? []
 

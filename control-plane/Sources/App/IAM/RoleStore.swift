@@ -1,7 +1,5 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
-import SQLKit
 import Vapor
 
 struct LegacyIAMRoleRecord: Decodable, Equatable, Sendable {
@@ -115,7 +113,7 @@ enum RoleStore {
     /// Transitional overload for policy/guardrail preparation paths that have
     /// not yet moved their surrounding hierarchy transaction to PostgresNIO.
     /// Deleted with the last Fluent transaction in this cohort.
-    static func allDescriptors(on db: any Database) async throws -> [RoleDescriptor] {
+    static func allDescriptors(on db: PostgresStoreContext) async throws -> [RoleDescriptor] {
         try await legacyRoles(on: db).map(RoleDescriptor.init(row:))
     }
 
@@ -228,7 +226,7 @@ enum RoleStore {
     /// contain non-IAM Fluent work. Removed when hierarchy ownership moves.
     @discardableResult
     static func deleteOwned(
-        by ownerType: IAMRoleOwnerType, ownerID: UUID, on db: any Database
+        by ownerType: IAMRoleOwnerType, ownerID: UUID, on db: PostgresStoreContext
     ) async throws -> Int {
         struct Identifier: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
@@ -240,26 +238,26 @@ enum RoleStore {
         ).all(decoding: Identifier.self).count
     }
 
-    static func legacyRole(id: UUID, on db: any Database) async throws -> LegacyIAMRoleRecord? {
+    static func legacyRole(id: UUID, on db: PostgresStoreContext) async throws -> LegacyIAMRoleRecord? {
         try await requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM iam_roles WHERE id = \(bind: id)"
         ).first(decoding: LegacyIAMRoleRecord.self)
     }
 
-    static func legacyRoles(ids: [UUID], on db: any Database) async throws -> [LegacyIAMRoleRecord] {
+    static func legacyRoles(ids: [UUID], on db: PostgresStoreContext) async throws -> [LegacyIAMRoleRecord] {
         guard !ids.isEmpty else { return [] }
         return try await requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM iam_roles WHERE id = ANY(\(bind: ids)) ORDER BY id"
         ).all(decoding: LegacyIAMRoleRecord.self)
     }
 
-    static func legacyRoles(on db: any Database) async throws -> [LegacyIAMRoleRecord] {
+    static func legacyRoles(on db: PostgresStoreContext) async throws -> [LegacyIAMRoleRecord] {
         try await requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM iam_roles ORDER BY id"
         ).all(decoding: LegacyIAMRoleRecord.self)
     }
 
-    static func legacyRoleCount(managed: Bool? = nil, on db: any Database) async throws -> Int {
+    static func legacyRoleCount(managed: Bool? = nil, on db: PostgresStoreContext) async throws -> Int {
         struct CountRow: Decodable { let count: Int }
         let sql = try requireSQL(db)
         let row: CountRow?
@@ -274,7 +272,7 @@ enum RoleStore {
         return row?.count ?? 0
     }
 
-    static func insertLegacy(_ role: IAMRoleSnapshot, on db: any Database) async throws
+    static func insertLegacy(_ role: IAMRoleSnapshot, on db: PostgresStoreContext) async throws
         -> LegacyIAMRoleRecord
     {
         guard let row = try await requireSQL(db).raw(
@@ -296,7 +294,7 @@ enum RoleStore {
         return row
     }
 
-    static func replaceLegacy(_ role: IAMRoleSnapshot, on db: any Database) async throws
+    static func replaceLegacy(_ role: IAMRoleSnapshot, on db: PostgresStoreContext) async throws
         -> LegacyIAMRoleRecord?
     {
         try await requireSQL(db).raw(
@@ -313,8 +311,8 @@ enum RoleStore {
         ).first(decoding: LegacyIAMRoleRecord.self)
     }
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw IAMPersistenceError.unexpectedRowCount(expected: 1, actual: 0)
         }
         return sql

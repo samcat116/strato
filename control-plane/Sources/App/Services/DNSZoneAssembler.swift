@@ -1,5 +1,5 @@
+import ControlPlanePostgres
 import Crypto
-import Fluent
 import Foundation
 import StratoShared
 import Vapor
@@ -61,7 +61,7 @@ struct AssembledDNSZone: Content, Sendable {
 enum DNSZoneAssembler {
 
     /// Assemble one zone.
-    static func assemble(zone: DNSZoneSnapshot, on db: any Database) async throws -> AssembledDNSZone {
+    static func assemble(zone: DNSZoneSnapshot, on db: PostgresStoreContext) async throws -> AssembledDNSZone {
         let zoneID = zone.id
         guard let assembled = try await assemble(zones: [zoneID: zone.name], on: db).first else {
             // Unreachable: the batch returns one entry per id it was given.
@@ -83,7 +83,7 @@ enum DNSZoneAssembler {
     ///
     /// Returned in the order `zones` iterates; callers that need a stable order
     /// impose their own.
-    static func assemble(zones: [UUID: String], on db: any Database) async throws -> [AssembledDNSZone] {
+    static func assemble(zones: [UUID: String], on db: PostgresStoreContext) async throws -> [AssembledDNSZone] {
         guard !zones.isEmpty else { return [] }
         let derived = try await derivedRecords(forZones: zones, on: db)
         let authored = try await authoredRecords(forZones: zones, on: db)
@@ -111,7 +111,7 @@ enum DNSZoneAssembler {
     /// their name: deriving on read is exactly what `VM.hostname` exists to
     /// avoid.
     static func derivedRecords(
-        zoneID: UUID, zoneName: String, on db: any Database
+        zoneID: UUID, zoneName: String, on db: PostgresStoreContext
     ) async throws -> [AssembledDNSRecord] {
         try await derivedRecords(forZones: [zoneID: zoneName], on: db)[zoneID] ?? []
     }
@@ -125,7 +125,7 @@ enum DNSZoneAssembler {
     /// VM on two networks with *different* primary zones lands in both, each
     /// carrying only the addresses that zone's networks allocated.
     private static func derivedRecords(
-        forZones zones: [UUID: String], on db: any Database
+        forZones zones: [UUID: String], on db: PostgresStoreContext
     ) async throws -> [UUID: [AssembledDNSRecord]] {
         guard !zones.isEmpty else { return [:] }
         var zoneByNetwork: [UUID: UUID] = [:]
@@ -196,7 +196,7 @@ enum DNSZoneAssembler {
     /// checked against, so a collision is rejected at write time with a clear
     /// error instead of being silently shadowed at realization time.
     static func derivedNames(
-        zoneID: UUID, zoneName: String, on db: any Database
+        zoneID: UUID, zoneName: String, on db: PostgresStoreContext
     ) async throws -> [String: Set<DNSRecordType>] {
         var names: [String: Set<DNSRecordType>] = [:]
         for record in try await derivedRecords(zoneID: zoneID, zoneName: zoneName, on: db) {
@@ -208,14 +208,14 @@ enum DNSZoneAssembler {
     // MARK: - Authored
 
     static func authoredRecords(
-        zoneID: UUID, zoneName: String, on db: any Database
+        zoneID: UUID, zoneName: String, on db: PostgresStoreContext
     ) async throws -> [AssembledDNSRecord] {
         try await authoredRecords(forZones: [zoneID: zoneName], on: db)[zoneID] ?? []
     }
 
     /// The authored records of several zones at once, in one query.
     private static func authoredRecords(
-        forZones zones: [UUID: String], on db: any Database
+        forZones zones: [UUID: String], on db: PostgresStoreContext
     ) async throws -> [UUID: [AssembledDNSRecord]] {
         guard !zones.isEmpty else { return [:] }
         let rows = try await LegacyDNSRecordStore.records(zoneIDs: Array(zones.keys), on: db)

@@ -1,13 +1,12 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
 /// Fixed-shape image access used while VM and volume writes still own Fluent
 /// transactions. Image snapshots themselves are immutable.
 package enum LegacyImageStore {
-    package static func image(id: UUID?, on db: any Database) async throws -> Image? {
+    package static func image(id: UUID?, on db: PostgresStoreContext) async throws -> Image? {
         guard let id else { return nil }
         let matches = try await images(ids: [id], on: db)
         guard matches.count <= 1 else {
@@ -20,11 +19,11 @@ package enum LegacyImageStore {
         ids: [UUID]? = nil,
         projectIDs: [UUID]? = nil,
         newestFirst: Bool = false,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [Image] {
         if let ids, ids.isEmpty { return [] }
         if let projectIDs, projectIDs.isEmpty { return [] }
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT \(unsafeRaw: columns) FROM images AS i WHERE TRUE"
         if let ids { query += " AND i.id = ANY(\(bind: ids))" }
         if let projectIDs { query += " AND i.project_id = ANY(\(bind: projectIDs))" }
@@ -34,14 +33,14 @@ package enum LegacyImageStore {
         return try await requireSQL(db).raw(query).all(decoding: Record.self).map { try $0.image }
     }
 
-    package static func count(on db: any Database) async throws -> Int {
+    package static func count(on db: PostgresStoreContext) async throws -> Int {
         struct Count: Decodable { let count: Int }
         return try await requireSQL(db).raw(
             "SELECT count(*)::bigint AS count FROM images"
         ).first(decoding: Count.self)?.count ?? 0
     }
 
-    static func loadingSourceImages(_ vms: [VM], on db: any Database) async throws -> [VM] {
+    static func loadingSourceImages(_ vms: [VM], on db: PostgresStoreContext) async throws -> [VM] {
         let ids = Array(Set(vms.compactMap(\.sourceImageID)))
         let loaded = try await LegacyImageArtifactStore.loading(
             images(ids: ids, on: db),
@@ -54,7 +53,7 @@ package enum LegacyImageStore {
         }
     }
 
-    static func loadingSourceImages(_ volumes: [Volume], on db: any Database) async throws -> [Volume] {
+    static func loadingSourceImages(_ volumes: [Volume], on db: PostgresStoreContext) async throws -> [Volume] {
         let ids = Array(Set(volumes.compactMap(\.sourceImageID)))
         let loaded = try await LegacyImageArtifactStore.loading(
             images(ids: ids, on: db),
@@ -69,7 +68,7 @@ package enum LegacyImageStore {
     }
 
     @discardableResult
-    package static func insert(_ image: Image, on db: any Database) async throws -> Image {
+    package static func insert(_ image: Image, on db: PostgresStoreContext) async throws -> Image {
         let id = try image.requireID()
         guard let row = try await requireSQL(db).raw(
             """
@@ -103,7 +102,7 @@ package enum LegacyImageStore {
         defaultMemory: Int64?,
         defaultDisk: Int64?,
         defaultCmdline: String?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Image? {
         try await requireSQL(db).raw(
             """
@@ -126,7 +125,7 @@ package enum LegacyImageStore {
     package static func updateStatus(
         id: UUID,
         status: ImageStatus,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Image? {
         try await requireSQL(db).raw(
             """
@@ -139,7 +138,7 @@ package enum LegacyImageStore {
     }
 
     @discardableResult
-    package static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    package static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM images WHERE id = \(bind: id) RETURNING id"
@@ -218,8 +217,8 @@ package enum LegacyImageStore {
         updated_at AS "updatedAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Image compatibility access requires PostgreSQL")
         }
         return sql

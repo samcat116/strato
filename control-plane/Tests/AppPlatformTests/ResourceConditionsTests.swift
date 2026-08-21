@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -23,9 +22,8 @@ final class ResourceConditionsTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "conditionsuser",
                 email: "conditions@example.com",
@@ -34,7 +32,7 @@ final class ResourceConditionsTests {
             )
             let org = try await builder.createOrganization(name: "Conditions Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Conditions Project",
@@ -73,7 +71,7 @@ final class ResourceConditionsTests {
             protocolVersion: WireProtocol.currentVersion,
             sandboxCapable: hypervisorType == .firecracker
         )
-        let orgID = try await Organization.all(on: app.db).first?.id
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: agentName,
             organizationScope: orgID.map { .organization($0) })
@@ -113,8 +111,8 @@ final class ResourceConditionsTests {
     }
 
     private func subscribeToEverything(app: Application) async throws {
-        let org = try #require(await Organization.all(on: app.db).first)
-        let user = try #require(await User.all(on: app.db).first)
+        let org = try #require(await Organization.all(on: app.testPostgres).first)
+        let user = try #require(await User.all(on: app.testPostgres).first)
         _ = try await app.webhookSubscriptionsPersistence.create(
             WebhookSubscriptionWrite(
                 id: UUID(),
@@ -136,7 +134,7 @@ final class ResourceConditionsTests {
     @Test("A VM whose agent has caught up and whose desired status is satisfied is converged")
     func vmConverged() async throws {
         try await withTestApp { app, _, project in
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.observedGeneration = vm.generation
@@ -153,7 +151,7 @@ final class ResourceConditionsTests {
     @Test("An acknowledged generation the observed status does not satisfy is not converged")
     func vmAcknowledgedButUnsatisfied() async throws {
         try await withTestApp { app, _, project in
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.error)
             vm.observedGeneration = vm.generation
@@ -167,7 +165,7 @@ final class ResourceConditionsTests {
     @Test("A VM being deleted never reads as converged")
     func vmPendingDeleteIsNeverConverged() async throws {
         try await withTestApp { app, _, project in
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             vm.setFixtureDesiredStatus(.absent)
             vm.setStatus(.shutdown)
             vm.observedGeneration = vm.generation
@@ -181,7 +179,7 @@ final class ResourceConditionsTests {
     @Test("A failure the current generation superseded still reports its own generation")
     func degradedCarriesTheFailingGeneration() async throws {
         try await withTestApp { app, _, project in
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             vm.generation = 14
             vm.observedGeneration = 12
             vm.convergencePhase = "downloading image"
@@ -201,7 +199,7 @@ final class ResourceConditionsTests {
     @Test("An error with no failing generation is not reported as degraded")
     func degradedRequiresBothHalves() async throws {
         try await withTestApp { app, _, project in
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             vm.lastError = "something went wrong"
             vm.failedGeneration = nil
 
@@ -214,7 +212,7 @@ final class ResourceConditionsTests {
     @Test("A failure at the current generation is not converged")
     func failureAtCurrentGenerationIsNotConverged() async throws {
         try await withTestApp { app, _, project in
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.generation = 5
@@ -236,7 +234,7 @@ final class ResourceConditionsTests {
     @Test("A failure an older generation left behind does not un-converge the current one")
     func supersededFailureStillReadsConverged() async throws {
         try await withTestApp { app, _, project in
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.generation = 6
@@ -256,7 +254,7 @@ final class ResourceConditionsTests {
     @Test("An unreportable error does not un-converge either")
     func errorWithoutGenerationDoesNotUnconverge() async throws {
         try await withTestApp { app, _, project in
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.generation = 5
@@ -275,7 +273,7 @@ final class ResourceConditionsTests {
     @Test("converged and degraded are never both an answer")
     func convergedAndDegradedAreMutuallyExclusive() async throws {
         try await withTestApp { app, _, project in
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.generation = 5
@@ -302,8 +300,8 @@ final class ResourceConditionsTests {
     @Test("isConverged and conditions.converged answer alike for a VM and a sandbox")
     func bothReadersAgree() async throws {
         try await withTestApp { app, _, project in
-            let builder = TestDataBuilder(db: app.db)
-            let vm = try await builder.createVM(name: "cond-vm", project: project)
+            let builder = TestDataBuilder(db: app.testPostgres)
+            var vm = try await builder.createVM(name: "cond-vm", project: project)
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.generation = 5
@@ -319,7 +317,7 @@ final class ResourceConditionsTests {
             #expect(vm.isConverged == vm.conditions.converged)
             #expect(!vm.isConverged)
 
-            let sandbox = try await builder.createSandbox(name: "cond-sandbox", project: project)
+            var sandbox = try await builder.createSandbox(name: "cond-sandbox", project: project)
             sandbox.setFixtureDesiredStatus(.running)
             sandbox.setStatus(.running)
             sandbox.generation = 3
@@ -337,7 +335,7 @@ final class ResourceConditionsTests {
     @Test("Sandboxes derive the same block from their own generation pair")
     func sandboxConditions() async throws {
         try await withTestApp { app, _, project in
-            let sandbox = try await TestDataBuilder(db: app.db)
+            var sandbox = try await TestDataBuilder(db: app.testPostgres)
                 .createSandbox(name: "cond-sandbox", project: project)
             sandbox.setFixtureDesiredStatus(.running)
             sandbox.setStatus(.running)
@@ -357,11 +355,11 @@ final class ResourceConditionsTests {
     @Test("VM and sandbox responses carry the conditions block")
     func responsesCarryConditions() async throws {
         try await withTestApp { app, _, project in
-            let builder = TestDataBuilder(db: app.db)
-            let vm = try await builder.createVM(name: "cond-vm", project: project)
+            let builder = TestDataBuilder(db: app.testPostgres)
+            var vm = try await builder.createVM(name: "cond-vm", project: project)
             vm.setFixtureDesiredStatus(.running)
             vm.convergencePhase = "downloading image"
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let vmJSON =
                 try JSONSerialization.jsonObject(
@@ -376,12 +374,12 @@ final class ResourceConditionsTests {
             // A nil condition is an absent key, not an explicit null.
             #expect(!vmConditions.keys.contains("degraded"))
 
-            let sandbox = try await builder.createSandbox(name: "cond-sandbox", project: project)
+            var sandbox = try await builder.createSandbox(name: "cond-sandbox", project: project)
             sandbox.setFixtureDesiredStatus(.running)
             sandbox.lastError = "pull failed"
             sandbox.failedGeneration = sandbox.generation
             sandbox.lastErrorAt = Date(timeIntervalSince1970: 1_700_000_000)
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             let sandboxJSON =
                 try JSONSerialization.jsonObject(
@@ -399,12 +397,12 @@ final class ResourceConditionsTests {
     @Test("A converging report records the agent's phase on the VM row")
     func convergingReportRecordsPhase() async throws {
         try await withTestApp { app, _, project in
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
             vm.setFixtureDesiredStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let envelope = try self.report(
                 agentId: agentId,
@@ -419,7 +417,7 @@ final class ResourceConditionsTests {
 
             // The row is otherwise untouched — a converging entry is progress
             // only — but the phase is now readable without polling anything.
-            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.status == .created)
             #expect(refreshed.conditions.phase == "downloading image")
             #expect(!refreshed.conditions.converged)
@@ -429,13 +427,13 @@ final class ResourceConditionsTests {
     @Test("A convergence failure lands as degraded, and survives the generation bump that follows")
     func failureRecordsDegraded() async throws {
         try await withTestApp { app, user, project in
-            var vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
             vm.setFixtureDesiredStatus(.running)  // generation 1
             vm = vm.extendingConvergenceDeadline(by: 120)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let envelope = try self.report(
                 agentId: agentId,
@@ -453,7 +451,7 @@ final class ResourceConditionsTests {
             // bumps the generation — so the degraded condition is deliberately
             // *behind* the target it is reported against, exactly as it would
             // be while a retry is in flight.
-            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.conditions.degraded?.reason == "boot failed: no bootable device")
             #expect(refreshed.conditions.degraded?.sinceGeneration == 1)
             #expect(refreshed.conditions.targetGeneration == 2)
@@ -464,7 +462,7 @@ final class ResourceConditionsTests {
     @Test("A successful convergence clears a recorded failure")
     func successClearsDegraded() async throws {
         try await withTestApp { app, _, project in
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
@@ -473,7 +471,7 @@ final class ResourceConditionsTests {
             vm.failedGeneration = 1
             vm.lastErrorAt = Date(timeIntervalSince1970: 1_700_000_000)
             vm.convergencePhase = "starting"
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             // The retry succeeded: the agent's report carries neither a phase
             // nor an error, and both must be dropped rather than left stale.
@@ -484,7 +482,7 @@ final class ResourceConditionsTests {
             await app.agentService.applyObservedStateReport(
                 envelope, fromAgentKey: agentKey("cond-agent"))
 
-            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.conditions.converged)
             #expect(refreshed.conditions.phase == nil)
             #expect(refreshed.conditions.degraded == nil)
@@ -495,7 +493,7 @@ final class ResourceConditionsTests {
     @Test("A VM the agent stops reporting loses its stale progress")
     func absenceClearsStaleProgress() async throws {
         try await withTestApp { app, _, project in
-            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
@@ -503,7 +501,7 @@ final class ResourceConditionsTests {
             vm.convergencePhase = "downloading image"
             vm.lastError = "transient download error"
             vm.failedGeneration = 1
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             // The agent restarted: it still holds the VM's placement but has
             // lost the in-memory progress, so its report mentions nothing.
@@ -511,7 +509,7 @@ final class ResourceConditionsTests {
             await app.agentService.applyObservedStateReport(
                 try self.report(agentId: agentId), fromAgentKey: agentKey("cond-agent"))
 
-            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.status == .created)
             #expect(refreshed.conditions.phase == nil)
             #expect(refreshed.conditions.degraded == nil)
@@ -521,13 +519,13 @@ final class ResourceConditionsTests {
     @Test("Sandbox reports record convergence progress the same way")
     func sandboxReportRecordsProgress() async throws {
         try await withTestApp { app, _, project in
-            let sandbox = try await TestDataBuilder(db: app.db)
+            var sandbox = try await TestDataBuilder(db: app.testPostgres)
                 .createSandbox(name: "cond-sandbox", project: project)
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-fc-agent", hypervisorType: .firecracker)
             sandbox.hypervisorId = agentId
             sandbox.setFixtureDesiredStatus(.running)  // generation 1
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             let converging = try self.report(
                 agentId: agentId,
@@ -539,7 +537,7 @@ final class ResourceConditionsTests {
             )
             await app.agentService.applyObservedStateReport(
                 converging, fromAgentKey: agentKey("cond-fc-agent"))
-            var refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            var refreshed = try #require(await Sandbox.find(sandbox.id, on: app.testPostgres))
             #expect(refreshed.conditions.phase == "pulling image")
             #expect(refreshed.conditions.degraded == nil)
 
@@ -554,7 +552,7 @@ final class ResourceConditionsTests {
             )
             await app.agentService.applyObservedStateReport(
                 failed, fromAgentKey: agentKey("cond-fc-agent"))
-            refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            refreshed = try #require(await Sandbox.find(sandbox.id, on: app.testPostgres))
             #expect(refreshed.conditions.phase == nil)
             #expect(refreshed.conditions.degraded?.reason == "manifest unknown")
             #expect(refreshed.conditions.degraded?.sinceGeneration == 1)
@@ -570,7 +568,7 @@ final class ResourceConditionsTests {
     func advanceAndFailInOneReportRecordsFailure() async throws {
         try await withTestApp { app, user, project in
             try await self.subscribeToEverything(app: app)
-            var vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
@@ -579,10 +577,10 @@ final class ResourceConditionsTests {
             vm.generation = 5
             vm.observedGeneration = 4
             vm = vm.extendingConvergenceDeadline(by: 120)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .resize, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
-                actor: .user(try user.requireID()), on: app.db)
+                actor: .user(try user.requireID()), on: app.testPostgres)
 
             // One report carrying both halves: the boot applied generation 5,
             // the resize planned at the same generation failed. The applier used
@@ -602,7 +600,7 @@ final class ResourceConditionsTests {
             await app.agentService.applyObservedStateReport(
                 envelope, fromAgentKey: agentKey("cond-agent"))
 
-            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             #expect(!refreshed.conditions.converged)
             #expect(refreshed.conditions.degraded?.sinceGeneration == 5)
             #expect(
@@ -616,7 +614,7 @@ final class ResourceConditionsTests {
     func driftCorrectingFailureDegradesConvergedVM() async throws {
         try await withTestApp { app, user, project in
             try await self.subscribeToEverything(app: app)
-            var vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
@@ -625,10 +623,10 @@ final class ResourceConditionsTests {
             vm.generation = 5
             vm.observedGeneration = 5  // the boot already converged and was reported
             vm = vm.extendingConvergenceDeadline(by: 120)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .resize, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
-                actor: .user(try user.requireID()), on: app.db)
+                actor: .user(try user.requireID()), on: app.testPostgres)
 
             let failing = try self.report(
                 agentId: agentId,
@@ -642,7 +640,7 @@ final class ResourceConditionsTests {
             await app.agentService.applyObservedStateReport(
                 failing, fromAgentKey: agentKey("cond-agent"))
 
-            var refreshed = try #require(await VM.find(vm.id, on: app.db))
+            var refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             #expect(!refreshed.conditions.converged)
             #expect(refreshed.conditions.degraded?.sinceGeneration == 5)
             #expect(try await self.mutationOutcomes(app: app) == ["operation.failed"])
@@ -651,7 +649,7 @@ final class ResourceConditionsTests {
             // the transition is reportable.
             await app.agentService.applyObservedStateReport(
                 failing, fromAgentKey: agentKey("cond-agent"))
-            refreshed = try #require(await VM.find(vm.id, on: app.db))
+            refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             #expect(!refreshed.conditions.converged)
             #expect(try await self.mutationOutcomes(app: app) == ["operation.failed"])
         }
@@ -661,7 +659,7 @@ final class ResourceConditionsTests {
     func steadyStateFailurePreservesIntentAndRecovers() async throws {
         try await withTestApp { app, user, project in
             try await self.subscribeToEverything(app: app)
-            var vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
@@ -670,10 +668,10 @@ final class ResourceConditionsTests {
             vm.generation = 5
             vm.observedGeneration = 5
             vm.convergenceDeadline = nil
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             _ = try await ResourceEvent.record(
                 .resize, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
-                actor: .user(try user.requireID()), on: app.db)
+                actor: .user(try user.requireID()), on: app.testPostgres)
 
             let failing = try self.report(
                 agentId: agentId,
@@ -686,7 +684,7 @@ final class ResourceConditionsTests {
             await app.agentService.applyObservedStateReport(
                 failing, fromAgentKey: agentKey("cond-agent"))
 
-            var refreshed = try #require(await VM.find(vm.id, on: app.db))
+            var refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.desiredStatus == .running)
             #expect(refreshed.generation == 5)
             #expect(refreshed.status == .shutdown)
@@ -697,12 +695,12 @@ final class ResourceConditionsTests {
             // Model an already-claimed sustained-divergence episode. Repeated
             // failures retain it; successful convergence clears it.
             refreshed.divergenceDetectedAt = Date()
-            try await refreshed.save(on: app.db)
+            try await refreshed.save(on: app.testPostgres)
 
             // Repeated heartbeats carry the same pair but do not move its age.
             await app.agentService.applyObservedStateReport(
                 failing, fromAgentKey: agentKey("cond-agent"))
-            refreshed = try #require(await VM.find(vm.id, on: app.db))
+            refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.lastErrorAt == firstErrorAt)
             #expect(refreshed.divergenceDetectedAt != nil)
             #expect(try await self.mutationOutcomes(app: app) == [])
@@ -713,7 +711,7 @@ final class ResourceConditionsTests {
                 vms: [ObservedVMState(vmId: vm.id!, status: .running, observedGeneration: 5)])
             await app.agentService.applyObservedStateReport(
                 recovered, fromAgentKey: agentKey("cond-agent"))
-            refreshed = try #require(await VM.find(vm.id, on: app.db))
+            refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.desiredStatus == .running)
             #expect(refreshed.generation == 5)
             #expect(refreshed.conditions.converged)
@@ -728,7 +726,7 @@ final class ResourceConditionsTests {
     func recoveryAtTheSameGenerationReconverges() async throws {
         try await withTestApp { app, _, project in
             try await self.subscribeToEverything(app: app)
-            var vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
@@ -742,7 +740,7 @@ final class ResourceConditionsTests {
             // recovery below from emitting a completion for a mutation whose
             // outcome the user was already told.
             vm.convergenceDeadline = nil
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             let recovered = try self.report(
                 agentId: agentId,
@@ -751,7 +749,7 @@ final class ResourceConditionsTests {
             await app.agentService.applyObservedStateReport(
                 recovered, fromAgentKey: agentKey("cond-agent"))
 
-            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            let refreshed = try #require(await VM.find(vm.id, on: app.testPostgres))
             #expect(refreshed.conditions.converged)
             #expect(refreshed.conditions.degraded == nil)
             #expect(try await self.mutationOutcomes(app: app) == [])

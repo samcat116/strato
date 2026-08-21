@@ -1,13 +1,12 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
 /// Explicit SQL access for VM value snapshots while surrounding transactions
 /// still expose Fluent's database handle.
 enum LegacyVMStore {
-    static func vm(id: UUID?, on db: any Database) async throws -> VM? {
+    static func vm(id: UUID?, on db: PostgresStoreContext) async throws -> VM? {
         guard let id else { return nil }
         return try await vms(ids: [id], on: db).first
     }
@@ -23,12 +22,12 @@ enum LegacyVMStore {
         desiredStatus: DesiredVMStatus? = nil,
         overdueAt: Date? = nil,
         terminatingBefore: Date? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [VM] {
         if ids?.isEmpty == true || projectIDs?.isEmpty == true || hypervisorIDs?.isEmpty == true {
             return []
         }
-        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM vms AS v WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT \(unsafeRaw: columns) FROM vms AS v WHERE TRUE"
         if let ids { query += " AND v.id = ANY(\(bind: ids))" }
         if let name { query += " AND v.name = \(bind: name)" }
         if let projectID { query += " AND v.project_id = \(bind: projectID)" }
@@ -46,7 +45,7 @@ enum LegacyVMStore {
     }
 
     @discardableResult
-    static func upsert(_ vm: VM, on db: any Database) async throws -> VM {
+    static func upsert(_ vm: VM, on db: PostgresStoreContext) async throws -> VM {
         let id = try vm.requireID()
         let tagsJSON = String(decoding: try JSONEncoder().encode(vm.tags), as: UTF8.self)
         guard let row = try await vmSQL(db).raw(
@@ -140,7 +139,7 @@ enum LegacyVMStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await vmSQL(db).raw(
             "DELETE FROM vms WHERE id = \(bind: id) RETURNING id"
@@ -284,8 +283,8 @@ enum LegacyVMStore {
     private static let returningColumns = columns.replacingOccurrences(of: "v.", with: "")
 }
 
-private func vmSQL(_ db: any Database) throws -> any SQLDatabase {
-    guard let sql = db as? any SQLDatabase else {
+private func vmSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+    guard let sql = db as? PostgresStoreContext else {
         throw Abort(.internalServerError, reason: "PostgreSQL SQL interface is unavailable")
     }
     return sql

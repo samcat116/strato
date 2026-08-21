@@ -1,4 +1,3 @@
-import Fluent
 import ControlPlanePostgres
 import Foundation
 import Vapor
@@ -151,7 +150,7 @@ enum IAMResourceTree {
                         guard let parentType = IAMNodeType(rawValue: value.type) else {
                             throw Abort(
                                 .internalServerError,
-                                reason: "Database returned unknown IAM parent type '\(value.type)'"
+                                reason: "PostgresStoreContext returned unknown IAM parent type '\(value.type)'"
                             )
                         }
                         parent = IAMNode(type: parentType, id: value.id)
@@ -197,7 +196,7 @@ enum IAMResourceTree {
     /// dangling id, or a project attached to neither a folder nor an org.
     /// Callers degrade to the bindings they can see rather than failing: a
     /// truncated chain can only under-report access, never invent it.
-    static func ancestors(of node: IAMNode, on db: any Database) async throws -> [IAMNode] {
+    static func ancestors(of node: IAMNode, on db: PostgresStoreContext) async throws -> [IAMNode] {
         try await resolve(node, on: db).chain
     }
 
@@ -208,7 +207,7 @@ enum IAMResourceTree {
     ///   Passing nil resolves against the database, which is what every
     ///   caller outside a request (background sweeps, tests) does.
     static func resolve(
-        _ node: IAMNode, cache: IAMRequestCache? = nil, on db: any Database
+        _ node: IAMNode, cache: IAMRequestCache? = nil, on db: PostgresStoreContext
     ) async throws -> Resolution {
         let resolved = try await resolve([node], cache: cache, on: db)
         // The batch is total over its inputs; the fallback is unreachable and
@@ -224,7 +223,7 @@ enum IAMResourceTree {
     /// for the whole batch at once — a hundred VMs in a list cost the same
     /// three or four queries one VM does, instead of three or four each.
     static func resolve(
-        _ nodes: [IAMNode], cache: IAMRequestCache? = nil, on db: any Database
+        _ nodes: [IAMNode], cache: IAMRequestCache? = nil, on db: PostgresStoreContext
     ) async throws -> [IAMNode: Resolution] {
         var resolved: [IAMNode: Resolution] = [:]
         var pending: [IAMNode] = []
@@ -285,7 +284,7 @@ enum IAMResourceTree {
 
     /// Walk every path upward in lockstep, one batched query per (level, type).
     private static func walk(
-        from starts: [IAMNode], cache: IAMRequestCache?, on db: any Database
+        from starts: [IAMNode], cache: IAMRequestCache?, on db: PostgresStoreContext
     ) async throws -> [IAMNode: Resolution] {
         var paths: [IAMNode: Path] = [:]
         for start in starts {
@@ -370,7 +369,7 @@ enum IAMResourceTree {
     /// A node whose row is missing is simply absent from the result; callers
     /// read that as "the chain ends here".
     private static func step(
-        ids: Set<UUID>, type: IAMNodeType, folders: inout FolderRows, on db: any Database
+        ids: Set<UUID>, type: IAMNodeType, folders: inout FolderRows, on db: PostgresStoreContext
     ) async throws -> [UUID: Step] {
         let idList = Array(ids)
 

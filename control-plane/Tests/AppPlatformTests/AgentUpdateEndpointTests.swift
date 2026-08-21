@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -27,9 +26,8 @@ final class AgentUpdateEndpointTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             // System admin: agent update authorization itself is covered by
             // the same requireAgentPermission path as force-offline; these
             // tests target the update-specific gating.
@@ -76,12 +74,12 @@ final class AgentUpdateEndpointTests {
             operatingSystem: .some(operatingSystem),
             wireProtocolVersion: .some(wireProtocolVersion)
         ).replacingOrganizationScope(.organization(try org.requireID()))
-        try await agent.save(on: app.db)
+        try await agent.save(on: app.testPostgres)
         return agent
     }
 
     private func reload(_ agent: Agent, on app: Application) async throws -> Agent {
-        let row = try await Agent.find(agent.requireID(), on: app.db)
+        let row = try await Agent.find(agent.requireID(), on: app.testPostgres)
         return try #require(row)
     }
 
@@ -162,10 +160,10 @@ final class AgentUpdateEndpointTests {
 
             let project = try await builder.createProject(
                 name: "FC Project", description: "project with a Firecracker VM", organization: org)
-            let vm = try await builder.createVM(name: "fc-vm", project: project)
+            var vm = try await builder.createVM(name: "fc-vm", project: project)
             vm.hypervisorId = agent.id!.uuidString
             vm.hypervisorType = .firecracker
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             // No force: the request must clear every gate and land the
             // assignment, proving hosted Firecracker VMs no longer trip one.
@@ -268,7 +266,7 @@ final class AgentUpdateEndpointTests {
 
             let project = try await builder.createProject(
                 name: "Sandbox Project", description: "project with a sandbox", organization: org)
-            let sandbox = Sandbox(
+            var sandbox = Sandbox(
                 name: "sb-1",
                 projectID: try project.requireID(),
                 environment: "development",
@@ -277,7 +275,7 @@ final class AgentUpdateEndpointTests {
                 memory: 512_000_000
             )
             sandbox.hypervisorId = agent.id!.uuidString
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/agents/\(agent.id!)/actions/update") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)

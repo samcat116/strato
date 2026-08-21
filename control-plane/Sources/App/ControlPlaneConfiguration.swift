@@ -2,6 +2,11 @@ import Configuration
 import Foundation
 import Vapor
 
+private enum DatabaseStatementTimeout {
+    static let defaultMilliseconds = 300_000
+    static let maximumMilliseconds = Int(Int32.max)
+}
+
 /// One operator-facing configuration setting. The registry is deliberately
 /// data, not documentation assembled at call sites, so the deployment reference
 /// can be generated without rediscovering defaults and accepted values.

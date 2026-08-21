@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -32,7 +32,7 @@ struct HierarchySnapshot {
 
     private let decidedFolderIDs: Set<UUID>?
 
-    static func load(organizationID: UUID, on db: Database) async throws -> HierarchySnapshot {
+    static func load(organizationID: UUID, on db: PostgresStoreContext) async throws -> HierarchySnapshot {
         let folders = try await LegacyOrganizationalUnitStore.organizationalUnits(
             organizationIDs: [organizationID], on: db)
         let folderIDs = folders.compactMap { $0.id }

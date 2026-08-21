@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -39,7 +38,7 @@ enum GuardrailText {
         guardrailID: UUID,
         attachNode: IAMNode,
         engine: any CedarEngine,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Prepared {
         let trimmed = cedarText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw GuardrailError.emptyCedarText }
@@ -94,7 +93,7 @@ enum GuardrailText {
     /// attach node rather than an owner, and there is no owner-type gate because
     /// `GuardrailStore.attachableNodeTypes` already fixed it upstream.
     private static func requireContained(
-        _ shape: AuthoredPolicyShape, attachNode: IAMNode, on db: any Database
+        _ shape: AuthoredPolicyShape, attachNode: IAMNode, on db: PostgresStoreContext
     ) async throws {
         guard let scope = shape.resourceScope else {
             throw GuardrailError.authoredUnscopedResource
@@ -154,7 +153,7 @@ enum GuardrailText {
     /// per-policy validation `CedarPolicySetCache` runs at boot, so a forbid
     /// that only fails against the live schema is caught here.
     private static func compileCandidate(
-        policyID: String, cedarText: String, engine: any CedarEngine, on db: any Database
+        policyID: String, cedarText: String, engine: any CedarEngine, on db: PostgresStoreContext
     ) async throws {
         let roles = try await RoleStore.allDescriptors(on: db)
         let schemaText = CedarSchemaBuilder.schemaText(roles: roles)

@@ -4,9 +4,11 @@ import Vapor
 
 struct APIKeyController: RouteCollection {
     private let apiKeys: APIKeysPersistence
+    private let iam: IAMPersistence
 
-    init(apiKeys: APIKeysPersistence) {
+    init(apiKeys: APIKeysPersistence, iam: IAMPersistence) {
         self.apiKeys = apiKeys
+        self.iam = iam
     }
 
     func boot(routes: RoutesBuilder) throws {
@@ -68,7 +70,7 @@ struct APIKeyController: RouteCollection {
         let restriction: CredentialRestriction
         if let payload = createRequest.restriction {
             restriction = try await CredentialRestriction.resolve(
-                payload, issuedUnder: req.credentialRestriction, on: req.db)
+                payload, issuedUnder: req.credentialRestriction, using: iam)
         } else {
             restriction = .unrestricted
             guard req.credentialRestriction.covers(restriction) else {
@@ -134,7 +136,7 @@ struct APIKeyController: RouteCollection {
             restriction = try await CredentialRestriction.resolve(
                 payload,
                 issuedUnder: req.credentialRestriction,
-                on: req.db
+                using: iam
             ).stored
         } else {
             restriction = nil

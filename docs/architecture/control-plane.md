@@ -9,7 +9,12 @@ the code for contributors; the system-level design lives in
 
 ## Targets and layout
 
-Two targets under `control-plane/Sources/`:
+Three targets under `control-plane/Sources/`:
+
+- **`ControlPlanePostgres`** — the native PostgresNIO runtime, schema
+  migrator, immutable domain persistence modules, and scoped query/session
+  compatibility layer. It has no Vapor, Fluent, PostgresKit, or SQLKit
+  dependency.
 
 - **`App`** — the executable. Boot files at the top level
   (`entrypoint.swift`, `configure.swift`, `routes.swift`), then:
@@ -17,8 +22,7 @@ Two targets under `control-plane/Sources/`:
   | Directory | Contents |
   |---|---|
   | `Controllers/` | ~43 `RouteCollection` structs, one per resource area (`VMController`, `SandboxController`, ...); WebSocket endpoints suffixed `WebSocketController` |
-  | `Models/` | ~65 Fluent models plus `…DTOs.swift` bundles |
-  | `Migrations/` | ~154 `AsyncMigration`s, verb-named (`Create…`, `Add…To…`, `Backfill…`, `Drop…`) |
+  | `Models/` | Domain snapshots and `…DTOs.swift` transport bundles |
   | `Services/` | ~69 service files (actors/structs), plus `SCIM/` and `SPIFFE/` subdirectories |
   | `IAM/` | The authorization engine: `IAMAuthorizer`, the Cedar encoding (`Cedar/`), `RoleRegistry`/`RoleBindingService`, the guardrail store, `WhoCanService`, decision recording — see [iam](./iam.md) |
   | `Middleware/` | The request pipeline: auth, rate limiting, audit, authorization |
@@ -65,13 +69,13 @@ against ~2.4s for the four targets in parallel. Keep them roughly balanced.
    reads `VALKEY_*`; sessions read `SESSION_VALKEY_*` and fall back wholesale to
    the coordination endpoint when unset, so they share one client unless the
    endpoints differ. Startup fails hard if either is missing or unreachable.
-   Under `.testing`: `InMemoryCoordinationStore` + Fluent sessions. Session keys
+   Under `.testing`: `InMemoryCoordinationStore` + Vapor memory sessions. Session keys
    carry an idle TTL (`SESSION_TTL_SECONDS`, default 7 days) that every read
    slides, and the driver skips the write-back when a request left the session
    data unchanged.
-4. Secrets encryption, registry client, WebAuthn, Postgres (with TLS), then
-   ~154 ordered migrations, applied by `SchemaMigrator` (**not**
-   `autoMigrate()`). Migrations run at startup; there is no separate migrate
+4. Secrets encryption, registry client, WebAuthn, then the native PostgresNIO
+   runtime (with TLS), its readiness probe, and ordered `StratoMigration`
+   values applied by `SchemaMigrator`. Migrations run at startup; there is no separate migrate
    step, which means every replica of a rolling upgrade enters this phase at
    once — see "Model and migration conventions" for how that is made safe
    (STR-183). `STRATO_RUN_MIGRATIONS=false` turns a replica into a verifier: it
@@ -651,13 +655,14 @@ effect — the warning — is claimed through `divergence_detected_at` on the ro
 
 Fire-and-forget work must go through `app.backgroundTasks.spawn { ... }`
 (`Services/BackgroundTaskRegistry.swift`) — shutdown drains the registry so
-in-flight DB writes finish before Fluent tears down its pools. This is also
+in-flight DB writes finish before PostgresNIO drains its pool. This is also
 what makes the test harness safe.
 
 ## Model and migration conventions
 
-- Fluent models: `final class X: Model, @unchecked Sendable`, snake_case
-  columns, UUID IDs.
+- Persistence values are immutable `Sendable` snapshots and private row
+  records. PostgreSQL columns remain snake_case and UUIDs remain
+  application-generated.
 - VM and Sandbox carry the reconciliation quartet: observed `status`,
   `desiredStatus`, `generation`, `observedGeneration`, with helpers
   `setDesiredStatus` (bumps generation), `isConverged`, and
@@ -672,14 +677,12 @@ what makes the test harness safe.
   row has to outlive both the resource it names and the principal that acted.
   It inherited the pattern from the retired `resource_operations` table, whose
   `resource_id` had to survive the row a delete removed for the same reason.
-- Migrations target Postgres (raw-SQL backfills gated on `as? SQLDatabase`),
-  and never query live models in a migration — snapshot the columns in a
-  private model instead. Migration ordering in `configure.swift` matters when
-  models select newly added columns.
-- **The migration phase is `SchemaMigrator`, not `app.autoMigrate()`**
-  (`SchemaMigrator.swift`, STR-183). Fluent's own migrator takes no lock and
-  wraps no transaction around a migration and the `_fluent_migrations` row that
-  records it, which is fine for one process and wrong for the supported
+- Migrations are explicit PostgresNIO SQL and never query application domain
+  models. Migration ordering remains stable for ledger compatibility.
+- **The migration phase is the native `SchemaMigrator`**
+  (`ControlPlanePostgres/SchemaMigrator.swift`, STR-183). It preserves the
+  `_fluent_migrations` ledger names while removing the Fluent runtime. A
+  migrator without a lock and atomic ledger write is wrong for the supported
   multi-replica deployment: concurrent boots race the same migration, and a
   crash between the DDL and the log row leaves a half-state *no later boot can
   get past* — every one recomputes the migration as unapplied, re-runs it, and
@@ -696,12 +699,8 @@ what makes the test harness safe.
     statement boundary. A losing replica waits, then finds nothing unapplied.
   - Each migration's `prepare` and its `MigrationLog` row commit **together**.
     Two traps live here. `connection.transaction { … }` is a silent no-op on a
-    pinned connection — fluent-postgres-driver's `withConnection` hands back a
-    database flagged `inTransaction: true` without issuing a `BEGIN` — so the
-    transaction is opened through `TransactionControlDatabase`. And pinning is
-    what keeps the connection budget at one: a migrator drawing its own
-    connections while the lock sat on a pinned one would need a pool of ≥2 *per
-    event loop*, and Vapor's Postgres pool defaults to exactly 1.
+    pinned PostgresNIO connection, with explicit `BEGIN`, `COMMIT`, and
+    `ROLLBACK`. Pinning also keeps the migration connection budget at one.
 - `UntransactedMigration` is the documented opt-out, for the one case Postgres
   forbids in a transaction block: `CREATE INDEX CONCURRENTLY`. No production
   migration conforms today. Opting out gives back the crash window above, so

@@ -8,7 +8,7 @@ specialized documents that cover each subsystem in depth.
 
 Three independently built Swift packages plus a frontend:
 
-- **Control plane** (`control-plane/`, Vapor 4 + Fluent/PostgreSQL) — owns
+- **Control plane** (`control-plane/`, Vapor 4 + PostgresNIO) — owns
   the JSON API, the database, the scheduler, authorization, and the agent
   WebSocket. Code map: [control-plane](./control-plane.md).
 - **Agent** (`agent/`) — runs on every hypervisor node; connects out to the

@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import StratoShared
 import Vapor
 
@@ -91,7 +91,7 @@ enum SiteNetworkAuthority {
     static func resolve(
         forAgent agent: Agent,
         offlineGrace: TimeInterval = controllerOfflineGrace,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Authority {
         let siteID = agent.siteID
         guard let site = try await LegacySiteStore.site(id: siteID, on: db) else {
@@ -105,7 +105,7 @@ enum SiteNetworkAuthority {
     static func resolve(
         forSite site: Site,
         offlineGrace: TimeInterval = controllerOfflineGrace,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Authority {
         guard let controllerID = site.networkControllerAgentID,
             let controller = try await Agent.find(controllerID, on: db)
@@ -280,7 +280,7 @@ enum SiteNetworkAuthority {
     /// the registration or assignment that triggered it.
     @discardableResult
     static func designateIfUnset(
-        agent: Agent, siteID: UUID, on db: any Database, logger: Logger
+        agent: Agent, siteID: UUID, on db: PostgresStoreContext, logger: Logger
     ) async -> Bool {
         guard let agentID = agent.id, canAuthorTopology(agent) else { return false }
         do {
@@ -342,7 +342,7 @@ enum SiteNetworkAuthority {
     /// `designateIfUnset`: it must never fail the registration that ran it.
     @discardableResult
     static func revalidateDesignation(
-        agent: Agent, siteID: UUID, on db: any Database, logger: Logger
+        agent: Agent, siteID: UUID, on db: PostgresStoreContext, logger: Logger
     ) async -> Bool {
         guard let agentID = agent.id else { return false }
         do {

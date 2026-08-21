@@ -1,6 +1,5 @@
 import Foundation
 import ControlPlanePostgres
-import Fluent
 import Vapor
 
 /// The workload registry surface (issue #491).
@@ -12,9 +11,26 @@ import Vapor
 /// an ordinary IAM policy write on the project and is gated there.
 struct WorkloadRegistrationController: RouteCollection {
     private let workloads: WorkloadsPersistence
+    private let hierarchy: HierarchyPersistence
+    private let projects: ProjectsPersistence
+    private let iam: IAMPersistence
+    private let groups: GroupsPersistence
+    private let users: UserDirectoryPersistence
 
-    init(workloads: WorkloadsPersistence) {
+    init(
+        workloads: WorkloadsPersistence,
+        hierarchy: HierarchyPersistence,
+        projects: ProjectsPersistence,
+        iam: IAMPersistence,
+        groups: GroupsPersistence,
+        users: UserDirectoryPersistence
+    ) {
         self.workloads = workloads
+        self.hierarchy = hierarchy
+        self.projects = projects
+        self.iam = iam
+        self.groups = groups
+        self.users = users
     }
 
     func boot(routes: RoutesBuilder) throws {
@@ -98,8 +114,7 @@ struct WorkloadRegistrationController: RouteCollection {
         } else {
             pageItems = []
         }
-        let names = try await GuestIdentity.names(
-            forVMs: pageItems.compactMap(\.vmID), on: req.db)
+        let names = try await workloads.vmNames(ids: pageItems.compactMap(\.vmID))
 
         return PagedResponse(
             items: try pageItems.map {
@@ -122,7 +137,7 @@ struct WorkloadRegistrationController: RouteCollection {
         // Same reserved-namespace rule as the service-account endpoint: even
         // an admin does not hand out platform-owned identities through the registry.
         let spiffeID = try WorkloadRegistry.validateRegistrable(spiffeID: body.spiffeId)
-        guard try await Organization.find(body.organizationId, on: req.db) != nil else {
+        guard try await hierarchy.organization(id: body.organizationId) != nil else {
             throw Abort(.notFound, reason: "Organization not found")
         }
 
@@ -173,13 +188,7 @@ struct WorkloadRegistrationController: RouteCollection {
                 ])
         }
 
-        try await req.db.transaction { db in
-            if registration.kind == WorkloadRegistrationKind.workload.rawValue {
-                try await RoleBindingService.revokeAll(
-                    principalType: .workload, principalID: registrationID, on: db)
-            }
-            try await LegacyWorkloadRegistrationStore.delete(id: registrationID, on: db)
-        }
+        _ = try await workloads.revokeRegistration(id: registrationID, kind: registration.kind)
         return .noContent
     }
 
@@ -190,7 +199,7 @@ struct WorkloadRegistrationController: RouteCollection {
     /// existing one. Same gate and ceiling report as every other grant.
     func setGrant(req: Request) async throws -> Response {
         let (project, registration) = try await loadGrantTarget(req)
-        let projectID = try project.requireID()
+        let projectID = project.id
         let registrationID = registration.id
         try await req.authorize("iam:setPolicy", on: IAMNode(type: .project, id: projectID))
 
@@ -206,11 +215,11 @@ struct WorkloadRegistrationController: RouteCollection {
                 reason: "Invalid role; use a role id returned by /api/iam/roles/bindable")
         }
         let node = IAMNode(type: .project, id: projectID)
-        let role = try await MemberRoleResolver.resolve(roleID, scopeNode: node, on: req.db)
+        let role = try await MemberRoleResolver.resolve(roleID, scopeNode: node, using: iam)
 
         // Keep grants within the registration's organization, the same rule
         // group grants follow.
-        if let rootOrgID = try await project.getRootOrganizationId(on: req.db),
+        if let rootOrgID = project.rootOrganizationID,
             registration.organizationID != rootOrgID
         {
             throw Abort(.badRequest, reason: "Workload registration belongs to a different organization")
@@ -227,15 +236,22 @@ struct WorkloadRegistrationController: RouteCollection {
         let actorID = req.auth.get(User.self)?.id
         try await RoleBindingService.setExclusiveGrant(
             principalType: .workload, principalID: registrationID,
-            roleID: role.id, node: node, createdBy: actorID, on: req.db)
-        return try await GuardrailWriteReport.report(for: proposed, req: req)
+            roleID: role.id, node: node, createdBy: actorID, using: iam)
+        return try await GuardrailWriteReport.report(
+            for: proposed,
+            using: iam,
+            groups: groups,
+            hierarchy: hierarchy,
+            projects: projects,
+            users: users,
+            req: req)
             .encodeResponse(status: .ok, for: req)
     }
 
     /// DELETE /api/projects/:projectID/workload-grants/:registrationID
     func clearGrant(req: Request) async throws -> HTTPStatus {
         let (project, registration) = try await loadGrantTarget(req)
-        let projectID = try project.requireID()
+        let projectID = project.id
         let registrationID = registration.id
         try await req.authorize("iam:setPolicy", on: IAMNode(type: .project, id: projectID))
 
@@ -244,15 +260,20 @@ struct WorkloadRegistrationController: RouteCollection {
             principalID: registrationID,
             nodeType: .project,
             nodeID: projectID,
-            on: req.db
+            using: iam
         )
         return .noContent
     }
 
     private func loadGrantTarget(
         _ req: Request
-    ) async throws -> (Project, WorkloadRegistrationSnapshot) {
-        let project = try await req.requireProject()
+    ) async throws -> (ProjectSnapshot, WorkloadRegistrationSnapshot) {
+        guard let projectID = req.parameters.get("projectID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid project ID")
+        }
+        guard let project = try await projects.project(id: projectID) else {
+            throw Abort(.notFound, reason: "Project not found")
+        }
         guard let registrationID = req.parameters.get("registrationID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid registration ID")
         }

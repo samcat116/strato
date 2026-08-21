@@ -1,12 +1,11 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 /// Fixed-shape quota access for operations that still own a Fluent transaction.
 /// The returned values are immutable and every write is explicit.
 enum LegacyResourceQuotaStore {
-    static func quota(id: UUID?, on db: any Database) async throws -> ResourceQuota? {
+    static func quota(id: UUID?, on db: PostgresStoreContext) async throws -> ResourceQuota? {
         guard let id else { return nil }
         let rows = try await requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM resource_quotas AS q WHERE q.id = \(bind: id)"
@@ -17,13 +16,13 @@ enum LegacyResourceQuotaStore {
         return rows.first?.quota
     }
 
-    static func all(on db: any Database) async throws -> [ResourceQuota] {
+    static func all(on db: PostgresStoreContext) async throws -> [ResourceQuota] {
         try await requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM resource_quotas AS q ORDER BY q.created_at, q.id"
         ).all(decoding: Record.self).map(\.quota)
     }
 
-    static func quotas(name: String, on db: any Database) async throws -> [ResourceQuota] {
+    static func quotas(name: String, on db: PostgresStoreContext) async throws -> [ResourceQuota] {
         try await requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM resource_quotas AS q WHERE q.name = \(bind: name) ORDER BY q.id"
         ).all(decoding: Record.self).map(\.quota)
@@ -34,9 +33,9 @@ enum LegacyResourceQuotaStore {
         organizationalUnitIDs: [UUID],
         organizationID: UUID?,
         environment: String?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [ResourceQuota] {
-        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM resource_quotas AS q WHERE (q.project_id = \(bind: projectID)"
+        var query: PostgresSQLQuery = "SELECT \(unsafeRaw: columns) FROM resource_quotas AS q WHERE (q.project_id = \(bind: projectID)"
         if !organizationalUnitIDs.isEmpty {
             query += " OR q.organizational_unit_id = ANY(\(bind: organizationalUnitIDs))"
         }
@@ -57,9 +56,9 @@ enum LegacyResourceQuotaStore {
         organizationID: UUID,
         organizationalUnitIDs: [UUID],
         projectIDs: [UUID],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [ResourceQuota] {
-        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM resource_quotas AS q WHERE q.organization_id = \(bind: organizationID)"
+        var query: PostgresSQLQuery = "SELECT \(unsafeRaw: columns) FROM resource_quotas AS q WHERE q.organization_id = \(bind: organizationID)"
         if !organizationalUnitIDs.isEmpty {
             query += " OR q.organizational_unit_id = ANY(\(bind: organizationalUnitIDs))"
         }
@@ -71,7 +70,7 @@ enum LegacyResourceQuotaStore {
     }
 
     @discardableResult
-    static func upsert(_ quota: ResourceQuota, on db: any Database) async throws -> ResourceQuota {
+    static func upsert(_ quota: ResourceQuota, on db: PostgresStoreContext) async throws -> ResourceQuota {
         let id = try quota.requireID()
         guard let row = try await requireSQL(db).raw(
             """
@@ -230,8 +229,8 @@ enum LegacyResourceQuotaStore {
         updated_at AS "updatedAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase, sql.dialect.name == "postgresql" else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext, sql.dialect.name == "postgresql" else {
             throw Abort(.internalServerError, reason: "Quota compatibility access requires PostgreSQL")
         }
         return sql

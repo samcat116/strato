@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import Testing
 import Vapor
@@ -21,7 +20,6 @@ final class WhoCanCeilingTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -43,7 +41,7 @@ final class WhoCanCeilingTests {
     /// Org → project → VM, with `user` an org admin (so it holds every VM
     /// action a ceiling might take back).
     private func buildTree(_ app: Application, prefix: String) async throws -> Tree {
-        let builder = TestDataBuilder(db: app.db)
+        let builder = TestDataBuilder(db: app.testPostgres)
         let org = try await builder.createOrganization(name: "\(prefix) Org")
         let project = try await builder.createProject(
             name: "\(prefix) Project", description: "d", organization: org)
@@ -53,15 +51,15 @@ final class WhoCanCeilingTests {
         try await builder.addUserToOrganization(user: user, organization: org, role: "member")
         try await RoleBindingService.grant(
             principalType: .user, principalID: user.id!, role: .admin,
-            nodeType: .organization, nodeID: org.id!, createdBy: nil, on: app.db)
+            nodeType: .organization, nodeID: org.id!, createdBy: nil, on: app.testPostgres)
         return Tree(org: org, project: project, vm: vm, user: user)
     }
 
     /// Recompile the policy set against the current database — the store writes
     /// here do not bump the version, so drive the rebuild directly.
     private func rebuild(_ app: Application) async throws {
-        let version = try await PolicySetVersionService.current(on: app.db)
-        await app.cedarPolicySet.rebuild(version: version, on: app.db)
+        let version = try await PolicySetVersionService.current(on: app.testPostgres)
+        await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
     }
 
     private func entry(_ result: WhoCanResult, for user: User) -> WhoCanEntry? {
@@ -75,25 +73,25 @@ final class WhoCanCeilingTests {
             _ = try await GuardrailStore.create(
                 name: "no-vm-delete", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
             try await rebuild(app)
 
             let deleteResult = try await WhoCanService.whoCan(
-                action: "vm:delete", node: tree.vmNode, app: app, on: app.db)
+                action: "vm:delete", node: tree.vmNode, app: app, on: app.testPostgres)
             #expect(entry(deleteResult, for: tree.user)?.ceilinged == true)
             #expect(deleteResult.ceilings.contains { $0.kind == .guardrail })
             let canDelete = try await WhoCanService.can(
                 principalType: .user, principalID: tree.user.id!, action: "vm:delete",
-                node: tree.vmNode, app: app, on: app.db)
+                node: tree.vmNode, app: app, on: app.testPostgres)
             #expect(!canDelete)
 
             // An action the ceiling does not cover is not ceilinged.
             let startResult = try await WhoCanService.whoCan(
-                action: "vm:start", node: tree.vmNode, app: app, on: app.db)
+                action: "vm:start", node: tree.vmNode, app: app, on: app.testPostgres)
             #expect(entry(startResult, for: tree.user)?.ceilinged == false)
             let canStart = try await WhoCanService.can(
                 principalType: .user, principalID: tree.user.id!, action: "vm:start",
-                node: tree.vmNode, app: app, on: app.db)
+                node: tree.vmNode, app: app, on: app.testPostgres)
             #expect(canStart)
         }
     }
@@ -106,16 +104,16 @@ final class WhoCanCeilingTests {
                 "forbid(principal, action in [Action::\"vm:delete\"], resource in \(tree.projectNode.cedarUID.cedarLiteral));"
             _ = try await GuardrailStore.createAuthored(
                 name: "authored-no-delete", description: nil, node: tree.projectNode,
-                cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.db)
+                cedarText: text, createdBy: nil, engine: app.cedarEngine, on: app.testPostgres)
             try await rebuild(app)
 
             let result = try await WhoCanService.whoCan(
-                action: "vm:delete", node: tree.vmNode, app: app, on: app.db)
+                action: "vm:delete", node: tree.vmNode, app: app, on: app.testPostgres)
             #expect(entry(result, for: tree.user)?.ceilinged == true)
             #expect(result.ceilings.contains { $0.kind == .guardrail })
             let canDelete = try await WhoCanService.can(
                 principalType: .user, principalID: tree.user.id!, action: "vm:delete",
-                node: tree.vmNode, app: app, on: app.db)
+                node: tree.vmNode, app: app, on: app.testPostgres)
             #expect(!canDelete)
         }
     }
@@ -129,22 +127,22 @@ final class WhoCanCeilingTests {
                 "forbid(principal, action in [Action::\"vm:delete\"], resource in \(tree.projectNode.cedarUID.cedarLiteral));"
             let prepared = try await PolicyStore.prepare(
                 id: id, cedarText: text, ownerType: .project, ownerID: tree.project.id!,
-                engine: app.cedarEngine, on: app.db)
+                engine: app.cedarEngine, on: app.testPostgres)
             _ = try await PolicyStore.create(
                 id: id, name: "forbid-delete", description: nil, ownerType: .project,
                 ownerID: tree.project.id!, prepared: prepared, createdBy: nil, enabled: true,
-                on: app.db)
+                on: app.testPostgres)
             try await rebuild(app)
 
             let result = try await WhoCanService.whoCan(
-                action: "vm:delete", node: tree.vmNode, app: app, on: app.db)
+                action: "vm:delete", node: tree.vmNode, app: app, on: app.testPostgres)
             #expect(entry(result, for: tree.user)?.ceilinged == true)
             #expect(result.ceilings.contains { $0.kind == .policy })
             // A forbid is reflected exactly, so it is not a best-effort caveat.
             #expect(result.authoredPolicyCaveat == false)
             let canDelete = try await WhoCanService.can(
                 principalType: .user, principalID: tree.user.id!, action: "vm:delete",
-                node: tree.vmNode, app: app, on: app.db)
+                node: tree.vmNode, app: app, on: app.testPostgres)
             #expect(!canDelete)
         }
     }
@@ -156,20 +154,20 @@ final class WhoCanCeilingTests {
             let guardrail = try await GuardrailStore.create(
                 name: "no-vm-delete", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
             // Simulate a row written before the migration: clear the stored
             // text so the cache must regenerate it from the matchers.
             try await LegacyGuardrailStore.setCedarText(
                 id: guardrail.id,
                 cedarText: nil,
-                on: app.db
+                on: app.testPostgres
             )
             try await rebuild(app)
 
             let decision = try await IAMAuthorizer.authorize(
                 userID: tree.user.id!, action: "vm:delete", node: tree.vmNode,
                 context: IAMCheckContext(path: "/test", method: "GET", requestID: nil),
-                state: .detached, app: app, db: app.db)
+                state: .detached, app: app, db: app.testPostgres)
             #expect(!decision.allowed)
             #expect(decision.tier == "guardrail")
         }
@@ -182,17 +180,17 @@ final class WhoCanCeilingTests {
             _ = try await GuardrailStore.create(
                 name: "no-vm-delete", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["vm:delete"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
             try await rebuild(app)
 
             for action in ["vm:delete", "vm:start", "vm:read"] {
                 let can = try await WhoCanService.can(
                     principalType: .user, principalID: tree.user.id!, action: action,
-                    node: tree.vmNode, app: app, on: app.db)
+                    node: tree.vmNode, app: app, on: app.testPostgres)
                 let decision = try await IAMAuthorizer.authorize(
                     userID: tree.user.id!, action: action, node: tree.vmNode,
                     context: IAMCheckContext(path: "/test", method: "GET", requestID: nil),
-                    state: .detached, app: app, db: app.db)
+                    state: .detached, app: app, db: app.testPostgres)
                 #expect(can == decision.allowed, "disagreement on \(action)")
             }
         }

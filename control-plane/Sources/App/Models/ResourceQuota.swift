@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -122,11 +121,11 @@ struct ResourceQuota: Content, Equatable, Sendable {
         return id
     }
 
-    func save(on db: any Database) async throws {
+    func save(on db: PostgresStoreContext) async throws {
         _ = try await LegacyResourceQuotaStore.upsert(self, on: db)
     }
 
-    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+    static func find(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await LegacyResourceQuotaStore.quota(id: id, on: db)
     }
 
@@ -240,12 +239,12 @@ extension ResourceQuota {
     /// ``QuotaUsageAggregator``. A caller that measures the same quota more
     /// than once, or that also needs a breakdown, should resolve the scope once
     /// with `QuotaUsageAggregator.scope(of:on:)` and reuse it.
-    func calculateActualUsage(on db: Database) async throws -> QuotaUsage {
+    func calculateActualUsage(on db: PostgresStoreContext) async throws -> QuotaUsage {
         try await QuotaUsageAggregator.measure(quota: self, on: db).asQuotaUsage
     }
 
     /// Total sandbox-snapshot storage within this quota's scope (issue #426).
-    func sandboxSnapshotStorageInScope(on db: Database) async throws -> Int64 {
+    func sandboxSnapshotStorageInScope(on db: PostgresStoreContext) async throws -> Int64 {
         let scope = try await QuotaUsageAggregator.scope(of: self, on: db)
         return try await QuotaUsageAggregator.snapshotStorageBytes(in: scope, on: db)
     }

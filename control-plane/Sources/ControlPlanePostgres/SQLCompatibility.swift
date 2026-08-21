@@ -55,6 +55,10 @@ public struct PostgresSQLQuery: ExpressibleByStringInterpolation, ExpressibleByS
         public mutating func appendInterpolation(ident value: String) {
             fragments.append(.literal("\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""))
         }
+
+        public mutating func appendInterpolation(_ query: PostgresSQLQuery) {
+            fragments.append(contentsOf: query.fragments)
+        }
     }
 
     public static func += (lhs: inout PostgresSQLQuery, rhs: PostgresSQLQuery) {
@@ -167,13 +171,10 @@ private struct RowKeyedContainer<Key: CodingKey>: KeyedDecodingContainerProtocol
         case is Data.Type:
             value = try decodeCell(Data.self, forKey: key)
         default:
-            throw DecodingError.typeMismatch(
-                type,
-                .init(
-                    codingPath: codingPath + [key],
-                    debugDescription: "Unsupported PostgreSQL record field type \(type)"
-                )
-            )
+            // RawRepresentable enums synthesized by Codable request a single
+            // primitive value. Decode that value from the cell without making
+            // every application enum conform to PostgresDecodable.
+            return try Value(from: CellDecoder(cell: try cell(for: key), codingPath: codingPath + [key]))
         }
         return value as! Value
     }
@@ -217,5 +218,58 @@ private struct RowKeyedContainer<Key: CodingKey>: KeyedDecodingContainerProtocol
                 debugDescription: "Nested PostgreSQL record containers are unsupported"
             )
         )
+    }
+}
+
+private struct CellDecoder: Decoder {
+    let cell: PostgresCell
+    let codingPath: [any CodingKey]
+    let userInfo: [CodingUserInfoKey: Any] = [:]
+
+    func container<Key: CodingKey>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> {
+        throw unsupported()
+    }
+
+    func unkeyedContainer() throws -> any UnkeyedDecodingContainer { throw unsupported() }
+
+    func singleValueContainer() throws -> any SingleValueDecodingContainer {
+        CellSingleValueContainer(cell: cell, codingPath: codingPath)
+    }
+
+    private func unsupported() -> DecodingError {
+        .typeMismatch(
+            Any.self,
+            .init(codingPath: codingPath, debugDescription: "PostgreSQL cells are scalar values")
+        )
+    }
+}
+
+private struct CellSingleValueContainer: SingleValueDecodingContainer {
+    let cell: PostgresCell
+    let codingPath: [any CodingKey]
+
+    func decodeNil() -> Bool { cell.bytes == nil }
+    func decode(_ type: Bool.Type) throws -> Bool { try cell.decode(type) }
+    func decode(_ type: String.Type) throws -> String { try cell.decode(type) }
+    func decode(_ type: Double.Type) throws -> Double { try cell.decode(type) }
+    func decode(_ type: Float.Type) throws -> Float { try cell.decode(type) }
+    func decode(_ type: Int.Type) throws -> Int { try cell.decode(type) }
+    func decode(_ type: Int8.Type) throws -> Int8 { Int8(try cell.decode(Int16.self)) }
+    func decode(_ type: Int16.Type) throws -> Int16 { try cell.decode(type) }
+    func decode(_ type: Int32.Type) throws -> Int32 { try cell.decode(type) }
+    func decode(_ type: Int64.Type) throws -> Int64 { try cell.decode(type) }
+    func decode(_ type: UInt.Type) throws -> UInt { UInt(try cell.decode(Int64.self)) }
+    func decode(_ type: UInt8.Type) throws -> UInt8 { UInt8(try cell.decode(Int64.self)) }
+    func decode(_ type: UInt16.Type) throws -> UInt16 { UInt16(try cell.decode(Int64.self)) }
+    func decode(_ type: UInt32.Type) throws -> UInt32 { UInt32(try cell.decode(Int64.self)) }
+    func decode(_ type: UInt64.Type) throws -> UInt64 { UInt64(try cell.decode(Int64.self)) }
+
+    func decode<Value: Decodable>(_ type: Value.Type) throws -> Value {
+        switch type {
+        case is UUID.Type: return try cell.decode(UUID.self) as! Value
+        case is Date.Type: return try cell.decode(Date.self) as! Value
+        case is Data.Type: return try cell.decode(Data.self) as! Value
+        default: return try Value(from: CellDecoder(cell: cell, codingPath: codingPath))
+        }
     }
 }

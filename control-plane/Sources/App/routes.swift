@@ -19,22 +19,36 @@ func routes(_ app: Application, persistence: ControlPlanePersistence) throws {
     try app.register(
         collection: VMController(
             workloads: persistence.workloads,
+            hierarchy: persistence.hierarchy,
             storagePools: persistence.storagePools,
-            vmCommands: persistence.vmCommandExecutions))
+            vmCommands: persistence.vmCommandExecutions,
+            database: persistence.storeContext))
     // Sandboxes: OCI-image Firecracker microVMs (issue #413)
-    try app.register(collection: SandboxController())
+    try app.register(collection: SandboxController(
+        workloads: persistence.workloads,
+        hierarchy: persistence.hierarchy,
+        database: persistence.storeContext))
     try app.register(
-        collection: OperationController(vmCommands: persistence.vmCommandExecutions))
+        collection: OperationController(
+            vmCommands: persistence.vmCommandExecutions,
+            database: persistence.storeContext))
     try app.register(
         collection: OrganizationController(
             groups: persistence.groups,
             hierarchy: persistence.hierarchy,
             iam: persistence.iam,
             projects: persistence.projects,
-            users: persistence.userDirectory
+            users: persistence.userDirectory,
+            database: persistence.storeContext
         )
     )
-    try app.register(collection: AuthorizationController(iam: persistence.iam))
+    try app.register(collection: AuthorizationController(
+        iam: persistence.iam,
+        groups: persistence.groups,
+        hierarchy: persistence.hierarchy,
+        users: persistence.userDirectory,
+        serviceAccounts: persistence.serviceAccounts,
+        workloads: persistence.workloads))
     // IAM tier-2 guardrails + policy-set versioning (issue #479)
     try app.register(
         collection: GuardrailController(
@@ -51,13 +65,22 @@ func routes(_ app: Application, persistence: ControlPlanePersistence) throws {
     try app.register(collection: PolicyController(iam: persistence.iam))
     // IAM authorization decision logs (issue #481)
     try app.register(collection: IAMDecisionLogController(decisionLogs: persistence.decisionLogs))
-    try app.register(collection: APIKeyController(apiKeys: persistence.apiKeys))
+    try app.register(collection: APIKeyController(apiKeys: persistence.apiKeys, iam: persistence.iam))
     // OAuth device grant + CLI session management (issue #558)
-    try app.register(collection: OAuthController(oauth: persistence.oauthDeviceSessions))
+    try app.register(
+        collection: OAuthController(
+            oauth: persistence.oauthDeviceSessions,
+            iam: persistence.iam))
     try app.register(collection: APIDocumentationController())
-    try app.register(collection: AgentWebSocketController())
-    try app.register(collection: AgentDesiredStateController(agents: persistence.agents))
-    try app.register(collection: AgentGuestIdentityController())
+    try app.register(collection: AgentWebSocketController(workloads: persistence.workloads))
+    try app.register(collection: AgentDesiredStateController(
+        agents: persistence.agents, workloads: persistence.workloads))
+    try app.register(
+        collection: AgentGuestIdentityController(
+            hierarchy: persistence.hierarchy,
+            trustDomains: persistence.orgTrustDomains,
+            workloads: persistence.workloads,
+            database: persistence.storeContext))
 
     // Hierarchical IAM controllers
     // Projects themselves are served by generated handlers — see
@@ -97,7 +120,7 @@ func routes(_ app: Application, persistence: ControlPlanePersistence) throws {
             projects: persistence.projects
         )
     )
-    try app.register(collection: HierarchyController())
+    try app.register(collection: HierarchyController(database: persistence.storeContext))
 
     // Groups controller
     try app.register(collection: GroupController(groups: persistence.groups))
@@ -107,7 +130,10 @@ func routes(_ app: Application, persistence: ControlPlanePersistence) throws {
         collection: OIDCController(
             providers: persistence.oidcProviders,
             groups: persistence.groups,
-            externalIDs: persistence.scimExternalIDs
+            externalIDs: persistence.scimExternalIDs,
+            hierarchy: persistence.hierarchy,
+            users: persistence.userDirectory,
+            iam: persistence.iam
         )
     )
     // Agent management controller
@@ -116,7 +142,9 @@ func routes(_ app: Application, persistence: ControlPlanePersistence) throws {
             enrollments: persistence.agentEnrollments,
             agents: persistence.agents,
             workloads: persistence.workloads,
-            hierarchy: persistence.hierarchy
+            hierarchy: persistence.hierarchy,
+            sites: persistence.sites,
+            trustDomains: persistence.orgTrustDomains
         )
     )
     // Sites (availability zones) grouping agents into shared OVN deployments
@@ -142,7 +170,9 @@ func routes(_ app: Application, persistence: ControlPlanePersistence) throws {
         collection: SCIMController(
             scimTokens: persistence.scimTokens,
             externalIDs: persistence.scimExternalIDs,
-            groups: persistence.groups
+            groups: persistence.groups,
+            hierarchy: persistence.hierarchy,
+            users: persistence.userDirectory
         )
     )
     try app.register(collection: SCIMTokenController(scimTokens: persistence.scimTokens))
@@ -154,17 +184,20 @@ func routes(_ app: Application, persistence: ControlPlanePersistence) throws {
     try app.register(
         collection: WebhookSubscriptionController(
             subscriptions: persistence.webhookSubscriptions,
-            deliveries: persistence.webhookDeliveries))
+            deliveries: persistence.webhookDeliveries,
+            projects: persistence.projects))
 
     // Image management controller
-    try app.register(collection: ImageController())
+    try app.register(collection: ImageController(
+        workloads: persistence.workloads, database: persistence.storeContext))
 
     // Volume management controller
     try app.register(
         collection: VolumeController(
             storagePools: persistence.storagePools,
             iam: persistence.iam,
-            projects: persistence.projects
+            projects: persistence.projects,
+            database: persistence.storeContext
         )
     )
 
@@ -175,7 +208,8 @@ func routes(_ app: Application, persistence: ControlPlanePersistence) throws {
             projects: persistence.projects,
             networks: persistence.networks,
             sites: persistence.sites,
-            hierarchy: persistence.hierarchy
+            hierarchy: persistence.hierarchy,
+            database: persistence.storeContext
         )
     )
 
@@ -186,27 +220,37 @@ func routes(_ app: Application, persistence: ControlPlanePersistence) throws {
             iam: persistence.iam,
             projects: persistence.projects,
             pools: persistence.floatingIPPools,
-            sites: persistence.sites
+            sites: persistence.sites,
+            database: persistence.storeContext
         )
     )
-    try app.register(collection: LoadBalancerController(iam: persistence.iam, projects: persistence.projects))
-    try app.register(collection: SecurityGroupController(iam: persistence.iam, projects: persistence.projects))
+    try app.register(collection: LoadBalancerController(
+        iam: persistence.iam,
+        projects: persistence.projects,
+        database: persistence.storeContext))
+    try app.register(collection: SecurityGroupController(
+        iam: persistence.iam,
+        projects: persistence.projects,
+        database: persistence.storeContext))
 
     // DNS zones, records, and zone↔network attachments (issue #770). Model
     // only — nothing realizes these yet.
-    try app.register(collection: DNSController(iam: persistence.iam, projects: persistence.projects))
+    try app.register(collection: DNSController(
+        iam: persistence.iam,
+        projects: persistence.projects,
+        database: persistence.storeContext))
 
     // Console WebSocket controller for VM console streaming
-    try app.register(collection: ConsoleWebSocketController())
+    try app.register(collection: ConsoleWebSocketController(database: persistence.storeContext))
 
     // VM graphics console: mint + attach for the VNC relay (issue #566)
-    try app.register(collection: VNCWebSocketController())
+    try app.register(collection: VNCWebSocketController(database: persistence.storeContext))
 
     // VM and sandbox guest-exec attach WebSockets (STR-81)
     try app.register(collection: GuestExecWebSocketController())
 
     // VM Logs controller for querying logs from Loki
-    try app.register(collection: LogsController())
+    try app.register(collection: LogsController(database: persistence.storeContext))
 
     // Audit trail query API (issue #39)
     try app.register(collection: AuditEventController(auditEvents: persistence.auditEvents))
@@ -218,8 +262,19 @@ func routes(_ app: Application, persistence: ControlPlanePersistence) throws {
     // registry mapping SPIFFE IDs to principals.
     try app.register(collection: ServiceAccountController(
         serviceAccounts: persistence.serviceAccounts,
-        workloads: persistence.workloads))
-    try app.register(collection: WorkloadRegistrationController(workloads: persistence.workloads))
+        workloads: persistence.workloads,
+        projects: persistence.projects,
+        iam: persistence.iam,
+        groups: persistence.groups,
+        hierarchy: persistence.hierarchy,
+        users: persistence.userDirectory))
+    try app.register(collection: WorkloadRegistrationController(
+        workloads: persistence.workloads,
+        hierarchy: persistence.hierarchy,
+        projects: persistence.projects,
+        iam: persistence.iam,
+        groups: persistence.groups,
+        users: persistence.userDirectory))
 
     // OpenAPI Vapor transport (spec-first, issue #583): surfaces whose handlers
     // are generated from Sources/App/openapi.yaml. Registered last so a

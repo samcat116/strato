@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Vapor
 import SwiftSCIM
 
@@ -7,15 +6,21 @@ struct SCIMController: RouteCollection {
     private let scimTokens: SCIMTokensPersistence
     private let externalIDs: SCIMExternalIDsPersistence
     private let groups: GroupsPersistence
+    private let hierarchy: HierarchyPersistence
+    private let users: UserDirectoryPersistence
 
     init(
         scimTokens: SCIMTokensPersistence,
         externalIDs: SCIMExternalIDsPersistence,
-        groups: GroupsPersistence
+        groups: GroupsPersistence,
+        hierarchy: HierarchyPersistence,
+        users: UserDirectoryPersistence
     ) {
         self.scimTokens = scimTokens
         self.externalIDs = externalIDs
         self.groups = groups
+        self.hierarchy = hierarchy
+        self.users = users
     }
 
     func boot(routes: RoutesBuilder) throws {
@@ -61,7 +66,7 @@ struct SCIMController: RouteCollection {
         }
 
         // Verify organization exists
-        guard let _ = try await Organization.find(organizationID, on: req.db) else {
+        guard try await hierarchy.organization(id: organizationID) != nil else {
             return scimErrorResponse(status: .notFound, detail: "Organization not found")
         }
 
@@ -280,7 +285,7 @@ struct SCIMController: RouteCollection {
 
         // Register handlers
         let userHandler = UserSCIMHandler(
-            db: req.db,
+            users: users,
             externalIDs: externalIDs,
             organizationID: organizationID
         )

@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Vapor
 
 /// Project-scoped native OVN L4 load balancers (STR-28). The resource and its
@@ -8,6 +7,13 @@ import Vapor
 struct LoadBalancerController: RouteCollection {
     let iam: IAMPersistence
     let projects: ProjectsPersistence
+    let database: PostgresStoreContext
+
+    init(iam: IAMPersistence, projects: ProjectsPersistence, database: PostgresStoreContext) {
+        self.iam = iam
+        self.projects = projects
+        self.database = database
+    }
     func boot(routes: RoutesBuilder) throws {
         let loadBalancers = routes.grouped("api", "load-balancers").grouped(User.guardMiddleware())
         loadBalancers.get(use: list)
@@ -48,13 +54,13 @@ struct LoadBalancerController: RouteCollection {
             visibility = resolved
         }
 
-        var rows = try await LegacyLoadBalancerStore.rows(projectIDs: projectIDs, on: req.db)
+        var rows = try await LegacyLoadBalancerStore.rows(projectIDs: projectIDs, on: database)
         if let visibility {
             rows = try await visibility.readableRows(rows, projectID: \.projectID, on: req)
         }
         var responses: [LoadBalancerResponse] = []
         for row in rows {
-            responses.append(try await response(for: row, on: req.db))
+            responses.append(try await response(for: row, on: database))
         }
         return paging.page(responses)
     }
@@ -70,18 +76,19 @@ struct LoadBalancerController: RouteCollection {
         let project = try await req.authorizedProjectForCreate(
             requested: request.projectId,
             action: "loadbalancer:create",
-            resourceKind: "load balancers")
+            resourceKind: "load balancers",
+            on: database)
         let projectID = try project.requireID()
         let network = try await LogicalNetworkService.resolveForWorkloadCreate(
             requestedID: request.logicalNetworkId,
             requestedName: nil,
             projectID: projectID,
-            on: req.db)
+            on: database)
 
         let creatorID = try user.requireID()
         let loadBalancer: LoadBalancerSnapshot
         do {
-            loadBalancer = try await req.db.transaction { db in
+            loadBalancer = try await database.transaction { db in
                 try await QuotaEnforcementService.reserveLoadBalancer(for: project, on: db)
                 let allocation = try await IPAMService.allocateIP(for: network, on: db)
                 let row = try await LegacyLoadBalancerStore.insert(
@@ -105,18 +112,18 @@ struct LoadBalancerController: RouteCollection {
             }
         } catch let error as IPAMService.IPAMError {
             throw Abort(.conflict, reason: error.localizedDescription)
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A load balancer named '\(name)' already exists in this project")
         }
 
         await req.application.agentService.syncDesiredStateToFleet()
-        return try await response(for: loadBalancer, on: req.db)
+        return try await response(for: loadBalancer, on: database)
     }
 
     @Sendable
     func get(req: Request) async throws -> LoadBalancerResponse {
         let loadBalancer = try await find(req, action: "loadbalancer:read")
-        return try await response(for: loadBalancer, on: req.db)
+        return try await response(for: loadBalancer, on: database)
     }
 
     @Sendable
@@ -126,13 +133,13 @@ struct LoadBalancerController: RouteCollection {
         let id = loadBalancer.id
 
         if request.name == nil, request.protocol == nil, request.healthCheck == nil {
-            return try await response(for: loadBalancer, on: req.db)
+            return try await response(for: loadBalancer, on: database)
         }
         let name = request.name
         try request.healthCheck?.validate()
 
         do {
-            try await req.db.transaction { db in
+            try await database.transaction { db in
                 guard let current = try await LegacyLoadBalancerStore.locked(id: id, on: db) else {
                     throw Abort(.notFound, reason: "Load balancer no longer exists")
                 }
@@ -145,16 +152,16 @@ struct LoadBalancerController: RouteCollection {
                 else { throw Abort(.notFound, reason: "Load balancer no longer exists") }
                 try await Self.bumpGeneration(of: id, on: db)
             }
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw Abort(
                 .conflict, reason: "A load balancer named '\(name ?? loadBalancer.name)' already exists in this project"
             )
         }
         await req.application.agentService.syncDesiredStateToFleet()
-        guard let refreshed = try await LegacyLoadBalancerStore.find(id: id, on: req.db) else {
+        guard let refreshed = try await LegacyLoadBalancerStore.find(id: id, on: database) else {
             throw Abort(.notFound)
         }
-        return try await response(for: refreshed, on: req.db)
+        return try await response(for: refreshed, on: database)
     }
 
     @Sendable
@@ -162,7 +169,7 @@ struct LoadBalancerController: RouteCollection {
         let loadBalancer = try await find(req, action: "loadbalancer:delete")
         let id = loadBalancer.id
         let networkID = loadBalancer.logicalNetworkID
-        try await req.db.transaction { db in
+        try await database.transaction { db in
             // FloatingIP.load_balancer_id is SET NULL: deleting the load
             // balancer withdraws external exposure without releasing the
             // project's reserved floating address.
@@ -194,7 +201,7 @@ struct LoadBalancerController: RouteCollection {
     func listListeners(req: Request) async throws -> [LoadBalancerListenerResponse] {
         let loadBalancer = try await find(req, action: "loadbalancer:read")
         return try await LegacyLoadBalancerTargetStore.listeners(
-            loadBalancerID: loadBalancer.id, on: req.db
+            loadBalancerID: loadBalancer.id, on: database
         )
             .map(LoadBalancerListenerResponse.init(from:))
     }
@@ -208,7 +215,7 @@ struct LoadBalancerController: RouteCollection {
         let loadBalancerID = loadBalancer.id
         let listener: LoadBalancerListenerSnapshot
         do {
-            listener = try await req.db.transaction { db in
+            listener = try await database.transaction { db in
                 let listener = try await LegacyLoadBalancerTargetStore.insertListener(
                     loadBalancerID: loadBalancerID,
                     port: request.port,
@@ -217,7 +224,7 @@ struct LoadBalancerController: RouteCollection {
                 try await Self.markPendingAndBump(loadBalancerID, on: db)
                 return listener
             }
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "Listener port \(request.port) already exists on this load balancer")
         }
         await req.application.agentService.syncDesiredStateToFleet()
@@ -234,7 +241,7 @@ struct LoadBalancerController: RouteCollection {
         let existing = try await findListener(req, loadBalancerID: loadBalancerID)
         let listener: LoadBalancerListenerSnapshot
         do {
-            listener = try await req.db.transaction { db in
+            listener = try await database.transaction { db in
                 guard let listener = try await LegacyLoadBalancerTargetStore.updateListener(
                     id: existing.id,
                     loadBalancerID: loadBalancerID,
@@ -245,7 +252,7 @@ struct LoadBalancerController: RouteCollection {
                 try await Self.markPendingAndBump(loadBalancerID, on: db)
                 return listener
             }
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "Listener port \(request.port) already exists on this load balancer")
         }
         await req.application.agentService.syncDesiredStateToFleet()
@@ -257,7 +264,7 @@ struct LoadBalancerController: RouteCollection {
         let loadBalancer = try await find(req, action: "loadbalancer:update")
         let loadBalancerID = loadBalancer.id
         let listener = try await findListener(req, loadBalancerID: loadBalancerID)
-        try await req.db.transaction { db in
+        try await database.transaction { db in
             guard try await LegacyLoadBalancerTargetStore.deleteListener(
                 id: listener.id, loadBalancerID: loadBalancerID, on: db) != nil
             else { throw Abort(.notFound, reason: "Listener not found on this load balancer") }
@@ -272,7 +279,7 @@ struct LoadBalancerController: RouteCollection {
     @Sendable
     func listBackends(req: Request) async throws -> [LoadBalancerBackendResponse] {
         let loadBalancer = try await find(req, action: "loadbalancer:read")
-        return try await backendResponses(loadBalancerID: loadBalancer.id, on: req.db)
+        return try await backendResponses(loadBalancerID: loadBalancer.id, on: database)
     }
 
     @Sendable
@@ -283,7 +290,7 @@ struct LoadBalancerController: RouteCollection {
         let target = try await resolveBackend(request, for: loadBalancer, on: req)
         let backend: LoadBalancerBackendSnapshot
         do {
-            backend = try await req.db.transaction { db in
+            backend = try await database.transaction { db in
                 let backend = try await LegacyLoadBalancerTargetStore.insertBackend(
                     loadBalancerID: loadBalancerID,
                     interfaceID: target.interface?.id,
@@ -292,7 +299,7 @@ struct LoadBalancerController: RouteCollection {
                 try await Self.markPendingAndBump(loadBalancerID, on: db)
                 return backend
             }
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "This backend is already attached to the load balancer")
         }
         await req.application.agentService.syncDesiredStateToFleet()
@@ -307,9 +314,9 @@ struct LoadBalancerController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid backend ID")
         }
         guard try await LegacyLoadBalancerTargetStore.backend(
-            id: backendID, loadBalancerID: loadBalancerID, on: req.db) != nil
+            id: backendID, loadBalancerID: loadBalancerID, on: database) != nil
         else { throw Abort(.notFound, reason: "Backend not found on this load balancer") }
-        try await req.db.transaction { db in
+        try await database.transaction { db in
             guard try await LegacyLoadBalancerTargetStore.deleteBackend(
                 id: backendID, loadBalancerID: loadBalancerID, on: db) != nil
             else { throw Abort(.notFound, reason: "Backend not found on this load balancer") }
@@ -325,7 +332,7 @@ struct LoadBalancerController: RouteCollection {
         guard let id = req.parameters.get("loadBalancerId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid load balancer ID")
         }
-        return try await req.authorizedLoadBalancer(id, action: action)
+        return try await req.authorizedLoadBalancer(id, action: action, on: database)
     }
 
     private func findListener(
@@ -336,7 +343,7 @@ struct LoadBalancerController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid listener ID")
         }
         guard let listener = try await LegacyLoadBalancerTargetStore.listener(
-            id: listenerID, loadBalancerID: loadBalancerID, on: req.db)
+            id: listenerID, loadBalancerID: loadBalancerID, on: database)
         else { throw Abort(.notFound, reason: "Listener not found on this load balancer") }
         return listener
     }
@@ -364,15 +371,15 @@ struct LoadBalancerController: RouteCollection {
         guard let vmID = request.vmId, let nicIndex = request.nicIndex, nicIndex >= 0 else {
             throw Abort(.badRequest, reason: "vmId and a non-negative nicIndex are required together")
         }
-        let vm = try await req.reachableVM(vmID, action: "vm:update")
+        let vm = try await req.reachableVM(vmID, action: "vm:update", on: database)
         try ProjectContainment.require(
             "VM", in: vm.projectID,
             sameProjectAs: "the load balancer", in: loadBalancer.projectID)
         guard let interface = try await LegacyVMNetworkInterfaceStore.interface(
-            vmID: vmID, orderIndex: nicIndex, on: req.db)
+            vmID: vmID, orderIndex: nicIndex, on: database)
         else { throw Abort(.notFound, reason: "VM interface at nicIndex \(nicIndex) not found") }
         guard let loadedInterface = try await LegacyInterfaceAddressStore.loading(
-            [interface], on: req.db).first
+            [interface], on: database).first
         else {
             throw Abort(.internalServerError, reason: "Could not load backend interface addresses")
         }
@@ -381,9 +388,9 @@ struct LoadBalancerController: RouteCollection {
         }
         guard
             let loadBalancerNetwork = try await LogicalNetwork.find(
-                loadBalancer.logicalNetworkID, on: req.db),
+                loadBalancer.logicalNetworkID, on: database),
             let backendNetwork = try await LogicalNetwork.find(
-                interface.logicalNetworkID, on: req.db)
+                interface.logicalNetworkID, on: database)
         else {
             throw Abort(.conflict, reason: "Load balancer or backend network no longer exists")
         }
@@ -398,7 +405,7 @@ struct LoadBalancerController: RouteCollection {
     }
 
     private func response(
-        for loadBalancer: LoadBalancerSnapshot, on db: Database
+        for loadBalancer: LoadBalancerSnapshot, on db: PostgresStoreContext
     ) async throws -> LoadBalancerResponse {
         let listeners = try await LegacyLoadBalancerTargetStore.listeners(
             loadBalancerID: loadBalancer.id, on: db)
@@ -406,7 +413,7 @@ struct LoadBalancerController: RouteCollection {
         return LoadBalancerResponse(from: loadBalancer, listeners: listeners, backends: backends)
     }
 
-    private func backendResponses(loadBalancerID: UUID, on db: Database) async throws
+    private func backendResponses(loadBalancerID: UUID, on db: PostgresStoreContext) async throws
         -> [LoadBalancerBackendResponse]
     {
         try await loadedBackends(loadBalancerID: loadBalancerID, on: db).map {
@@ -414,7 +421,7 @@ struct LoadBalancerController: RouteCollection {
         }
     }
 
-    private func loadedBackends(loadBalancerID: UUID, on db: Database) async throws
+    private func loadedBackends(loadBalancerID: UUID, on db: PostgresStoreContext) async throws
         -> [(LoadBalancerBackendSnapshot, VMNetworkInterface?)]
     {
         let backends = try await LegacyLoadBalancerTargetStore.backends(
@@ -436,14 +443,14 @@ struct LoadBalancerController: RouteCollection {
         }
     }
 
-    private static func markPendingAndBump(_ id: UUID, on db: Database) async throws {
+    private static func markPendingAndBump(_ id: UUID, on db: PostgresStoreContext) async throws {
         guard try await LegacyLoadBalancerStore.markPending(id: id, on: db) != nil else {
             throw Abort(.notFound, reason: "Load balancer no longer exists")
         }
         try await bumpGeneration(of: id, on: db)
     }
 
-    private static func bumpGeneration(of id: UUID, on db: Database) async throws {
+    private static func bumpGeneration(of id: UUID, on db: PostgresStoreContext) async throws {
         switch try await DesiredStateGenerationWriter.advance(
             schema: LoadBalancer.schema, id: id, on: db)
         {

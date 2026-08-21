@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -85,7 +84,7 @@ struct VMAttachTargetDisclosureTests {
 
     private func withApp(_ test: (Fixture) async throws -> Void) async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let admin = try await builder.createUser(
                 username: "disclosure-admin",
                 email: "disclosure-admin@example.com",
@@ -93,7 +92,7 @@ struct VMAttachTargetDisclosureTests {
                 isSystemAdmin: true)
             let org = try await builder.createOrganization(name: "Disclosure Org")
             try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
-            try await admin.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await admin.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let home = try await builder.createProject(
                 name: "Home Project", description: "Owns the attachable resources", organization: org)
@@ -106,10 +105,10 @@ struct VMAttachTargetDisclosureTests {
                 email: "disclosure-editor@example.com",
                 displayName: "Disclosure Editor")
             try await builder.addUserToOrganization(user: editor, organization: org, role: "member")
-            try await editor.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await editor.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: try editor.requireID(), role: .editor,
-                nodeType: .project, nodeID: try home.requireID(), createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: try home.requireID(), createdBy: nil, on: app.testPostgres)
 
             // The attachable resources, written directly: every guard under
             // test fires before any of them is realized. The volume must be
@@ -121,16 +120,16 @@ struct VMAttachTargetDisclosureTests {
                 size: 10 * 1024 * 1024 * 1024,
                 status: .available,
                 createdByID: try admin.requireID())
-            try await volume.save(on: app.db)
+            try await volume.save(on: app.testPostgres)
             try await placeVolume(
                 volume,
                 on: "agent-that-is-not-connected",
                 at: "/var/lib/strato/volumes/disclosure/volume.qcow2",
-                using: app.db
+                using: app.testPostgres
             )
 
             let group = try await LegacySecurityGroupStore.insert(
-                projectID: try home.requireID(), name: "disclosure-group", on: app.db)
+                projectID: try home.requireID(), name: "disclosure-group", on: app.testPostgres)
 
             let pool = try await builder.createFloatingIPPool(
                 name: "disclosure-edge", cidr: "203.0.113.0/29", gateway: "203.0.113.1",
@@ -139,7 +138,7 @@ struct VMAttachTargetDisclosureTests {
             let floatingIP = try await LegacyFloatingIPStore.insert(
                 poolID: pool.id, address: "203.0.113.2",
                 projectID: try home.requireID(), createdByID: try admin.requireID(),
-                on: app.db)
+                on: app.testPostgres)
 
             // A VM the editor cannot touch, with a NIC so that nothing behind
             // the check under test could fail first for want of one.
@@ -150,12 +149,12 @@ struct VMAttachTargetDisclosureTests {
             let nic = VMNetworkInterface(
                 vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: VMNetworkInterface.generateMACAddress())
-            try await nic.save(on: app.db)
+            try await nic.save(on: app.testPostgres)
             try await LegacyInterfaceAddressStore.insert(
                 kind: .vm,
                 interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(),
                 family: .ipv4, address: "10.95.0.5", prefixLength: 24, gateway: network.gateway,
-                on: app.db)
+                on: app.testPostgres)
 
             try await test(
                 Fixture(
@@ -239,7 +238,7 @@ struct VMAttachTargetDisclosureTests {
             try await self.expectIndistinguishable(.volume(fixture.volumeId), fixture: fixture)
 
             // Nothing was bound on the way to the refusal.
-            let volume = try #require(try await Volume.find(fixture.volumeId, on: fixture.app.db))
+            let volume = try #require(try await Volume.find(fixture.volumeId, on: fixture.app.testPostgres))
             #expect(volume.vmID == nil)
             #expect(volume.status == .available)
         }
@@ -252,7 +251,7 @@ struct VMAttachTargetDisclosureTests {
             try await self.expectIndistinguishable(.securityGroup(fixture.groupId), fixture: fixture)
 
             let memberships = try await LegacyInterfaceSecurityGroupStore.count(
-                kind: .vm, on: fixture.app.db)
+                kind: .vm, on: fixture.app.testPostgres)
             #expect(memberships == 0)
         }
     }
@@ -276,7 +275,7 @@ struct VMAttachTargetDisclosureTests {
             try await self.expectIndistinguishable(.floatingIP(fixture.floatingIpId), fixture: fixture)
 
             let floatingIP = try #require(
-                try await LegacyFloatingIPStore.find(id: fixture.floatingIpId, on: fixture.app.db))
+                try await LegacyFloatingIPStore.find(id: fixture.floatingIpId, on: fixture.app.testPostgres))
             #expect(floatingIP.interfaceID == nil)
         }
     }

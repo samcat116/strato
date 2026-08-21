@@ -1,7 +1,5 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
-import SQLKit
 import Vapor
 
 /// Minimal immutable rows used by event producers that must append outbox
@@ -22,7 +20,7 @@ struct LegacyWebhookSubscriptionMatch: Decodable, Sendable {
 enum LegacyWebhookStore {
     static func activeSubscriptions(
         organizationID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [LegacyWebhookSubscriptionMatch] {
         try await requireSQL(db).raw(
             """
@@ -42,7 +40,7 @@ enum LegacyWebhookStore {
         eventType: WebhookEventType,
         payload: String,
         nextAttemptAt: Date = Date(),
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> UUID {
         struct Identifier: Decodable { let id: UUID }
         guard let row = try await requireSQL(db).raw(
@@ -64,8 +62,8 @@ enum LegacyWebhookStore {
         return row.id
     }
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Webhook outbox requires PostgreSQL")
         }
         return sql

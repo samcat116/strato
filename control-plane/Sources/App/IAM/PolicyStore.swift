@@ -1,7 +1,5 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
-import SQLKit
 import Vapor
 
 struct LegacyIAMPolicyRecord: Decodable, Equatable, Sendable {
@@ -70,7 +68,7 @@ enum PolicyStore {
         ownerType: IAMRoleOwnerType,
         ownerID: UUID,
         engine: any CedarEngine,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Prepared {
         guard !cedarText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw PolicyError.emptyCedarText
@@ -151,7 +149,7 @@ enum PolicyStore {
         _ shape: AuthoredPolicyShape,
         ownerType: IAMRoleOwnerType,
         ownerID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws {
         guard let ownerNodeType = ownerType.nodeType else {
             throw PolicyError.uncreatableOwnerType(ownerType.rawValue)
@@ -206,7 +204,7 @@ enum PolicyStore {
         policyID: String,
         cedarText: String,
         engine: any CedarEngine,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws {
         let roles = try await RoleStore.allDescriptors(on: db)
         try compileCandidate(
@@ -234,7 +232,7 @@ enum PolicyStore {
 
     /// The policies a node owns.
     static func owned(
-        by ownerType: IAMRoleOwnerType, ownerID: UUID, on db: any Database
+        by ownerType: IAMRoleOwnerType, ownerID: UUID, on db: PostgresStoreContext
     ) async throws -> [LegacyIAMPolicyRecord] {
         try await requireSQL(db).raw(
             """
@@ -263,13 +261,13 @@ enum PolicyStore {
     /// actually reaches a given resource is a further containment question the
     /// caller answers per policy (see `WhoCanService`).
     static func inScope(
-        along chain: [IAMNode], on db: any Database
+        along chain: [IAMNode], on db: PostgresStoreContext
     ) async throws -> [LegacyIAMPolicyRecord] {
         let organizationIDs = chain.filter { $0.type == .organization }.map(\.id)
         let projectIDs = chain.filter { $0.type == .project }.map(\.id)
         guard !organizationIDs.isEmpty || !projectIDs.isEmpty else { return [] }
         let sql = try requireSQL(db)
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT \(unsafeRaw: columns) FROM iam_policies WHERE enabled = true AND (FALSE"
         if !organizationIDs.isEmpty {
             query +=
@@ -311,7 +309,7 @@ enum PolicyStore {
         prepared: Prepared,
         createdBy: UUID?,
         enabled: Bool,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LegacyIAMPolicyRecord {
         guard IAMRoleOwnerType.creatableOwners.contains(ownerType) else {
             throw PolicyError.uncreatableOwnerType(ownerType.rawValue)
@@ -334,7 +332,7 @@ enum PolicyStore {
                 throw IAMPersistenceError.unexpectedRowCount(expected: 1, actual: 0)
             }
             return policy
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw PolicyError.duplicateName(name)
         }
     }
@@ -390,7 +388,7 @@ enum PolicyStore {
     /// contributing a permit or forbid to the compiled set.
     @discardableResult
     static func deleteOwned(
-        by ownerType: IAMRoleOwnerType, ownerID: UUID, on db: any Database
+        by ownerType: IAMRoleOwnerType, ownerID: UUID, on db: PostgresStoreContext
     ) async throws -> Int {
         struct Identifier: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
@@ -402,15 +400,15 @@ enum PolicyStore {
         ).all(decoding: Identifier.self).count
     }
 
-    static func count(on db: any Database) async throws -> Int {
+    static func count(on db: PostgresStoreContext) async throws -> Int {
         struct CountRow: Decodable { let count: Int }
         return try await requireSQL(db).raw(
             "SELECT count(*)::bigint AS count FROM iam_policies"
         ).first(decoding: CountRow.self)?.count ?? 0
     }
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw IAMPersistenceError.unexpectedRowCount(expected: 1, actual: 0)
         }
         return sql

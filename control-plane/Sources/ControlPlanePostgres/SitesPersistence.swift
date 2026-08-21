@@ -547,7 +547,7 @@ private struct InsertSite: SiteStatement {
         """
     }
     static let bindingDataTypes: [PostgresDataType] = [
-        .uuid, .text, .text, .text, .float8, .float8, .text, .text, .jsonb, .uuid, .uuid,
+        .uuid, .text, .text, .text, .float8, .float8, .text, .text, .text, .uuid, .uuid,
     ]
     let write: SiteWrite
     func makeBindings() throws -> PostgresBindings {
@@ -645,7 +645,7 @@ private struct UpdateSite: SiteStatement {
         """
     }
     static let bindingDataTypes: [PostgresDataType] = [
-        .uuid, .text, .uuid, .text, .float8, .float8, .text, .text, .jsonb,
+        .uuid, .text, .uuid, .text, .float8, .float8, .text, .text, .text,
     ]
     let id: UUID
     let update: SiteUpdate

@@ -1,6 +1,4 @@
 import ControlPlanePostgres
-import Fluent
-import FluentPostgresDriver
 import NIOSSL
 import Vapor
 import Valkey
@@ -71,12 +69,21 @@ public func configure(
     app.lifecycle.use(NativePostgresLifecycleHandler(database: nativePostgres))
     try await nativePostgres.start()
     let persistence = ControlPlanePersistence(database: nativePostgres)
-    app.observedStateApplier = ObservedStateApplier(app: app, workloads: persistence.workloads)
+    if app.environment == .testing {
+        app.testPostgres = persistence.storeContext
+    }
+    app.observedStateApplier = ObservedStateApplier(
+        app: app,
+        database: persistence.storeContext,
+        workloads: persistence.workloads
+    )
     app.desiredStateAssembler = DesiredStateAssembler(
         app: app,
+        database: persistence.storeContext,
         workloads: persistence.workloads,
         floatingIPAllocations: persistence.floatingIPAllocations
     )
+    app.imageFetchService = ImageFetchService(app: app, database: persistence.storeContext)
     app.policySetVersion = PolicySetVersionCache(logger: app.logger, iam: persistence.iam)
     app.cedarPolicySet = CedarPolicySetCache(logger: app.logger, iam: persistence.iam)
     app.decisionLogsPersistence = persistence.decisionLogs
@@ -94,6 +101,8 @@ public func configure(
     app.groupsPersistence = persistence.groups
     app.hierarchyPersistence = persistence.hierarchy
     app.iamPersistence = persistence.iam
+    app.serviceAccountsPersistence = persistence.serviceAccounts
+    app.orgTrustDomainsPersistence = persistence.orgTrustDomains
     app.projectsPersistence = persistence.projects
     app.networksPersistence = persistence.networks
     app.sitesPersistence = persistence.sites
@@ -322,7 +331,8 @@ public func configure(
         BearerAuthorizationHeaderAuthenticator(
             apiKeys: persistence.apiKeys,
             oauthSessions: persistence.oauthDeviceSessions,
-            users: persistence.userDirectory
+            users: persistence.userDirectory,
+            workloads: persistence.workloads
         )
     )
 
@@ -426,106 +436,15 @@ public func configure(
     // in-process Cedar policy set against real `role_bindings` rows, so tests
     // exercise the exact production decision path — there is no permissive mock
     // in front of it.
-    app.middleware.use(AuthorizationMiddleware())
-
-    // Configure database based on environment
-    if app.environment == .testing {
-        // Testing environment already configured with a per-test Postgres
-        // database clone in test setup — skip database configuration here
-    } else {
-        // TLS mode is configurable via DATABASE_TLS (disable|prefer|require) and
-        // defaults to `require` outside development, so credentials and data are
-        // encrypted whenever Postgres is remote. See issue #56.
-        let databaseTLS = try makeDatabaseTLS(
-            configuration: app.controlPlaneConfiguration, logger: app.logger)
-        let statementTimeout = try DatabaseStatementTimeout(
-            milliseconds: app.controlPlaneConfiguration.int(.databaseStatementTimeoutMS)!)
-        let migrationStatementTimeout = try DatabaseStatementTimeout(
-            milliseconds: app.controlPlaneConfiguration.int(.databaseMigrationStatementTimeoutMS)!)
-        let databaseConfiguration = SQLPostgresConfiguration(
-            hostname: app.controlPlaneConfiguration.string(.databaseHost)!,
-            port: app.controlPlaneConfiguration.int(.databasePort)!,
-            username: app.controlPlaneConfiguration.string(.databaseUsername)!,
-            password: app.controlPlaneConfiguration.string(.databasePassword)!,
-            database: app.controlPlaneConfiguration.string(.databaseName)!,
-            tls: databaseTLS
-        )
-        app.logger.info(
-            "Database statement timeouts configured",
-            metadata: [
-                "servingMilliseconds": .stringConvertible(statementTimeout.milliseconds),
-                "migrationMilliseconds": .stringConvertible(migrationStatementTimeout.milliseconds),
-            ]
-        )
-        app.databases.use(
-            statementTimeout.applying(
-                to: DatabaseConfigurationFactory.postgres(
-                    configuration: databaseConfiguration
-                )
-            ), as: .psql)
-    }
-
-    // STR-234 replaces the executable historical chain with the reviewed
-    // current-schema baseline. This migration intentionally accepts only a
-    // fresh database; see ADR 0009 for the cutover decision.
-    app.migrations.add(CurrentSchemaBaseline())
-
-    // STR-28: project-scoped native OVN load balancers, incremental listener
-    // and backend membership, external Floating IP attachment, and quota.
-    app.migrations.add(CreateLoadBalancer())
-    app.migrations.add(CreateLoadBalancerListener())
-    app.migrations.add(CreateLoadBalancerBackend())
-    app.migrations.add(AddLoadBalancerCountToResourceQuota())
-
-    // STR-236: initialize the previously inert network counter from the
-    // project-wide logical networks each global quota actually governs.
-    app.migrations.add(BackfillNetworkQuotaAccounting())
-
-    // STR-237: fresh, feature-scoped dependency health becomes the authority
-    // for new placement while existing workloads remain untouched.
-    app.migrations.add(AddAgentDependencyObservations())
-
-    // STR-64: choose full seed ISO or IMDS-backed NoCloud per VM. Existing
-    // rows stay on the full ISO explicitly; this phase does not cut them over.
-    app.migrations.add(AddMetadataSourceToVM())
-
-    // STR-64: an OVN agent may still disable its metadata listener. Persist
-    // the explicit registration capability and fail closed until it reports.
-    app.migrations.add(AddAgentMetadataServiceCapability())
-
-    // STR-66: mutable VM tags and plural authorized keys. Existing single-key
-    // rows are backfilled without changing what their guests receive.
-    app.migrations.add(AddMutableMetadataToVM())
-
-    // STR-246: the guest-agent opt-in was added to the fresh-schema baseline
-    // without an upgrade migration. Repair preserved databases before any VM
-    // query can select the required field.
-    app.migrations.add(AddGuestAgentEnabledToVM())
-
-    // STR-256: reject oversized IAM names before their unique btree indexes
-    // turn caller input into PostgreSQL 54000 and an API 500.
-    app.migrations.add(AddAdministrativeTextLengthConstraints())
-
-    // STR-79: durable captured VM command state with cold output payloads.
-    app.migrations.add(CreateVMCommandExecutions())
-
-    // STR-154: preserve the attachment case and its coordinates instead of
-    // interpreting every agent-owned storage reference as a host path.
-    app.migrations.add(ReplaceVolumeReplicaDatasetPath())
-
-    // STR-156: durable agent-reported physical disk inventory and operator OSD
-    // eligibility intent. Missing disks remain rows until their agent is removed.
-    app.migrations.add(CreateStorageDevices())
-
-    // Agent enrollment now hands the host one opaque bearer and derives every
-    // identity/network value server-side when it is redeemed. Existing rows
-    // stay on their issued bootstrap commands; no secret can be backfilled.
-    app.migrations.add(AddAgentEnrollmentBootstrapTokens())
+    app.middleware.use(AuthorizationMiddleware(
+        workloads: persistence.workloads,
+        serviceAccounts: persistence.serviceAccounts,
+        projects: persistence.projects
+    ))
 
     // The native migrator owns one initialized PostgresNIO connection for the
-    // advisory lock and every per-migration transaction. Fluent registrations
-    // remain temporarily as compatibility fixtures while cohort parity tests
-    // are converted, but application boot no longer executes them.
+    // advisory lock and every per-migration transaction. The stable migration
+    // names and ledger semantics remain compatible with existing databases.
     let nativeMigrator = try ControlPlanePostgres.SchemaMigrator(
         database: nativePostgres,
         migrations: StratoMigrations.current,
@@ -550,7 +469,9 @@ public func configure(
     // used by metadata and per-network resolvers. Existing rows cannot be
     // renumbered safely in place, so name every collision at each startup until
     // its operator remediates it.
-    try await NetworkServiceSpaceAudit.warnAboutCollidingNetworks(on: app.db, logger: app.logger)
+    try await NetworkServiceSpaceAudit.warnAboutCollidingNetworks(
+        using: persistence.networks,
+        logger: app.logger)
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
     // curated registry. Runs every startup so registry changes land with the
@@ -583,7 +504,6 @@ public func configure(
     if app.environment != .testing {
         try await GuardrailStore.backfillCedarText(
             using: persistence.iam,
-            hierarchyDB: app.db,
             logger: app.logger
         )
     }
@@ -592,7 +512,7 @@ public func configure(
         await app.startPolicySetVersionWatch()
     } else {
         let version = try await persistence.iam.currentPolicySetVersion()
-        await app.cedarPolicySet.rebuild(version: version, on: app.db)
+        await app.cedarPolicySet.rebuild(version: version)
     }
 
     // Converge any plaintext stored secrets (OIDC client secrets, SSF auth
@@ -618,7 +538,7 @@ public func configure(
     app.logger.info("Scheduler service initialized with strategy: \(schedulingStrategy.rawValue)")
 
     // Configure SPIFFE/SPIRE authentication when enabled in startup configuration.
-    try await app.configureSPIRE()
+    try await app.configureSPIRE(trustDomains: persistence.orgTrustDomains)
 
     // Configure SPIRE join-token provisioning for the agent registration flow
     // (requires SPIRE_ENABLED plus SPIRE_SERVER_API_ADDRESS)
@@ -643,11 +563,17 @@ public func configure(
     // the handler cancels it at shutdown (if the service was ever created).
     app.agentService = AgentService(
         app: app,
+        database: persistence.storeContext,
         storageDevices: persistence.storageDevices,
         storagePools: persistence.storagePools,
         agentEnrollments: persistence.agentEnrollments,
         startImmediately: false
     )
+    app.configureResourceMutation(ResourceMutation(
+        agentDispatch: app.agentService,
+        logger: app.logger,
+        database: persistence.storeContext
+    ))
     app.lifecycle.use(AgentServiceLifecycleHandler())
 
     // Audit retention (issue #39): when AUDIT_RETENTION_DAYS is set, an

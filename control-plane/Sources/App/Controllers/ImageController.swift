@@ -1,10 +1,17 @@
 import Foundation
+import ControlPlanePostgres
 import Vapor
-import Fluent
 import NIOCore
 import StratoShared
 
 struct ImageController: RouteCollection {
+    private let workloads: WorkloadsPersistence
+    private let database: PostgresStoreContext
+
+    init(workloads: WorkloadsPersistence, database: PostgresStoreContext) {
+        self.workloads = workloads
+        self.database = database
+    }
     /// Upper bound on a single multipart upload, enforced as bytes stream past
     /// so an over-large upload gets a 413 instead of filling the image store.
     /// Both handlers now stream into the store rather than buffering the body,
@@ -45,7 +52,7 @@ struct ImageController: RouteCollection {
         }
 
         // Verify project exists and user has access
-        let projectID = try await req.requireProject().requireID()
+        let projectID = try await req.requireProject(on: database).requireID()
 
         // Check user permission on project (view_project permission allows listing images)
         let hasPermission = try await req.can("project:read", on: IAMNode(type: .project, id: projectID))
@@ -56,8 +63,8 @@ struct ImageController: RouteCollection {
 
         // Get all images for the project
         let images = try await LegacyImageArtifactStore.loading(
-            LegacyImageStore.images(projectIDs: [projectID], newestFirst: true, on: req.db),
-            on: req.db)
+            LegacyImageStore.images(projectIDs: [projectID], newestFirst: true, on: database),
+            on: database)
 
         return paging.page(images.map { ImageResponse(from: $0) })
     }
@@ -75,11 +82,11 @@ struct ImageController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid project or image ID")
         }
 
-        guard var image = try await LegacyImageStore.image(id: imageID, on: req.db) else {
+        guard var image = try await LegacyImageStore.image(id: imageID, on: database) else {
             throw Abort(.notFound, reason: "Image not found")
         }
         // Load artifacts so the response carries compatibility metadata.
-        image = try await LegacyImageArtifactStore.loading(image, on: req.db)
+        image = try await LegacyImageArtifactStore.loading(image, on: database)
 
         // Verify image belongs to the project
         guard image.projectID == projectID else {
@@ -108,7 +115,7 @@ struct ImageController: RouteCollection {
         }
 
         // Verify project exists and user has create permission
-        let projectID = try await req.requireProject().requireID()
+        let projectID = try await req.requireProject(on: database).requireID()
 
         let hasPermission = try await req.can("image:create", on: IAMNode(type: .project, id: projectID))
 
@@ -188,7 +195,7 @@ struct ImageController: RouteCollection {
             defaultDisk: createRequest.defaultDisk,
             defaultCmdline: createRequest.defaultCmdline
         )
-        let artifact = try await req.db.transaction { db -> ImageArtifactSnapshot in
+        let artifact = try await database.transaction { db -> ImageArtifactSnapshot in
             try await image.save(on: db)
 
             let imageID = try image.requireID()
@@ -277,7 +284,7 @@ struct ImageController: RouteCollection {
             defaultDisk: createRequest.defaultDisk,
             defaultCmdline: createRequest.defaultCmdline
         )
-        try await req.db.transaction { db in
+        try await database.transaction { db in
             try await image.save(on: db)
             try await grantImageCreatorBinding(
                 imageID: try image.requireID(), userID: userID, on: db)
@@ -294,7 +301,7 @@ struct ImageController: RouteCollection {
     /// Grants the creator's admin role binding on a new image (issue #477) —
     /// the authoritative grant Cedar evaluates.
     private func grantImageCreatorBinding(
-        imageID: UUID, userID: UUID, on database: any Database
+        imageID: UUID, userID: UUID, on database: PostgresStoreContext
     ) async throws {
         try await RoleBindingService.grant(
             principalType: .user,
@@ -324,7 +331,7 @@ struct ImageController: RouteCollection {
             status: .uploading,
             uploadedByID: userID
         )
-        try await tempImage.save(on: req.db)
+        try await tempImage.save(on: database)
 
         guard let imageID = tempImage.id else {
             throw Abort(.internalServerError, reason: "Failed to create image record")
@@ -347,7 +354,7 @@ struct ImageController: RouteCollection {
                     kind: ArtifactKind.diskImage.rawValue, filename: validated)
             }
         } catch {
-            _ = try await LegacyImageStore.delete(id: imageID, on: req.db)
+            _ = try await LegacyImageStore.delete(id: imageID, on: database)
             throw error
         }
 
@@ -357,7 +364,7 @@ struct ImageController: RouteCollection {
             if let key = upload.key {
                 try? await store.delete(key: key)
             }
-            _ = try? await LegacyImageStore.delete(id: imageID, on: req.db)
+            _ = try? await LegacyImageStore.delete(id: imageID, on: database)
             return error
         }
 
@@ -443,7 +450,7 @@ struct ImageController: RouteCollection {
                 defaultMemory: defaultMemory,
                 defaultDisk: defaultDisk,
                 defaultCmdline: defaultCmdline,
-                on: req.db)
+                on: database)
             else { throw ImageError.imageNotFound(imageID) }
             completedImage = updated
 
@@ -458,12 +465,12 @@ struct ImageController: RouteCollection {
                 size: size,
                 checksum: checksum,
                 storagePath: relativePath,
-                on: req.db)
-            completedImage = try await completedImage.recomputedStatus(on: req.db)
+                on: database)
+            completedImage = try await completedImage.recomputedStatus(on: database)
 
             // Grant the creator's IAM binding.
             try await grantImageCreatorBinding(
-                imageID: imageID, userID: userID, on: req.db)
+                imageID: imageID, userID: userID, on: database)
         } catch {
             throw await failUpload(error)
         }
@@ -499,7 +506,7 @@ struct ImageController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid project or image ID")
         }
 
-        guard var image = try await LegacyImageStore.image(id: imageID, on: req.db) else {
+        guard var image = try await LegacyImageStore.image(id: imageID, on: database) else {
             throw Abort(.notFound, reason: "Image not found")
         }
         guard image.projectID == projectID else {
@@ -573,12 +580,12 @@ struct ImageController: RouteCollection {
         // removing its stored object first — unless the upload just overwrote it
         // at the same key, in which case deleting would remove the new bytes.
         if let existing = try await LegacyImageArtifactStore.artifact(
-            imageID: imageID, kind: kind, on: req.db)
+            imageID: imageID, kind: kind, on: database)
         {
             if existing.storagePath != relativePath {
                 try? await store.delete(key: existing.storagePath)
             }
-            _ = try await LegacyImageArtifactStore.delete(id: existing.id, on: req.db)
+            _ = try await LegacyImageArtifactStore.delete(id: existing.id, on: database)
         }
 
         try await LegacyImageArtifactStore.insert(
@@ -590,9 +597,9 @@ struct ImageController: RouteCollection {
             size: size,
             checksum: checksum,
             storagePath: relativePath,
-            on: req.db)
+            on: database)
 
-        image = try await image.recomputedStatus(on: req.db)
+        image = try await image.recomputedStatus(on: database)
 
         req.logger.info(
             "Image artifact uploaded",
@@ -622,7 +629,7 @@ struct ImageController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid project or image ID")
         }
 
-        guard var image = try await LegacyImageStore.image(id: imageID, on: req.db) else {
+        guard var image = try await LegacyImageStore.image(id: imageID, on: database) else {
             throw Abort(.notFound, reason: "Image not found")
         }
         guard image.projectID == projectID else {
@@ -661,12 +668,12 @@ struct ImageController: RouteCollection {
 
         // Replace any existing artifact of this kind (unique on image_id, kind).
         if let existing = try await LegacyImageArtifactStore.artifact(
-            imageID: imageID, kind: kind, on: req.db)
+            imageID: imageID, kind: kind, on: database)
         {
             if existing.storagePath != relativePath {
                 try? await req.application.imageObjectStore.delete(key: existing.storagePath)
             }
-            _ = try await LegacyImageArtifactStore.delete(id: existing.id, on: req.db)
+            _ = try await LegacyImageArtifactStore.delete(id: existing.id, on: database)
         }
 
         // Create the artifact in a pending state; the background fetch fills in
@@ -683,10 +690,10 @@ struct ImageController: RouteCollection {
             status: .pending,
             sourceURL: fetchRequest.sourceURL,
             expectedChecksum: expectedChecksum,
-            on: req.db)
+            on: database)
 
         // Removing a prior ready artifact may drop the image below bootable.
-        image = try await image.recomputedStatus(on: req.db)
+        image = try await image.recomputedStatus(on: database)
 
         let artifactId = artifact.id
         Task {
@@ -728,7 +735,7 @@ struct ImageController: RouteCollection {
             throw Abort(.badRequest, reason: "Unknown artifact kind '\(kindString)'")
         }
 
-        guard var image = try await LegacyImageStore.image(id: imageID, on: req.db) else {
+        guard var image = try await LegacyImageStore.image(id: imageID, on: database) else {
             throw Abort(.notFound, reason: "Image not found")
         }
         guard image.projectID == projectID else {
@@ -741,15 +748,15 @@ struct ImageController: RouteCollection {
         }
 
         guard let artifact = try await LegacyImageArtifactStore.artifact(
-            imageID: imageID, kind: kind, on: req.db)
+            imageID: imageID, kind: kind, on: database)
         else {
             throw Abort(.notFound, reason: "Image has no \(kind.rawValue) artifact")
         }
 
         try? await req.application.imageObjectStore.delete(key: artifact.storagePath)
-        _ = try await LegacyImageArtifactStore.delete(id: artifact.id, on: req.db)
+        _ = try await LegacyImageArtifactStore.delete(id: artifact.id, on: database)
 
-        image = try await image.recomputedStatus(on: req.db)
+        image = try await image.recomputedStatus(on: database)
 
         req.logger.info(
             "Image artifact deleted",
@@ -771,7 +778,7 @@ struct ImageController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid project or image ID")
         }
 
-        guard let image = try await LegacyImageStore.image(id: imageID, on: req.db) else {
+        guard let image = try await LegacyImageStore.image(id: imageID, on: database) else {
             throw Abort(.notFound, reason: "Image not found")
         }
 
@@ -798,9 +805,9 @@ struct ImageController: RouteCollection {
             defaultMemory: updateRequest.defaultMemory ?? image.defaultMemory,
             defaultDisk: updateRequest.defaultDisk ?? image.defaultDisk,
             defaultCmdline: updateRequest.defaultCmdline ?? image.defaultCmdline,
-            on: req.db)
+            on: database)
         else { throw Abort(.notFound, reason: "Image not found") }
-        updated = try await updated.recomputedStatus(on: req.db)
+        updated = try await updated.recomputedStatus(on: database)
 
         req.logger.info("Image updated", metadata: ["image_id": .string(imageID.uuidString)])
 
@@ -820,7 +827,7 @@ struct ImageController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid project or image ID")
         }
 
-        guard let image = try await LegacyImageStore.image(id: imageID, on: req.db) else {
+        guard let image = try await LegacyImageStore.image(id: imageID, on: database) else {
             throw Abort(.notFound, reason: "Image not found")
         }
 
@@ -854,7 +861,7 @@ struct ImageController: RouteCollection {
         // creator grant above and anything granted on it since — in the same
         // transaction. Bindings have no FK to the row they protect, so a delete
         // that skips this leaks them permanently (STR-112).
-        try await req.db.transaction { db in
+        try await database.transaction { db in
             try await RoleBindingService.revokeAll(nodeType: .image, nodeID: imageID, on: db)
             _ = try await LegacyImageStore.delete(id: imageID, on: db)
         }
@@ -895,7 +902,8 @@ struct ImageController: RouteCollection {
         // Never fall through to session auth on failure: a request carrying
         // XFCC that doesn't verify is a spoofing attempt, not a browser.
         if AgentMTLSAuthenticator.hasClientCertificate(req) {
-            let agent = try await AgentMTLSAuthenticator.authenticateAgent(req: req)
+            let agent = try await AgentMTLSAuthenticator.authenticateAgent(
+                req: req, workloads: workloads)
 
             try await authorizeAgentImageFetch(req: req, agent: agent, imageID: imageID)
 
@@ -921,7 +929,7 @@ struct ImageController: RouteCollection {
         // the image's ancestor chain, so a nonexistent image can only ever
         // deny — a plain 404 is the accurate answer (and the pre-cutover
         // behavior).
-        guard try await LegacyImageStore.image(id: imageID, on: req.db) != nil else {
+        guard try await LegacyImageStore.image(id: imageID, on: database) != nil else {
             throw Abort(.notFound, reason: "Image not found")
         }
 
@@ -960,7 +968,7 @@ struct ImageController: RouteCollection {
             let agentRow = try await LegacyAgentStore.agents(
                 trustDomain: agent.identity.trustDomain,
                 name: agent.identity.name,
-                on: req.db).first,
+                on: database).first,
             let agentId = agentRow.id?.uuidString
         else {
             req.logger.warning(
@@ -1001,7 +1009,7 @@ struct ImageController: RouteCollection {
     private func serveImageFile(
         req: Request, imageID: UUID, projectID: UUID, artifactKind: ArtifactKind
     ) async throws -> Response {
-        guard let image = try await LegacyImageStore.image(id: imageID, on: req.db) else {
+        guard let image = try await LegacyImageStore.image(id: imageID, on: database) else {
             throw Abort(.notFound, reason: "Image not found")
         }
 
@@ -1019,7 +1027,7 @@ struct ImageController: RouteCollection {
 
         guard
             let artifact = try await LegacyImageArtifactStore.artifact(
-                imageID: imageID, kind: artifactKind, status: .ready, on: req.db)
+                imageID: imageID, kind: artifactKind, status: .ready, on: database)
         else {
             throw Abort(.notFound, reason: "Image has no ready \(artifactKind.rawValue) artifact")
         }
@@ -1040,7 +1048,7 @@ struct ImageController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid project or image ID")
         }
 
-        guard let image = try await LegacyImageStore.image(id: imageID, on: req.db) else {
+        guard let image = try await LegacyImageStore.image(id: imageID, on: database) else {
             throw Abort(.notFound, reason: "Image not found")
         }
 
@@ -1057,7 +1065,7 @@ struct ImageController: RouteCollection {
         }
 
         return ImageStatusResponse(
-            from: try await LegacyImageArtifactStore.loading(image, on: req.db))
+            from: try await LegacyImageArtifactStore.loading(image, on: database))
     }
 }
 

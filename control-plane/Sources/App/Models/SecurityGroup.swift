@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 enum SecurityGroup {
@@ -26,11 +25,11 @@ struct SecurityGroupSnapshot: Equatable, Sendable {
 enum LegacySecurityGroupStore {
     static func groups(
         ids: [UUID]? = nil, projectIDs: [UUID]? = nil, isDefault: Bool? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [SecurityGroupSnapshot] {
         if let ids, ids.isEmpty { return [] }
         if let projectIDs, projectIDs.isEmpty { return [] }
-        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM security_groups WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT \(unsafeRaw: columns) FROM security_groups WHERE TRUE"
         if let ids { query += " AND id = ANY(\(bind: ids))" }
         if let projectIDs { query += " AND project_id = ANY(\(bind: projectIDs))" }
         if let isDefault { query += " AND is_default = \(bind: isDefault)" }
@@ -38,11 +37,11 @@ enum LegacySecurityGroupStore {
         return try await requireSQL(db).raw(query).all(decoding: Record.self).map(\.snapshot)
     }
 
-    static func group(id: UUID, on db: any Database) async throws -> SecurityGroupSnapshot? {
+    static func group(id: UUID, on db: PostgresStoreContext) async throws -> SecurityGroupSnapshot? {
         try await groups(ids: [id], on: db).first
     }
 
-    static func defaultGroup(projectID: UUID, on db: any Database) async throws
+    static func defaultGroup(projectID: UUID, on db: PostgresStoreContext) async throws
         -> SecurityGroupSnapshot?
     {
         try await groups(projectIDs: [projectID], isDefault: true, on: db).first
@@ -52,7 +51,7 @@ enum LegacySecurityGroupStore {
     static func insert(
         id: UUID = UUID(), projectID: UUID, name: String,
         description: String? = nil, isDefault: Bool = false,
-        createdByID: UUID? = nil, on db: any Database
+        createdByID: UUID? = nil, on db: PostgresStoreContext
     ) async throws -> SecurityGroupSnapshot {
         guard let row = try await requireSQL(db).raw(
             """
@@ -72,7 +71,7 @@ enum LegacySecurityGroupStore {
 
     @discardableResult
     static func update(
-        id: UUID, name: String, description: String?, on db: any Database
+        id: UUID, name: String, description: String?, on db: PostgresStoreContext
     ) async throws -> SecurityGroupSnapshot? {
         try await requireSQL(db).raw(
             """
@@ -85,14 +84,14 @@ enum LegacySecurityGroupStore {
         ).first(decoding: Record.self)?.snapshot
     }
 
-    static func count(projectID: UUID, on db: any Database) async throws -> Int {
+    static func count(projectID: UUID, on db: PostgresStoreContext) async throws -> Int {
         struct Count: Decodable { let count: Int }
         return try await requireSQL(db).raw(
             "SELECT count(*)::bigint AS count FROM security_groups WHERE project_id = \(bind: projectID)"
         ).first(decoding: Count.self)?.count ?? 0
     }
 
-    static func ids(projectIDs: [UUID], on db: any Database) async throws -> [UUID] {
+    static func ids(projectIDs: [UUID], on db: PostgresStoreContext) async throws -> [UUID] {
         struct ID: Decodable { let id: UUID }
         guard !projectIDs.isEmpty else { return [] }
         return try await requireSQL(db).raw(
@@ -101,7 +100,7 @@ enum LegacySecurityGroupStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct ID: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM security_groups WHERE id = \(bind: id) RETURNING id"
@@ -134,8 +133,8 @@ enum LegacySecurityGroupStore {
         created_at AS "createdAt", updated_at AS "updatedAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Security groups require PostgreSQL")
         }
         return sql

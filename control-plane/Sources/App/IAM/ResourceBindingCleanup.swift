@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 
 /// Drops the role bindings of a resource whose row is being removed.
@@ -83,7 +83,7 @@ enum ResourceBindingCleanup {
     /// away with it. Call inside the transaction that removes the VM row, so
     /// bindings and rows can never diverge — and *before* the delete, which
     /// takes the `vm_snapshots` rows this reads with it.
-    static func revokeBindings(forDeletedVM vmID: UUID, on db: any Database) async throws {
+    static func revokeBindings(forDeletedVM vmID: UUID, on db: PostgresStoreContext) async throws {
         let snapshotIDs = try await LegacyVMSnapshotStore.snapshots(vmID: vmID, on: db)
             .compactMap(\.id)
         try await RoleBindingService.revokeAll(nodeType: .vmSnapshot, nodeIDs: snapshotIDs, on: db)
@@ -102,7 +102,7 @@ enum ResourceBindingCleanup {
 
     /// Sandbox counterpart: the sandbox node plus the snapshots that cascade
     /// away with it (issue #428). Same read-before-delete ordering requirement.
-    static func revokeBindings(forDeletedSandbox sandboxID: UUID, on db: any Database) async throws {
+    static func revokeBindings(forDeletedSandbox sandboxID: UUID, on db: PostgresStoreContext) async throws {
         let snapshotIDs = try await LegacySandboxSnapshotStore.snapshots(
             sandboxID: sandboxID, on: db
         ).compactMap(\.id)
@@ -112,7 +112,7 @@ enum ResourceBindingCleanup {
 
     /// Volume counterpart: the volume node plus the snapshots that cascade away
     /// with it (STR-148). Same read-before-delete ordering requirement.
-    static func revokeBindings(forDeletedVolume volumeID: UUID, on db: any Database) async throws {
+    static func revokeBindings(forDeletedVolume volumeID: UUID, on db: PostgresStoreContext) async throws {
         let snapshotIDs = try await LegacyVolumeSnapshotStore.snapshots(
             volumeID: volumeID, on: db
         ).compactMap(\.id)
@@ -124,11 +124,11 @@ enum ResourceBindingCleanup {
     /// cascade away with it. Records hang off the zone, not the project, so
     /// this is the one project child collected through its own parent rather
     /// than through `project_id`.
-    static func revokeBindings(forDeletedDNSZone zoneID: UUID, on db: any Database) async throws {
+    static func revokeBindings(forDeletedDNSZone zoneID: UUID, on db: PostgresStoreContext) async throws {
         try await revokeBindings(forDeletedDNSZones: [zoneID], on: db)
     }
 
-    static func revokeBindings(forDeletedDNSZones zoneIDs: [UUID], on db: any Database) async throws {
+    static func revokeBindings(forDeletedDNSZones zoneIDs: [UUID], on db: PostgresStoreContext) async throws {
         guard !zoneIDs.isEmpty else { return }
         let recordIDs = try await LegacyDNSRecordStore.ids(zoneIDs: zoneIDs, on: db)
         try await RoleBindingService.revokeAll(nodeType: .dnsRecord, nodeIDs: recordIDs, on: db)
@@ -141,13 +141,13 @@ enum ResourceBindingCleanup {
     /// Same ordering requirement as the VM and sandbox helpers, and a stricter
     /// one: this reads the child rows the delete is about to remove, so it must
     /// run *before* `project.delete`, inside that transaction.
-    static func revokeBindings(forDeletedProject projectID: UUID, on db: any Database) async throws {
+    static func revokeBindings(forDeletedProject projectID: UUID, on db: PostgresStoreContext) async throws {
         try await revokeBindings(forDeletedProjects: [projectID], on: db)
     }
 
     /// The plural form, for the container deletes that cascade a whole set of
     /// projects at once.
-    static func revokeBindings(forDeletedProjects projectIDs: [UUID], on db: any Database) async throws {
+    static func revokeBindings(forDeletedProjects projectIDs: [UUID], on db: PostgresStoreContext) async throws {
         guard !projectIDs.isEmpty else { return }
 
         // A service account is both a node and a principal, so it needs both
@@ -222,7 +222,7 @@ enum ResourceBindingCleanup {
     /// locked `FOR UPDATE` (an FK child insert takes `FOR KEY SHARE` on it),
     /// which is a concurrency change worth making deliberately rather than as
     /// a side effect of this one.
-    static func revokeBindings(forDeletedFolder folder: OrganizationalUnit, on db: any Database) async throws {
+    static func revokeBindings(forDeletedFolder folder: OrganizationalUnit, on db: PostgresStoreContext) async throws {
         let folderID = try folder.requireID()
         let descendantIDs = try await folder.descendants(on: db).compactMap(\.id)
         let folderIDs = [folderID] + descendantIDs
@@ -242,7 +242,7 @@ enum ResourceBindingCleanup {
     /// than nodes — neither is a bindable node, but both cascade on
     /// `organization_id` and their grants elsewhere would outlive them, the
     /// cleanup each one's own delete endpoint does.
-    static func revokeBindings(forDeletedOrganization organizationID: UUID, on db: any Database) async throws {
+    static func revokeBindings(forDeletedOrganization organizationID: UUID, on db: PostgresStoreContext) async throws {
         let folderIDs = try await LegacyOrganizationalUnitStore.organizationalUnits(
             organizationIDs: [organizationID], on: db
         ).compactMap(\.id)

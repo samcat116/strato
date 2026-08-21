@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import StratoShared
 import Vapor
@@ -205,24 +205,24 @@ struct SandboxSnapshot: Content, Sendable {
         return id
     }
 
-    func persisted(on db: any Database) async throws -> Self {
+    func persisted(on db: PostgresStoreContext) async throws -> Self {
         try await LegacySandboxSnapshotStore.upsert(self, on: db)
     }
-    func persist(on db: any Database) async throws { _ = try await persisted(on: db) }
-    func save(on db: any Database) async throws { try await persist(on: db) }
-    func remove(on db: any Database) async throws {
+    func persist(on db: PostgresStoreContext) async throws { _ = try await persisted(on: db) }
+    func save(on db: PostgresStoreContext) async throws { try await persist(on: db) }
+    func remove(on db: PostgresStoreContext) async throws {
         guard let id else { return }
         _ = try await LegacySandboxSnapshotStore.delete(id: id, on: db)
     }
-    func delete(on db: any Database) async throws { try await remove(on: db) }
-    static func load(_ id: UUID?, on db: any Database) async throws -> Self? {
+    func delete(on db: PostgresStoreContext) async throws { try await remove(on: db) }
+    static func load(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await LegacySandboxSnapshotStore.snapshot(id: id, on: db)
     }
-    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+    static func find(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await load(id, on: db)
     }
 
-    static func all(on db: any Database) async throws -> [Self] {
+    static func all(on db: PostgresStoreContext) async throws -> [Self] {
         try await LegacySandboxSnapshotStore.snapshots(on: db)
     }
 
@@ -346,23 +346,23 @@ extension SandboxSnapshot: SnapshotArtifactResource {
         (projectID, environment)
     }
 
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [SandboxSnapshot] {
+    static func overdueForConvergence(at now: Date, on db: PostgresStoreContext) async throws -> [SandboxSnapshot] {
         try await LegacySandboxSnapshotStore.snapshots(overdueAt: now, on: db)
     }
 
-    static func placed(onAgent agentId: String, on db: any Database) async throws -> [SandboxSnapshot] {
+    static func placed(onAgent agentId: String, on db: PostgresStoreContext) async throws -> [SandboxSnapshot] {
         try await LegacySandboxSnapshotStore.snapshots(agentID: agentId, on: db)
     }
 
-    static func matching(ids: [UUID], on db: any Database) async throws -> [SandboxSnapshot] {
+    static func matching(ids: [UUID], on db: PostgresStoreContext) async throws -> [SandboxSnapshot] {
         try await LegacySandboxSnapshotStore.snapshots(ids: ids, on: db)
     }
 
-    static func expired(at now: Date, on db: any Database) async throws -> [SandboxSnapshot] {
+    static func expired(at now: Date, on db: PostgresStoreContext) async throws -> [SandboxSnapshot] {
         try await LegacySandboxSnapshotStore.snapshots(expiredAt: now, on: db)
     }
 
-    static func terminating(on db: any Database) async throws -> [SandboxSnapshot] {
+    static func terminating(on db: PostgresStoreContext) async throws -> [SandboxSnapshot] {
         try await LegacySandboxSnapshotStore.snapshots(terminating: true, on: db)
     }
 

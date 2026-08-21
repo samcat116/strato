@@ -1,7 +1,6 @@
+import ControlPlanePostgres
 import Testing
 import Vapor
-import Fluent
-import SQLKit
 import VaporTesting
 import StratoShared
 import AppTestSupport
@@ -24,9 +23,8 @@ final class VolumeStuckSweepTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "voluser",
                 email: "vol@example.com",
@@ -76,7 +74,7 @@ final class VolumeStuckSweepTests {
             vmID: vmID,
             deviceName: vmID == nil ? nil : "disk0"
         )
-        try await volume.save(on: app.db)
+        try await volume.save(on: app.testPostgres)
         return volume
     }
 
@@ -90,7 +88,7 @@ final class VolumeStuckSweepTests {
 
             await app.agentService.sweepStuckConvergence()
 
-            let swept = try await #require(try await Volume.find(volume.id, on: app.db))
+            let swept = try await #require(try await Volume.find(volume.id, on: app.testPostgres))
             #expect(swept.conditions.degraded != nil)
             #expect(swept.errorMessage?.isEmpty == false)
             // Claimed: the deadline is cleared, so a second pass finds nothing.
@@ -106,7 +104,7 @@ final class VolumeStuckSweepTests {
 
             await app.agentService.sweepStuckConvergence()
 
-            let swept = try await #require(try await Volume.find(volume.id, on: app.db))
+            let swept = try await #require(try await Volume.find(volume.id, on: app.testPostgres))
             #expect(swept.conditions.degraded == nil)
             #expect(swept.convergenceDeadline != nil)
         }
@@ -124,7 +122,7 @@ final class VolumeStuckSweepTests {
 
             await app.agentService.sweepStuckConvergence()
 
-            let swept = try await #require(try await Volume.find(volume.id, on: app.db))
+            let swept = try await #require(try await Volume.find(volume.id, on: app.testPostgres))
             #expect(swept.conditions.degraded == nil)
             #expect(swept.status == .available)
         }
@@ -142,7 +140,7 @@ final class VolumeStuckSweepTests {
 
             await app.agentService.sweepStuckConvergence()
 
-            let swept = try await #require(try await Volume.find(volume.id, on: app.db))
+            let swept = try await #require(try await Volume.find(volume.id, on: app.testPostgres))
             #expect(swept.conditions.degraded == nil)
             #expect(swept.convergenceDeadline == nil)
         }
@@ -158,11 +156,11 @@ final class VolumeStuckSweepTests {
                 deadlineOverdueBy: 60, status: .available, desired: .absent,
                 generation: 2, observedGeneration: 2, on: app, user: user, project: project
             ).replacing(finalizers: [ResourceFinalizer.agentAbsent.rawValue])
-            try await volume.save(on: app.db)
+            try await volume.save(on: app.testPostgres)
 
             await app.agentService.sweepStuckConvergence()
 
-            let swept = try await #require(try await Volume.find(volume.id, on: app.db))
+            let swept = try await #require(try await Volume.find(volume.id, on: app.testPostgres))
             #expect(swept.conditions.degraded != nil)
             #expect(!swept.conditions.converged)
             // The delete's intent survives: reverting it would resurrect a
@@ -184,11 +182,11 @@ final class VolumeStuckSweepTests {
                 on: app, user: user, project: project
             ).replacing(
                 errorMessage: "resize failed: no space left on device", failedGeneration: 3)
-            try await volume.save(on: app.db)
+            try await volume.save(on: app.testPostgres)
 
             await app.agentService.sweepStuckConvergence()
 
-            let swept = try await #require(try await Volume.find(volume.id, on: app.db))
+            let swept = try await #require(try await Volume.find(volume.id, on: app.testPostgres))
             // The agent's reason survives — not overwritten with "Timed out…".
             #expect(swept.errorMessage == "resize failed: no space left on device")
             #expect(swept.conditions.degraded?.sinceGeneration == 3)
@@ -208,14 +206,14 @@ final class VolumeStuckSweepTests {
                 generation: 2, observedGeneration: 2, on: app, user: user, project: project)
             let volumeID = try #require(volume.id)
 
-            let sql = try #require(app.db as? any SQLDatabase)
+            let sql = try #require(Optional(app.testPostgres))
             let past = Date().addingTimeInterval(-3600)
             try await sql.raw("UPDATE volumes SET updated_at = \(bind: past) WHERE id = \(bind: volumeID)")
                 .run()
 
             await app.agentService.sweepOrphanedTerminatingResources()
 
-            #expect(try await Volume.find(volumeID, on: app.db) == nil)
+            #expect(try await Volume.find(volumeID, on: app.testPostgres) == nil)
         }
     }
 
@@ -227,17 +225,17 @@ final class VolumeStuckSweepTests {
                 generation: 2, observedGeneration: 2, on: app, user: user, project: project
             ).replacing(finalizers: [ResourceFinalizer.agentAbsent.rawValue])
             let volumeID = try #require(volume.id)
-            try await volume.save(on: app.db)
-            try await placeVolume(volume, on: UUID().uuidString, using: app.db)
+            try await volume.save(on: app.testPostgres)
+            try await placeVolume(volume, on: UUID().uuidString, using: app.testPostgres)
 
-            let sql = try #require(app.db as? any SQLDatabase)
+            let sql = try #require(Optional(app.testPostgres))
             let past = Date().addingTimeInterval(-3600)
             try await sql.raw("UPDATE volumes SET updated_at = \(bind: past) WHERE id = \(bind: volumeID)")
                 .run()
 
             await app.agentService.sweepOrphanedTerminatingResources()
 
-            #expect(try await Volume.find(volumeID, on: app.db) != nil)
+            #expect(try await Volume.find(volumeID, on: app.testPostgres) != nil)
         }
     }
 }

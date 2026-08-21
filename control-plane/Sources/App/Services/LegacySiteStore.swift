@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 /// Fixed-shape SQL used only where a still-Fluent aggregate must inspect or
@@ -14,7 +13,7 @@ package enum LegacySiteStore {
         case equals(UUID)
     }
 
-    package static func site(id: UUID?, on db: any Database) async throws -> Site? {
+    package static func site(id: UUID?, on db: PostgresStoreContext) async throws -> Site? {
         guard let id else { return nil }
         let matches = try await sites(ids: [id], on: db)
         guard matches.count <= 1 else {
@@ -30,10 +29,10 @@ package enum LegacySiteStore {
         organizationID: UUID? = nil,
         organizationalUnitID: UUID? = nil,
         excludingID: UUID? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [Site] {
         if let ids, ids.isEmpty { return [] }
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT \(unsafeRaw: columns) FROM sites AS s WHERE TRUE"
         if let ids { query += " AND s.id = ANY(\(bind: ids))" }
         if let name { query += " AND s.name = \(bind: name)" }
@@ -52,10 +51,10 @@ package enum LegacySiteStore {
     package static func count(
         networkControllerAgentID: UUID,
         excludingID: UUID? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Int {
         struct Count: Decodable { let count: Int }
-        var query: SQLQueryString = """
+        var query: PostgresSQLQuery = """
             SELECT count(*)::bigint AS count
             FROM sites
             WHERE network_controller_agent_id = \(bind: networkControllerAgentID)
@@ -65,7 +64,7 @@ package enum LegacySiteStore {
     }
 
     @discardableResult
-    static func insert(_ site: Site, on db: any Database) async throws -> Site {
+    static func insert(_ site: Site, on db: PostgresStoreContext) async throws -> Site {
         let id = try site.requireID()
         let labels = String(
             data: try JSONEncoder().encode(site.labels),
@@ -99,9 +98,9 @@ package enum LegacySiteStore {
         siteID: UUID,
         agentID: UUID?,
         condition: NetworkControllerCondition = .any,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Site? {
-        var query: SQLQueryString = """
+        var query: PostgresSQLQuery = """
             UPDATE sites
             SET network_controller_agent_id = \(bind: agentID),
                 updated_at = CURRENT_TIMESTAMP
@@ -120,7 +119,7 @@ package enum LegacySiteStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM sites WHERE id = \(bind: id) RETURNING id"
@@ -211,8 +210,8 @@ package enum LegacySiteStore {
         updated_at AS "updatedAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Site compatibility access requires PostgreSQL")
         }
         return sql

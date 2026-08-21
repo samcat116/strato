@@ -108,6 +108,17 @@ public enum UserRegistrationResult: Equatable, Sendable {
     case identifierConflict
 }
 
+public enum SCIMUserWriteResult: Equatable, Sendable {
+    case saved(UserDirectorySnapshot)
+    case identifierConflict
+    case notMember
+}
+
+public enum OIDCJITProvisionResult: Equatable, Sendable {
+    case created(UserDirectorySnapshot)
+    case identifierConflict
+}
+
 /// Owns account directory state. Credential material, enrollment challenges,
 /// and security-event mutations remain in their dedicated identity modules.
 public struct UserDirectoryPersistence: Sendable {
@@ -190,6 +201,38 @@ public struct UserDirectoryPersistence: Sendable {
     public func save(_ write: UserDirectoryWrite) async throws -> UserDirectorySnapshot {
         try await database.withSession(operation: "users.directory.save") { session in
             try await save(write, session: session)
+        }
+    }
+
+    /// Creates the OIDC account, organization membership, and optional
+    /// organization role in one transaction. A failed grant cannot leave an
+    /// authenticatable account without its authorization state.
+    public func provisionOIDCUser(
+        _ write: UserDirectoryWrite,
+        organizationID: UUID,
+        roleID: UUID?
+    ) async throws -> OIDCJITProvisionResult {
+        try await database.withTransaction(operation: "users.directory.provision_oidc") { session in
+            guard try await conflictingUser(
+                username: write.username,
+                email: write.email,
+                excludingID: nil,
+                session: session) == nil
+            else { return .identifierConflict }
+
+            let user = try await save(write, session: session)
+            _ = try await session.execute(
+                InsertOIDCOrganizationMembership(
+                    id: UUID(), userID: user.id, organizationID: organizationID, roleID: roleID),
+                operation: "users.directory.provision_oidc.membership")
+            if let roleID {
+                _ = try await session.execute(
+                    InsertOIDCOrganizationBinding(
+                        id: UUID(), userID: user.id, roleID: roleID,
+                        organizationID: organizationID),
+                    operation: "users.directory.provision_oidc.binding")
+            }
+            return .created(user)
         }
     }
 
@@ -279,6 +322,100 @@ public struct UserDirectoryPersistence: Sendable {
                     operation: "users.directory.organization_members.query"
                 )
             )
+        }
+    }
+
+    public func scimUsers(organizationID: UUID) async throws -> [UserDirectorySnapshot] {
+        try await database.withSession(operation: "users.scim.list") { session in
+            try await session.execute(
+                ListOrganizationDirectoryUsers(organizationID: organizationID),
+                operation: "users.scim.list.query")
+        }
+    }
+
+    public func scimUser(id: UUID, organizationID: UUID) async throws -> UserDirectorySnapshot? {
+        try await database.withSession(operation: "users.scim.lookup") { session in
+            try oneOrNone(await session.execute(
+                FindOrganizationDirectoryUser(id: id, organizationID: organizationID),
+                operation: "users.scim.lookup.query"))
+        }
+    }
+
+    public func createSCIMUser(
+        _ write: UserDirectoryWrite,
+        organizationID: UUID
+    ) async throws -> SCIMUserWriteResult {
+        do {
+            return try await database.withTransaction(operation: "users.scim.create") { session in
+                guard try await conflictingUser(
+                    username: write.username,
+                    email: write.email,
+                    excludingID: nil,
+                    session: session) == nil
+                else { return .identifierConflict }
+                let user = try await save(write, session: session)
+                _ = try only(await session.execute(
+                    InsertSCIMOrganizationMembership(
+                        id: UUID(), userID: user.id, organizationID: organizationID),
+                    operation: "users.scim.create.membership"))
+                return .saved(user)
+            }
+        } catch let error as PSQLError where error.serverInfo?[.sqlState] == "23505" {
+            return .identifierConflict
+        }
+    }
+
+    public func updateSCIMUser(
+        _ write: UserDirectoryWrite,
+        organizationID: UUID
+    ) async throws -> SCIMUserWriteResult {
+        do {
+            return try await database.withTransaction(operation: "users.scim.update") { session in
+                let membership = try await session.execute(
+                    LockSCIMOrganizationMembership(
+                        userID: write.id, organizationID: organizationID),
+                    operation: "users.scim.update.membership")
+                guard membership.count == 1 else { return .notMember }
+                guard try await conflictingUser(
+                    username: write.username,
+                    email: write.email,
+                    excludingID: write.id,
+                    session: session) == nil
+                else { return .identifierConflict }
+                return .saved(try await save(write, session: session))
+            }
+        } catch let error as PSQLError where error.serverInfo?[.sqlState] == "23505" {
+            return .identifierConflict
+        }
+    }
+
+    /// Applies the IdP offboarding signal and removes only access rooted in
+    /// this organization. The security-state mutation, membership removal,
+    /// group cleanup, and grant cleanup share one pinned transaction.
+    public func offboardSCIMUser(
+        id: UUID,
+        organizationID: UUID,
+        disabledAt: Date = Date()
+    ) async throws -> UserDirectorySnapshot? {
+        try await database.withTransaction(operation: "users.scim.offboard") { session in
+            let memberships = try await session.execute(
+                LockSCIMOrganizationMembership(userID: id, organizationID: organizationID),
+                operation: "users.scim.offboard.membership")
+            guard memberships.count == 1 else { return nil }
+            let user = try oneOrNone(await session.execute(
+                DisableSCIMDirectoryUser(id: id, disabledAt: disabledAt),
+                operation: "users.scim.offboard.user"))
+            guard let user else { return nil }
+            _ = try await session.execute(
+                DeleteSCIMOrganizationMembership(userID: id, organizationID: organizationID),
+                operation: "users.scim.offboard.organization_membership")
+            _ = try await session.execute(
+                DeleteSCIMGroupMemberships(userID: id, organizationID: organizationID),
+                operation: "users.scim.offboard.group_memberships")
+            _ = try await session.execute(
+                DeleteSCIMOrganizationRoleBindings(userID: id, organizationID: organizationID),
+                operation: "users.scim.offboard.role_bindings")
+            return user
         }
     }
 
@@ -436,6 +573,210 @@ private struct FindDirectoryUser: DirectoryUserStatement {
     }
 }
 
+private struct FindOrganizationDirectoryUser: DirectoryUserStatement {
+    static var sql: String {
+        """
+        SELECT \(directoryUserColumns)
+        FROM users AS u
+        JOIN user_organizations AS membership ON membership.user_id = u.id
+        WHERE u.id = $1 AND membership.organization_id = $2
+        """
+    }
+    let id: UUID
+    let organizationID: UUID
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 2)
+        bindings.append(id)
+        bindings.append(organizationID)
+        return bindings
+    }
+}
+
+private struct ListOrganizationDirectoryUsers: DirectoryUserStatement {
+    static var sql: String {
+        """
+        SELECT \(directoryUserColumns)
+        FROM users AS u
+        JOIN user_organizations AS membership ON membership.user_id = u.id
+        WHERE membership.organization_id = $1
+        ORDER BY u.username, u.id
+        """
+    }
+    let organizationID: UUID
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 1)
+        bindings.append(organizationID)
+        return bindings
+    }
+}
+
+private struct InsertSCIMOrganizationMembership: PostgresPreparedStatement {
+    static let sql = """
+        INSERT INTO user_organizations (id, user_id, organization_id, created_at)
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+        RETURNING id
+        """
+    typealias Row = UUID
+    let id: UUID
+    let userID: UUID
+    let organizationID: UUID
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 3)
+        bindings.append(id)
+        bindings.append(userID)
+        bindings.append(organizationID)
+        return bindings
+    }
+    func decodeRow(_ row: PostgresRow) throws -> UUID {
+        try row.makeRandomAccess()["id"].decode(UUID.self)
+    }
+}
+
+private struct LockSCIMOrganizationMembership: PostgresPreparedStatement {
+    static let sql = """
+        SELECT id FROM user_organizations
+        WHERE user_id = $1 AND organization_id = $2
+        FOR UPDATE
+        """
+    typealias Row = UUID
+    let userID: UUID
+    let organizationID: UUID
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 2)
+        bindings.append(userID)
+        bindings.append(organizationID)
+        return bindings
+    }
+    func decodeRow(_ row: PostgresRow) throws -> UUID {
+        try row.makeRandomAccess()["id"].decode(UUID.self)
+    }
+}
+
+private struct DisableSCIMDirectoryUser: DirectoryUserStatement {
+    static var sql: String {
+        """
+        WITH updated AS (
+            UPDATE users
+            SET scim_active = FALSE,
+                disabled_at = COALESCE(disabled_at, $2),
+                session_epoch = session_epoch + 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+            RETURNING *
+        )
+        SELECT \(directoryUserColumns) FROM updated AS u
+        """
+    }
+    let id: UUID
+    let disabledAt: Date
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 2)
+        bindings.append(id)
+        bindings.append(disabledAt)
+        return bindings
+    }
+}
+
+private struct DeleteSCIMOrganizationMembership: PostgresPreparedStatement {
+    static let sql = """
+        DELETE FROM user_organizations
+        WHERE user_id = $1 AND organization_id = $2
+        RETURNING id
+        """
+    typealias Row = UUID
+    let userID: UUID
+    let organizationID: UUID
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 2)
+        bindings.append(userID)
+        bindings.append(organizationID)
+        return bindings
+    }
+    func decodeRow(_ row: PostgresRow) throws -> UUID {
+        try row.makeRandomAccess()["id"].decode(UUID.self)
+    }
+}
+
+private struct DeleteSCIMGroupMemberships: PostgresPreparedStatement {
+    static let sql = """
+        DELETE FROM user_groups
+        WHERE user_id = $1
+          AND group_id IN (SELECT id FROM groups WHERE organization_id = $2)
+        RETURNING id
+        """
+    typealias Row = UUID
+    let userID: UUID
+    let organizationID: UUID
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 2)
+        bindings.append(userID)
+        bindings.append(organizationID)
+        return bindings
+    }
+    func decodeRow(_ row: PostgresRow) throws -> UUID {
+        try row.makeRandomAccess()["id"].decode(UUID.self)
+    }
+}
+
+private struct DeleteSCIMOrganizationRoleBindings: PostgresPreparedStatement {
+    static let sql = """
+        WITH RECURSIVE edges(node_type, node_id, parent_type, parent_id) AS (
+            SELECT 'organizational_unit', id,
+                   CASE WHEN parent_ou_id IS NULL THEN 'organization' ELSE 'organizational_unit' END,
+                   COALESCE(parent_ou_id, organization_id) FROM organizational_units
+            UNION ALL SELECT 'project', id,
+                   CASE WHEN organizational_unit_id IS NOT NULL THEN 'organizational_unit' ELSE 'organization' END,
+                   COALESCE(organizational_unit_id, organization_id) FROM projects
+            UNION ALL SELECT 'virtual_machine', id, 'project', project_id FROM vms
+            UNION ALL SELECT 'sandbox', id, 'project', project_id FROM sandboxes
+            UNION ALL SELECT 'image', id, 'project', project_id FROM images
+            UNION ALL SELECT 'network', id, 'project', project_id FROM logical_networks
+            UNION ALL SELECT 'floating_ip', id, 'project', project_id FROM floating_ips
+            UNION ALL SELECT 'load_balancer', id, 'project', project_id FROM load_balancers
+            UNION ALL SELECT 'security_group', id, 'project', project_id FROM security_groups
+            UNION ALL SELECT 'dns_zone', id, 'project', project_id FROM dns_zones
+            UNION ALL SELECT 'dns_record', id, 'dns_zone', zone_id FROM dns_records
+            UNION ALL SELECT 'volume', id, 'project', project_id FROM volumes
+            UNION ALL SELECT 'volume_snapshot', id, 'project', project_id FROM volume_snapshots
+            UNION ALL SELECT 'sandbox_snapshot', id, 'project', project_id FROM sandbox_snapshots
+            UNION ALL SELECT 'vm_snapshot', id, 'project', project_id FROM vm_snapshots
+            UNION ALL SELECT 'site', id,
+                   CASE WHEN organizational_unit_id IS NOT NULL THEN 'organizational_unit' ELSE 'organization' END,
+                   COALESCE(organizational_unit_id, organization_id) FROM sites
+            UNION ALL SELECT 'agent', id,
+                   CASE WHEN organizational_unit_id IS NOT NULL THEN 'organizational_unit' ELSE 'organization' END,
+                   COALESCE(organizational_unit_id, organization_id) FROM agents
+            UNION ALL SELECT 'service_account', id, 'project', project_id FROM service_accounts
+        ), walk(binding_id, node_type, node_id) AS (
+            SELECT id, node_type, node_id
+            FROM role_bindings
+            WHERE principal_type = 'user' AND principal_id = $1
+            UNION ALL
+            SELECT walk.binding_id, edges.parent_type, edges.parent_id
+            FROM walk
+            JOIN edges ON edges.node_type = walk.node_type AND edges.node_id = walk.node_id
+        )
+        DELETE FROM role_bindings
+        WHERE id IN (
+            SELECT binding_id FROM walk
+            WHERE node_type = 'organization' AND node_id = $2
+        )
+        RETURNING id
+        """
+    typealias Row = UUID
+    let userID: UUID
+    let organizationID: UUID
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 2)
+        bindings.append(userID)
+        bindings.append(organizationID)
+        return bindings
+    }
+    func decodeRow(_ row: PostgresRow) throws -> UUID {
+        try row.makeRandomAccess()["id"].decode(UUID.self)
+    }
+}
+
 private struct FindDirectoryUserByEmail: DirectoryUserStatement {
     static let sql = "SELECT \(directoryUserColumns) FROM users AS u WHERE u.email = $1"
     let email: String
@@ -525,6 +866,52 @@ private struct DeleteDirectoryUser: PostgresPreparedStatement {
     func makeBindings() -> PostgresBindings {
         var bindings = PostgresBindings(capacity: 1)
         bindings.append(id)
+        return bindings
+    }
+    func decodeRow(_ row: PostgresRow) throws -> UUID { try row.decode(UUID.self) }
+}
+
+private struct InsertOIDCOrganizationMembership: PostgresPreparedStatement {
+    static let sql = """
+        INSERT INTO user_organizations (id, user_id, organization_id, role_id, created_at)
+        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+        RETURNING id
+        """
+    typealias Row = UUID
+    let id: UUID
+    let userID: UUID
+    let organizationID: UUID
+    let roleID: UUID?
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 4)
+        bindings.append(id)
+        bindings.append(userID)
+        bindings.append(organizationID)
+        bindings.append(roleID)
+        return bindings
+    }
+    func decodeRow(_ row: PostgresRow) throws -> UUID { try row.decode(UUID.self) }
+}
+
+private struct InsertOIDCOrganizationBinding: PostgresPreparedStatement {
+    static let sql = """
+        INSERT INTO role_bindings (
+            id, principal_type, principal_id, role_id, node_type, node_id,
+            condition, expires_at, created_by, created_at
+        ) VALUES ($1, 'user', $2, $3, 'organization', $4, NULL, NULL, NULL, CURRENT_TIMESTAMP)
+        RETURNING id
+        """
+    typealias Row = UUID
+    let id: UUID
+    let userID: UUID
+    let roleID: UUID
+    let organizationID: UUID
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 4)
+        bindings.append(id)
+        bindings.append(userID)
+        bindings.append(roleID)
+        bindings.append(organizationID)
         return bindings
     }
     func decodeRow(_ row: PostgresRow) throws -> UUID { try row.decode(UUID.self) }

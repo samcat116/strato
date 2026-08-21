@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import StratoShared
 import Vapor
@@ -13,10 +12,12 @@ import Vapor
 /// (issue #363). Lives outside `OIDCController` so tests can drive it without
 /// a fake IdP.
 struct OIDCIdentityService {
-    let db: Database
     let providers: OIDCProvidersPersistence
     let groups: GroupsPersistence
     let externalIDs: SCIMExternalIDsPersistence
+    let users: UserDirectoryPersistence
+    let hierarchy: HierarchyPersistence
+    let iam: IAMPersistence
     let logger: Logger
 
     // MARK: - Claim extraction
@@ -60,16 +61,17 @@ struct OIDCIdentityService {
     func resolveUser(
         userInfo: OIDCUserInfo,
         provider: OIDCProviderSnapshot,
-        organization: Organization,
+        organization: OrganizationSnapshot,
         groupValues: [String]
     ) async throws -> User {
-        guard let organizationID = organization.id else {
-            throw Abort(.internalServerError, reason: "Provider and organization IDs are required")
-        }
+        let organizationID = organization.id
         let providerID = provider.id
 
-        if let existingUser = try await User.findOIDCUser(subject: userInfo.subject, providerID: providerID, on: db) {
-            return existingUser
+        if let existingUser = try await users.users(
+            filter: UserDirectoryFilter(
+                oidcProviderID: providerID, oidcSubject: userInfo.subject)).first
+        {
+            return User(snapshot: existingUser)
         }
 
         // A SCIM-provisioned user whose externalId matches the OIDC subject is
@@ -85,13 +87,14 @@ struct OIDCIdentityService {
                 externalID: userInfo.subject,
                 resourceType: .user,
                 organizationID: organizationID
-            ), let scimUser = try await User.find(internalID, on: db)
+            ), let scimSnapshot = try await users.user(id: internalID)
         {
+            let scimUser = User(snapshot: scimSnapshot)
             var linkedUser = scimUser.linkedToOIDCProvider(providerID, subject: userInfo.subject)
             if linkedUser.currentOrganizationId == nil {
                 linkedUser = linkedUser.replacingCurrentOrganization(organizationID)
             }
-            linkedUser = try await linkedUser.persisted(on: db)
+            linkedUser = User(snapshot: try await users.save(linkedUser.directoryWrite))
             logger.info(
                 "Linked OIDC login to SCIM-provisioned user",
                 metadata: [
@@ -106,19 +109,16 @@ struct OIDCIdentityService {
         // would let a user who can set an arbitrary `email` claim take over a
         // victim's existing account by matching their address.
         if let email = userInfo.email, userInfo.emailVerified {
-            let usersWithEmail = try await LegacyUserStore.users(email: email, on: db)
-
-            for user in usersWithEmail {
-                if let userID = user.id,
-                    try await OrganizationMembershipStore.membership(
-                        userID: userID, organizationID: organizationID, on: db) != nil
-                {
-                    var linkedUser = user.linkedToOIDCProvider(providerID, subject: userInfo.subject)
+            if let snapshot = try await users.user(email: email),
+                try await hierarchy.membership(
+                    userID: snapshot.id, organizationID: organizationID) != nil
+            {
+                    var linkedUser = User(snapshot: snapshot)
+                        .linkedToOIDCProvider(providerID, subject: userInfo.subject)
                     if linkedUser.currentOrganizationId == nil {
                         linkedUser = linkedUser.replacingCurrentOrganization(organizationID)
                     }
-                    return try await linkedUser.persisted(on: db)
-                }
+                    return User(snapshot: try await users.save(linkedUser.directoryWrite))
             }
         }
 
@@ -139,7 +139,7 @@ struct OIDCIdentityService {
         // unique, so JIT-provisioning would fail the constraint; deny with a clear
         // reason instead of surfacing a 500, and never auto-adopt the address.
         if !email.isEmpty {
-            let emailTaken = try await LegacyUserStore.users(email: email, on: db).first != nil
+            let emailTaken = try await users.user(email: email) != nil
             if emailTaken {
                 logger.warning(
                     "Refusing to JIT-provision an OIDC user whose email is already in use",
@@ -155,8 +155,7 @@ struct OIDCIdentityService {
             }
         }
 
-        return try await db.transaction { transaction in
-            let user = User(
+        let user = User(
                 username: username,
                 email: email,
                 displayName: displayName,
@@ -166,46 +165,17 @@ struct OIDCIdentityService {
                 oidcProviderID: providerID,
                 oidcSubject: userInfo.subject
             )
-            // Authorization on product routes needs a current org (middleware
-            // rejects requests without one), so seed it at provisioning time.
-            let persistedUser = try await user.persisted(on: transaction)
-
-            guard let userID = persistedUser.id else {
-                throw Abort(.internalServerError, reason: "User ID is required")
-            }
-
-            _ = try await OrganizationMembershipStore.insert(
-                userID: userID,
-                organizationID: organizationID,
-                roleID: resolvedRole?.id,
-                on: transaction
-            )
-
-            // The claim-driven role gets its binding on the org node, in the
-            // same transaction as the membership row — without it the new user
-            // authenticates but fails every permission check. Bare membership
-            // maps to no binding.
-            //
-            // Deliberately not gated by the write-time ceiling check (#484),
-            // unlike the administrative grant APIs: this runs during sign-in,
-            // and failing closed here would make an SMT solver a hard
-            // dependency of authentication. Guardrails still apply to every
-            // request this user makes, so a ceiling is enforced either way —
-            // what is given up is only the explanation at write time, for a
-            // grant no human is watching anyway.
-            if let resolvedRole {
-                try await RoleBindingService.grant(
-                    principalType: .user,
-                    principalID: userID,
-                    roleID: resolvedRole.id,
-                    nodeType: .organization,
-                    nodeID: organizationID,
-                    createdBy: nil,
-                    on: transaction
-                )
-            }
-
-            return persistedUser
+        switch try await users.provisionOIDCUser(
+            user.directoryWrite,
+            organizationID: organizationID,
+            roleID: resolvedRole?.id)
+        {
+        case .created(let snapshot):
+            return User(snapshot: snapshot)
+        case .identifierConflict:
+            throw Abort(
+                .conflict,
+                reason: "The OIDC account identifiers are already in use. Contact an administrator.")
         }
     }
 
@@ -245,8 +215,8 @@ struct OIDCIdentityService {
         // project permissions through group role bindings) to a non-member
         // would undo the removal — claims only ever map onto current org
         // members.
-        let membership = try await OrganizationMembershipStore.membership(
-            userID: userID, organizationID: organizationID, on: db)
+        let membership = try await hierarchy.membership(
+            userID: userID, organizationID: organizationID)
         guard membership != nil else {
             logger.warning(
                 "OIDC login for a user without org membership; skipping group claim sync",
@@ -309,63 +279,34 @@ struct OIDCIdentityService {
         guard mapsOrganizationRole(provider), let userID = user.id else { return }
 
         guard
-            try await OrganizationMembershipStore.membership(
-                userID: userID, organizationID: organizationID, on: db) != nil
+            try await hierarchy.membership(
+                userID: userID, organizationID: organizationID) != nil
         else {
             return
         }
 
         let resolved = await resolveDesiredOrgRole(
             provider: provider, organizationID: organizationID, groupValues: groupValues)
-        let node = IAMNode(type: .organization, id: organizationID)
-        try await RoleBindingService.withMembershipNodeLocked(node, on: db) { transaction in
-            guard
-                let membership = try await OrganizationMembershipStore.membership(
-                    userID: userID, organizationID: organizationID, on: transaction)
-            else {
-                return
-            }
-
-            let currentBindings = try await RoleBindingService.activeBindings(
-                principalType: .user, principalID: userID,
-                nodeType: .organization, nodeID: organizationID, on: transaction)
-            let desiredBindingMatches =
-                if let roleID = resolved?.id {
-                    currentBindings.count == 1 && currentBindings[0].roleID == roleID
-                } else {
-                    currentBindings.isEmpty
-                }
-            guard membership.roleID != resolved?.id || !desiredBindingMatches else { return }
-
-            let heldAdminBinding = currentBindings.contains { $0.roleID == IAMRole.admin.seededID }
-            if heldAdminBinding {
-                // Only admins who can actually sign in count: an admin disabled
-                // by SSF or deactivated via SCIM keeps their membership row but
-                // is blocked at login, so demoting the last *usable* admin would
-                // still lock the org out. The org-row lock serializes this with
-                // every other membership demotion and removal.
-                let otherAdmins = try await LegacyRoleBindingStore
-                    .countOtherUsableOrganizationAdmins(
-                        excluding: userID,
-                        organizationID: organizationID,
-                        adminRoleID: IAMRole.admin.seededID,
-                        on: transaction)
-                if otherAdmins == 0 {
-                    logger.warning(
-                        "OIDC role mapping would demote the organization's last admin; skipping",
-                        metadata: [
-                            "user_id": .string(userID.uuidString),
-                            "organization_id": .string(organizationID.uuidString),
-                        ])
-                    return
-                }
-            }
-
-            _ = try await OrganizationMembershipStore.updateRole(
-                id: membership.id, roleID: resolved?.id, on: transaction)
-            try await RoleBindingService.setExclusiveGrant(
-                principalType: .user, principalID: userID, roleID: resolved?.id,
-                node: node, createdBy: nil, on: transaction)
+        switch try await hierarchy.updateMemberRole(
+            userID: userID,
+            organizationID: organizationID,
+            roleID: resolved?.id,
+            administratorRoleID: IAMRole.admin.seededID,
+            createdBy: nil)
+        {
+        case .applied:
+            break
+        case .lastAdministrator:
+            logger.warning(
+                "OIDC role mapping would demote the organization's last admin; skipping",
+                metadata: [
+                    "user_id": .string(userID.uuidString),
+                    "organization_id": .string(organizationID.uuidString),
+                ])
+        case .membershipNotFound, .organizationNotFound:
+            return
+        case .alreadyMember, .principalAlreadyBound:
+            throw Abort(.internalServerError, reason: "Unexpected OIDC membership state")
         }
     }
 
@@ -411,7 +352,7 @@ struct OIDCIdentityService {
             return try await MemberRoleResolver.resolve(
                 requestedRoleID,
                 scopeNode: IAMNode(type: .organization, id: organizationID),
-                on: db)
+                using: iam)
         } catch {
             logger.warning(
                 "OIDC role mapping did not resolve; falling back to the provider default role",
@@ -425,11 +366,29 @@ struct OIDCIdentityService {
                 let fallback = try? await MemberRoleResolver.resolve(
                     fallbackID,
                     scopeNode: IAMNode(type: .organization, id: organizationID),
-                    on: db)
+                    using: iam)
             {
                 return fallback
             }
             return nil
         }
     }
+
+#if DEBUG
+    package func resolveUser(
+        userInfo: OIDCUserInfo,
+        provider: OIDCProviderSnapshot,
+        organization: Organization,
+        groupValues: [String]
+    ) async throws -> User {
+        guard let organizationID = organization.id,
+            let snapshot = try await hierarchy.organization(id: organizationID)
+        else {
+            throw Abort(.notFound, reason: "Organization not found")
+        }
+        return try await resolveUser(
+            userInfo: userInfo, provider: provider,
+            organization: snapshot, groupValues: groupValues)
+    }
+#endif
 }

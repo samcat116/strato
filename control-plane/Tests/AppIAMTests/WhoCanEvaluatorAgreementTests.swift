@@ -1,4 +1,3 @@
-import Fluent
 import ControlPlanePostgres
 import Foundation
 import Testing
@@ -24,7 +23,6 @@ final class WhoCanEvaluatorAgreementTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -54,8 +52,8 @@ final class WhoCanEvaluatorAgreementTests {
     /// Recompile the policy set against the current database (store writes in
     /// these tests do not bump the version, so drive the rebuild directly).
     private func rebuild(_ app: Application) async throws {
-        let version = try await PolicySetVersionService.current(on: app.db)
-        await app.cedarPolicySet.rebuild(version: version, on: app.db)
+        let version = try await PolicySetVersionService.current(on: app.testPostgres)
+        await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
     }
 
     private func authorizerAllows(
@@ -64,7 +62,7 @@ final class WhoCanEvaluatorAgreementTests {
         let decision = try await IAMAuthorizer.authorize(
             principal: principal, action: action, node: node,
             context: IAMCheckContext(path: "/test", method: "GET", requestID: nil),
-            state: .detached, app: app, db: app.db)
+            state: .detached, app: app, db: app.testPostgres)
         return decision.allowed
     }
 
@@ -86,16 +84,16 @@ final class WhoCanEvaluatorAgreementTests {
                 """
             let prepared = try await PolicyStore.prepare(
                 id: id, cedarText: text, ownerType: .project, ownerID: tree.project.id!,
-                engine: app.cedarEngine, on: app.db)
+                engine: app.cedarEngine, on: app.testPostgres)
             _ = try await PolicyStore.create(
                 id: id, name: "permit-delete", description: nil, ownerType: .project,
                 ownerID: tree.project.id!, prepared: prepared, createdBy: nil, enabled: true,
-                on: app.db)
+                on: app.testPostgres)
             try await rebuild(app)
 
             let can = try await WhoCanService.can(
                 principalType: .user, principalID: user.id!, action: "vm:delete",
-                node: tree.vmNode, app: app, on: app.db)
+                node: tree.vmNode, app: app, on: app.testPostgres)
             #expect(can)
             let enforced = try await authorizerAllows(
                 app, principal: .user(user.id!), action: "vm:delete", node: tree.vmNode)
@@ -104,7 +102,7 @@ final class WhoCanEvaluatorAgreementTests {
             // The reverse lookup still cannot *enumerate* the permit's
             // principals — the caveat is how it stays honest about that.
             let result = try await WhoCanService.whoCan(
-                action: "vm:delete", node: tree.vmNode, app: app, on: app.db)
+                action: "vm:delete", node: tree.vmNode, app: app, on: app.testPostgres)
             #expect(result.authoredPolicyCaveat)
             #expect(!result.principals.contains { $0.principal.id == user.id })
         }
@@ -119,11 +117,11 @@ final class WhoCanEvaluatorAgreementTests {
                 username: "cond-agree", email: "cond-agree@example.com")
             try await insertConditionedRoleBinding(
                 principalType: .user, principalID: user.id!, role: .editor,
-                nodeType: .project, nodeID: tree.project.id!, condition: "mfa", on: app.db)
+                nodeType: .project, nodeID: tree.project.id!, condition: "mfa", on: app.testPostgres)
 
             let can = try await WhoCanService.can(
                 principalType: .user, principalID: user.id!, action: "vm:start",
-                node: tree.vmNode, app: app, on: app.db)
+                node: tree.vmNode, app: app, on: app.testPostgres)
             let enforced = try await authorizerAllows(
                 app, principal: .user(user.id!), action: "vm:start", node: tree.vmNode)
             #expect(!enforced, "the slice skips conditioned bindings (under-grant)")
@@ -133,7 +131,7 @@ final class WhoCanEvaluatorAgreementTests {
             // row an admin may want to revoke — and does not mark it ceilinged
             // (nothing forbids it; the grant just is not unconditional).
             let result = try await WhoCanService.whoCan(
-                action: "vm:start", node: tree.vmNode, app: app, on: app.db)
+                action: "vm:start", node: tree.vmNode, app: app, on: app.testPostgres)
             let entry = result.principals.first { $0.principal.id == user.id }
             #expect(entry != nil)
             #expect(entry?.ceilinged == false)
@@ -146,7 +144,7 @@ final class WhoCanEvaluatorAgreementTests {
             let tree = try await buildTree(app, prefix: "MachineNet")
             let account = try await LegacyServiceAccountStore.insert(
                 ServiceAccountWrite(name: "net-reader", projectID: tree.project.id!),
-                on: app.db)
+                on: app.testPostgres)
             let network = try await TestDataBuilder(app: app).createNetwork(
                 name: "agree-net", project: tree.project, subnet: "10.95.0.0/24", gateway: "10.95.0.1")
             let node = IAMNode(type: .network, id: network.id!)
@@ -156,7 +154,7 @@ final class WhoCanEvaluatorAgreementTests {
             // reading one now takes a grant like any other project resource.
             let can = try await WhoCanService.can(
                 principalType: .serviceAccount, principalID: account.id, action: "network:read",
-                node: node, app: app, on: app.db)
+                node: node, app: app, on: app.testPostgres)
             let enforced = try await authorizerAllows(
                 app, principal: .serviceAccount(account.id), action: "network:read", node: node)
             #expect(!enforced)
@@ -177,17 +175,17 @@ final class WhoCanEvaluatorAgreementTests {
             for type in [IAMPrincipalType.user, .serviceAccount, .workload] {
                 let can = try await WhoCanService.can(
                     principalType: type, principalID: UUID(), action: "network:read",
-                    node: node, app: app, on: app.db)
+                    node: node, app: app, on: app.testPostgres)
                 #expect(!can, "unknown \(type.rawValue) must answer false")
             }
 
             // A disabled user cannot act on anything it still holds.
             let disabled = try await builder.createUser(
                 username: "agree-disabled", email: "agree-disabled@example.com")
-            try await disabled.replacing(disabledAt: .some(Date())).save(on: app.db)
+            try await disabled.replacing(disabledAt: .some(Date())).save(on: app.testPostgres)
             let can = try await WhoCanService.can(
                 principalType: .user, principalID: disabled.id!, action: "network:read",
-                node: node, app: app, on: app.db)
+                node: node, app: app, on: app.testPostgres)
             #expect(!can)
         }
     }
@@ -207,13 +205,13 @@ final class WhoCanEvaluatorAgreementTests {
             // request-validation 500 out of the who-can ceiling pass.
             let can = try await WhoCanService.can(
                 principalType: .user, principalID: member.id!, action: "org:read",
-                node: tree.vmNode, app: app, on: app.db)
+                node: tree.vmNode, app: app, on: app.testPostgres)
             #expect(!can)
 
             // The reverse lookup still enumerates membership along the chain
             // without erroring, and marks nothing ceilinged (nothing forbids).
             let result = try await WhoCanService.whoCan(
-                action: "org:read", node: tree.vmNode, app: app, on: app.db)
+                action: "org:read", node: tree.vmNode, app: app, on: app.testPostgres)
             let entry = result.principals.first {
                 $0.principal.id == member.id && $0.source == .orgMembership
             }
@@ -231,26 +229,26 @@ final class WhoCanEvaluatorAgreementTests {
                 name: "group-path", description: "d", organization: tree.org)
             try await RoleBindingService.grant(
                 principalType: .group, principalID: group.id!, role: .editor,
-                nodeType: .organization, nodeID: tree.org.id!, createdBy: nil, on: app.db)
+                nodeType: .organization, nodeID: tree.org.id!, createdBy: nil, on: app.testPostgres)
 
             let canStart = try await WhoCanService.can(
                 principalType: .group, principalID: group.id!, action: "vm:start",
-                node: tree.vmNode, app: app, on: app.db)
+                node: tree.vmNode, app: app, on: app.testPostgres)
             #expect(canStart)
             let canSetPolicy = try await WhoCanService.can(
                 principalType: .group, principalID: group.id!, action: "iam:setPolicy",
-                node: tree.vmNode, app: app, on: app.db)
+                node: tree.vmNode, app: app, on: app.testPostgres)
             #expect(!canSetPolicy, "editor does not grant iam:setPolicy")
 
             _ = try await GuardrailStore.create(
                 name: "group-no-start", description: nil, effect: nil, node: tree.orgNode,
                 actions: ["vm:start"], principalMatch: .group(group.id!), resourceMatch: .any,
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
             try await rebuild(app)
 
             let ceilinged = try await WhoCanService.can(
                 principalType: .group, principalID: group.id!, action: "vm:start",
-                node: tree.vmNode, app: app, on: app.db)
+                node: tree.vmNode, app: app, on: app.testPostgres)
             #expect(!ceilinged)
         }
     }

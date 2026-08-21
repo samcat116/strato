@@ -1,5 +1,5 @@
+import ControlPlanePostgres
 import Foundation
-import Fluent
 import Vapor
 
 /// The trust domain the control plane's own identities live in. Every org trust
@@ -39,12 +39,13 @@ public protocol OrgTrustDomainSource: Sendable {
 /// feature flag is off, which is what keeps the multi-trust-domain paths
 /// dormant even if rows somehow exist.
 struct DatabaseOrgTrustDomainSource: OrgTrustDomainSource {
-    let app: Application
+    let enabled: Bool
+    let trustDomains: OrgTrustDomainsPersistence
 
     public func loadOrgTrustDomains() async throws -> [OrgTrustDomainSnapshot] {
-        guard app.controlPlaneConfiguration.bool(.spireOrgTrustDomainsEnabled) == true else { return [] }
+        guard enabled else { return [] }
 
-        let rows = try await OrgTrustDomainStore.active(on: app.db)
+        let rows = try await trustDomains.activeTrustDomains()
 
         // `acceptsIdentities` also demands a cached bundle: a domain we hold no
         // roots for cannot be verified against, and accepting its SVIDs on the

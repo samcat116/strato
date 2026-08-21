@@ -3,10 +3,8 @@ import Foundation
 import Vapor
 import StratoShared
 import NIOWebSocket
-import Fluent
 import NIOCore
 import NIOConcurrencyHelpers
-import SQLKit
 import Tracing
 import Metrics
 
@@ -20,7 +18,7 @@ final class WebSocketManager: @unchecked Sendable {
     private struct Connection {
         let websocket: WebSocket
         let frameProcessor: AgentWebSocketFrameProcessor
-        /// Database UUID of the agent, learned at registration (the socket is
+        /// PostgresStoreContext UUID of the agent, learned at registration (the socket is
         /// accepted before the register message arrives, so it starts nil).
         var agentId: String?
     }
@@ -108,6 +106,7 @@ final class WebSocketManager: @unchecked Sendable {
 
 actor AgentService {
     private let app: Application
+    private let database: PostgresStoreContext
     private let storageDevices: StorageDevicesPersistence?
     private let storagePools: StoragePoolsPersistence?
     private let agentEnrollments: AgentEnrollmentsPersistence?
@@ -166,6 +165,7 @@ actor AgentService {
 
     init(
         app: Application,
+        database: PostgresStoreContext,
         storageDevices: StorageDevicesPersistence? = nil,
         storagePools: StoragePoolsPersistence? = nil,
         agentEnrollments: AgentEnrollmentsPersistence? = nil,
@@ -173,6 +173,7 @@ actor AgentService {
         heartbeatInterval: Duration = .seconds(30)
     ) {
         self.app = app
+        self.database = database
         self.storageDevices = storageDevices
         self.storagePools = storagePools
         self.agentEnrollments = agentEnrollments
@@ -199,7 +200,7 @@ actor AgentService {
     /// socket handler running after `asyncShutdown` cleared storage) creates
     /// a fresh service on a dead app. `AgentServiceLifecycleHandler` has
     /// already run by then and nothing will ever shut this instance down, so
-    /// an armed heartbeat's first tick touches `app.db` after core teardown
+    /// an armed heartbeat's first tick touches `database` after core teardown
     /// and dies with Vapor's "Core not configured" fatal error — the
     /// recurring CI crash.
     private func armBackgroundWork() {
@@ -213,7 +214,7 @@ actor AgentService {
     /// Cancel the heartbeat monitoring loop and wait for an in-flight tick to
     /// finish. Called from the application's shutdown lifecycle (see
     /// `AgentServiceLifecycleHandler`): the loop holds the `Application` and
-    /// sweeps the database every tick, so a tick that touches `app.db` after
+    /// sweeps the database every tick, so a tick that touches `database` after
     /// shutdown hits Vapor's "Core not configured" fatal error — long-lived
     /// test processes crash exactly this way. Cancellation interrupts the
     /// loop's sleep immediately, but a tick body already past the sleep is
@@ -295,7 +296,7 @@ actor AgentService {
             throw AgentServiceError.unsupportedProtocolVersion(agentName: agentName, version: protocolVersion)
         }
 
-        let db = app.db
+        let db = database
         var organizationScope = organizationScope
         var siteID = siteID
         let dependencyObservations = normalizedDependencyObservations(
@@ -307,11 +308,12 @@ actor AgentService {
         var previousDependencyObservations: [NodeDependencyObservation] = []
 
         // Find existing agent or create new one
-        var agent: Agent
-        if let existingAgent = try await LegacyAgentStore.agents(
+        let existingAgent = try await LegacyAgentStore.agents(
             trustDomain: trustDomain, name: agentName, on: db
         ).first
-        {
+        let isNewAgent = existingAgent == nil
+        var agent: Agent
+        if let existingAgent {
             // Update existing agent
             agent = existingAgent
             previousDependencyObservations = existingAgent.dependencyObservations
@@ -409,7 +411,7 @@ actor AgentService {
             // the site's whole OVN deployment belongs to one org. Refusals are
             // logged, not fatal; the agent registers with its previous scope.
             var refusalReason: String?
-            if agent.id != nil {
+            if !isNewAgent {
                 refusalReason = "agent organization is fixed by its required site"
             }
             if let refusalReason {
@@ -437,7 +439,7 @@ actor AgentService {
             // agent still registers with its previous site intact. (A
             // brand-new agent row has no id yet and trips neither guard.)
             var refusalReason: String?
-            if let agentID = agent.id {
+            if !isNewAgent, let agentID = agent.id {
                 let controllerships = try await LegacySiteStore.count(
                     networkControllerAgentID: agentID,
                     excludingID: siteID,
@@ -573,7 +575,7 @@ actor AgentService {
         }
         guard let identity = AgentIdentity(key: agentKey) else { return nil }
         let agent = try? await LegacyAgentStore.agents(
-            trustDomain: identity.trustDomain, name: identity.name, on: app.db).first
+            trustDomain: identity.trustDomain, name: identity.name, on: database).first
         return agent?.id?.uuidString
     }
 
@@ -584,7 +586,7 @@ actor AgentService {
     func vmIsOwnedByAgent(vmId: String, agentKey: String) async -> Bool {
         guard let vmUUID = UUID(uuidString: vmId),
             let senderAgentId = await agentId(forKey: agentKey),
-            let vm = try? await VM.find(vmUUID, on: app.db)
+            let vm = try? await VM.find(vmUUID, on: database)
         else {
             return false
         }
@@ -598,7 +600,7 @@ actor AgentService {
     func sandboxIsOwnedByAgent(sandboxId: String, agentKey: String) async -> Bool {
         guard let sandboxUUID = UUID(uuidString: sandboxId),
             let senderAgentId = await agentId(forKey: agentKey),
-            let sandbox = try? await Sandbox.find(sandboxUUID, on: app.db)
+            let sandbox = try? await Sandbox.find(sandboxUUID, on: database)
         else {
             return false
         }
@@ -612,12 +614,12 @@ actor AgentService {
             return local
         }
         guard let agentUUID = UUID(uuidString: agentId) else { return nil }
-        let agent = try? await Agent.find(agentUUID, on: app.db)
+        let agent = try? await Agent.find(agentUUID, on: database)
         return agent?.identity.key
     }
 
     func unregisterAgent(_ agentId: String, fromAgentKey connectionAgentKey: String) async throws {
-        let db = app.db
+        let db = database
 
         // Resolve the target and confirm it belongs to the authenticated
         // connection. Without this an agent could pass another agent's id in the
@@ -686,7 +688,7 @@ actor AgentService {
         }
 
         if let agentUUID = UUID(uuidString: agentId),
-            let agent = try? await Agent.find(agentUUID, on: app.db)
+            let agent = try? await Agent.find(agentUUID, on: database)
         {
             Telemetry.recordDependenciesUnavailable(
                 agentName: agent.name, observations: agent.dependencyObservations)
@@ -757,7 +759,7 @@ actor AgentService {
         // Update database status asynchronously
         Task {
             do {
-                let db = self.app.db
+                let db = self.database
                 if let identity = AgentIdentity(key: agentKey),
                     let agent = try await LegacyAgentStore.agents(
                         trustDomain: identity.trustDomain, name: identity.name, on: db).first
@@ -780,7 +782,7 @@ actor AgentService {
     /// the claimed `agentId` must belong to it, so one agent cannot drive another
     /// agent's resource tracking or VM reconciliation.
     func updateAgentHeartbeat(_ message: AgentHeartbeatMessage, fromAgentKey agentKey: String) async throws {
-        let db = app.db
+        let db = database
         guard let agentUUID = UUID(uuidString: message.agentId),
             let agent = try await Agent.find(agentUUID, on: db)
         else {
@@ -974,7 +976,7 @@ actor AgentService {
                     // shutdown's wait) as short as possible. The application
                     // check is the last line of defense for a loop that
                     // somehow outlives its app: every step below touches
-                    // app.db or app storage, which is a process-killing fatal
+                    // database or app storage, which is a process-killing fatal
                     // error (not a throw) after core teardown.
                     try self.checkTickPreconditions()
 
@@ -1024,7 +1026,7 @@ actor AgentService {
                     // Delete snapshot artifacts past their retention deadline
                     // (STR-150) — the `ttlSecondsAfterFinished` answer durable
                     // artifact objects need and fire-and-forget RPCs did not.
-                    await SnapshotRetentionSweep.run(app: app)
+                    await SnapshotRetentionSweep.run(app: app, database: database)
 
                     try self.checkTickPreconditions()
 
@@ -1057,7 +1059,7 @@ actor AgentService {
         // Shutdown sets this before cancelling the loop; a tick that already
         // slipped past its sleep must not start a database sweep it doesn't
         // need to finish. The app-level check is a backstop for loops armed
-        // outside the lifecycle handler's reach: touching `app.db` after
+        // outside the lifecycle handler's reach: touching `database` after
         // core teardown is a process-killing fatal error, not a throw.
         guard !isShutDown, !app.didShutdown else { return }
 
@@ -1065,7 +1067,7 @@ actor AgentService {
         let staleThreshold: TimeInterval = 60  // 60 seconds
 
         do {
-            let onlineAgents = try await LegacyAgentStore.agents(status: .online, on: app.db)
+            let onlineAgents = try await LegacyAgentStore.agents(status: .online, on: database)
 
             // Export per-agent heartbeat staleness as a gauge every cycle so
             // alerting can watch an agent go quiet before the sweep removes
@@ -1103,12 +1105,12 @@ actor AgentService {
                     agentName: agent.name,
                     observations: agent.dependencyObservations,
                     factory: dependencyMetricsFactory)
-                try await offlineAgent.save(on: app.db)
+                try await offlineAgent.save(on: database)
 
                 Telemetry.agentDisconnected(reason: "stale")
                 Telemetry.recordAgentUp(agentName: agent.name, up: false)
                 await WebhookEvents.emitAgentPresence(
-                    agent: offlineAgent, connected: false, reason: "stale", on: app.db, logger: app.logger)
+                    agent: offlineAgent, connected: false, reason: "stale", on: database, logger: app.logger)
                 app.logger.info(
                     "Agent heartbeat stale past threshold; marked offline",
                     metadata: ["agentName": .string(agent.name)])
@@ -1134,7 +1136,7 @@ actor AgentService {
         do {
             let controlled = try await LegacySiteStore.sites(
                 networkControllerAgentID: agentID,
-                on: app.db)
+                on: database)
             for site in controlled {
                 Telemetry.recordSiteNetworkControllerUp(site: site.name, up: false)
                 app.logger.warning(
@@ -1175,7 +1177,7 @@ actor AgentService {
     func sweepStuckConvergence() async {
         guard !isShutDown, !app.didShutdown else { return }
 
-        let db = app.db
+        let db = database
         let now = Date()
 
         do {
@@ -1214,7 +1216,7 @@ actor AgentService {
     @discardableResult
     func sweepSteadyStateDivergence(now: Date = Date()) async -> SteadyStateDivergenceCounts {
         guard !isShutDown, !app.didShutdown else { return SteadyStateDivergenceCounts() }
-        guard let sql = app.db as? any SQLDatabase else {
+        guard let sql = database as? PostgresStoreContext else {
             app.logger.error("Steady-state divergence sweep requires an SQL database")
             return SteadyStateDivergenceCounts()
         }
@@ -1264,7 +1266,7 @@ actor AgentService {
     private struct DivergenceClaim: Decodable { let id: UUID }
 
     private func divergentVMRows(
-        before cutoff: Date, on sql: any SQLDatabase
+        before cutoff: Date, on sql: PostgresStoreContext
     ) async throws -> [DivergedWorkloadRow] {
         try await sql.raw(
             """
@@ -1284,7 +1286,7 @@ actor AgentService {
     }
 
     private func divergentSandboxRows(
-        before cutoff: Date, on sql: any SQLDatabase
+        before cutoff: Date, on sql: PostgresStoreContext
     ) async throws -> [DivergedWorkloadRow] {
         try await sql.raw(
             """
@@ -1303,7 +1305,7 @@ actor AgentService {
     }
 
     private func claimVMDivergence(
-        _ id: UUID, at now: Date, before cutoff: Date, on sql: any SQLDatabase
+        _ id: UUID, at now: Date, before cutoff: Date, on sql: PostgresStoreContext
     ) async throws -> Bool {
         let rows = try await sql.raw(
             """
@@ -1326,7 +1328,7 @@ actor AgentService {
     }
 
     private func claimSandboxDivergence(
-        _ id: UUID, at now: Date, before cutoff: Date, on sql: any SQLDatabase
+        _ id: UUID, at now: Date, before cutoff: Date, on sql: PostgresStoreContext
     ) async throws -> Bool {
         let rows = try await sql.raw(
             """
@@ -1367,7 +1369,7 @@ actor AgentService {
     /// query filters on — no kind lookup, which is exactly what stamping a
     /// deadline instead of a `lastMutationKind` bought.
     private func degradeOverdue<R: ConvergingResource>(
-        _ type: R.Type, now: Date, on db: any Database
+        _ type: R.Type, now: Date, on db: PostgresStoreContext
     ) async throws {
         let overdue = try await R.overdueForConvergence(at: now, on: db)
 
@@ -1474,7 +1476,7 @@ actor AgentService {
     ///
     /// Internal rather than private so tests can drive a pass directly.
     func sweepStrandedVolumeAttachments() async {
-        // Never touch app.db (a fatal error, not a throw, after core
+        // Never touch database (a fatal error, not a throw, after core
         // teardown) once shutdown has begun — this was the crashing frame of
         // the recurring "Core not configured" CI crash.
         guard !isShutDown, !app.didShutdown else { return }
@@ -1486,7 +1488,7 @@ actor AgentService {
             return
         }
 
-        let db = app.db
+        let db = database
 
         do {
             // This mirrors the schema constraint column for column: the fields
@@ -1558,7 +1560,7 @@ actor AgentService {
         // every replica scanning.
         guard await app.coordination.acquireSweepLock("orphaned_terminating") else { return }
 
-        let db = app.db
+        let db = database
         let cutoff = Date().addingTimeInterval(-Self.orphanedTerminatingBudgetSeconds)
 
         do {
@@ -1605,7 +1607,7 @@ actor AgentService {
     /// workload half only because `desired_status` is a different enum type per
     /// family, which Fluent's field projection cannot be abstracted over.
     private func reapOrphanedTerminatingSnapshots<A: SnapshotArtifactResource>(
-        _ type: A.Type, kind: String, on db: any Database
+        _ type: A.Type, kind: String, on db: PostgresStoreContext
     ) async throws {
         let terminating = try await A.terminating(on: db).filter { $0.finalizers.isEmpty }
         await reapOrphanedTerminating(terminating, kind: kind, on: db)
@@ -1615,7 +1617,7 @@ actor AgentService {
     /// already-cleared token on an empty list reaps — so the sweep shares the
     /// reap claim and per-kind teardown instead of re-spelling either.
     private func reapOrphanedTerminating<R: FinalizableResource>(
-        _ resources: [R], kind: String, on db: any Database
+        _ resources: [R], kind: String, on db: PostgresStoreContext
     ) async {
         for resource in resources {
             guard let id = resource.id else { continue }
@@ -1691,7 +1693,7 @@ actor AgentService {
     ///
     /// Internal rather than private so tests can drive a pass directly.
     func sweepExpiredSandboxes() async {
-        // Never touch app.db once shutdown has begun — after core teardown
+        // Never touch database once shutdown has begun — after core teardown
         // that is a process-killing fatal error, not a throw.
         guard !isShutDown, !app.didShutdown else { return }
         guard await app.coordination.acquireSweepLock("sandbox_expiry") else {
@@ -1699,7 +1701,7 @@ actor AgentService {
             return
         }
 
-        let db = app.db
+        let db = database
         let now = Date()
 
         do {
@@ -1751,7 +1753,7 @@ actor AgentService {
     /// delete. Sharing the path is the point: quota release, reservation
     /// release, and the audit trail all come for free, and the `system` actor
     /// on the event makes the unattended deletion attributable.
-    private func expireSandbox(_ sandbox: Sandbox, reason: SandboxExpiryReason, on db: Database) async {
+    private func expireSandbox(_ sandbox: Sandbox, reason: SandboxExpiryReason, on db: PostgresStoreContext) async {
         guard let sandboxID = sandbox.id else { return }
 
         var onlineAgentID: String?
@@ -1851,7 +1853,7 @@ actor AgentService {
             return
         }
 
-        let db = app.db
+        let db = database
         let now = Date()
         // Nil on a dev build with no configured target: no *rollout* can run,
         // but assignments an operator made by hand (which supply their own
@@ -2056,8 +2058,8 @@ actor AgentService {
     private func siteNetworkControllerID(forAgentId agentId: String) async -> String? {
         guard let agentUUID = UUID(uuidString: agentId) else { return nil }
         do {
-            guard let agent = try await Agent.find(agentUUID, on: app.db),
-                let site = try await LegacySiteStore.site(id: agent.siteID, on: app.db)
+            guard let agent = try await Agent.find(agentUUID, on: database),
+                let site = try await LegacySiteStore.site(id: agent.siteID, on: database)
             else { return nil }
             return site.networkControllerAgentID?.uuidString
         } catch {
@@ -2188,7 +2190,7 @@ actor AgentService {
         }
 
         guard let agentUUID = UUID(uuidString: report.agentId),
-            let agent = try? await Agent.find(agentUUID, on: app.db)
+            let agent = try? await Agent.find(agentUUID, on: database)
         else {
             app.logger.warning(
                 "Observed-state report from unknown agent", metadata: ["agentId": .string(report.agentId)])
@@ -2240,7 +2242,7 @@ actor AgentService {
         }
         if agentChanged {
             do {
-                try await updatedAgent.save(on: app.db)
+                try await updatedAgent.save(on: database)
             } catch {
                 app.logger.warning(
                     "Failed to persist agent resources from observed-state report: \(error)",
@@ -2470,12 +2472,12 @@ actor AgentService {
     /// (or by TTL on failure).
     /// - Parameters:
     ///   - vm: The VM to create
-    ///   - db: Database connection
+    ///   - db: PostgresStoreContext connection
     ///   - strategy: Optional scheduling strategy override
     ///   - image: Optional source image (its architecture constrains placement)
     func createVM(
         vm: VM,
-        db: Database,
+        db: PostgresStoreContext,
         strategy: SchedulingStrategy? = nil,
         image: Image? = nil
     ) async throws {
@@ -2620,7 +2622,7 @@ actor AgentService {
     /// first is refused rather than degraded, because the alternative is a
     /// sandbox that boots with no interface while the API keeps reporting the
     /// address IPAM reserved for it.
-    func createSandbox(sandbox: Sandbox, db: Database) async throws {
+    func createSandbox(sandbox: Sandbox, db: PostgresStoreContext) async throws {
         var schedulableAgents = await schedulableAgentsFromDatabase()
         let sandboxId = sandbox.id?.uuidString ?? ""
 
@@ -2811,7 +2813,7 @@ actor AgentService {
     /// (user-mode/SLIRP) agents realize their networking without a site
     /// controller and are unaffected.
     private func requireNetworkAuthority(
-        forAgentId agentId: String, workloadId: String, consequence: String, on db: Database
+        forAgentId agentId: String, workloadId: String, consequence: String, on db: PostgresStoreContext
     ) async throws {
         guard let agentUUID = UUID(uuidString: agentId),
             let agent = try await Agent.find(agentUUID, on: db),
@@ -2834,7 +2836,7 @@ actor AgentService {
     /// site's agents. NICs are persisted before placement runs, so the rows
     /// are authoritative here. Networks pinned to different sites cannot
     /// coexist on one VM — no host is in both sites.
-    private func pinnedSiteID(for vm: VM, on db: Database) async throws -> UUID? {
+    private func pinnedSiteID(for vm: VM, on db: PostgresStoreContext) async throws -> UUID? {
         guard let vmID = vm.id else { return nil }
         let nics = try await LegacyVMNetworkInterfaceStore.interfaces(vmID: vmID, on: db)
         return try await pinnedSiteID(forNetworkIDs: nics.map(\.logicalNetworkID), on: db)
@@ -2844,7 +2846,7 @@ actor AgentService {
     /// none of them is site-pinned. Shared by the VM and sandbox paths (STR-103)
     /// — a sandbox carries at most one NIC, so the multi-site conflict can only
     /// arise for a VM, but the rule is a property of the networks either way.
-    private func pinnedSiteID(forNetworkIDs ids: [UUID], on db: Database) async throws -> UUID? {
+    private func pinnedSiteID(forNetworkIDs ids: [UUID], on db: PostgresStoreContext) async throws -> UUID? {
         let networkIDs = Set(ids)
         guard !networkIDs.isEmpty else { return nil }
 
@@ -2870,7 +2872,7 @@ actor AgentService {
     /// per-agent VM counts, filtered to agents whose presence key is live.
     func schedulableAgentsFromDatabase() async -> [SchedulableAgent] {
         do {
-            async let onlineAgents = LegacyAgentStore.agents(status: .online, on: app.db)
+            async let onlineAgents = LegacyAgentStore.agents(status: .online, on: database)
             async let groupedCounts = runningVMCountsFromDatabase()
             let (agents, runningVMCounts) = try await (onlineAgents, groupedCounts)
 
@@ -2918,7 +2920,7 @@ actor AgentService {
 
     /// Count placed VMs per agent without hydrating every VM in the cluster.
     private func runningVMCountsFromDatabase() async throws -> [String: Int] {
-        guard let sql = app.db as? SQLDatabase else {
+        guard let sql = database as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Scheduler placement requires an SQL database")
         }
 
@@ -2956,7 +2958,7 @@ actor AgentService {
     /// same on all replicas.
     func getAgentList() async -> [Agent] {
         do {
-            return try await Agent.all(on: app.db)
+            return try await Agent.all(on: database)
         } catch {
             app.logger.error("Failed to load agent list from database: \(error)")
             return []
@@ -2965,7 +2967,7 @@ actor AgentService {
 
     func getAgentInfo(_ agentId: String) async -> Agent? {
         guard let agentUUID = UUID(uuidString: agentId) else { return nil }
-        return try? await Agent.find(agentUUID, on: app.db)
+        return try? await Agent.find(agentUUID, on: database)
     }
 }
 
@@ -2998,7 +3000,10 @@ extension Application {
 
     var agentService: AgentService {
         get {
-            lazyService(AgentServiceKey.self) { AgentService(app: self) }
+            guard let service = storage[AgentServiceKey.self] else {
+                preconditionFailure("Agent service has not been configured")
+            }
+            return service
         }
         set {
             setStorageValue(AgentServiceKey.self, to: newValue)
@@ -3015,7 +3020,7 @@ extension Application {
 
 /// Instantiates the agent service at boot; at shutdown, cancels its heartbeat
 /// monitor and waits for the loop to exit so the periodic database sweep
-/// never outlives the application (an in-flight tick touching `app.db` after
+/// never outlives the application (an in-flight tick touching `database` after
 /// core teardown is the "Core not configured" CI crash).
 struct AgentServiceLifecycleHandler: LifecycleHandler {
     /// Force creation at boot: the service's heartbeat/sweep loop and — since

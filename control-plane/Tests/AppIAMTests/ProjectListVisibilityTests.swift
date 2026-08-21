@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import Testing
 import Vapor
@@ -26,7 +25,6 @@ final class ProjectListVisibilityTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -47,7 +45,7 @@ final class ProjectListVisibilityTests {
     }
 
     private func makeFixture(_ app: Application, prefix: String) async throws -> Fixture {
-        let builder = TestDataBuilder(db: app.db)
+        let builder = TestDataBuilder(db: app.testPostgres)
         let organization = try await builder.createOrganization(name: "\(prefix) Org")
         let folder = try await builder.createOU(
             name: "\(prefix) Folder", description: "d", organization: organization)
@@ -127,7 +125,7 @@ final class ProjectListVisibilityTests {
 
             try await RoleBindingService.grant(
                 principalType: .user, principalID: fixture.member.id!, role: .admin,
-                nodeType: .project, nodeID: fixture.folderProject.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: fixture.folderProject.id!, createdBy: nil, on: app.testPostgres)
 
             // The sibling at org root stays denied, and stays out of the lists.
             try await expectItemReadForbidden(app, project: fixture.rootProject, token: fixture.token)
@@ -150,7 +148,7 @@ final class ProjectListVisibilityTests {
     @Test("A folder binding does not reach a sibling folder or the organization root")
     func folderBindingDoesNotReachSiblings() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let fixture = try await makeFixture(app, prefix: "Sibling")
             let organizationID = fixture.organization.id!
 
@@ -161,7 +159,7 @@ final class ProjectListVisibilityTests {
 
             try await RoleBindingService.grant(
                 principalType: .user, principalID: fixture.member.id!, role: .admin,
-                nodeType: .organizationalUnit, nodeID: fixture.folder.id!, createdBy: nil, on: app.db)
+                nodeType: .organizationalUnit, nodeID: fixture.folder.id!, createdBy: nil, on: app.testPostgres)
 
             try await expectItemReadForbidden(app, project: siblingProject, token: fixture.token)
             try await expectItemReadForbidden(app, project: fixture.rootProject, token: fixture.token)
@@ -187,7 +185,7 @@ final class ProjectListVisibilityTests {
     @Test("A guardrail that takes back project:read removes the project from the list")
     func guardrailNarrowsTheProjectList() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let organization = try await builder.createOrganization(name: "Guardrail List Org")
             _ = try await builder.createProject(
                 name: "Guardrail Visible", description: "d", organization: organization)
@@ -206,9 +204,9 @@ final class ProjectListVisibilityTests {
                 name: "list-no-project-read", description: nil, effect: nil,
                 node: IAMNode(type: .project, id: hidden.id!),
                 actions: ["project:read"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+                createdBy: nil, on: app.testPostgres)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
             try await expectItemReadForbidden(app, project: hidden, token: token)
             #expect(try await projectNames(app, "/api/projects", token: token) == ["Guardrail Visible"])
@@ -220,7 +218,7 @@ final class ProjectListVisibilityTests {
     @Test("The organization hierarchy tree hides projects, VMs and folders the caller cannot read")
     func hierarchyTreeIsScopedToTheCaller() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let fixture = try await makeFixture(app, prefix: "Tree")
             _ = try await builder.createVM(name: "tree-vm", project: fixture.rootProject)
 
@@ -251,7 +249,7 @@ final class ProjectListVisibilityTests {
     @Test("An org admin still sees the whole tree")
     func hierarchyTreeIsUnchangedForAnAdmin() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let fixture = try await makeFixture(app, prefix: "AdminTree")
             _ = try await builder.createVM(name: "admin-tree-vm", project: fixture.rootProject)
 
@@ -297,7 +295,7 @@ final class ProjectListVisibilityTests {
             // A binding on one project makes exactly that project findable.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: fixture.member.id!, role: .viewer,
-                nodeType: .project, nodeID: fixture.folderProject.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: fixture.folderProject.id!, createdBy: nil, on: app.testPostgres)
 
             try await app.test(.GET, "/api/hierarchy/search?q=Search") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
@@ -312,7 +310,7 @@ final class ProjectListVisibilityTests {
     @Test("The folder list is decided per folder, not by organization membership")
     func folderListIsScopedToTheCaller() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let fixture = try await makeFixture(app, prefix: "Folder")
             let organizationID = fixture.organization.id!
             let nested = try await builder.createOU(
@@ -364,7 +362,7 @@ final class ProjectListVisibilityTests {
                 maxStorage: 100 * 1024 * 1024 * 1024,
                 maxVMs: 5
             )
-            try await projectQuota.save(on: app.db)
+            try await projectQuota.save(on: app.testPostgres)
 
             func quotaNames(_ path: String) async throws -> [String] {
                 var names: [String] = []
@@ -382,7 +380,7 @@ final class ProjectListVisibilityTests {
 
             try await RoleBindingService.grant(
                 principalType: .user, principalID: fixture.member.id!, role: .viewer,
-                nodeType: .project, nodeID: fixture.rootProject.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: fixture.rootProject.id!, createdBy: nil, on: app.testPostgres)
 
             #expect(try await quotaNames("/api/quotas?level=project") == ["Quota Project Limit"])
             #expect(try await quotaNames("/api/quotas") == ["Quota Project Limit"])
@@ -396,7 +394,7 @@ final class ProjectListVisibilityTests {
     @Test("A project grant with no organization membership row still reaches its quota")
     func quotaListDoesNotRequireAnOrganizationMembershipRow() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let organization = try await builder.createOrganization(name: "Unaffiliated Org")
             let project = try await builder.createProject(
                 name: "Unaffiliated Project", description: "d", organization: organization)
@@ -408,14 +406,14 @@ final class ProjectListVisibilityTests {
                 maxStorage: 40 * 1024 * 1024 * 1024,
                 maxVMs: 2
             )
-            try await quota.save(on: app.db)
+            try await quota.save(on: app.testPostgres)
 
             // Deliberately no `addUserToOrganization`.
             let outsider = try await builder.createUser(
                 username: "unaffiliated", email: "unaffiliated@example.com")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: outsider.id!, role: .viewer,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
             let token = try await outsider.generateAPIKey(on: app)
 
             // `GET /api/projects` still bounds its candidate set by membership
@@ -440,7 +438,7 @@ final class ProjectListVisibilityTests {
     @Test("A system admin sees quotas in organizations they hold no membership row in")
     func quotaListIsUnnarrowedForSystemAdmins() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let organization = try await builder.createOrganization(name: "Admin Quota Org")
             let project = try await builder.createProject(
                 name: "Admin Quota Project", description: "d", organization: organization)
@@ -452,7 +450,7 @@ final class ProjectListVisibilityTests {
                 maxStorage: 80 * 1024 * 1024 * 1024,
                 maxVMs: 4
             )
-            try await quota.save(on: app.db)
+            try await quota.save(on: app.testPostgres)
 
             let admin = try await builder.createUser(
                 username: "quota-admin", email: "quota-admin@example.com", isSystemAdmin: true)
@@ -471,7 +469,7 @@ final class ProjectListVisibilityTests {
     @Test("The flat resource list carries no folder the caller has not been decided on")
     func flatResourceListOmitsConnectivityAncestors() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let organization = try await builder.createOrganization(name: "Ancestor Org")
             let outer = try await builder.createOU(
                 name: "Ancestor Outer", description: "secret roadmap", organization: organization)
@@ -487,7 +485,7 @@ final class ProjectListVisibilityTests {
                 user: member, organization: organization, role: "member")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: member.id!, role: .viewer,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
             let token = try await member.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/organizations/\(organization.id!)/resources") { req in

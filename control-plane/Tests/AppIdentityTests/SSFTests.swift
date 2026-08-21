@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Testing
 import Vapor
@@ -63,7 +62,7 @@ private struct SSFFixture {
 private func makePushFixture(
     _ app: Application, transmitterURL: String = "https://idp.example.com"
 ) async throws -> SSFFixture {
-    let builder = TestDataBuilder(db: app.db)
+    let builder = TestDataBuilder(db: app.testPostgres)
     let user = try await builder.createUser(username: "ssfuser", email: "ssf@example.com")
     let org = try await builder.createOrganization(name: "SSF Org")
     try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
@@ -136,7 +135,7 @@ final class SSFPushDeliveryTests {
                 app, streamID: fixture.stream.id, token: fixture.pushToken, body: set,
                 expect: .accepted)
 
-            let user = try #require(try await User.find(fixture.user.id, on: app.db))
+            let user = try #require(try await User.find(fixture.user.id, on: app.testPostgres))
             #expect(user.sessionEpoch == 1)
             #expect(user.disabledAt == nil)
 
@@ -166,7 +165,7 @@ final class SSFPushDeliveryTests {
                 app, streamID: fixture.stream.id, token: fixture.pushToken, body: set,
                 expect: .accepted)
 
-            let user = try #require(try await User.find(fixture.user.id, on: app.db))
+            let user = try #require(try await User.find(fixture.user.id, on: app.testPostgres))
             #expect(user.sessionEpoch == 1)
 
             let activeKeys = try await app.apiKeysPersistence.keys(
@@ -189,7 +188,7 @@ final class SSFPushDeliveryTests {
             try await self.deliver(
                 app, streamID: fixture.stream.id, token: fixture.pushToken, body: disable,
                 expect: .accepted)
-            var user = try #require(try await User.find(fixture.user.id, on: app.db))
+            var user = try #require(try await User.find(fixture.user.id, on: app.testPostgres))
             #expect(user.disabledAt != nil)
             #expect(user.sessionEpoch == 1)
 
@@ -201,7 +200,7 @@ final class SSFPushDeliveryTests {
             try await self.deliver(
                 app, streamID: fixture.stream.id, token: fixture.pushToken, body: enable,
                 expect: .accepted)
-            user = try #require(try await User.find(fixture.user.id, on: app.db))
+            user = try #require(try await User.find(fixture.user.id, on: app.testPostgres))
             #expect(user.disabledAt == nil)
         }
     }
@@ -210,7 +209,7 @@ final class SSFPushDeliveryTests {
     func subjectOutsideOrgIgnored() async throws {
         try await withTestApp { app in
             let fixture = try await makePushFixture(app)
-            let outsider = try await TestDataBuilder(db: app.db)
+            let outsider = try await TestDataBuilder(db: app.testPostgres)
                 .createUser(username: "outsider", email: "outsider@example.com")
 
             let set = try makeUnsignedSET(
@@ -223,7 +222,7 @@ final class SSFPushDeliveryTests {
                 app, streamID: fixture.stream.id, token: fixture.pushToken, body: set,
                 expect: .accepted)
 
-            let user = try #require(try await User.find(outsider.id, on: app.db))
+            let user = try #require(try await User.find(outsider.id, on: app.testPostgres))
             #expect(user.sessionEpoch == 0)
 
             let unmatched = try await app.audit.events.events(
@@ -238,7 +237,7 @@ final class SSFPushDeliveryTests {
     func issSubScopedToIssuer() async throws {
         try await withTestApp { app in
             let fixture = try await makePushFixture(app)
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
 
             // Same OIDC `sub` at two different issuers; only the provider for
             // the stream's transmitter (and organization) may match.
@@ -259,10 +258,10 @@ final class SSFPushDeliveryTests {
                 discoveryURL: "https://other-idp.example.com/.well-known/openid-configuration"
             ))
 
-            try await fixture.user.linkedToOIDCProvider(provider.id, subject: "shared-sub").save(on: app.db)
+            try await fixture.user.linkedToOIDCProvider(provider.id, subject: "shared-sub").save(on: app.testPostgres)
             let otherUser = try await builder.createUser(username: "other", email: "other@example.com")
             try await builder.addUserToOrganization(user: otherUser, organization: otherOrg)
-            try await otherUser.linkedToOIDCProvider(otherProvider.id, subject: "shared-sub").save(on: app.db)
+            try await otherUser.linkedToOIDCProvider(otherProvider.id, subject: "shared-sub").save(on: app.testPostgres)
 
             let set = try makeUnsignedSET(
                 iss: "https://idp.example.com",
@@ -273,9 +272,9 @@ final class SSFPushDeliveryTests {
                 app, streamID: fixture.stream.id, token: fixture.pushToken, body: set,
                 expect: .accepted)
 
-            let target = try #require(try await User.find(fixture.user.id, on: app.db))
+            let target = try #require(try await User.find(fixture.user.id, on: app.testPostgres))
             #expect(target.sessionEpoch == 1)
-            let bystander = try #require(try await User.find(otherUser.id, on: app.db))
+            let bystander = try #require(try await User.find(otherUser.id, on: app.testPostgres))
             #expect(bystander.sessionEpoch == 0)
 
             // A foreign issuer with the same sub matches no provider in this
@@ -290,7 +289,7 @@ final class SSFPushDeliveryTests {
             try await self.deliver(
                 app, streamID: fixture.stream.id, token: fixture.pushToken, body: foreign,
                 expect: .accepted)
-            let unchanged = try #require(try await User.find(fixture.user.id, on: app.db))
+            let unchanged = try #require(try await User.find(fixture.user.id, on: app.testPostgres))
             #expect(unchanged.sessionEpoch == 1)
         }
     }
@@ -308,7 +307,7 @@ final class SSFPushDeliveryTests {
                 app, streamID: fixture.stream.id, token: "ssf_wrong", body: set,
                 expect: .unauthorized)
 
-            let user = try #require(try await User.find(fixture.user.id, on: app.db))
+            let user = try #require(try await User.find(fixture.user.id, on: app.testPostgres))
             #expect(user.sessionEpoch == 0)
         }
     }
@@ -374,7 +373,7 @@ final class SSFPushDeliveryTests {
     @Test("Poll endpoints outside the allow-list are never polled")
     func pollEndpointOutsideAllowListRejected() async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(username: "polluser", email: "poll@example.com")
             let org = try await builder.createOrganization(name: "Poll Org")
             try await builder.addUserToOrganization(user: user, organization: org)
@@ -422,7 +421,7 @@ final class SSFStreamAPITests {
     @Test("Stream CRUD via the organization-scoped API")
     func streamCRUD() async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(username: "ssfadmin", email: "admin@example.com")
             let org = try await builder.createOrganization(name: "CRUD Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
@@ -498,7 +497,7 @@ final class SSFStreamAPITests {
             let key = try SecretsEncryptionService.parseKey(String(repeating: "ef", count: 32))
             app.secretsEncryption = SecretsEncryptionService(key: key)
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(username: "ssfenc", email: "enc@example.com")
             let org = try await builder.createOrganization(name: "Enc Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
@@ -560,7 +559,7 @@ final class SSFStreamAPITests {
     @Test("Receiver construction decrypts the stored management auth token")
     func receiverDecryptsStoredAuthToken() async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(username: "ssfrecv", email: "recv@example.com")
             let org = try await builder.createOrganization(name: "Recv Org")
 
@@ -594,7 +593,7 @@ final class SSFStreamAPITests {
     @Test("Stream creation validates the transmitter URL")
     func createRejectsInvalidTransmitterURL() async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(username: "ssfadmin2", email: "a2@example.com")
             let org = try await builder.createOrganization(name: "URL Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
@@ -627,7 +626,7 @@ final class SSFStreamAPITests {
     @Test("Stream mutations require organization admin")
     func mutationsRequireAdmin() async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(username: "member", email: "m@example.com")
             let org = try await builder.createOrganization(name: "Denied Org")
             try await builder.addUserToOrganization(user: user, organization: org)
@@ -688,7 +687,7 @@ final class UserSecurityMiddlewareTests {
     @Test("Requests pass when the session epoch matches")
     func matchingEpochPasses() async throws {
         try await withTestApp { app in
-            let user = try await TestDataBuilder(db: app.db)
+            let user = try await TestDataBuilder(db: app.testPostgres)
                 .createUser(username: "epoch0", email: "e0@example.com")
             let res = try await self.respond(app) { req in
                 req.auth.login(user)
@@ -702,14 +701,14 @@ final class UserSecurityMiddlewareTests {
     @Test("A bumped session epoch revokes existing sessions")
     func bumpedEpochRevokesSession() async throws {
         try await withTestApp { app in
-            let user = try await TestDataBuilder(db: app.db)
+            let user = try await TestDataBuilder(db: app.testPostgres)
                 .createUser(username: "epoch1", email: "e1@example.com")
             let res = try await self.respond(app) { req in
                 req.auth.login(user)
                 req.session.authenticate(user)
                 req.stampSessionEpoch(for: user)
                 // The signal handler bumps the epoch after login.
-                try await user.replacing(sessionEpoch: user.sessionEpoch + 1).save(on: app.db)
+                try await user.replacing(sessionEpoch: user.sessionEpoch + 1).save(on: app.testPostgres)
             }
             #expect(res.status == .unauthorized)
         }
@@ -718,7 +717,7 @@ final class UserSecurityMiddlewareTests {
     @Test("Sessions with no epoch stamp count as epoch zero")
     func missingStampCountsAsZero() async throws {
         try await withTestApp { app in
-            let user = try await TestDataBuilder(db: app.db)
+            let user = try await TestDataBuilder(db: app.testPostgres)
                 .createUser(username: "legacy", email: "legacy@example.com")
 
             // No stamp: a pre-feature session. Epoch 0 still matches.
@@ -728,7 +727,7 @@ final class UserSecurityMiddlewareTests {
             }
             #expect(ok.status == .ok)
 
-            try await user.replacing(sessionEpoch: 1).save(on: app.db)
+            try await user.replacing(sessionEpoch: 1).save(on: app.testPostgres)
             let revoked = try await self.respond(app) { req in
                 req.auth.login(user)
                 req.session.authenticate(user)
@@ -740,9 +739,9 @@ final class UserSecurityMiddlewareTests {
     @Test("Disabled accounts are rejected on any authenticated request")
     func disabledAccountRejected() async throws {
         try await withTestApp { app in
-            let user = try await TestDataBuilder(db: app.db)
+            let user = try await TestDataBuilder(db: app.testPostgres)
                 .createUser(username: "disabled", email: "d@example.com")
-            try await user.replacing(disabledAt: .some(Date())).save(on: app.db)
+            try await user.replacing(disabledAt: .some(Date())).save(on: app.testPostgres)
 
             // No session at all — the API-key path is rejected too.
             let res = try await self.respond(app) { req in
@@ -755,13 +754,13 @@ final class UserSecurityMiddlewareTests {
     @Test("API-key requests survive an epoch mismatch and re-stamp the session")
     func apiKeyRequestsRestampStaleSessions() async throws {
         try await withTestApp { app in
-            let user = try await TestDataBuilder(db: app.db)
+            let user = try await TestDataBuilder(db: app.testPostgres)
                 .createUser(username: "keyed", email: "k@example.com")
             let res = try await self.respond(app) { req in
                 req.auth.login(user)
                 req.session.authenticate(user)
                 req.stampSessionEpoch(for: user)
-                try await user.replacing(sessionEpoch: 3).save(on: app.db)
+                try await user.replacing(sessionEpoch: 3).save(on: app.testPostgres)
                 req.apiKey = try await app.apiKeysPersistence.issue(
                     APIKeyWrite(
                         userID: try user.requireID(),
@@ -807,7 +806,7 @@ final class UserSecurityMiddlewareTests {
             }
 
             // The same session (epoch stamp 0) is now revoked.
-            let refreshed = try #require(try await User.find(fixture.user.id, on: app.db))
+            let refreshed = try #require(try await User.find(fixture.user.id, on: app.testPostgres))
             let denied = try await self.respond(app) { req in
                 req.auth.login(refreshed)
                 req.session.authenticate(refreshed)

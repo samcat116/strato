@@ -1,4 +1,3 @@
-import Fluent
 import ControlPlanePostgres
 import StratoShared
 import Vapor
@@ -16,19 +15,22 @@ struct FloatingIPController: RouteCollection {
     private let projects: ProjectsPersistence
     private let pools: FloatingIPPoolsPersistence
     private let sites: SitesPersistence
+    private let database: PostgresStoreContext
 
     init(
         allocations: FloatingIPAllocationsPersistence? = nil,
         iam: IAMPersistence,
         projects: ProjectsPersistence,
         pools: FloatingIPPoolsPersistence,
-        sites: SitesPersistence
+        sites: SitesPersistence,
+        database: PostgresStoreContext
     ) {
         self.allocations = allocations
         self.iam = iam
         self.projects = projects
         self.pools = pools
         self.sites = sites
+        self.database = database
     }
 
     func boot(routes: RoutesBuilder) throws {
@@ -367,7 +369,8 @@ struct FloatingIPController: RouteCollection {
 
         let project = try await req.authorizedProjectForCreate(
             requested: request.projectId,
-            action: "floatingip:create", resourceKind: "floating IPs", verb: "allocate")
+            action: "floatingip:create", resourceKind: "floating IPs", verb: "allocate",
+            on: database)
         let projectId = try project.requireID()
 
         guard let pool = try await pools.pool(id: request.poolId) else {
@@ -381,7 +384,7 @@ struct FloatingIPController: RouteCollection {
                 organizationalUnitID: pool.organizationalUnitID,
                 required: false
             ),
-            try await Self.scopeContains(poolScope, project: project, on: req.db)
+            try await Self.scopeContains(poolScope, project: project, on: database)
         else {
             throw Abort(.conflict, reason: "Pool '\(pool.name)' does not serve this project's organization scope")
         }
@@ -498,7 +501,7 @@ struct FloatingIPController: RouteCollection {
         // the VM too (the volume-attach rule). An unreachable VM is answered as
         // absent whether it is missing or merely forbidden — see `reachableVM`
         // (issue #881).
-        let vm = try await req.reachableVM(vmID, action: "vm:update")
+        let vm = try await req.reachableVM(vmID, action: "vm:update", on: database)
         // After the VM check, never before: a containment refusal handed to a
         // caller who can't touch the VM would tell them it exists in another
         // project (issue #777).
@@ -507,8 +510,8 @@ struct FloatingIPController: RouteCollection {
             sameProjectAs: "the floating IP", in: floatingIP.projectID)
 
         let interfaces = try await LegacyInterfaceAddressStore.loading(
-            LegacyVMNetworkInterfaceStore.interfaces(vmID: vmID, on: req.db),
-            on: req.db)
+            LegacyVMNetworkInterfaceStore.interfaces(vmID: vmID, on: database),
+            on: database)
         let interface: VMNetworkInterface
         if let interfaceId = request.interfaceId {
             guard let match = interfaces.first(where: { $0.id == interfaceId }) else {
@@ -540,7 +543,7 @@ struct FloatingIPController: RouteCollection {
         guard interface.ipv4Address != nil else {
             throw Abort(.conflict, reason: "Interface has no IPv4 address to NAT to")
         }
-        guard let network = try await LogicalNetwork.find(interface.logicalNetworkID, on: req.db) else {
+        guard let network = try await LogicalNetwork.find(interface.logicalNetworkID, on: database) else {
             throw Abort(.conflict, reason: "Interface's network no longer exists")
         }
         guard network.externalAccess else {
@@ -563,7 +566,7 @@ struct FloatingIPController: RouteCollection {
         _ = try await Self.requireNATRealizingAgent(
             for: vm,
             offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
-            on: req.db)
+            on: database)
         guard let allocations else {
             throw Abort(
                 .internalServerError,
@@ -645,7 +648,7 @@ struct FloatingIPController: RouteCollection {
         req: Request
     ) async throws -> FloatingIPResponse {
         let loadBalancer = try await req.authorizedLoadBalancer(
-            loadBalancerID, action: "loadbalancer:update")
+            loadBalancerID, action: "loadbalancer:update", on: database)
         try ProjectContainment.require(
             "Load balancer", in: loadBalancer.projectID,
             sameProjectAs: "the floating IP", in: floatingIP.projectID)
@@ -662,7 +665,7 @@ struct FloatingIPController: RouteCollection {
 
         guard
             let network = try await LogicalNetwork.find(
-                loadBalancer.logicalNetworkID, on: req.db)
+                loadBalancer.logicalNetworkID, on: database)
         else {
             throw Abort(.conflict, reason: "Load balancer's network no longer exists")
         }
@@ -679,14 +682,14 @@ struct FloatingIPController: RouteCollection {
                 .conflict,
                 reason: "Pool '\(pool.name)' is pinned to a different site than network '\(network.name)'")
         }
-        guard let site = try await LegacySiteStore.site(id: network.siteID, on: req.db) else {
+        guard let site = try await LegacySiteStore.site(id: network.siteID, on: database) else {
             throw Abort(.conflict, reason: "Load balancer's network site no longer exists")
         }
         if let refusal = SiteNetworkAuthority.refusal(
             try await SiteNetworkAuthority.resolve(
                 forSite: site,
                 offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
-                on: req.db),
+                on: database),
             consequence: "nothing would realize the load balancer's external address")
         {
             throw refusal
@@ -720,7 +723,7 @@ struct FloatingIPController: RouteCollection {
 
     /// Whether a pool's owning scope contains a project (same containment rule
     /// as sites serving projects).
-    static func scopeContains(_ scope: OrganizationScope, project: Project, on db: Database) async throws -> Bool {
+    static func scopeContains(_ scope: OrganizationScope, project: Project, on db: PostgresStoreContext) async throws -> Bool {
         let projectScope: OrganizationScope
         if let orgID = project.organizationID {
             projectScope = .organization(orgID)
@@ -789,7 +792,7 @@ struct FloatingIPController: RouteCollection {
     static func requireNATRealizingAgent(
         for vm: VM,
         offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> Agent {
         guard let hypervisorId = vm.hypervisorId,
             let agentUUID = UUID(uuidString: hypervisorId),

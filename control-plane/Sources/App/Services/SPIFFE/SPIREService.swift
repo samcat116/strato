@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
 import Crypto
@@ -690,7 +691,7 @@ extension Application {
     }
 
     /// Configure SPIRE service
-    public func configureSPIRE() async throws {
+    public func configureSPIRE(trustDomains: OrgTrustDomainsPersistence) async throws {
         let config = SPIREServiceConfig.fromConfiguration(controlPlaneConfiguration)
 
         guard config.enabled else {
@@ -705,7 +706,9 @@ extension Application {
             // Reads `org_trust_domains`, and returns nothing while the per-org
             // trust domain feature is off — so with the flag down the service
             // knows exactly one trust domain, as it always has.
-            orgTrustDomainSource: DatabaseOrgTrustDomainSource(app: self)
+            orgTrustDomainSource: DatabaseOrgTrustDomainSource(
+                enabled: controlPlaneConfiguration.bool(.spireOrgTrustDomainsEnabled) == true,
+                trustDomains: trustDomains)
         )
 
         try await service.start()

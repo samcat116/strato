@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
 import StratoShared
@@ -5,6 +6,11 @@ import NIOCore
 import NIOWebSocket
 
 struct AgentWebSocketController: RouteCollection {
+    private let workloads: WorkloadsPersistence
+
+    init(workloads: WorkloadsPersistence) {
+        self.workloads = workloads
+    }
     /// Message types whose bodies are base64 payload rather than anything worth
     /// reading in a log, and which arrive at a rate no log should try to keep
     /// up with. Matched against the envelope's leading bytes, where `type` is.
@@ -197,7 +203,15 @@ struct AgentWebSocketController: RouteCollection {
                 // The workload registry is authoritative for the mapping
                 // (issue #491): a URI registered to a different principal is
                 // rejected, and a first-seen agent identity is registered.
-                try await WorkloadRegistry.requireAgentRegistration(identity: identity, on: req.db)
+                do {
+                    try await workloads.requireAgentRegistration(
+                        spiffeID: identity.key,
+                        agentName: identity.name)
+                } catch WorkloadsPersistenceError.spiffeIDOwnedByDifferentPrincipal {
+                    throw Abort(
+                        .forbidden,
+                        reason: "SPIFFE identity is registered to a different principal")
+                }
 
                 req.logger.info(
                     "Agent authenticated via XFCC header (Envoy mTLS)",

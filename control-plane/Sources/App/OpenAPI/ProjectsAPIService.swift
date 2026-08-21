@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -20,6 +19,7 @@ import Vapor
 /// the same envelope as every hand-written controller; the shared access-control
 /// helpers throw `Abort` too, so this keeps one error path for the whole API.
 struct ProjectsAPIService: APIProtocol {
+    let database: PostgresStoreContext
     let projects: ProjectsPersistence
     let quotas: ResourceQuotasPersistence
     let iam: IAMPersistence
@@ -187,17 +187,17 @@ struct ProjectsAPIService: APIProtocol {
         let req = try OpenAPIRequestContext.require()
         try Self.requireAuthenticated(req)
         let projectID = try Self.uuid(input.path.projectID, name: "project ID")
-        let project = try await Self.findProject(projectID, on: req.db)
+        let project = try await Self.findProject(projectID, on: database)
 
         try await OrganizationAccessService.requireProjectAction("project:delete", project: project, on: req)
 
-        let vmCount = try await Self.vmCount(projectID, on: req.db)
+        let vmCount = try await Self.vmCount(projectID, on: database)
         if vmCount > 0 {
             throw Abort(.conflict, reason: "Cannot delete project with VMs. Delete or move VMs first.")
         }
 
         let sandboxCount = try await LegacySandboxStore.sandboxes(
-            projectID: projectID, on: req.db).count
+            projectID: projectID, on: database).count
         if sandboxCount > 0 {
             throw Abort(.conflict, reason: "Cannot delete project with sandboxes. Delete sandboxes first.")
         }
@@ -207,7 +207,7 @@ struct ProjectsAPIService: APIProtocol {
         // roles it owns (issue #605), which would otherwise be bindable
         // nowhere while still shaping the Cedar schema. Removing roles is a
         // policy-set change and bumps the version.
-        let removed = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
+        let removed = try await PolicySetVersionService.withPolicySetChange(on: database) { db in
             // Global organization/OU quotas survive this project and must be
             // refreshed after its networks cascade away. Resolve and lock them
             // while the project still exists; project-scoped quotas are part of
@@ -250,7 +250,7 @@ struct ProjectsAPIService: APIProtocol {
             // that refusal into the same answer the check gives.
             do {
                 try await project.delete(on: db)
-            } catch let error as any DatabaseError where error.isConstraintFailure {
+            } catch let error as any PostgresConstraintError where error.isConstraintFailure {
                 throw Abort(
                     .conflict,
                     reason: "Cannot delete project: a VM or sandbox was created in it. "
@@ -621,7 +621,7 @@ struct ProjectsAPIService: APIProtocol {
         return uuid
     }
 
-    private static func findProject(_ projectID: UUID, on db: any Database) async throws -> Project {
+    private static func findProject(_ projectID: UUID, on db: PostgresStoreContext) async throws -> Project {
         guard let project = try await Project.find(projectID, on: db) else {
             throw Abort(.notFound, reason: "Project not found")
         }
@@ -668,7 +668,7 @@ struct ProjectsAPIService: APIProtocol {
         return nil
     }
 
-    private static func vmCount(_ projectID: UUID, on db: any Database) async throws -> Int {
+    private static func vmCount(_ projectID: UUID, on db: PostgresStoreContext) async throws -> Int {
         try await LegacyVMStore.vms(projectID: projectID, on: db).count
     }
 

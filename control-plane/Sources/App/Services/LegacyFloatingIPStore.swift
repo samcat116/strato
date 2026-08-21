@@ -1,7 +1,5 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
-import SQLKit
 
 /// Immutable decoding state for the last callers that must read floating-IP
 /// rows through an existing Fluent transaction. Allocation, attachment,
@@ -26,20 +24,20 @@ enum LegacyFloatingIPStore {
         updated_at AS "updatedAt"
         """
 
-    static func find(id: UUID, on db: any Database) async throws -> LegacyFloatingIPRecord? {
+    static func find(id: UUID, on db: PostgresStoreContext) async throws -> LegacyFloatingIPRecord? {
         try await requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM floating_ips WHERE id = \(bind: id)"
         ).first(decoding: LegacyFloatingIPRecord.self)
     }
 
-    static func rows(ids: [UUID], on db: any Database) async throws -> [LegacyFloatingIPRecord] {
+    static func rows(ids: [UUID], on db: PostgresStoreContext) async throws -> [LegacyFloatingIPRecord] {
         guard !ids.isEmpty else { return [] }
         return try await requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM floating_ips WHERE id = ANY(\(bind: ids)) ORDER BY id"
         ).all(decoding: LegacyFloatingIPRecord.self)
     }
 
-    static func ids(projectIDs: [UUID], on db: any Database) async throws -> [UUID] {
+    static func ids(projectIDs: [UUID], on db: PostgresStoreContext) async throws -> [UUID] {
         struct Identifier: Decodable { let id: UUID }
         guard !projectIDs.isEmpty else { return [] }
         return try await requireSQL(db).raw(
@@ -47,7 +45,7 @@ enum LegacyFloatingIPStore {
         ).all(decoding: Identifier.self).map(\.id)
     }
 
-    static func attachedInterfaceCount(networkID: UUID, on db: any Database) async throws -> Int {
+    static func attachedInterfaceCount(networkID: UUID, on db: PostgresStoreContext) async throws -> Int {
         struct CountRow: Decodable { let count: Int }
         return try await requireSQL(db).raw(
             """
@@ -69,7 +67,7 @@ enum LegacyFloatingIPStore {
         interfaceID: UUID? = nil,
         loadBalancerID: UUID? = nil,
         createdByID: UUID? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LegacyFloatingIPRecord {
         guard let row = try await requireSQL(db).raw(
             """
@@ -94,7 +92,7 @@ enum LegacyFloatingIPStore {
         id: UUID,
         interfaceID: UUID?,
         loadBalancerID: UUID?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LegacyFloatingIPRecord? {
         try await requireSQL(db).raw(
             """
@@ -108,8 +106,8 @@ enum LegacyFloatingIPStore {
         ).first(decoding: LegacyFloatingIPRecord.self)
     }
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw FloatingIPAllocationError.unexpectedRowCount(expected: 1, actual: 0)
         }
         return sql

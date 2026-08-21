@@ -111,7 +111,6 @@ final class ReplicaRoutingAgentServiceTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let store = InMemoryCoordinationStore()
             let coordination = CoordinationService(store: store, logger: app.logger)
@@ -145,11 +144,11 @@ final class ReplicaRoutingAgentServiceTests {
         // New agents need an owning org; this harness creates no other data,
         // so mint one on first use.
         let orgID: UUID
-        if let existing = try await Organization.all(on: app.db).first {
+        if let existing = try await Organization.all(on: app.testPostgres).first {
             orgID = try existing.requireID()
         } else {
             let org = Organization(name: "Routing Org", description: "org for routing tests")
-            try await org.save(on: app.db)
+            try await org.save(on: app.testPostgres)
             orgID = try org.requireID()
         }
         let agentUUID = try await app.agentService.registerAgent(

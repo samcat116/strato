@@ -1,3 +1,4 @@
+import ControlPlanePostgres
 import Vapor
 
 // IAM phase 5 (issue #482): the structurally default-deny authorization
@@ -32,6 +33,19 @@ import Vapor
 // the `platform-system-admin` tier-1 policy inside the evaluator, so their
 // activity lands in the decision log and tier-2 guardrails bind them too.
 struct AuthorizationMiddleware: AsyncMiddleware {
+    private let workloads: WorkloadsPersistence?
+    private let serviceAccounts: ServiceAccountsPersistence?
+    private let projects: ProjectsPersistence?
+
+    init(
+        workloads: WorkloadsPersistence? = nil,
+        serviceAccounts: ServiceAccountsPersistence? = nil,
+        projects: ProjectsPersistence? = nil
+    ) {
+        self.workloads = workloads
+        self.serviceAccounts = serviceAccounts
+        self.projects = projects
+    }
 
     enum RouteClass: Equatable {
         case isPublic
@@ -452,7 +466,14 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         let isMembershipProbe =
             resourceId == "*" && (routeAction == resource.readAction || routeAction == resource.createAction)
         if isMembershipProbe {
-            guard let currentOrgId = try await request.actingOrganizationID() else {
+            guard let workloads, let serviceAccounts, let projects else {
+                throw Abort(.internalServerError, reason: "Authorization persistence is unavailable")
+            }
+            guard let currentOrgId = try await request.actingOrganizationID(
+                workloads: workloads,
+                serviceAccounts: serviceAccounts,
+                projects: projects)
+            else {
                 throw Abort(.forbidden, reason: "No current organization set")
             }
             check = ("org:read", IAMNode(type: .organization, id: currentOrgId))
@@ -481,8 +502,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             state: isMembershipProbe
                 ? request.iamAuthState.membershipProbe() : request.iamAuthState,
             cache: request.iamCache,
-            app: request.application,
-            db: request.db
+            app: request.application
         )
         guard decision.allowed else {
             throw Abort(.forbidden, reason: "Insufficient permissions for this operation")

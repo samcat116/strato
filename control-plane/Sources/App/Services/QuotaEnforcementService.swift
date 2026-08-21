@@ -1,7 +1,6 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
-import Fluent
-import SQLKit
 
 /// Enforces resource quotas across the VM, sandbox, volume and network lifecycle.
 /// Resolves the project/OU/org quotas that govern a workload (matching its
@@ -27,7 +26,7 @@ struct QuotaEnforcementService {
     static func applicableQuotas(
         for project: Project,
         environment: String,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> [ResourceQuota] {
         try await applicableQuotas(for: project, environmentScope: environment, on: db)
     }
@@ -37,7 +36,7 @@ struct QuotaEnforcementService {
     /// by workloads from every environment (STR-236).
     static func applicableProjectWideQuotas(
         for project: Project,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> [ResourceQuota] {
         try await applicableQuotas(for: project, environmentScope: nil, on: db)
     }
@@ -51,7 +50,7 @@ struct QuotaEnforcementService {
     /// sibling projects that share an organization or OU quota.
     static func lockedProjectWideAncestorQuotas(
         for project: Project,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> [ResourceQuota] {
         try await lockProjectNetworkMutations(for: project, on: db)
         let quotas = try await applicableProjectWideQuotas(for: project, on: db)
@@ -65,7 +64,7 @@ struct QuotaEnforcementService {
     private static func applicableQuotas(
         for project: Project,
         environmentScope: String?,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> [ResourceQuota] {
         guard let projectID = project.id else { return [] }
         let ouID = project.organizationalUnitID
@@ -120,7 +119,7 @@ struct QuotaEnforcementService {
         vcpus: Int,
         memory: Int64,
         storage: Int64,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await reserveWorkload(for: project, environment: environment, on: db) { quota in
             let vmCheck = quota.canAccommodateVM(vcpus: vcpus, memory: memory, storage: 0)
@@ -146,7 +145,7 @@ struct QuotaEnforcementService {
         environment: String,
         vcpuDelta: Int,
         memoryDelta: Int64,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await reserveWorkload(for: project, environment: environment, on: db) { quota in
             let check = quota.canAccommodateVMResize(vcpuDelta: vcpuDelta, memoryDelta: memoryDelta)
@@ -162,7 +161,7 @@ struct QuotaEnforcementService {
         environment: String,
         vcpus: Int,
         memory: Int64,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await reserveWorkload(for: project, environment: environment, on: db) { quota in
             let check = quota.canAccommodateSandbox(vcpus: vcpus, memory: memory)
@@ -177,7 +176,7 @@ struct QuotaEnforcementService {
         for project: Project,
         environment: String,
         size: Int64,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await reserveWorkload(for: project, environment: environment, on: db) { quota in
             let check = quota.canAccommodateStorage(size, for: "the snapshot")
@@ -198,7 +197,7 @@ struct QuotaEnforcementService {
         for project: Project,
         environment: String,
         size: Int64,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await reserveWorkload(for: project, environment: environment, on: db) { quota in
             let check = quota.canAccommodateVolume(size: size)
@@ -212,7 +211,7 @@ struct QuotaEnforcementService {
     /// network insert transaction so a refusal consumes no fleet-wide address.
     static func reserveNetwork(
         for project: Project,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await lockProjectNetworkMutations(for: project, on: db)
         let quotas = try await applicableProjectWideQuotas(for: project, on: db)
@@ -229,7 +228,7 @@ struct QuotaEnforcementService {
     /// hierarchy transfers just like logical networks.
     static func reserveLoadBalancer(
         for project: Project,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await lockProjectNetworkMutations(for: project, on: db)
         let quotas = try await applicableProjectWideQuotas(for: project, on: db)
@@ -254,7 +253,7 @@ struct QuotaEnforcementService {
         loadBalancerCount: Int = 0,
         sourceQuotas: [ResourceQuota],
         destinationQuotas: [ResourceQuota],
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> [ResourceQuota] {
         let sourceIDs = Set(sourceQuotas.compactMap(\.id))
         let destinationOnly = destinationQuotas.filter { quota in
@@ -301,7 +300,7 @@ struct QuotaEnforcementService {
         environment: String,
         sizeDelta: Int64,
         reason: String = "the volume resize",
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await reserveWorkload(for: project, environment: environment, on: db) { quota in
             let check = quota.canAccommodateStorage(sizeDelta, for: reason)
@@ -319,7 +318,7 @@ struct QuotaEnforcementService {
     static func storageOverCommit(
         projectID: UUID,
         environment: String,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> String? {
         guard let project = try await Project.find(projectID, on: db) else { return nil }
         let quotas = try await applicableQuotas(for: project, environment: environment, on: db)
@@ -346,7 +345,7 @@ struct QuotaEnforcementService {
     private static func reserveWorkload(
         for project: Project,
         environment: String,
-        on db: Database,
+        on db: PostgresStoreContext,
         apply: (ResourceQuota) throws -> (quota: ResourceQuota, allowed: Bool, reason: String?)
     ) async throws {
         let quotas = try await applicableQuotas(for: project, environment: environment, on: db)
@@ -356,7 +355,7 @@ struct QuotaEnforcementService {
     private static func reserveResource(
         for project: Project,
         quotas: [ResourceQuota],
-        on db: Database,
+        on db: PostgresStoreContext,
         apply: (ResourceQuota) throws -> (quota: ResourceQuota, allowed: Bool, reason: String?)
     ) async throws {
         // Serialize concurrent reservations that touch any of these quotas before
@@ -413,7 +412,7 @@ struct QuotaEnforcementService {
     /// place.
     static func release(
         for vm: VM,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await releaseWorkload(projectID: vm.projectID, environment: vm.environment, on: db)
     }
@@ -422,7 +421,7 @@ struct QuotaEnforcementService {
     /// is deleted.
     static func release(
         for sandbox: Sandbox,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await releaseWorkload(projectID: sandbox.projectID, environment: sandbox.environment, on: db)
     }
@@ -433,7 +432,7 @@ struct QuotaEnforcementService {
     /// cascades them and this recomputes rather than decrements.
     static func release(
         for volume: Volume,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await releaseWorkload(projectID: volume.projectID, environment: volume.environment, on: db)
     }
@@ -442,7 +441,7 @@ struct QuotaEnforcementService {
     /// the canonical project-wide recount observes the released slot (STR-236).
     static func release(
         for network: LogicalNetwork,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         let projectID = network.projectID
         try await lockProjectNetworkMutations(projectID: projectID, on: db)
@@ -456,7 +455,7 @@ struct QuotaEnforcementService {
     /// project-wide slot drops out of the canonical recount (STR-28).
     static func releaseLoadBalancer(
         projectID: UUID,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await lockProjectNetworkMutations(projectID: projectID, on: db)
         guard let project = try await Project.find(projectID, on: db) else { return }
@@ -465,7 +464,7 @@ struct QuotaEnforcementService {
         try await resyncAndSaveReservations(quotas, on: db)
     }
 
-    private static func releaseWorkload(projectID: UUID, environment: String, on db: Database) async throws {
+    private static func releaseWorkload(projectID: UUID, environment: String, on db: PostgresStoreContext) async throws {
         guard let project = try await Project.find(projectID, on: db) else { return }
         let quotas = try await applicableQuotas(for: project, environment: environment, on: db)
 
@@ -477,7 +476,7 @@ struct QuotaEnforcementService {
     /// no longer be derived from the deleted project after its cascade.
     static func resyncAndSaveReservations(
         _ quotas: [ResourceQuota],
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         for quota in quotas {
             let synchronized = try await resyncReservations(quota, on: db)
@@ -494,7 +493,7 @@ struct QuotaEnforcementService {
     /// cycle between network creation, transfer, and deletion.
     static func lockProjectNetworkMutations(
         for project: Project,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         guard let projectID = project.id else { return }
         try await lockProjectNetworkMutations(projectID: projectID, on: db)
@@ -502,7 +501,7 @@ struct QuotaEnforcementService {
 
     static func lockProjectNetworkMutations(
         projectID: UUID,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await lockAdvisoryKey("project-network:\(projectID.uuidString)", on: db)
     }
@@ -515,15 +514,15 @@ struct QuotaEnforcementService {
     /// the same Postgres) without a persisted lock row. Locks are taken in a stable
     /// (sorted) id order so two creates touching an overlapping set of quotas can't
     /// deadlock by acquiring them in opposite orders.
-    private static func lockQuotas(_ quotas: [ResourceQuota], on db: Database) async throws {
+    private static func lockQuotas(_ quotas: [ResourceQuota], on db: PostgresStoreContext) async throws {
         let keys = quotas.compactMap { $0.id?.uuidString }.sorted()
         for key in keys {
             try await lockAdvisoryKey(key, on: db)
         }
     }
 
-    private static func lockAdvisoryKey(_ key: String, on db: Database) async throws {
-        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
+    private static func lockAdvisoryKey(_ key: String, on db: PostgresStoreContext) async throws {
+        guard let sql = db as? PostgresStoreContext, sql.dialect.name == "postgresql" else { return }
         try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: key)))").run()
     }
 
@@ -543,7 +542,7 @@ struct QuotaEnforcementService {
     /// admission path this runs under the per-quota advisory lock, so every row
     /// it doesn't load is lock time every other create in the organization
     /// doesn't wait for (issue #692).
-    static func resyncReservations(_ quota: ResourceQuota, on db: Database) async throws -> ResourceQuota {
+    static func resyncReservations(_ quota: ResourceQuota, on db: PostgresStoreContext) async throws -> ResourceQuota {
         let scope = try await QuotaUsageAggregator.scope(of: quota, on: db)
         let usage = try await QuotaUsageAggregator.measure(scope, on: db)
         return quota.replacingReservations(with: usage)

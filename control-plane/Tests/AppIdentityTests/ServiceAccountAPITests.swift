@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Testing
 import Vapor
@@ -16,7 +15,6 @@ final class ServiceAccountAPITests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -35,7 +33,7 @@ final class ServiceAccountAPITests {
     }
 
     private func makeEnv(_ app: Application, prefix: String) async throws -> Env {
-        let builder = TestDataBuilder(db: app.db)
+        let builder = TestDataBuilder(db: app.testPostgres)
         let org = try await builder.createOrganization(name: "\(prefix) Org")
         let project = try await builder.createProject(
             name: "\(prefix) Project", description: "d", organization: org)
@@ -100,7 +98,7 @@ final class ServiceAccountAPITests {
 
             // The creator's explicit admin binding on the account.
             let creatorBindings = try await RoleBindingService.activeBindings(
-                nodeType: .serviceAccount, nodeID: accountID, on: app.db)
+                nodeType: .serviceAccount, nodeID: accountID, on: app.testPostgres)
             #expect(creatorBindings.count == 1)
             #expect(creatorBindings.first?.principalType == IAMPrincipalType.user.rawValue)
 
@@ -136,10 +134,10 @@ final class ServiceAccountAPITests {
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            #expect(try await LegacyServiceAccountStore.account(id: accountID, on: app.db) == nil)
+            #expect(try await LegacyServiceAccountStore.account(id: accountID, on: app.testPostgres) == nil)
             // Both binding directions were cleaned up.
             let leftover = try await RoleBindingService.activeBindings(
-                nodeType: .serviceAccount, nodeID: accountID, on: app.db)
+                nodeType: .serviceAccount, nodeID: accountID, on: app.testPostgres)
             #expect(leftover.isEmpty)
         }
     }
@@ -150,7 +148,7 @@ final class ServiceAccountAPITests {
             let env = try await makeEnv(app, prefix: "denied")
             let projectID = try env.project.requireID()
             let account = try await LegacyServiceAccountStore.insert(
-                ServiceAccountWrite(name: "hidden", projectID: projectID), on: app.db)
+                ServiceAccountWrite(name: "hidden", projectID: projectID), on: app.testPostgres)
 
             try await app.test(.POST, "/api/projects/\(projectID)/service-accounts") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: env.memberToken)
@@ -174,7 +172,7 @@ final class ServiceAccountAPITests {
             let env = try await makeEnv(app, prefix: "role")
             let projectID = try env.project.requireID()
             let account = try await LegacyServiceAccountStore.insert(
-                ServiceAccountWrite(name: "roled", projectID: projectID), on: app.db)
+                ServiceAccountWrite(name: "roled", projectID: projectID), on: app.testPostgres)
             let accountID = account.id
 
             try await app.test(.PUT, "/api/service-accounts/\(accountID)/project-role") { req in
@@ -188,7 +186,7 @@ final class ServiceAccountAPITests {
             #expect(
                 try await WhoCanService.can(
                     principalType: .serviceAccount, principalID: accountID,
-                    action: "vm:create", node: projectNode, app: app, on: app.db))
+                    action: "vm:create", node: projectNode, app: app, on: app.testPostgres))
 
             // Replacing narrows: editor → viewer leaves exactly one binding.
             try await app.test(.PUT, "/api/service-accounts/\(accountID)/project-role") { req in
@@ -198,12 +196,12 @@ final class ServiceAccountAPITests {
                 #expect(res.status == .ok)
             }
             let bindings = try await RoleBindingService.activeBindings(
-                principalType: .serviceAccount, principalID: accountID, on: app.db)
+                principalType: .serviceAccount, principalID: accountID, on: app.testPostgres)
             #expect(bindings.count == 1)
             #expect(
                 try await WhoCanService.can(
                     principalType: .serviceAccount, principalID: accountID,
-                    action: "vm:create", node: projectNode, app: app, on: app.db) == false)
+                    action: "vm:create", node: projectNode, app: app, on: app.testPostgres) == false)
 
             // An unknown role is a 400, and a bare member may not grant.
             try await app.test(.PUT, "/api/service-accounts/\(accountID)/project-role") { req in
@@ -226,7 +224,7 @@ final class ServiceAccountAPITests {
             }
             #expect(
                 try await RoleBindingService.activeBindings(
-                    principalType: .serviceAccount, principalID: accountID, on: app.db
+                    principalType: .serviceAccount, principalID: accountID, on: app.testPostgres
                 ).isEmpty)
         }
     }
@@ -239,7 +237,7 @@ final class ServiceAccountAPITests {
             let env = try await makeEnv(app, prefix: "spiffe")
             let projectID = try env.project.requireID()
             let account = try await LegacyServiceAccountStore.insert(
-                ServiceAccountWrite(name: "registered", projectID: projectID), on: app.db)
+                ServiceAccountWrite(name: "registered", projectID: projectID), on: app.testPostgres)
             let accountID = account.id
             var registrationID: UUID!
 
@@ -257,7 +255,7 @@ final class ServiceAccountAPITests {
 
             // The registry resolves the identity to the account's principal.
             let resolved = try await WorkloadRegistry.resolve(
-                spiffeID: "spiffe://strato.local/sa/registered", on: app.db)
+                spiffeID: "spiffe://strato.local/sa/registered", on: app.testPostgres)
             #expect(resolved == .serviceAccount(id: accountID))
 
             // Not a SPIFFE URI → 400; an already-registered URI → 409; the
@@ -278,13 +276,13 @@ final class ServiceAccountAPITests {
 
             // Attaching an identity is grant-shaped: a project *editor* can
             // update the account but may not register identities to it.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let editor = try await builder.createUser(
                 username: "spiffe-editor", email: "spiffe-editor@example.com")
             try await builder.addUserToOrganization(user: editor, organization: env.org, role: "member")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: editor.id!, role: .editor,
-                nodeType: .project, nodeID: projectID, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: projectID, createdBy: nil, on: app.testPostgres)
             let editorToken = try await editor.generateAPIKey(on: app)
             try await app.test(.PATCH, "/api/service-accounts/\(accountID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: editorToken)
@@ -323,7 +321,7 @@ final class ServiceAccountAPITests {
             }
             #expect(
                 try await WorkloadRegistry.resolve(
-                    spiffeID: "spiffe://strato.local/sa/registered", on: app.db) == nil)
+                    spiffeID: "spiffe://strato.local/sa/registered", on: app.testPostgres) == nil)
         }
     }
 
@@ -360,15 +358,15 @@ final class ServiceAccountAPITests {
 
             // The account cascaded away with the project — and neither the
             // creator binding on its node nor the binding it held survived.
-            #expect(try await LegacyServiceAccountStore.account(id: accountID, on: app.db) == nil)
+            #expect(try await LegacyServiceAccountStore.account(id: accountID, on: app.testPostgres) == nil)
             let onNode = try await LegacyRoleBindingStore.bindings(
                 nodeType: IAMNodeType.serviceAccount.rawValue,
                 nodeID: accountID,
-                on: app.db).count
+                on: app.testPostgres).count
             let held = try await LegacyRoleBindingStore.bindings(
                 principalType: IAMPrincipalType.serviceAccount.rawValue,
                 principalID: accountID,
-                on: app.db).count
+                on: app.testPostgres).count
             #expect(onNode == 0)
             #expect(held == 0)
         }
@@ -383,7 +381,7 @@ final class ServiceAccountAPITests {
             let orgID = try env.org.requireID()
             let projectID = try env.project.requireID()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let sysAdmin = try await builder.createUser(
                 username: "wlreg-root", email: "wlreg-root@example.com", isSystemAdmin: true)
             let sysAdminToken = try await sysAdmin.generateAPIKey(on: app)
@@ -426,7 +424,7 @@ final class ServiceAccountAPITests {
                     id: roleID, actions: ["project:read"]),
                 actions: ["project:read"],
                 managed: false,
-                createdBy: nil), on: app.db)
+                createdBy: nil), on: app.testPostgres)
             try await app.test(
                 .PUT, "/api/projects/\(projectID)/workload-grants/\(registrationID!)"
             ) { req in
@@ -439,7 +437,7 @@ final class ServiceAccountAPITests {
             #expect(
                 try await WhoCanService.can(
                     principalType: .workload, principalID: registrationID,
-                    action: "project:read", node: projectNode, app: app, on: app.db))
+                    action: "project:read", node: projectNode, app: app, on: app.testPostgres))
 
             // The ordinary project-access listing now includes workload
             // principals, so a project admin can render and edit the binding
@@ -466,7 +464,7 @@ final class ServiceAccountAPITests {
             }
             #expect(
                 try await RoleBindingService.activeBindings(
-                    principalType: .workload, principalID: registrationID, on: app.db
+                    principalType: .workload, principalID: registrationID, on: app.testPostgres
                 ).isEmpty)
         }
     }

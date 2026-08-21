@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -21,7 +21,7 @@ import Vapor
 enum OffboardingSweep {
     /// Run inside the same transaction that deletes the organization-membership
     /// membership row.
-    static func userLeftOrganization(userID: UUID, organizationID: UUID, on db: Database) async throws {
+    static func userLeftOrganization(userID: UUID, organizationID: UUID, on db: PostgresStoreContext) async throws {
         // Keep this delete on the caller's existing transaction. Moving it to
         // the native pool before organization memberships migrate would let
         // one half commit without the other.

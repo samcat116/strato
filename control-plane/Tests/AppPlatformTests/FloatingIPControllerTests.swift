@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -39,9 +38,8 @@ final class FloatingIPControllerTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "fipuser",
                 email: "fip@example.com",
@@ -50,7 +48,7 @@ final class FloatingIPControllerTests {
             )
             let org = try await builder.createOrganization(name: "FIP Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "FIP Project",
@@ -61,7 +59,7 @@ final class FloatingIPControllerTests {
                 id: Self.fixtureSiteID,
                 name: "Floating IP Test Site",
                 organizationScope: .organization(try org.requireID()))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
             let token = try await user.generateAPIKey(on: app)
 
             try await test(app, user, org, project, token)
@@ -99,17 +97,17 @@ final class FloatingIPControllerTests {
     private func createVMWithNIC(
         app: Application, org: Organization, project: Project, network: LogicalNetwork, fixedIP: String
     ) async throws -> (VM, VMNetworkInterface) {
-        let builder = TestDataBuilder(db: app.db)
-        let vm = try await builder.createVM(name: "fip-vm-\(UUID().uuidString.prefix(8))", project: project)
+        let builder = TestDataBuilder(db: app.testPostgres)
+        var vm = try await builder.createVM(name: "fip-vm-\(UUID().uuidString.prefix(8))", project: project)
         let nic = VMNetworkInterface(
             vmID: vm.id!, logicalNetworkID: try network.requireID(), macAddress: VMNetworkInterface.generateMACAddress()
         )
-        try await nic.save(on: app.db)
+        try await nic.save(on: app.testPostgres)
         try await LegacyInterfaceAddressStore.insert(
             kind: .vm,
             interfaceID: nic.id!, logicalNetworkID: try network.requireID(), family: .ipv4,
             address: fixedIP, prefixLength: 24, gateway: network.gateway,
-            on: app.db)
+            on: app.testPostgres)
         try await placeVM(
             vm, app: app, org: org, protocolVersion: WireProtocol.currentVersion,
             named: "agent-\(UUID().uuidString.prefix(8))")
@@ -172,8 +170,8 @@ final class FloatingIPControllerTests {
             // is allowed.
             let siteA = Site(name: "site-a", organizationScope: .organization(org.id!))
             let siteB = Site(name: "site-b", organizationScope: .organization(org.id!))
-            try await siteA.save(on: app.db)
-            try await siteB.save(on: app.db)
+            try await siteA.save(on: app.testPostgres)
+            try await siteB.save(on: app.testPostgres)
             for (name, site) in [("edge-a", siteA), ("edge-b", siteB)] {
                 try await app.test(.POST, "/api/floating-ip-pools") { req in
                     req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -192,15 +190,15 @@ final class FloatingIPControllerTests {
     @Test("Pool names are unique per owner, not per deployment")
     func poolNameScopedToOwner() async throws {
         try await withFloatingIPTestApp { app, _, org, _, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let otherOrg = try await builder.createOrganization(name: "FIP Other Org")
             let otherSite = Site(
                 name: "FIP Other Site", organizationScope: .organization(try otherOrg.requireID()))
-            try await otherSite.save(on: app.db)
+            try await otherSite.save(on: app.testPostgres)
             let ou = OrganizationalUnit(
                 name: "FIP OU", description: "folder-owned pools", organizationID: org.id!,
                 path: "/\(org.id!.uuidString)", depth: 1)
-            try await ou.save(on: app.db)
+            try await ou.save(on: app.testPostgres)
 
             func createPublicPool(
                 cidr: String, siteID: UUID, owner: [String: String]
@@ -287,7 +285,7 @@ final class FloatingIPControllerTests {
             let network = LogicalNetwork(
                 name: "backstop-net", subnet: "10.50.0.0/24", gateway: "10.50.0.1",
                 projectID: try project.requireID(), externalAccess: true)
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
             let (_, nic) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: network, fixedIP: "10.50.0.5")
 
@@ -295,13 +293,13 @@ final class FloatingIPControllerTests {
             // winner the controller's pre-check didn't see).
             try await LegacyFloatingIPStore.insert(
                 poolID: pool.id, address: "203.0.113.2", projectID: project.id!,
-                interfaceID: nic.id!, on: app.db)
+                interfaceID: nic.id!, on: app.testPostgres)
 
             // Second row targeting the same NIC hits the partial unique index.
             await #expect(throws: (any Error).self) {
                 try await LegacyFloatingIPStore.insert(
                     poolID: pool.id, address: "203.0.113.3", projectID: project.id!,
-                    interfaceID: nic.id!, on: app.db)
+                    interfaceID: nic.id!, on: app.testPostgres)
             }
         }
     }
@@ -343,11 +341,11 @@ final class FloatingIPControllerTests {
             let egress = LogicalNetwork(
                 name: "egress-net", subnet: "10.40.0.0/24", gateway: "10.40.0.1",
                 projectID: try project.requireID(), externalAccess: true)
-            try await egress.save(on: app.db)
+            try await egress.save(on: app.testPostgres)
             let isolated = LogicalNetwork(
                 name: "isolated-net", subnet: "10.41.0.0/24", gateway: "10.41.0.1",
                 projectID: try project.requireID(), externalAccess: false)
-            try await isolated.save(on: app.db)
+            try await isolated.save(on: app.testPostgres)
 
             let (vm, nic) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: egress, fixedIP: "10.40.0.5")
@@ -372,7 +370,7 @@ final class FloatingIPControllerTests {
 
             // Cross-project VM → 400, the one status every cross-project
             // refusal answers with (issue #777); was 409.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let otherProject = try await builder.createProject(
                 name: "Other FIP Project", description: "", organization: org)
             let (foreignVM, _) = try await self.createVMWithNIC(
@@ -397,7 +395,7 @@ final class FloatingIPControllerTests {
                 #expect(body.fixedIP == "10.40.0.5")
                 #expect(body.networkName == "egress-net")
             }
-            let refreshedNetwork = try await LogicalNetwork.find(egress.id, on: app.db)
+            let refreshedNetwork = try await LogicalNetwork.find(egress.id, on: app.testPostgres)
             #expect(refreshedNetwork!.generation == generationBefore + 1)
 
             // Second floating IP on the same NIC → 409.
@@ -444,7 +442,7 @@ final class FloatingIPControllerTests {
             let network = LogicalNetwork(
                 name: "concurrent-fip-net", subnet: "10.42.0.0/24", gateway: "10.42.0.1",
                 projectID: try project.requireID(), externalAccess: true)
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
             let (firstVM, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: network, fixedIP: "10.42.0.5")
             let (secondVM, _) = try await self.createVMWithNIC(
@@ -487,11 +485,11 @@ final class FloatingIPControllerTests {
             }()
             _ = try await (firstAttach, secondAttach)
 
-            let stored = try #require(try await LogicalNetwork.find(network.id, on: app.db))
+            let stored = try #require(try await LogicalNetwork.find(network.id, on: app.testPostgres))
             let storedFirst = try #require(
-                try await LegacyFloatingIPStore.find(id: firstFIP, on: app.db))
+                try await LegacyFloatingIPStore.find(id: firstFIP, on: app.testPostgres))
             let storedSecond = try #require(
-                try await LegacyFloatingIPStore.find(id: secondFIP, on: app.db))
+                try await LegacyFloatingIPStore.find(id: secondFIP, on: app.testPostgres))
             #expect(stored.generation == startGeneration + 2)
             #expect(storedFirst.interfaceID != nil)
             #expect(storedSecond.interfaceID != nil)
@@ -503,6 +501,7 @@ final class FloatingIPControllerTests {
     private func placeVM(
         _ vm: VM, app: Application, org: Organization, protocolVersion: Int, named: String = "fip-agent"
     ) async throws {
+        var vm = vm
         let message = AgentRegisterMessage(
             agentId: named,
             hostname: "fip-host",
@@ -519,13 +518,13 @@ final class FloatingIPControllerTests {
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: named, siteID: Self.fixtureSiteID,
             organizationScope: .organization(org.id!))
-        let site = try #require(try await LegacySiteStore.site(id: Self.fixtureSiteID, on: app.db))
+        let site = try #require(try await LegacySiteStore.site(id: Self.fixtureSiteID, on: app.testPostgres))
         if site.networkControllerAgentID == nil {
             _ = try await LegacySiteStore.setNetworkController(
-                siteID: Self.fixtureSiteID, agentID: agentUUID, condition: .unset, on: app.db)
+                siteID: Self.fixtureSiteID, agentID: agentUUID, condition: .unset, on: app.testPostgres)
         }
         vm.hypervisorId = agentUUID.uuidString
-        try await vm.save(on: app.db)
+        try await vm.save(on: app.testPostgres)
     }
 
     @Test("Attach is refused while the VM is unplaced")
@@ -535,14 +534,14 @@ final class FloatingIPControllerTests {
             let network = LogicalNetwork(
                 name: "unplaced-net", subnet: "10.85.0.0/24", gateway: "10.85.0.1",
                 projectID: try project.requireID(), externalAccess: true)
-            try await network.save(on: app.db)
-            let (vm, _) = try await self.createVMWithNIC(
+            try await network.save(on: app.testPostgres)
+            var (vm, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: network, fixedIP: "10.85.0.5")
             // Simulate a scheduling-pending (or failed-placement) VM: the
             // scheduler has no floating-IP capability requirement, so an
             // attach accepted now could land on a pre-v12 agent later.
             vm.hypervisorId = nil
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             var fipId: UUID?
             try await app.test(.POST, "/api/floating-ips") { req in
@@ -567,7 +566,7 @@ final class FloatingIPControllerTests {
             let network = LogicalNetwork(
                 name: "no-controller-net", subnet: "10.95.0.0/24", gateway: "10.95.0.1",
                 projectID: try project.requireID(), externalAccess: true)
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
             let (vm, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: network, fixedIP: "10.95.0.5")
 
@@ -575,10 +574,10 @@ final class FloatingIPControllerTests {
             // controller: assembly then sends *no* agent the network state,
             // so nothing would realize the NAT rule.
             let site = Site(name: "controllerless", organizationScope: .organization(org.id!))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
             let agent = try #require(
-                try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.db))
-            try await agent.replacing(siteID: try site.requireID()).save(on: app.db)
+                try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.testPostgres))
+            try await agent.replacing(siteID: try site.requireID()).save(on: app.testPostgres)
 
             var fipId: UUID?
             try await app.test(.POST, "/api/floating-ips") { req in
@@ -596,7 +595,7 @@ final class FloatingIPControllerTests {
 
             // Designating the (current-protocol) host as controller unblocks it.
             _ = try await LegacySiteStore.setNetworkController(
-                siteID: try site.requireID(), agentID: agent.id, on: app.db)
+                siteID: try site.requireID(), agentID: agent.id, on: app.testPostgres)
             try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(["vmId": vm.id!.uuidString])
@@ -613,7 +612,7 @@ final class FloatingIPControllerTests {
             let network = LogicalNetwork(
                 name: "offline-ctl-net", subnet: "10.96.0.0/24", gateway: "10.96.0.1",
                 projectID: try project.requireID(), externalAccess: true)
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
             let (vm, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: network, fixedIP: "10.96.0.5")
 
@@ -622,9 +621,9 @@ final class FloatingIPControllerTests {
             // that would author the NAT rule, so nothing realizes it — issue
             // #833's cross-node case, distinct from having no controller at all.
             let site = Site(name: "offline-controller", organizationScope: .organization(org.id!))
-            try await site.save(on: app.db)
-            let host = try #require(try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.db))
-            try await host.replacing(siteID: try site.requireID()).save(on: app.db)
+            try await site.save(on: app.testPostgres)
+            let host = try #require(try await Agent.find(UUID(uuidString: vm.hypervisorId!), on: app.testPostgres))
+            try await host.replacing(siteID: try site.requireID()).save(on: app.testPostgres)
 
             let controllerUUID = try await app.agentService.registerAgent(
                 AgentRegisterMessage(
@@ -636,13 +635,13 @@ final class FloatingIPControllerTests {
                     dependencyObservations: [Self.healthyOverlayObservation()]),
                 agentName: "fip-offline-ctl", siteID: site.id,
                 organizationScope: .organization(org.id!))
-            let controller = try #require(try await Agent.find(controllerUUID, on: app.db))
+            let controller = try #require(try await Agent.find(controllerUUID, on: app.testPostgres))
             _ = try await LegacySiteStore.setNetworkController(
-                siteID: try site.requireID(), agentID: controllerUUID, on: app.db)
+                siteID: try site.requireID(), agentID: controllerUUID, on: app.testPostgres)
             try await controller.replacing(
                 lastHeartbeat: .some(Date().addingTimeInterval(
                     -(SiteNetworkAuthority.controllerOfflineGrace + 600)))
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             var fipId: UUID?
             try await app.test(.POST, "/api/floating-ips") { req in
@@ -660,7 +659,7 @@ final class FloatingIPControllerTests {
             }
 
             // A heartbeat from the controller unblocks the same attach.
-            try await controller.replacing(lastHeartbeat: .some(Date())).save(on: app.db)
+            try await controller.replacing(lastHeartbeat: .some(Date())).save(on: app.testPostgres)
             try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(["vmId": vm.id!.uuidString])
@@ -685,7 +684,7 @@ final class FloatingIPControllerTests {
             // flag alone (the evaluator's tier-1 policy) must be enough to
             // allocate and to list, with and without an explicit project
             // filter.
-            let bareAdmin = try await TestDataBuilder(db: app.db).createUser(
+            let bareAdmin = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "fip-bare-admin", email: "fip-bare-admin@example.com",
                 displayName: "Bare Admin", isSystemAdmin: true)
             let bareAdminToken = try await bareAdmin.generateAPIKey(on: app)
@@ -716,7 +715,7 @@ final class FloatingIPControllerTests {
     func siteDeletePoolGuard() async throws {
         try await withFloatingIPTestApp { app, _, org, _, token in
             let site = Site(name: "pool-pinned-site", organizationScope: .organization(org.id!))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
             try await app.test(.POST, "/api/floating-ip-pools") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
@@ -743,10 +742,10 @@ final class FloatingIPControllerTests {
             // The site belongs to a different organization: an admin of
             // `org` may create pools in their own scope but must not occupy
             // another tenant's site.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let foreignOrg = try await builder.createOrganization(name: "Pool Foreign Org")
             let site = Site(name: "gated-site", organizationScope: .organization(foreignOrg.id!))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
 
             let member = try await builder.createUser(
                 username: "poolmember",
@@ -789,14 +788,14 @@ final class FloatingIPControllerTests {
             let network = LogicalNetwork(
                 name: "vm-perm-net", subnet: "10.90.0.0/24", gateway: "10.90.0.1",
                 projectID: try project.requireID(), externalAccess: true)
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
             let (vm, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: network, fixedIP: "10.90.0.5")
 
             // A user who holds the floating IP (a resource-level admin
             // binding, what allocation writes for its creator) but nothing on
             // the VM must not be able to change the VM's exposure.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let member = try await builder.createUser(
                 username: "fipmember",
                 email: "fipmember@example.com",
@@ -815,7 +814,7 @@ final class FloatingIPControllerTests {
             }
             try await RoleBindingService.grant(
                 principalType: .user, principalID: member.id!, role: .admin,
-                nodeType: .floatingIP, nodeID: fipId!, createdBy: nil, on: app.db)
+                nodeType: .floatingIP, nodeID: fipId!, createdBy: nil, on: app.testPostgres)
 
             try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
@@ -830,7 +829,7 @@ final class FloatingIPControllerTests {
             // Editor on the VM itself flips the verdict.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: member.id!, role: .editor,
-                nodeType: .virtualMachine, nodeID: vm.id!, createdBy: nil, on: app.db)
+                nodeType: .virtualMachine, nodeID: vm.id!, createdBy: nil, on: app.testPostgres)
             try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
                 try req.content.encode(["vmId": vm.id!.uuidString])
@@ -847,7 +846,7 @@ final class FloatingIPControllerTests {
             let network = LogicalNetwork(
                 name: "egress-guard-net", subnet: "10.60.0.0/24", gateway: "10.60.0.1",
                 projectID: try project.requireID(), externalAccess: true)
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
             let (vm, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: network, fixedIP: "10.60.0.5")
 
@@ -895,7 +894,7 @@ final class FloatingIPControllerTests {
             let network = LogicalNetwork(
                 name: "site-move-net", subnet: "10.70.0.0/24", gateway: "10.70.0.1",
                 projectID: try project.requireID(), externalAccess: true)
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
             let (vm, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, network: network, fixedIP: "10.70.0.5")
 
@@ -914,7 +913,7 @@ final class FloatingIPControllerTests {
             }
 
             let site = Site(name: "move-target", organizationScope: .organization(org.id!))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
 
             // Moving the pool to another site while an address is attached
             // would strand the attachment.

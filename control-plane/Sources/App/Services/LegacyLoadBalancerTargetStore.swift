@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 struct LoadBalancerListenerSnapshot: Equatable, Sendable {
@@ -28,7 +27,7 @@ struct LoadBalancerBackendSnapshot: Equatable, Sendable {
 enum LegacyLoadBalancerTargetStore {
     static func listeners(
         loadBalancerID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [LoadBalancerListenerSnapshot] {
         let rows = try await requireSQL(db).raw(
             """
@@ -44,7 +43,7 @@ enum LegacyLoadBalancerTargetStore {
     static func listener(
         id: UUID,
         loadBalancerID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LoadBalancerListenerSnapshot? {
         try await requireSQL(db).raw(
             """
@@ -62,7 +61,7 @@ enum LegacyLoadBalancerTargetStore {
         loadBalancerID: UUID,
         port: Int,
         backendPort: Int,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LoadBalancerListenerSnapshot {
         guard let row = try await requireSQL(db).raw(
             """
@@ -86,7 +85,7 @@ enum LegacyLoadBalancerTargetStore {
         loadBalancerID: UUID,
         port: Int,
         backendPort: Int,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LoadBalancerListenerSnapshot? {
         try await requireSQL(db).raw(
             """
@@ -104,7 +103,7 @@ enum LegacyLoadBalancerTargetStore {
     static func deleteListener(
         id: UUID,
         loadBalancerID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
@@ -118,7 +117,7 @@ enum LegacyLoadBalancerTargetStore {
 
     static func backends(
         loadBalancerID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [LoadBalancerBackendSnapshot] {
         let rows = try await requireSQL(db).raw(
             """
@@ -134,7 +133,7 @@ enum LegacyLoadBalancerTargetStore {
     static func backend(
         id: UUID,
         loadBalancerID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LoadBalancerBackendSnapshot? {
         guard let row = try await requireSQL(db).raw(
             """
@@ -153,7 +152,7 @@ enum LegacyLoadBalancerTargetStore {
         loadBalancerID: UUID,
         interfaceID: UUID?,
         address: String?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LoadBalancerBackendSnapshot {
         guard let row = try await requireSQL(db).raw(
             """
@@ -177,7 +176,7 @@ enum LegacyLoadBalancerTargetStore {
     static func deleteBackend(
         id: UUID,
         loadBalancerID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
@@ -195,7 +194,7 @@ enum LegacyLoadBalancerTargetStore {
         loadBalancerID: UUID,
         healthStatus: LoadBalancerBackendHealth,
         lastHealthCheckAt: Date?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LoadBalancerBackendSnapshot? {
         guard let row = try await requireSQL(db).raw(
             """
@@ -210,7 +209,7 @@ enum LegacyLoadBalancerTargetStore {
         return try row.snapshot()
     }
 
-    static func backendCount(on db: any Database) async throws -> Int {
+    static func backendCount(on db: PostgresStoreContext) async throws -> Int {
         struct Count: Decodable { let count: Int }
         return try await requireSQL(db).raw(
             "SELECT count(*)::bigint AS count FROM load_balancer_backends"
@@ -282,8 +281,8 @@ enum LegacyLoadBalancerTargetStore {
         updated_at AS "updatedAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Load-balancer targets require PostgreSQL")
         }
         return sql

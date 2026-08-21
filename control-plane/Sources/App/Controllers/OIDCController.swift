@@ -1,6 +1,4 @@
 import ControlPlanePostgres
-import Fluent
-import SQLKit
 import Vapor
 import JWT
 import Crypto
@@ -10,15 +8,24 @@ struct OIDCController: RouteCollection {
     private let providers: OIDCProvidersPersistence
     private let groups: GroupsPersistence
     private let externalIDs: SCIMExternalIDsPersistence
+    private let hierarchy: HierarchyPersistence
+    private let users: UserDirectoryPersistence
+    private let iam: IAMPersistence
 
     init(
         providers: OIDCProvidersPersistence,
         groups: GroupsPersistence,
-        externalIDs: SCIMExternalIDsPersistence
+        externalIDs: SCIMExternalIDsPersistence,
+        hierarchy: HierarchyPersistence,
+        users: UserDirectoryPersistence,
+        iam: IAMPersistence
     ) {
         self.providers = providers
         self.groups = groups
         self.externalIDs = externalIDs
+        self.hierarchy = hierarchy
+        self.users = users
+        self.iam = iam
     }
 
     func boot(routes: RoutesBuilder) throws {
@@ -88,8 +95,7 @@ struct OIDCController: RouteCollection {
             groupMappings: createRequest.groupMappings,
             adminClaimValues: createRequest.adminClaimValues,
             roleMappings: createRequest.roleMappings,
-            organizationID: organizationID,
-            on: req.db
+            organizationID: organizationID
         )
 
         var provider = try await providers.create(OIDCProviderWrite(
@@ -208,8 +214,7 @@ struct OIDCController: RouteCollection {
             groupMappings: updateRequest.groupMappings,
             adminClaimValues: updateRequest.adminClaimValues,
             roleMappings: updateRequest.roleMappings,
-            organizationID: organizationID,
-            on: req.db
+            organizationID: organizationID
         )
         // An empty string clears the groups claim (disables mapping).
         if let groupsClaim = updateRequest.groupsClaim {
@@ -364,30 +369,15 @@ struct OIDCController: RouteCollection {
 
         // Case-insensitive name match. Exact match first, then a fallback scan
         // (org counts are small, so the scan is cheap).
-        var organization = try await LegacyOrganizationStore.organizations(
-            name: rawName, on: req.db
-        ).first
-        if organization == nil, let sql = req.db as? SQLDatabase {
-            // Case-insensitive fallback done in SQL (LOWER) with LIMIT 2 —
-            // enough to detect ambiguity without scanning the org table on a
-            // public, unauthenticated endpoint. Ambiguous matches (org names
-            // differing only by case) must not route the user to an arbitrary
-            // tenant's IdP — exact casing is required in that situation.
-            let rows = try await sql.select()
-                .column("id")
-                .from("organizations")
-                .where(SQLFunction("LOWER", args: SQLColumn("name")), .equal, SQLBind(rawName.lowercased()))
-                .limit(2)
-                .all()
-            if rows.count == 1 {
-                let id = try rows[0].decode(column: "id", as: UUID.self)
-                organization = try await Organization.find(id, on: req.db)
-            }
+        let organizations = try await hierarchy.allOrganizations()
+        let exact = organizations.first { $0.name == rawName }
+        let folded = organizations.filter {
+            $0.name.caseInsensitiveCompare(rawName) == .orderedSame
         }
-
-        guard let organization, let organizationID = organization.id else {
+        guard let organization = exact ?? (folded.count == 1 ? folded[0] : nil) else {
             return SSOLookupResponse(organizationID: nil, providers: [])
         }
+        let organizationID = organization.id
 
         let providers = try await providers.providers(organizationID: organizationID, enabledOnly: true)
 
@@ -491,7 +481,7 @@ struct OIDCController: RouteCollection {
 
         // Fetch the OIDC provider
         guard let provider = try await providers.ownedProvider(id: providerID, organizationID: organizationID),
-            let organization = try await Organization.find(organizationID, on: req.db)
+            let organization = try await hierarchy.organization(id: organizationID)
         else {
             throw Abort(.notFound, reason: "OIDC provider not found")
         }
@@ -521,10 +511,12 @@ struct OIDCController: RouteCollection {
             // Resolve the user and converge identity/authz state with the
             // token's claims (issue #363).
             let identity = OIDCIdentityService(
-                db: req.db,
                 providers: providers,
                 groups: groups,
                 externalIDs: externalIDs,
+                users: users,
+                hierarchy: hierarchy,
+                iam: iam,
                 logger: req.logger
             )
 
@@ -1077,15 +1069,14 @@ struct OIDCController: RouteCollection {
         groupMappings: [OIDCGroupMapping]?,
         adminClaimValues: [String]?,
         roleMappings: [OIDCRoleMapping]?,
-        organizationID: UUID,
-        on db: Database
+        organizationID: UUID
     ) async throws {
         if let defaultRoleID {
             do {
                 _ = try await MemberRoleResolver.resolve(
                     defaultRoleID,
                     scopeNode: IAMNode(type: .organization, id: organizationID),
-                    on: db)
+                    using: iam)
             } catch {
                 throw Abort(
                     .badRequest,
@@ -1116,7 +1107,7 @@ struct OIDCController: RouteCollection {
                     _ = try await MemberRoleResolver.resolve(
                         mapping.roleID,
                         scopeNode: IAMNode(type: .organization, id: organizationID),
-                        on: db)
+                        using: iam)
                 } catch {
                     throw Abort(
                         .badRequest,

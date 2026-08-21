@@ -1,6 +1,5 @@
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import AppTestSupport
 @testable import App
@@ -23,9 +22,8 @@ final class VolumeAuthorizationTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "volauthuser",
                 email: "volauth@example.com",
@@ -34,7 +32,7 @@ final class VolumeAuthorizationTests {
             )
             let org = try await builder.createOrganization(name: "Volume Auth Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Volume Auth Project",
@@ -79,7 +77,7 @@ final class VolumeAuthorizationTests {
             // The caller may create volumes in their own project, but the
             // source image lives in a foreign organization no binding
             // reaches — the exact cross-project leak this test pins.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let foreignOrg = try await builder.createOrganization(name: "Foreign Image Org")
             let foreignProject = try await builder.createProject(
                 name: "Foreign Image Project", description: "elsewhere", organization: foreignOrg)
@@ -99,7 +97,7 @@ final class VolumeAuthorizationTests {
             }
 
             // The unauthorized request must not have left a volume behind.
-            let volumeCount = try await Volume.all(on: app.db).count
+            let volumeCount = try await Volume.all(on: app.testPostgres).count
             #expect(volumeCount == 0)
         }
     }
@@ -119,12 +117,12 @@ final class VolumeAuthorizationTests {
                 #expect(accepted.targetGeneration == 1)
             }
 
-            // Placement runs on a detached task that touches app.db; wait for it
+            // Placement runs on a detached task that touches app.testPostgres; wait for it
             // to settle (no agents connected → degraded) so it can't race
             // application shutdown during test teardown.
             var placed: Volume?
             for _ in 0..<100 {
-                placed = try await Volume.all(on: app.db).first
+                placed = try await Volume.all(on: app.testPostgres).first
                 if placed?.conditions.degraded != nil { break }
                 try await Task.sleep(for: .milliseconds(50))
             }

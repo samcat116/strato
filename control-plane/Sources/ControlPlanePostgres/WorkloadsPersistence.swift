@@ -169,6 +169,7 @@ public enum WorkloadsPersistenceError: Error, Equatable, Sendable {
     case unexpectedRowCount(expected: Int, actual: Int)
     case noMatchingClaims
     case duplicateSPIFFEID(String)
+    case spiffeIDOwnedByDifferentPrincipal(String)
 }
 
 /// Read-side workload identity facts used by IAM management surfaces. The
@@ -232,6 +233,16 @@ public struct WorkloadsPersistence: Sendable {
         }
     }
 
+    public func vmNames(ids: [UUID]) async throws -> [UUID: String] {
+        guard !ids.isEmpty else { return [:] }
+        let rows = try await database.withSession(operation: "workloads.vm_names.lookup") { session in
+            try await session.execute(
+                FindVMNames(ids: Array(Set(ids))),
+                operation: "workloads.vm_names.lookup.query")
+        }
+        return Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0.name) })
+    }
+
     public func createRegistration(
         _ write: WorkloadRegistrationWrite
     ) async throws -> WorkloadRegistrationSnapshot {
@@ -250,6 +261,37 @@ public struct WorkloadsPersistence: Sendable {
         }
     }
 
+    /// Establishes the first-seen agent mapping and verifies every later use.
+    /// The insert and authoritative read share one transaction, so concurrent
+    /// first connections converge on the unique SPIFFE-ID row.
+    public func requireAgentRegistration(
+        spiffeID: String,
+        agentName: String
+    ) async throws {
+        try await database.withTransaction(operation: "workloads.registrations.require_agent") {
+            session in
+            _ = try await session.execute(
+                InsertAgentRegistrationIfAbsent(
+                    id: UUID(), spiffeID: spiffeID, agentName: agentName),
+                operation: "workloads.registrations.require_agent.insert")
+            let rows = try await session.execute(
+                FindWorkloadRegistrationBySPIFFEID(spiffeID: spiffeID),
+                operation: "workloads.registrations.require_agent.lookup")
+            guard rows.count == 1, rows[0].kind == "agent", rows[0].agentName == agentName else {
+                throw WorkloadsPersistenceError.spiffeIDOwnedByDifferentPrincipal(spiffeID)
+            }
+        }
+    }
+
+    @discardableResult
+    public func deleteAgentRegistration(spiffeID: String) async throws -> Bool {
+        try await database.withSession(operation: "workloads.registrations.delete_agent") { session in
+            try await session.execute(
+                DeleteAgentRegistration(spiffeID: spiffeID),
+                operation: "workloads.registrations.delete_agent.query").count == 1
+        }
+    }
+
     @discardableResult
     public func deleteRegistration(
         id: UUID,
@@ -259,6 +301,23 @@ public struct WorkloadsPersistence: Sendable {
             try await session.execute(
                 DeleteWorkloadRegistration(id: id, serviceAccountID: serviceAccountID),
                 operation: "workloads.registrations.delete.query").count == 1
+        }
+    }
+
+    /// Removes a directly registered workload principal and all of its grants
+    /// in one transaction. Other registration kinds keep their existing
+    /// foreign-key ownership semantics and are deleted without grant cleanup.
+    @discardableResult
+    public func revokeRegistration(id: UUID, kind: String) async throws -> Bool {
+        try await database.withTransaction(operation: "workloads.registrations.revoke") { session in
+            if kind == "workload" {
+                _ = try await session.execute(
+                    DeleteWorkloadRoleBindings(principalID: id),
+                    operation: "workloads.registrations.revoke.bindings")
+            }
+            return try await session.execute(
+                DeleteWorkloadRegistration(id: id, serviceAccountID: nil),
+                operation: "workloads.registrations.revoke.registration").count == 1
         }
     }
 
@@ -613,6 +672,26 @@ private struct ListVMWorkloadRegistrations: WorkloadRegistrationStatement {
     }
 }
 
+private struct VMNameRow: Sendable {
+    let id: UUID
+    let name: String
+}
+
+private struct FindVMNames: PostgresPreparedStatement {
+    static let sql = "SELECT id, name FROM vms WHERE id = ANY($1) ORDER BY id"
+    typealias Row = VMNameRow
+    let ids: [UUID]
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 1)
+        bindings.append(ids)
+        return bindings
+    }
+    func decodeRow(_ row: PostgresRow) throws -> VMNameRow {
+        let value = try row.decode((UUID, String).self)
+        return VMNameRow(id: value.0, name: value.1)
+    }
+}
+
 private struct InsertWorkloadRegistration: WorkloadRegistrationStatement {
     static let sql = """
         INSERT INTO workload_registrations (
@@ -640,6 +719,30 @@ private struct InsertWorkloadRegistration: WorkloadRegistrationStatement {
     }
 }
 
+private struct InsertAgentRegistrationIfAbsent: PostgresPreparedStatement {
+    static let sql = """
+        INSERT INTO workload_registrations (
+            id, spiffe_id, kind, agent_name, created_at
+        ) VALUES ($1, $2, 'agent', $3, CURRENT_TIMESTAMP)
+        ON CONFLICT (spiffe_id) DO NOTHING
+        RETURNING id
+        """
+    typealias Row = UUID
+    let id: UUID
+    let spiffeID: String
+    let agentName: String
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 3)
+        bindings.append(id)
+        bindings.append(spiffeID)
+        bindings.append(agentName)
+        return bindings
+    }
+    func decodeRow(_ row: PostgresRow) throws -> UUID {
+        try row.makeRandomAccess()["id"].decode(UUID.self)
+    }
+}
+
 private struct DeleteWorkloadRegistration: PostgresPreparedStatement {
     static let sql = """
         DELETE FROM workload_registrations
@@ -653,6 +756,38 @@ private struct DeleteWorkloadRegistration: PostgresPreparedStatement {
         var bindings = PostgresBindings(capacity: 2)
         bindings.append(id)
         bindings.append(serviceAccountID)
+        return bindings
+    }
+    func decodeRow(_ row: PostgresRow) throws -> UUID { try row.decode(UUID.self) }
+}
+
+private struct DeleteAgentRegistration: PostgresPreparedStatement {
+    static let sql = """
+        DELETE FROM workload_registrations
+        WHERE spiffe_id = $1 AND kind::text = 'agent'
+        RETURNING id
+        """
+    typealias Row = UUID
+    let spiffeID: String
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 1)
+        bindings.append(spiffeID)
+        return bindings
+    }
+    func decodeRow(_ row: PostgresRow) throws -> UUID { try row.decode(UUID.self) }
+}
+
+private struct DeleteWorkloadRoleBindings: PostgresPreparedStatement {
+    static let sql = """
+        DELETE FROM role_bindings
+        WHERE principal_type::text = 'workload' AND principal_id = $1
+        RETURNING id
+        """
+    typealias Row = UUID
+    let principalID: UUID
+    func makeBindings() -> PostgresBindings {
+        var bindings = PostgresBindings(capacity: 1)
+        bindings.append(principalID)
         return bindings
     }
     func decodeRow(_ row: PostgresRow) throws -> UUID { try row.decode(UUID.self) }

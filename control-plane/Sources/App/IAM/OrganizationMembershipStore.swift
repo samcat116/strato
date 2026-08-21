@@ -1,7 +1,5 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
-import SQLKit
 
 /// Immutable decoding state for the last hierarchy callers that still share a
 /// Fluent transaction with identity writes. New hierarchy code uses
@@ -21,7 +19,7 @@ enum OrganizationMembershipStore {
         """
 
     static func membership(
-        userID: UUID, organizationID: UUID, on db: any Database
+        userID: UUID, organizationID: UUID, on db: PostgresStoreContext
     ) async throws -> LegacyOrganizationMembershipRecord? {
         try await requireSQL(db).raw(
             """
@@ -32,7 +30,7 @@ enum OrganizationMembershipStore {
     }
 
     static func firstMembership(
-        userID: UUID, on db: any Database
+        userID: UUID, on db: PostgresStoreContext
     ) async throws -> LegacyOrganizationMembershipRecord? {
         try await requireSQL(db).raw(
             """
@@ -44,7 +42,7 @@ enum OrganizationMembershipStore {
     }
 
     static func memberships(
-        userIDs: [UUID], on db: any Database
+        userIDs: [UUID], on db: PostgresStoreContext
     ) async throws -> [LegacyOrganizationMembershipRecord] {
         guard !userIDs.isEmpty else { return [] }
         return try await requireSQL(db).raw(
@@ -57,7 +55,7 @@ enum OrganizationMembershipStore {
     }
 
     static func memberships(
-        organizationID: UUID, userIDs: [UUID]? = nil, on db: any Database
+        organizationID: UUID, userIDs: [UUID]? = nil, on db: PostgresStoreContext
     ) async throws -> [LegacyOrganizationMembershipRecord] {
         let sql = try requireSQL(db)
         if let userIDs {
@@ -85,7 +83,7 @@ enum OrganizationMembershipStore {
         userID: UUID,
         organizationID: UUID,
         roleID: UUID? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LegacyOrganizationMembershipRecord {
         guard let row = try await requireSQL(db).raw(
             """
@@ -103,7 +101,7 @@ enum OrganizationMembershipStore {
     }
 
     static func updateRole(
-        id: UUID, roleID: UUID?, on db: any Database
+        id: UUID, roleID: UUID?, on db: PostgresStoreContext
     ) async throws -> LegacyOrganizationMembershipRecord? {
         try await requireSQL(db).raw(
             """
@@ -115,22 +113,22 @@ enum OrganizationMembershipStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> Bool {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> Bool {
         struct Identifier: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM user_organizations WHERE id = \(bind: id) RETURNING id"
         ).first(decoding: Identifier.self) != nil
     }
 
-    static func count(on db: any Database) async throws -> Int {
+    static func count(on db: PostgresStoreContext) async throws -> Int {
         struct CountRow: Decodable { let count: Int }
         return try await requireSQL(db).raw(
             "SELECT count(*)::bigint AS count FROM user_organizations"
         ).first(decoding: CountRow.self)?.count ?? 0
     }
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw HierarchyPersistenceError.unexpectedRowCount(expected: 1, actual: 0)
         }
         return sql

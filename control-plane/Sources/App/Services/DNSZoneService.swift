@@ -1,5 +1,4 @@
-import Fluent
-import SQLKit
+import ControlPlanePostgres
 import StratoShared
 import Vapor
 
@@ -105,8 +104,8 @@ enum DNSZoneService {
     /// A transaction-scoped Postgres advisory lock, released on commit or
     /// rollback, and a no-op on any non-Postgres database (like
     /// `IPAMService`'s allocation lock).
-    static func lockZone(_ zoneID: UUID, on db: any Database) async throws {
-        guard let sql = db as? any SQLDatabase, sql.dialect.name == "postgresql" else { return }
+    static func lockZone(_ zoneID: UUID, on db: PostgresStoreContext) async throws {
+        guard let sql = db as? PostgresStoreContext, sql.dialect.name == "postgresql" else { return }
         try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: "dnszone:\(zoneID.uuidString)")))")
             .run()
     }
@@ -115,7 +114,7 @@ enum DNSZoneService {
     /// `assertRRsetSettingsAgree` for why the set, not the record, owns them.
     static func applyRRsetSettings(
         zoneID: UUID, name: String, type: DNSRecordType, ttl: Int, view: DNSRecordView,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws {
         try await LegacyDNSRecordStore.applyRRsetSettings(
             zoneID: zoneID, name: name, type: type, ttl: ttl, view: view, on: db)
@@ -134,7 +133,7 @@ enum DNSZoneService {
     /// are immutable, so the only conflict a value edit can introduce is a
     /// duplicate within one RRset, which the uniqueness index catches.
     static func assertNoConflict(
-        zone: DNSZoneSnapshot, name: String, type: DNSRecordType, on db: any Database
+        zone: DNSZoneSnapshot, name: String, type: DNSRecordType, on db: PostgresStoreContext
     ) async throws {
         let zoneID = zone.id
         let fqdn = DNSName.qualified(name: name, inZone: zone.name)
@@ -182,7 +181,7 @@ enum DNSZoneService {
     /// resolution for.
     static func assertRRsetSettingsAgree(
         zone: DNSZoneSnapshot, name: String, type: DNSRecordType, ttl: Int, view: DNSRecordView,
-        excluding recordID: UUID? = nil, on db: any Database
+        excluding recordID: UUID? = nil, on db: PostgresStoreContext
     ) async throws {
         let zoneID = zone.id
         guard let sibling = try await LegacyDNSRecordStore.records(
@@ -208,7 +207,7 @@ enum DNSZoneService {
 
     /// The zones a VM registers derived records into: the primary zone of
     /// every network it has a NIC on. Usually zero or one.
-    static func registrationZones(vmID: UUID, on db: any Database) async throws -> [DNSZoneSnapshot] {
+    static func registrationZones(vmID: UUID, on db: PostgresStoreContext) async throws -> [DNSZoneSnapshot] {
         let networkIDs = try await LegacyVMNetworkInterfaceStore.interfaces(vmID: vmID, on: db)
             .map(\.logicalNetworkID)
         guard !networkIDs.isEmpty else { return [] }
@@ -216,7 +215,7 @@ enum DNSZoneService {
     }
 
     /// The primary zones of a set of networks, deduplicated.
-    static func registrationZones(networkIDs: [UUID], on db: any Database) async throws -> [DNSZoneSnapshot] {
+    static func registrationZones(networkIDs: [UUID], on db: PostgresStoreContext) async throws -> [DNSZoneSnapshot] {
         let zoneIDs = try await LegacyLogicalNetworkStore.networks(
             ids: Array(Set(networkIDs)), on: db)
             .compactMap(\.primaryDNSZoneID)
@@ -229,7 +228,7 @@ enum DNSZoneService {
     /// Two things can take the name: another VM registering into the same zone
     /// (a derived collision), and an authored record at the same owner name.
     static func hostnameIsAvailable(
-        _ hostname: String, forVM vmID: UUID?, in zones: [DNSZoneSnapshot], on db: any Database
+        _ hostname: String, forVM vmID: UUID?, in zones: [DNSZoneSnapshot], on db: PostgresStoreContext
     ) async throws -> Bool {
         for zone in zones {
             let zoneID = zone.id
@@ -259,7 +258,7 @@ enum DNSZoneService {
     /// hostname writes are strict instead — there the caller named the value,
     /// so a conflict is worth reporting.
     static func availableHostname(
-        basedOn name: String, forVM vmID: UUID?, in zones: [DNSZoneSnapshot], on db: any Database
+        basedOn name: String, forVM vmID: UUID?, in zones: [DNSZoneSnapshot], on db: PostgresStoreContext
     ) async throws -> String {
         let base = DNSName.slugify(name)
         guard !zones.isEmpty else { return base }
@@ -287,7 +286,7 @@ enum DNSZoneService {
     /// unique within the zones a VM registers into" holds from the assignment
     /// onward, rather than being something assembly quietly papers over.
     static func assertPrimaryZoneAssignable(
-        zone: DNSZoneSnapshot, networkID: UUID, on db: any Database
+        zone: DNSZoneSnapshot, networkID: UUID, on db: PostgresStoreContext
     ) async throws {
         let zoneID = zone.id
 
@@ -353,7 +352,7 @@ enum DNSZoneService {
     /// moving the primary pointer need the live name; the zone-rename path has
     /// the old spelling captured separately and moves following domains in the
     /// same transaction as the rename.
-    static func primaryZoneName(of network: LogicalNetwork, on db: any Database) async throws
+    static func primaryZoneName(of network: LogicalNetwork, on db: PostgresStoreContext) async throws
         -> String?
     {
         guard let zoneID = network.primaryDNSZoneID else { return nil }
@@ -363,7 +362,7 @@ enum DNSZoneService {
     /// Enforce an explicitly requested hostname: valid label, free everywhere
     /// the VM registers.
     static func validatedExplicitHostname(
-        _ raw: String, forVM vmID: UUID?, in zones: [DNSZoneSnapshot], on db: any Database
+        _ raw: String, forVM vmID: UUID?, in zones: [DNSZoneSnapshot], on db: PostgresStoreContext
     ) async throws -> String {
         let hostname = try DNSName.normalizedHostname(raw)
         guard try await hostnameIsAvailable(hostname, forVM: vmID, in: zones, on: db) else {

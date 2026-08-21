@@ -1,4 +1,3 @@
-import Fluent
 import Synchronization
 import Testing
 import Vapor
@@ -54,31 +53,31 @@ struct BootstrapCommandTests {
                     "--org-name", "CI Org", "--project-name", "E2E",
                 ])
 
-            let user = try #require(try await User.all(on: app.db).first)
+            let user = try #require(try await User.all(on: app.testPostgres).first)
             #expect(user.username == "ci")
             #expect(user.email == "ci@example.com")
             #expect(user.isSystemAdmin)
 
-            let org = try #require(try await Organization.all(on: app.db).first)
+            let org = try #require(try await Organization.all(on: app.testPostgres).first)
             #expect(org.name == "CI Org")
             #expect(user.currentOrganizationId == org.id)
 
             let membership = try #require(
                 try await OrganizationMembershipStore.membership(
-                    userID: user.id!, organizationID: org.id!, on: app.db))
+                    userID: user.id!, organizationID: org.id!, on: app.testPostgres))
             #expect(membership.roleID == IAMRole.admin.seededID)
 
-            let project = try #require(try await Project.all(on: app.db).first)
+            let project = try #require(try await Project.all(on: app.testPostgres).first)
             #expect(project.name == "E2E")
             let expectedPath = "/\(org.id!.uuidString)/\(project.id!.uuidString)"
             #expect(project.path == expectedPath)
 
             // Explicit authoritative admin bindings on both the org and project.
             let orgBindings = try await RoleBindingService.activeBindings(
-                nodeType: .organization, nodeID: org.id!, on: app.db)
+                nodeType: .organization, nodeID: org.id!, on: app.testPostgres)
             #expect(orgBindings.map(\.roleID) == [IAMRole.admin.seededID])
             let projectBindings = try await RoleBindingService.activeBindings(
-                nodeType: .project, nodeID: project.id!, on: app.db)
+                nodeType: .project, nodeID: project.id!, on: app.testPostgres)
             #expect(projectBindings.map(\.roleID) == [IAMRole.admin.seededID])
 
             // --quiet prints exactly the key, and its hash matches the stored row.
@@ -112,7 +111,7 @@ struct BootstrapCommandTests {
             let console = try await runBootstrap(
                 app, arguments: ["--quiet", "--admin-email", "ada.lovelace@example.com"])
 
-            let user = try #require(try await User.all(on: app.db).first)
+            let user = try #require(try await User.all(on: app.testPostgres).first)
             #expect(user.email == "ada.lovelace@example.com")
             // Derived from the local part rather than left as `bootstrap`.
             #expect(user.username == "ada.lovelace")
@@ -142,7 +141,7 @@ struct BootstrapCommandTests {
         try await withTestApp { app in
             try await runBootstrap(
                 app, arguments: ["--quiet", "--admin-email", "ada@example.com", "--username", "ci"])
-            let user = try #require(try await User.all(on: app.db).first)
+            let user = try #require(try await User.all(on: app.testPostgres).first)
             #expect(user.username == "ci")
         }
     }
@@ -184,7 +183,7 @@ struct BootstrapCommandTests {
             await #expect(throws: BootstrapCommand.UnusableDerivedUsernameError.self) {
                 try await runBootstrap(app, arguments: ["--quiet", "--admin-email", "ada+ci@example.com"])
             }
-            let userCount = try await User.count(on: app.db)
+            let userCount = try await User.count(on: app.testPostgres)
             #expect(userCount == 0)
         }
     }
@@ -195,7 +194,7 @@ struct BootstrapCommandTests {
             let console = try await runBootstrap(
                 app, arguments: ["--quiet", "--no-api-key", "--admin-email", "ada@example.com"])
 
-            let user = try #require(try await User.all(on: app.db).first)
+            let user = try #require(try await User.all(on: app.testPostgres).first)
             let keyCount = try await app.apiKeysPersistence.keys(
                 userID: try user.requireID()
             ).count
@@ -214,7 +213,7 @@ struct BootstrapCommandTests {
             await #expect(throws: BootstrapCommand.UnreachableSeedError.self) {
                 try await runBootstrap(app, arguments: ["--quiet", "--no-api-key"])
             }
-            let userCount = try await User.count(on: app.db)
+            let userCount = try await User.count(on: app.testPostgres)
             #expect(userCount == 0)
         }
     }
@@ -223,7 +222,7 @@ struct BootstrapCommandTests {
     func adminEmailRefusesWhenUsersExist() async throws {
         try await withTestApp { app in
             let existing = User(username: "someone", email: "someone@example.com", displayName: "Someone")
-            try await existing.save(on: app.db)
+            try await existing.save(on: app.testPostgres)
 
             await #expect(throws: BootstrapCommand.RefusedError.self) {
                 try await runBootstrap(app, arguments: ["--quiet", "--admin-email", "ada@example.com"])
@@ -248,7 +247,7 @@ struct BootstrapCommandTests {
                     app,
                     arguments: ["--quiet", "--admin-email", "ada@example.com", "--email", "ci@example.com"])
             }
-            let userCount = try await User.count(on: app.db)
+            let userCount = try await User.count(on: app.testPostgres)
             #expect(userCount == 0)
         }
     }
@@ -259,7 +258,7 @@ struct BootstrapCommandTests {
             await #expect(throws: BootstrapCommand.UnusableDerivedUsernameError.self) {
                 try await runBootstrap(app, arguments: ["--quiet", "--admin-email", "a+b@example.com"])
             }
-            let userCount = try await User.count(on: app.db)
+            let userCount = try await User.count(on: app.testPostgres)
             #expect(userCount == 0)
         }
     }
@@ -268,14 +267,14 @@ struct BootstrapCommandTests {
     func refusesWhenUsersExist() async throws {
         try await withTestApp { app in
             let existing = User(username: "someone", email: "someone@example.com", displayName: "Someone")
-            try await existing.save(on: app.db)
+            try await existing.save(on: app.testPostgres)
 
             await #expect(throws: BootstrapCommand.RefusedError.self) {
                 try await runBootstrap(app, arguments: ["--quiet"])
             }
-            let userCount = try await User.count(on: app.db)
+            let userCount = try await User.count(on: app.testPostgres)
             #expect(userCount == 1)
-            let orgCount = try await Organization.count(on: app.db)
+            let orgCount = try await Organization.count(on: app.testPostgres)
             #expect(orgCount == 0)
         }
     }
@@ -287,7 +286,7 @@ struct BootstrapCommandTests {
             await #expect(throws: BootstrapCommand.RefusedError.self) {
                 try await runBootstrap(app, arguments: ["--quiet"])
             }
-            let user = try #require(try await User.all(on: app.db).first)
+            let user = try #require(try await User.all(on: app.testPostgres).first)
             let keyCount = try await app.apiKeysPersistence.keys(
                 userID: try user.requireID()
             ).count

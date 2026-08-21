@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 enum InterfaceWorkloadKind: Sendable {
@@ -30,11 +29,11 @@ enum LegacyInterfaceSecurityGroupStore {
         kind: InterfaceWorkloadKind,
         interfaceIDs: [UUID]? = nil,
         securityGroupID: UUID? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [InterfaceSecurityGroupSnapshot] {
         if let interfaceIDs, interfaceIDs.isEmpty { return [] }
         let sql = try requireSQL(db)
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT \(unsafeRaw: columns) FROM \(unsafeRaw: kind.table) WHERE TRUE"
         if let interfaceIDs { query += " AND interface_id = ANY(\(bind: interfaceIDs))" }
         if let securityGroupID { query += " AND security_group_id = \(bind: securityGroupID)" }
@@ -45,7 +44,7 @@ enum LegacyInterfaceSecurityGroupStore {
     static func membership(
         kind: InterfaceWorkloadKind,
         id: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> InterfaceSecurityGroupSnapshot? {
         try await requireSQL(db).raw(
             """
@@ -63,7 +62,7 @@ enum LegacyInterfaceSecurityGroupStore {
         id: UUID = UUID(),
         interfaceID: UUID,
         securityGroupID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> InterfaceSecurityGroupSnapshot {
         guard let row = try await requireSQL(db).raw(
             """
@@ -85,7 +84,7 @@ enum LegacyInterfaceSecurityGroupStore {
         kind: InterfaceWorkloadKind,
         interfaceID: UUID,
         securityGroupID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [UUID] {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
@@ -102,12 +101,12 @@ enum LegacyInterfaceSecurityGroupStore {
         kind: InterfaceWorkloadKind,
         interfaceIDs: [UUID]? = nil,
         securityGroupID: UUID? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Int {
         if let interfaceIDs, interfaceIDs.isEmpty { return 0 }
         struct Count: Decodable { let count: Int }
         let sql = try requireSQL(db)
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT count(*)::bigint AS count FROM \(unsafeRaw: kind.table) WHERE TRUE"
         if let interfaceIDs { query += " AND interface_id = ANY(\(bind: interfaceIDs))" }
         if let securityGroupID { query += " AND security_group_id = \(bind: securityGroupID)" }
@@ -117,7 +116,7 @@ enum LegacyInterfaceSecurityGroupStore {
     static func securityGroupIDsByInterface(
         kind: InterfaceWorkloadKind,
         interfaceIDs: [UUID],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [UUID: [UUID]] {
         let memberships = try await memberships(
             kind: kind, interfaceIDs: interfaceIDs, on: db)
@@ -148,8 +147,8 @@ enum LegacyInterfaceSecurityGroupStore {
         created_at AS "createdAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Interface security groups require PostgreSQL")
         }
         return sql

@@ -1,5 +1,4 @@
-import Fluent
-import SQLKit
+import ControlPlanePostgres
 import Testing
 import Vapor
 import VaporTesting
@@ -14,7 +13,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
         let admin = User(
             username: "admin", email: "admin@example.com", displayName: "Admin", isSystemAdmin: true
         )
-        try await admin.save(on: app.db)
+        try await admin.save(on: app.testPostgres)
         return try await admin.generateAPIKey(on: app)
     }
 
@@ -35,7 +34,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
                 #expect(res.status == .forbidden)
             }
 
-            let created = try await LegacyUserStore.users(username: "neo", on: app.db).first
+            let created = try await LegacyUserStore.users(username: "neo", on: app.testPostgres).first
             #expect(created == nil)
         }
     }
@@ -76,7 +75,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
             #expect(claim.isValid())
 
             // The user exists with no credentials yet.
-            let user = try #require(try await User.find(createdUserID, on: app.db))
+            let user = try #require(try await User.find(createdUserID, on: app.testPostgres))
             let credentialCount = try await app.passkeysPersistence.credentials(
                 userID: user.requireID()
             ).count
@@ -144,7 +143,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
             }
 
             let membership = try await OrganizationMembershipStore.membership(
-                userID: #require(createdUserID), organizationID: orgID, on: app.db)
+                userID: #require(createdUserID), organizationID: orgID, on: app.testPostgres)
             #expect(membership?.roleID == IAMRole.admin.seededID)
         }
     }
@@ -166,7 +165,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
             }
 
             // The whole create rolls back — no orphaned user.
-            let created = try await LegacyUserStore.users(username: "neo", on: app.db).first
+            let created = try await LegacyUserStore.users(username: "neo", on: app.testPostgres).first
             #expect(created == nil)
         }
     }
@@ -179,7 +178,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
             // An org the admin is not a member of.
             let other = Organization(name: "Zeta Corp", description: "")
-            try await other.save(on: app.db)
+            try await other.save(on: app.testPostgres)
 
             try await app.test(.GET, "/api/organizations/all") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -266,7 +265,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
             let invitee = User(
                 username: "invitee", email: "invitee@example.com", displayName: "Invitee")
-            try await invitee.save(on: app.db)
+            try await invitee.save(on: app.testPostgres)
 
             let token = try await seedTestAccountClaim(
                 userID: try invitee.requireID(),
@@ -345,7 +344,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
             let invitee = User(
                 username: "invitee", email: "invitee@example.com", displayName: "Invitee")
-            try await invitee.save(on: app.db)
+            try await invitee.save(on: app.testPostgres)
 
             let token = try await seedTestAccountClaim(
                 userID: try invitee.requireID(),
@@ -355,7 +354,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
             // This is the exact conditional consume claimFinish runs before
             // enrolling a credential: only the first attempt claims the token.
-            let sql = try #require(app.db as? SQLDatabase)
+            let sql = try #require(Optional(app.testPostgres))
             let claimID = token.id
             let first = try await sql.raw(
                 """
@@ -432,7 +431,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
                 sessionCookie = res.headers.setCookie?["vapor-session"]?.string
             }
             let cookie = try #require(sessionCookie)
-            let user = try #require(try await LegacyUserStore.users(username: "trinity", on: app.db).first)
+            let user = try #require(try await LegacyUserStore.users(username: "trinity", on: app.testPostgres).first)
 
             func beginRegistration() async throws -> HTTPStatus {
                 var status: HTTPStatus = .internalServerError

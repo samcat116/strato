@@ -1,6 +1,5 @@
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import NIOHTTP1
 import AppTestSupport
@@ -22,7 +21,6 @@ final class ProjectTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             // Create test user and organization
             let testUser = User(
@@ -31,13 +29,13 @@ final class ProjectTests {
                 displayName: "Test User",
                 isSystemAdmin: false
             )
-            try await testUser.save(on: app.db)
+            try await testUser.save(on: app.testPostgres)
 
             let testOrganization = Organization(
                 name: "Test Organization",
                 description: "Test organization for unit tests"
             )
-            try await testOrganization.save(on: app.db)
+            try await testOrganization.save(on: app.testPostgres)
 
             // Create test OU
             var testOU = OrganizationalUnit(
@@ -47,16 +45,16 @@ final class ProjectTests {
                 path: "",
                 depth: 0
             )
-            try await testOU.save(on: app.db)
-            testOU = testOU.replacingPath(try await testOU.buildPath(on: app.db))
-            try await testOU.save(on: app.db)
+            try await testOU.save(on: app.testPostgres)
+            testOU = testOU.replacingPath(try await testOU.buildPath(on: app.testPostgres))
+            try await testOU.save(on: app.testPostgres)
 
             // Add user to organization as admin
             _ = try await OrganizationMembershipStore.insert(
                 userID: testUser.id!,
                 organizationID: testOrganization.id!,
                 roleID: IAMRole.admin.seededID,
-                on: app.db
+                on: app.testPostgres
             )
 
             // The admin role binding the API/backfill would have written
@@ -64,7 +62,7 @@ final class ProjectTests {
             // answers from `role_bindings`.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: testUser.id!, role: .admin,
-                nodeType: .organization, nodeID: testOrganization.id!, createdBy: nil, on: app.db)
+                nodeType: .organization, nodeID: testOrganization.id!, createdBy: nil, on: app.testPostgres)
 
             let authToken = try await testUser.generateAPIKey(on: app)
 
@@ -151,7 +149,7 @@ final class ProjectTests {
             // a mismatch here means project-scoped permissions can't resolve
             // via the org hierarchy and the creating admin gets 403s.
             let projectId = try #require(createdProjectId)
-            let savedProject = try await Project.find(projectId, on: app.db)
+            let savedProject = try await Project.find(projectId, on: app.testPostgres)
             let saved = try #require(savedProject)
             #expect(saved.organizationID == testOrganization.id)
             #expect(saved.path == "/\(testOrganization.id!.uuidString)/\(projectId.uuidString)")
@@ -163,7 +161,7 @@ final class ProjectTests {
                 roleID: IAMRole.admin.seededID,
                 nodeType: IAMNodeType.project.rawValue,
                 nodeID: projectId,
-                on: app.db).count
+                on: app.testPostgres).count
             #expect(bindingCount == 1)
         }
     }
@@ -188,7 +186,7 @@ final class ProjectTests {
             }
 
             let projectId = try #require(createdProjectId)
-            let savedProject = try await Project.find(projectId, on: app.db)
+            let savedProject = try await Project.find(projectId, on: app.testPostgres)
             let saved = try #require(savedProject)
             // The parent must be the *immediate* parent — the OU, not the root
             // organization — so OU-scoped projects inherit up the OU chain (and
@@ -230,9 +228,9 @@ final class ProjectTests {
                 organizationID: testOrganization.id,
                 path: ""
             )
-            try await project.save(on: app.db)
-            project = project.replacingPath(try await project.buildPath(on: app.db))
-            try await project.save(on: app.db)
+            try await project.save(on: app.testPostgres)
+            project = project.replacingPath(try await project.buildPath(on: app.testPostgres))
+            try await project.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/projects/\(project.id!)/environments") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -261,9 +259,9 @@ final class ProjectTests {
                 defaultEnvironment: "dev",
                 environments: ["dev", "staging", "prod"]
             )
-            try await project.save(on: app.db)
-            project = project.replacingPath(try await project.buildPath(on: app.db))
-            try await project.save(on: app.db)
+            try await project.save(on: app.testPostgres)
+            project = project.replacingPath(try await project.buildPath(on: app.testPostgres))
+            try await project.save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/projects/\(project.id!)/environments/staging") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -289,7 +287,7 @@ final class ProjectTests {
                 defaultEnvironment: "dev",
                 environments: ["dev", "prod"]
             )
-            try await project.save(on: app.db)
+            try await project.save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/projects/\(project.id!)/environments/dev") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -311,7 +309,7 @@ final class ProjectTests {
                 organizationID: testOrganization.id,
                 path: ""
             )
-            try await orgProject.save(on: app.db)
+            try await orgProject.save(on: app.testPostgres)
 
             let ouProject = Project(
                 name: "OU Project",
@@ -319,7 +317,7 @@ final class ProjectTests {
                 organizationalUnitID: testOU.id,
                 path: ""
             )
-            try await ouProject.save(on: app.db)
+            try await ouProject.save(on: app.testPostgres)
 
             try await app.test(.GET, "/api/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -344,7 +342,7 @@ final class ProjectTests {
                 organizationID: testOrganization.id,
                 path: ""
             )
-            try await orgProject.save(on: app.db)
+            try await orgProject.save(on: app.testPostgres)
 
             // ...and one nested under an OU within the same organization.
             let ouProject = Project(
@@ -353,7 +351,7 @@ final class ProjectTests {
                 organizationalUnitID: testOU.id,
                 path: ""
             )
-            try await ouProject.save(on: app.db)
+            try await ouProject.save(on: app.testPostgres)
 
             try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/projects") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -376,18 +374,18 @@ final class ProjectTests {
             let visibleProject = Project(
                 name: "Visible Project", description: "member has a binding here",
                 organizationID: testOrganization.id, path: "")
-            try await visibleProject.save(on: app.db)
+            try await visibleProject.save(on: app.testPostgres)
             let hiddenProject = Project(
                 name: "Hidden Project", description: "member has no binding here",
                 organizationID: testOrganization.id, path: "")
-            try await hiddenProject.save(on: app.db)
+            try await hiddenProject.save(on: app.testPostgres)
 
             // A folder project the member also has no binding on — covers the
             // folder-scoped list endpoint (`listFolderProjects`).
             let hiddenFolderProject = Project(
                 name: "Hidden Folder Project", description: "member has no binding here",
                 organizationalUnitID: testOU.id, path: "")
-            try await hiddenFolderProject.save(on: app.db)
+            try await hiddenFolderProject.save(on: app.testPostgres)
 
             // A bare org member: a membership row and nothing else —
             // under the redesign that grants `org:read` + `project:create`, no
@@ -395,13 +393,13 @@ final class ProjectTests {
             let member = User(
                 username: "bare-member", email: "member@example.com",
                 displayName: "Bare Member", isSystemAdmin: false)
-            try await member.save(on: app.db)
+            try await member.save(on: app.testPostgres)
             _ = try await OrganizationMembershipStore.insert(
-                userID: member.id!, organizationID: testOrganization.id!, on: app.db)
+                userID: member.id!, organizationID: testOrganization.id!, on: app.testPostgres)
             // One explicit project binding — the only project they may read.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: member.id!, role: .viewer,
-                nodeType: .project, nodeID: visibleProject.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: visibleProject.id!, createdBy: nil, on: app.testPostgres)
             let memberToken = try await member.generateAPIKey(on: app)
 
             // Before STR-113 this handed back every project in the org; now the
@@ -453,7 +451,7 @@ final class ProjectTests {
                 path: "",
                 depth: 0
             )
-            try await targetOU.save(on: app.db)
+            try await targetOU.save(on: app.testPostgres)
 
             let project = Project(
                 name: "Transfer Test",
@@ -461,7 +459,7 @@ final class ProjectTests {
                 organizationalUnitID: testOU.id,
                 path: ""
             )
-            try await project.save(on: app.db)
+            try await project.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/projects/\(project.id!)/transfer") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -482,7 +480,7 @@ final class ProjectTests {
     @Test("Project transfer enforces destination network quotas and refreshes both paths")
     func testTransferProjectEnforcesNetworkQuotas() async throws {
         try await withProjectTestApp { app, _, testOrganization, sourceOU, authToken in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let destinationOU = try await builder.createOU(
                 name: "Quota Destination",
                 description: "Destination hierarchy",
@@ -508,13 +506,13 @@ final class ProjectTests {
                 name: "shared-organization-networks", maxNetworks: 2,
                 organization: testOrganization)
             for quota in [sourceQuota, destinationQuota] {
-                let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
-                try await synchronized.save(on: app.db)
+                let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.testPostgres)
+                try await synchronized.save(on: app.testPostgres)
                 #expect(synchronized.networkCount == 1)
             }
             let synchronizedSharedQuota = try await QuotaEnforcementService.resyncReservations(
-                sharedOrganizationQuota, on: app.db)
-            try await synchronizedSharedQuota.save(on: app.db)
+                sharedOrganizationQuota, on: app.testPostgres)
+            try await synchronizedSharedQuota.save(on: app.testPostgres)
             #expect(synchronizedSharedQuota.networkCount == 2)
 
             func transfer() async throws -> HTTPResponseStatus {
@@ -536,23 +534,23 @@ final class ProjectTests {
 
             #expect(try await transfer() == .forbidden)
             let refusedProject = try #require(
-                try await Project.find(sourceProject.id, on: app.db))
+                try await Project.find(sourceProject.id, on: app.testPostgres))
             #expect(refusedProject.organizationalUnitID == sourceOU.id)
-            #expect(try await ResourceQuota.find(sourceQuota.id, on: app.db)?.networkCount == 1)
-            #expect(try await ResourceQuota.find(destinationQuota.id, on: app.db)?.networkCount == 1)
+            #expect(try await ResourceQuota.find(sourceQuota.id, on: app.testPostgres)?.networkCount == 1)
+            #expect(try await ResourceQuota.find(destinationQuota.id, on: app.testPostgres)?.networkCount == 1)
             #expect(
-                try await ResourceQuota.find(sharedOrganizationQuota.id, on: app.db)?.networkCount == 2)
+                try await ResourceQuota.find(sharedOrganizationQuota.id, on: app.testPostgres)?.networkCount == 2)
 
-            try await destinationQuota.withMaxNetworks(2).save(on: app.db)
+            try await destinationQuota.withMaxNetworks(2).save(on: app.testPostgres)
             #expect(try await transfer() == .ok)
 
             let movedProject = try #require(
-                try await Project.find(sourceProject.id, on: app.db))
+                try await Project.find(sourceProject.id, on: app.testPostgres))
             #expect(movedProject.organizationalUnitID == destinationOU.id)
-            #expect(try await ResourceQuota.find(sourceQuota.id, on: app.db)?.networkCount == 0)
-            #expect(try await ResourceQuota.find(destinationQuota.id, on: app.db)?.networkCount == 2)
+            #expect(try await ResourceQuota.find(sourceQuota.id, on: app.testPostgres)?.networkCount == 0)
+            #expect(try await ResourceQuota.find(destinationQuota.id, on: app.testPostgres)?.networkCount == 2)
             #expect(
-                try await ResourceQuota.find(sharedOrganizationQuota.id, on: app.db)?.networkCount == 2)
+                try await ResourceQuota.find(sharedOrganizationQuota.id, on: app.testPostgres)?.networkCount == 2)
         }
     }
 
@@ -561,16 +559,16 @@ final class ProjectTests {
         try await withProjectTestApp { app, testUser, testOrganization, _, authToken in
             // A second organization the user also administers.
             let destinationOrg = Organization(name: "Destination Org", description: "Transfer target")
-            try await destinationOrg.save(on: app.db)
+            try await destinationOrg.save(on: app.testPostgres)
             _ = try await OrganizationMembershipStore.insert(
                 userID: testUser.id!,
                 organizationID: destinationOrg.id!,
                 roleID: IAMRole.admin.seededID,
-                on: app.db
+                on: app.testPostgres
             )
             try await RoleBindingService.grant(
                 principalType: .user, principalID: testUser.id!, role: .admin,
-                nodeType: .organization, nodeID: destinationOrg.id!, createdBy: nil, on: app.db)
+                nodeType: .organization, nodeID: destinationOrg.id!, createdBy: nil, on: app.testPostgres)
 
             let project = Project(
                 name: "Cross Org Project",
@@ -578,7 +576,7 @@ final class ProjectTests {
                 organizationID: testOrganization.id,
                 path: ""
             )
-            try await project.save(on: app.db)
+            try await project.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/projects/\(project.id!)/transfer") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -596,7 +594,7 @@ final class ProjectTests {
             // The persisted parentage must now point at the destination org,
             // otherwise destination admins can't resolve project-scoped
             // permissions through the hierarchy the Cedar evaluator builds.
-            let movedProject = try await Project.find(project.id!, on: app.db)
+            let movedProject = try await Project.find(project.id!, on: app.testPostgres)
             let moved = try #require(movedProject)
             #expect(moved.organizationID == destinationOrg.id)
             #expect(moved.path == "/\(destinationOrg.id!.uuidString)/\(project.id!.uuidString)")
@@ -607,11 +605,11 @@ final class ProjectTests {
     func testTransferToNonAdminOrganizationForbidden() async throws {
         try await withProjectTestApp { app, testUser, testOrganization, _, authToken in
             let destinationOrg = Organization(name: "Member Only Org", description: "User is only a member")
-            try await destinationOrg.save(on: app.db)
+            try await destinationOrg.save(on: app.testPostgres)
             _ = try await OrganizationMembershipStore.insert(
                 userID: testUser.id!,
                 organizationID: destinationOrg.id!,
-                on: app.db
+                on: app.testPostgres
             )
 
             // The user holds no admin binding on the destination org (only a
@@ -624,7 +622,7 @@ final class ProjectTests {
                 organizationID: testOrganization.id,
                 path: ""
             )
-            try await project.save(on: app.db)
+            try await project.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/projects/\(project.id!)/transfer") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -650,7 +648,7 @@ final class ProjectTests {
                 organizationID: testOrganization.id,
                 path: ""
             )
-            try await project.save(on: app.db)
+            try await project.save(on: app.testPostgres)
 
             try await app.test(.PUT, "/api/projects/\(project.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -675,7 +673,7 @@ final class ProjectTests {
     @Test("Update project rolls metadata back when its move is refused")
     func testUpdateProjectAndMoveAreAtomic() async throws {
         try await withProjectTestApp { app, _, testOrganization, sourceOU, authToken in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let destinationOU = try await builder.createOU(
                 name: "Atomic Update Destination",
                 description: "Rejects the incoming project",
@@ -696,8 +694,8 @@ final class ProjectTests {
             let destinationQuota = try await builder.createResourceQuota(
                 name: "atomic-destination-networks", maxNetworks: 1, ou: destinationOU)
             let synchronizedDestinationQuota = try await QuotaEnforcementService.resyncReservations(
-                destinationQuota, on: app.db)
-            try await synchronizedDestinationQuota.save(on: app.db)
+                destinationQuota, on: app.testPostgres)
+            try await synchronizedDestinationQuota.save(on: app.testPostgres)
 
             try await app.test(.PUT, "/api/projects/\(try project.requireID())") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -713,7 +711,7 @@ final class ProjectTests {
             }
 
             let persisted = try #require(
-                try await Project.find(project.id, on: app.db))
+                try await Project.find(project.id, on: app.testPostgres))
             #expect(persisted.name == "Original Atomic Project")
             #expect(persisted.description == "Original description")
             #expect(persisted.organizationalUnitID == sourceOU.id)
@@ -731,7 +729,7 @@ final class ProjectTests {
                 organizationID: testOrganization.id,
                 path: ""
             )
-            try await project.save(on: app.db)
+            try await project.save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/projects/\(project.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -739,7 +737,7 @@ final class ProjectTests {
                 #expect(res.status == .noContent)
             }
 
-            let deletedProject = try await Project.find(project.id, on: app.db)
+            let deletedProject = try await Project.find(project.id, on: app.testPostgres)
             #expect(deletedProject == nil)
         }
     }
@@ -753,14 +751,14 @@ final class ProjectTests {
                 organizationID: testOrganization.id,
                 path: ""
             )
-            try await project.save(on: app.db)
+            try await project.save(on: app.testPostgres)
             let projectID = try project.requireID()
 
             let group = try await SecurityGroupService.ensureDefaultGroup(
-                projectID: projectID, on: app.db)
+                projectID: projectID, on: app.testPostgres)
             let groupID = group.id
             let rules = try await LegacySecurityGroupRuleStore.rules(
-                securityGroupID: groupID, on: app.db)
+                securityGroupID: groupID, on: app.testPostgres)
             #expect(rules.count == 4)
             #expect(rules.filter { $0.remoteGroupID == groupID }.count == 2)
 
@@ -770,17 +768,17 @@ final class ProjectTests {
                 #expect(res.status == .noContent)
             }
 
-            #expect(try await Project.find(projectID, on: app.db) == nil)
-            #expect(try await LegacySecurityGroupStore.group(id: groupID, on: app.db) == nil)
+            #expect(try await Project.find(projectID, on: app.testPostgres) == nil)
+            #expect(try await LegacySecurityGroupStore.group(id: groupID, on: app.testPostgres) == nil)
             #expect(try await LegacySecurityGroupRuleStore.count(
-                securityGroupID: groupID, on: app.db) == 0)
+                securityGroupID: groupID, on: app.testPostgres) == 0)
         }
     }
 
     @Test("Deleting a project refreshes ancestor quotas after its networks cascade")
     func testDeleteProjectRefreshesAncestorNetworkQuotas() async throws {
         try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let project = try await builder.createProject(
                 name: "Delete Network Project",
                 description: "Its networks cascade with it",
@@ -795,8 +793,8 @@ final class ProjectTests {
                 name: "project-network-count", project: project)
 
             for quota in [organizationQuota, ouQuota, projectQuota] {
-                let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
-                try await synchronized.save(on: app.db)
+                let synchronized = try await QuotaEnforcementService.resyncReservations(quota, on: app.testPostgres)
+                try await synchronized.save(on: app.testPostgres)
                 #expect(synchronized.networkCount == 1)
             }
 
@@ -806,12 +804,12 @@ final class ProjectTests {
                 #expect(res.status == .noContent)
             }
 
-            #expect(try await LogicalNetwork.find(network.id, on: app.db) == nil)
-            #expect(try await ResourceQuota.find(projectQuota.id, on: app.db) == nil)
+            #expect(try await LogicalNetwork.find(network.id, on: app.testPostgres) == nil)
+            #expect(try await ResourceQuota.find(projectQuota.id, on: app.testPostgres) == nil)
             let refreshedOrganizationQuota = try #require(
-                try await ResourceQuota.find(organizationQuota.id, on: app.db))
+                try await ResourceQuota.find(organizationQuota.id, on: app.testPostgres))
             let refreshedOUQuota = try #require(
-                try await ResourceQuota.find(ouQuota.id, on: app.db))
+                try await ResourceQuota.find(ouQuota.id, on: app.testPostgres))
             #expect(refreshedOrganizationQuota.networkCount == 0)
             #expect(refreshedOUQuota.networkCount == 0)
         }
@@ -826,7 +824,7 @@ final class ProjectTests {
                 organizationID: testOrganization.id,
                 path: ""
             )
-            try await project.save(on: app.db)
+            try await project.save(on: app.testPostgres)
 
             // Create a VM in the project
             let vm = VM(
@@ -839,7 +837,7 @@ final class ProjectTests {
                 memory: 2 * 1024 * 1024 * 1024,
                 disk: 10 * 1024 * 1024 * 1024
             )
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/projects/\(project.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -858,7 +856,7 @@ final class ProjectTests {
                 organizationID: testOrganization.id,
                 path: ""
             )
-            try await project.save(on: app.db)
+            try await project.save(on: app.testPostgres)
 
             // `deleteProject` counts VMs and refuses when any exist, but the
             // count and the delete are not one atomic step and read-committed
@@ -879,14 +877,14 @@ final class ProjectTests {
                 memory: 2 * 1024 * 1024 * 1024,
                 disk: 10 * 1024 * 1024 * 1024
             )
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             await #expect(throws: (any Error).self) {
-                try await project.delete(on: app.db)
+                try await project.delete(on: app.testPostgres)
             }
 
-            #expect(try await VM.find(vm.id, on: app.db) != nil)
-            #expect(try await Project.find(project.id, on: app.db) != nil)
+            #expect(try await VM.find(vm.id, on: app.testPostgres) != nil)
+            #expect(try await Project.find(project.id, on: app.testPostgres) != nil)
         }
     }
 
@@ -894,7 +892,7 @@ final class ProjectTests {
     func testOrganizationDeleteCannotCascadeOverVMs() async throws {
         try await withProjectTestApp { app, user, _, _, authToken in
             // A fresh org, since the fixture org is the caller's current one.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Doomed Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
             let project = try await builder.createProject(
@@ -902,7 +900,7 @@ final class ProjectTests {
             let vm = try await builder.createVM(name: "survivor-vm", project: project)
             // Pointed at the doomed org, so the refusal can be checked to have
             // happened *before* the delete path clears this.
-            try await user.replacingCurrentOrganization(try org.requireID()).save(on: app.db)
+            try await user.replacingCurrentOrganization(try org.requireID()).save(on: app.testPostgres)
 
             // `projects.organization_id` cascades, so before STR-98 this
             // deleted the VM row outright — one level further up the same
@@ -917,11 +915,11 @@ final class ProjectTests {
                 #expect(res.body.string.contains("Doomed Project"))
             }
 
-            #expect(try await VM.find(vm.id, on: app.db) != nil)
-            #expect(try await Organization.find(org.id, on: app.db) != nil)
+            #expect(try await VM.find(vm.id, on: app.testPostgres) != nil)
+            #expect(try await Organization.find(org.id, on: app.testPostgres) != nil)
             // The pre-check runs before the user updates, which are not in the
             // delete's transaction and would otherwise persist through it.
-            let refreshed = try await User.find(user.id, on: app.db)
+            let refreshed = try await User.find(user.id, on: app.testPostgres)
             #expect(refreshed?.currentOrganizationId != nil)
         }
     }
@@ -942,7 +940,7 @@ final class ProjectTests {
                 organizationID: testOrganization.id,
                 path: ""
             )
-            try await project.save(on: app.db)
+            try await project.save(on: app.testPostgres)
 
             try await app.test(.GET, "/api/projects/\(project.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)

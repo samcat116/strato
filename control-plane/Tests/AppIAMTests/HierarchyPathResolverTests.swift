@@ -1,6 +1,5 @@
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import AppTestSupport
 @testable import App
@@ -12,8 +11,7 @@ final class HierarchyPathResolverTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
-            try await test(app, TestDataBuilder(db: app.db))
+            try await test(app, TestDataBuilder(db: app.testPostgres))
         } catch {
             try await app.shutdownForTesting()
             throw error
@@ -34,7 +32,7 @@ final class HierarchyPathResolverTests {
                 entityType: "project",
                 entityID: project.id!,
                 organizationID: org.id!,
-                on: app.db
+                on: app.testPostgres
             )
 
             #expect(path.map { $0.type } == ["organization", "organizational_unit", "organizational_unit", "project"])
@@ -54,7 +52,7 @@ final class HierarchyPathResolverTests {
                 entityType: "vm",
                 entityID: vm.id!,
                 organizationID: org.id!,
-                on: app.db
+                on: app.testPostgres
             )
 
             #expect(path.map { $0.type } == ["organization", "organizational_unit", "project", "vm"])
@@ -72,7 +70,7 @@ final class HierarchyPathResolverTests {
                 entityType: "project",
                 entityID: project.id!,
                 organizationID: org.id!,
-                on: app.db
+                on: app.testPostgres
             )
 
             #expect(path.map { $0.type } == ["organization", "project"])
@@ -89,7 +87,7 @@ final class HierarchyPathResolverTests {
                 entityType: "widget",
                 entityID: UUID(),
                 organizationID: org.id!,
-                on: app.db
+                on: app.testPostgres
             )
 
             #expect(path.map { $0.type } == ["organization"])

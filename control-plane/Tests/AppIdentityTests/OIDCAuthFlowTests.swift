@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import NIOConcurrencyHelpers
 import NIOCore
@@ -295,7 +294,7 @@ final class OIDCAuthFlowTests {
         _ test: (Application, Organization, OIDCProviderSnapshot, FakeIdPClient) async throws -> Void
     ) async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "SSO Flow Org")
 
             let provider = try await app.oidcProvidersPersistence.create(OIDCProviderWrite(
@@ -382,7 +381,7 @@ final class OIDCAuthFlowTests {
         #expect(res.headers.first(name: .location) == "/login?error=oidc_failed")
     }
 
-    private func userCount(on db: Database, subject: String = "sub-123") async throws -> Int {
+    private func userCount(on db: PostgresStoreContext, subject: String = "sub-123") async throws -> Int {
         try await LegacyUserStore.users(oidcSubject: subject, on: db).count
     }
 
@@ -421,13 +420,13 @@ final class OIDCAuthFlowTests {
             // JIT-provisioned user linked to the provider, with org membership.
             let user = try await LegacyUserStore.users(
                 oidcSubject: "sub-123",
-                on: app.db
+                on: app.testPostgres
             ).first
             let resolvedUser = try #require(user)
             #expect(resolvedUser.oidcProviderID == provider.id)
             #expect(resolvedUser.email == "sso-user@example.com")
             let membership = try await OrganizationMembershipStore.membership(
-                userID: resolvedUser.id!, organizationID: org.id!, on: app.db)
+                userID: resolvedUser.id!, organizationID: org.id!, on: app.testPostgres)
             #expect(membership?.roleID == nil)
 
             // The token exchange posted the authorization-code grant to the
@@ -465,7 +464,7 @@ final class OIDCAuthFlowTests {
                 }
             }
 
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 1)
         }
     }
@@ -482,7 +481,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 #expect(res.status == .badRequest)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -509,7 +508,7 @@ final class OIDCAuthFlowTests {
                 expectLoginFailedRedirect(res)
             }
             #expect(idp.requests(urlContaining: "internal-admin.svc.example.org").isEmpty)
-            #expect(try await userCount(on: app.db) == 0)
+            #expect(try await userCount(on: app.testPostgres) == 0)
         }
     }
 
@@ -537,7 +536,7 @@ final class OIDCAuthFlowTests {
                 #expect(res.status == .seeOther)
             }
             #expect(!idp.requests(urlContaining: "keys.googleapis.example").isEmpty)
-            #expect(try await userCount(on: app.db) == 1)
+            #expect(try await userCount(on: app.testPostgres) == 1)
         }
     }
 
@@ -564,7 +563,7 @@ final class OIDCAuthFlowTests {
                 expectLoginFailedRedirect(res)
             }
             #expect(idp.requests(urlContaining: "internal-admin.svc.example.org").isEmpty)
-            #expect(try await userCount(on: app.db) == 0)
+            #expect(try await userCount(on: app.testPostgres) == 0)
         }
     }
 
@@ -664,7 +663,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -702,7 +701,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -777,7 +776,7 @@ final class OIDCAuthFlowTests {
                 #expect(res.headers.first(name: .location) == "/")
             }
 
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 1)
         }
     }
@@ -800,7 +799,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -822,7 +821,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -844,7 +843,7 @@ final class OIDCAuthFlowTests {
                 #expect(res.headers.first(name: .location) == "/")
             }
 
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 1)
         }
     }
@@ -864,7 +863,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -885,7 +884,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -906,7 +905,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }
@@ -931,7 +930,7 @@ final class OIDCAuthFlowTests {
                 #expect(res.status == .seeOther)
                 #expect(res.headers.first(name: .location) == "/")
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 1)
         }
     }
@@ -975,7 +974,7 @@ final class OIDCAuthFlowTests {
                 #expect(res.status == .seeOther)
                 #expect(res.headers.first(name: .location) == "/")
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 1)
         }
     }
@@ -994,7 +993,7 @@ final class OIDCAuthFlowTests {
             ) { res in
                 self.expectLoginFailedRedirect(res)
             }
-            let count = try await userCount(on: app.db)
+            let count = try await userCount(on: app.testPostgres)
             #expect(count == 0)
         }
     }

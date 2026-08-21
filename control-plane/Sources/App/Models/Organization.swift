@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -38,19 +37,19 @@ struct Organization: Content, Equatable, Sendable {
         return id
     }
 
-    func save(on db: any Database) async throws {
+    func save(on db: PostgresStoreContext) async throws {
         _ = try await LegacyOrganizationStore.upsert(self, on: db)
     }
 
-    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+    static func find(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await LegacyOrganizationStore.organization(id: id, on: db)
     }
 
-    static func all(on db: any Database) async throws -> [Self] {
+    static func all(on db: PostgresStoreContext) async throws -> [Self] {
         try await LegacyOrganizationStore.organizations(on: db)
     }
 
-    static func count(on db: any Database) async throws -> Int {
+    static func count(on db: PostgresStoreContext) async throws -> Int {
         try await LegacyOrganizationStore.count(on: db)
     }
 }
@@ -133,7 +132,7 @@ extension Organization {
     /// Two flat queries, not a tree walk: a project hangs off exactly one of an
     /// organization or a folder (`Project.validate`), and every folder
     /// denormalizes the organization it belongs to (issue #692).
-    func getAllProjects(on db: Database) async throws -> [Project] {
+    func getAllProjects(on db: PostgresStoreContext) async throws -> [Project] {
         guard let organizationID = id else { return [] }
         let folderIDs = try await LegacyOrganizationalUnitStore.organizationalUnits(
             organizationIDs: [organizationID], on: db
@@ -145,7 +144,7 @@ extension Organization {
 
 extension OrganizationalUnit {
     /// Get all projects in this OU and its descendants
-    func getAllProjects(on db: Database) async throws -> [Project] {
+    func getAllProjects(on db: PostgresStoreContext) async throws -> [Project] {
         let folderIDs = try await selfAndDescendantIDs(on: db)
         guard !folderIDs.isEmpty else { return [] }
         return try await LegacyProjectStore.projects(organizationalUnitIDs: folderIDs, on: db)
@@ -155,7 +154,7 @@ extension OrganizationalUnit {
 extension Project {
     /// Every project of an organization, given the ids of its folders: those
     /// hanging directly off the organization plus those inside any folder.
-    static func all(inOrganization organizationID: UUID, folders folderIDs: [UUID], on db: Database) async throws
+    static func all(inOrganization organizationID: UUID, folders folderIDs: [UUID], on db: PostgresStoreContext) async throws
         -> [Project]
     {
         try await LegacyProjectStore.projects(

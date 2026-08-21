@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import Testing
 import Vapor
@@ -20,7 +19,6 @@ final class GuardrailWriteReportTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             app.guardrailAnalyzer = SymCCGuardrailAnalyzer(solverPath: solverPath()!)
             try await test(app)
         } catch {
@@ -48,7 +46,7 @@ final class GuardrailWriteReportTests {
         _ app: Application, _ binding: ProposedBinding
     ) async throws -> [GuardrailWriteReport.GrantCeiling] {
         try await GuardrailWriteReport.ceilings(
-            narrowing: binding, analyzer: app.guardrailAnalyzer, on: app.db, logger: app.logger)
+            narrowing: binding, analyzer: app.guardrailAnalyzer, on: app.testPostgres, logger: app.logger)
     }
 
     // MARK: - The report finds what it should
@@ -69,7 +67,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .any,
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let found = try await ceilings(
@@ -115,7 +113,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .any,
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             for role in [IAMRole.operator, .editor, .admin] {
@@ -159,7 +157,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .user(user.id!),
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let found = try await ceilings(
@@ -188,7 +186,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .user(bob.id!),
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             // Resolved against the database, not symbolically: a solver told
@@ -222,7 +220,7 @@ final class GuardrailWriteReportTests {
                 resourceMatch: .any,
                 enabled: false,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let found = try await ceilings(
@@ -250,7 +248,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .any,
                 resourceMatch: .environment("production"),
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             // The project holds no production VM *today*. The ceiling still
@@ -284,7 +282,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .group(group.id!),
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let found = try await ceilings(
@@ -320,7 +318,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .group(contractors.id!),
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             // The grant is to engineers, but it reaches a contractor through
@@ -353,7 +351,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .any,
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let binding = ProposedBinding(
@@ -369,7 +367,7 @@ final class GuardrailWriteReportTests {
                 _ = try await GuardrailWriteReport.ceilings(
                     narrowing: binding,
                     analyzer: UnavailableGuardrailAnalyzer(reason: "no solver in this test"),
-                    on: app.db,
+                    on: app.testPostgres,
                     logger: app.logger
                 )
             }
@@ -392,7 +390,7 @@ final class GuardrailWriteReportTests {
                 principalMatch: .any,
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             // The solver's answers are stubbed *per resource type* so the
@@ -406,7 +404,7 @@ final class GuardrailWriteReportTests {
                     principalType: .user, principalID: user.id!, role: .editor,
                     node: tree.projectNode),
                 analyzer: SelectiveGuardrailAnalyzer(nonDisjointResourceTypes: [CedarEntityType.vm.rawValue]),
-                on: app.db,
+                on: app.testPostgres,
                 logger: app.logger
             )
             #expect(found.count == 1)
@@ -428,7 +426,7 @@ final class GuardrailWriteReportTests {
                     principalType: .user, principalID: user.id!, role: .admin,
                     node: tree.projectNode),
                 analyzer: UnavailableGuardrailAnalyzer(reason: "must not be consulted"),
-                on: app.db,
+                on: app.testPostgres,
                 logger: app.logger
             )
             #expect(found.isEmpty)
@@ -451,7 +449,7 @@ final class GuardrailWriteReportTests {
                 nodeType: .project,
                 nodeID: tree.project.id!,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let guardrail = try await GuardrailStore.create(
@@ -463,11 +461,11 @@ final class GuardrailWriteReportTests {
                 principalMatch: .any,
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             let shadowed = try await GuardrailWriteReport.shadowedBindings(
-                by: guardrail, analyzer: app.guardrailAnalyzer, on: app.db, logger: app.logger)
+                by: guardrail, analyzer: app.guardrailAnalyzer, on: app.testPostgres, logger: app.logger)
             #expect(shadowed.count == 1)
             #expect(shadowed.first?.role == .editor)
             #expect(shadowed.first?.node == tree.projectNode)

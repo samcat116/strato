@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -29,7 +28,6 @@ final class VMListScalingTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -41,12 +39,12 @@ final class VMListScalingTests {
     @Test("GET /api/vms issues the same number of queries however many VMs it returns")
     func listQueryCountStaysBounded() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "scaleuser", email: "scale@example.com", isSystemAdmin: false)
             let org = try await builder.createOrganization(name: "Scale Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "member")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Scale Project", description: "many VMs", organization: org)
@@ -56,7 +54,7 @@ final class VMListScalingTests {
             // short-circuiting on a denial.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .viewer,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
 
             /// Drive `VMController.index` with a request we own so Fluent's
             /// per-request query history (enabled on the request, not the app)
@@ -67,13 +65,15 @@ final class VMListScalingTests {
                     application: app, method: .GET, url: URI(path: "/api/vms"),
                     on: app.eventLoopGroup.next())
                 req.auth.login(user)
-                req.fluent.history.start()
+                req.application.testPostgres.history.start()
                 let vms = try await VMController(
-                    workloads: app.workloadsPersistence
+                    workloads: app.workloadsPersistence,
+                    hierarchy: app.hierarchyPersistence,
+                    database: app.testPostgres
                 ).visibleVMs(req: req)
-                req.fluent.history.stop()
+                req.application.testPostgres.history.stop()
                 #expect(vms.count == expected)
-                return req.fluent.history.queries.count
+                return req.application.testPostgres.history.count
             }
 
             for index in 0..<10 {
@@ -109,7 +109,7 @@ final class VMListScalingTests {
     @Test("Cached resolution equals the uncached walk across shared chains")
     func cachedResolutionMatchesUncached() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "equser", email: "eq@example.com", isSystemAdmin: false)
             let org = try await builder.createOrganization(name: "Eq Org")
@@ -125,7 +125,7 @@ final class VMListScalingTests {
             let projectB = try await builder.createProject(name: "Eq B", description: "d", ou: childOU)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .viewer,
-                nodeType: .organizationalUnit, nodeID: ou.id!, createdBy: nil, on: app.db)
+                nodeType: .organizationalUnit, nodeID: ou.id!, createdBy: nil, on: app.testPostgres)
 
             var nodes: [IAMNode] = []
             for project in [projectA, projectB] {
@@ -148,8 +148,8 @@ final class VMListScalingTests {
             // independent uncached resolution — chain and leaf facts alike.
             let chainCache = IAMRequestCache()
             for node in nodes {
-                let cached = try await IAMResourceTree.resolve(node, cache: chainCache, on: app.db)
-                let uncached = try await IAMResourceTree.resolve(node, on: app.db)
+                let cached = try await IAMResourceTree.resolve(node, cache: chainCache, on: app.testPostgres)
+                let uncached = try await IAMResourceTree.resolve(node, on: app.testPostgres)
                 #expect(cached == uncached)
             }
 
@@ -158,8 +158,8 @@ final class VMListScalingTests {
             let sliceCache = IAMRequestCache()
             for node in nodes {
                 let cached = try await EntitySliceLoader.load(
-                    userID: user.id!, node: node, cache: sliceCache, on: app.db)
-                let uncached = try await EntitySliceLoader.load(userID: user.id!, node: node, on: app.db)
+                    userID: user.id!, node: node, cache: sliceCache, on: app.testPostgres)
+                let uncached = try await EntitySliceLoader.load(userID: user.id!, node: node, on: app.testPostgres)
                 #expect(cached == uncached)
             }
         }

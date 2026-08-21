@@ -1,7 +1,6 @@
 import Testing
 import ControlPlanePostgres
 import Vapor
-import Fluent
 import VaporTesting
 import StratoShared
 import AppTestSupport
@@ -28,9 +27,8 @@ final class VolumeIOLimitsTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "iolimituser",
                 email: "iolimit@example.com",
@@ -39,7 +37,7 @@ final class VolumeIOLimitsTests {
             )
             let org = try await builder.createOrganization(name: "IO Limit Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "IO Limit Project",
@@ -70,7 +68,7 @@ final class VolumeIOLimitsTests {
             ),
             protocolVersion: protocolVersion
         )
-        let orgID = try await Organization.all(on: app.db).first?.id
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let uuid = try await app.agentService.registerAgent(
             message, agentName: name, organizationScope: orgID.map { .organization($0) })
         return uuid.uuidString
@@ -109,7 +107,7 @@ final class VolumeIOLimitsTests {
             appliedIOPSTotal: appliedIOPSTotal,
             appliedBPSTotal: appliedBPSTotal
         )
-        try await app.db.transaction { db in
+        try await app.testPostgres.transaction { db in
             try await volume.save(on: db)
             try await placeVolume(volume, on: agentId, using: db)
             try await RoleBindingService.grant(
@@ -169,12 +167,12 @@ final class VolumeIOLimitsTests {
                 #expect(res.status == .accepted)
             }
 
-            // Placement runs on a detached task that touches app.db; wait for it
+            // Placement runs on a detached task that touches app.testPostgres; wait for it
             // to settle (no agents connected → degraded) so it cannot race
             // application shutdown during teardown.
             var placed: Volume?
             for _ in 0..<100 {
-                placed = try await Volume.all(on: app.db).first
+                placed = try await Volume.all(on: app.testPostgres).first
                 if placed?.conditions.degraded != nil { break }
                 try await Task.sleep(for: .milliseconds(50))
             }
@@ -207,7 +205,7 @@ final class VolumeIOLimitsTests {
             }
 
             // Rejected before the insert: no row, not a row with the caps dropped.
-            let count = try await Volume.all(on: app.db).count
+            let count = try await Volume.all(on: app.testPostgres).count
             #expect(count == 0)
         }
     }
@@ -228,7 +226,7 @@ final class VolumeIOLimitsTests {
                 #expect(res.status == .accepted)
             }
 
-            let stored = try #require(try await Volume.find(volume.id!, on: app.db))
+            let stored = try #require(try await Volume.find(volume.id!, on: app.testPostgres))
             #expect(stored.iopsTotal == 500)
             #expect(stored.bpsTotal == 1 << 20)
             #expect(stored.generation == 5)
@@ -237,7 +235,7 @@ final class VolumeIOLimitsTests {
 
             let event = try #require(
                 try await ResourceEvent.latest(
-                    .requested, resourceKind: .volume, resourceID: volume.id!, on: app.db))
+                    .requested, resourceKind: .volume, resourceID: volume.id!, on: app.testPostgres))
             #expect(event.mutation == .throttle)
             #expect(event.targetGeneration == 5)
         }
@@ -260,7 +258,7 @@ final class VolumeIOLimitsTests {
                 #expect(res.status == .accepted)
             }
 
-            let stored = try #require(try await Volume.find(volume.id!, on: app.db))
+            let stored = try #require(try await Volume.find(volume.id!, on: app.testPostgres))
             #expect(stored.iopsTotal == nil)
             #expect(stored.bpsTotal == nil)
             #expect(stored.ioLimits == nil)
@@ -293,7 +291,7 @@ final class VolumeIOLimitsTests {
                 #expect(res.status == .badRequest)
             }
 
-            let stored = try #require(try await Volume.find(volume.id!, on: app.db))
+            let stored = try #require(try await Volume.find(volume.id!, on: app.testPostgres))
             #expect(stored.ioLimits == nil)
             #expect(stored.generation == 1)
         }
@@ -320,7 +318,7 @@ final class VolumeIOLimitsTests {
             let agentId = try await self.registerAgent(app: app, named: "io-terminating-agent")
             let volume = try await self.makeVolume(
                 app: app, user: user, project: project, agentId: agentId)
-            try await volume.replacing(desiredStatus: .absent).save(on: app.db)
+            try await volume.replacing(desiredStatus: .absent).save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/volumes/\(volume.id!)/io-limits") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -349,8 +347,8 @@ final class VolumeIOLimitsTests {
             // An all-null pair leaves as an *absent* field, not as a
             // present-but-empty object. Two spellings of "uncapped" is what
             // would make a planner re-plan a throttle that is already applied.
-            let volume = try #require(try await Volume.all(on: app.db).first)
-            try await volume.replacing(iopsTotal: nil).save(on: app.db)
+            let volume = try #require(try await Volume.all(on: app.testPostgres).first)
+            try await volume.replacing(iopsTotal: nil).save(on: app.testPostgres)
 
             message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             entry = try #require(message.volumes.first)
@@ -385,7 +383,7 @@ final class VolumeIOLimitsTests {
                             ioLimits: nil)
                     ]))
 
-            let stored = try #require(try await Volume.find(volume.id!, on: app.db))
+            let stored = try #require(try await Volume.find(volume.id!, on: app.testPostgres))
             #expect(stored.appliedIOPSTotal == 500)
             // And the volume still converges by generation: an agent that
             // cannot apply ceilings is not a degraded volume, it is a volume
@@ -419,7 +417,7 @@ final class VolumeIOLimitsTests {
                             ioLimits: VolumeIOLimits(iopsTotal: nil, bpsTotal: nil))
                     ]))
 
-            let stored = try #require(try await Volume.find(volume.id!, on: app.db))
+            let stored = try #require(try await Volume.find(volume.id!, on: app.testPostgres))
             #expect(stored.appliedIOPSTotal == nil)
             #expect(stored.appliedBPSTotal == nil)
         }
@@ -446,7 +444,7 @@ final class VolumeIOLimitsTests {
                             ioLimits: VolumeIOLimits(iopsTotal: 500, bpsTotal: nil))
                     ]))
 
-            let stored = try #require(try await Volume.find(volume.id!, on: app.db))
+            let stored = try #require(try await Volume.find(volume.id!, on: app.testPostgres))
             #expect(stored.appliedIOLimits?.iopsTotal == 500)
             #expect(stored.appliedIOLimits?.bpsTotal == nil)
             // Requested and applied agree, which is the only way a caller can

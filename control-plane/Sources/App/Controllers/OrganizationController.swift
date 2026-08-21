@@ -1,7 +1,6 @@
 import ControlPlanePostgres
 import Foundation
 import Vapor
-import Fluent
 
 struct OrganizationController: RouteCollection {
     let groups: GroupsPersistence?
@@ -9,28 +8,36 @@ struct OrganizationController: RouteCollection {
     let iam: IAMPersistence
     let projects: ProjectsPersistence?
     let users: UserDirectoryPersistence?
+    let database: PostgresStoreContext
 
     init(
         groups: GroupsPersistence,
         hierarchy: HierarchyPersistence,
         iam: IAMPersistence,
         projects: ProjectsPersistence,
-        users: UserDirectoryPersistence
+        users: UserDirectoryPersistence,
+        database: PostgresStoreContext
     ) {
         self.groups = groups
         self.hierarchy = hierarchy
         self.iam = iam
         self.projects = projects
         self.users = users
+        self.database = database
     }
 
     /// Direct-method test seam for read-only organization listing.
-    package init(hierarchy: HierarchyPersistence, iam: IAMPersistence) {
+    package init(
+        hierarchy: HierarchyPersistence,
+        iam: IAMPersistence,
+        database: PostgresStoreContext
+    ) {
         groups = nil
         self.hierarchy = hierarchy
         self.iam = iam
         projects = nil
         users = nil
+        self.database = database
     }
 
     func boot(routes: RoutesBuilder) throws {
@@ -187,7 +194,7 @@ struct OrganizationController: RouteCollection {
     /// Refuse a delete that would cascade over live workloads, naming the
     /// projects holding them so the operator knows where to look.
     private static func requireNoWorkloads(
-        inProjects projectIDs: [UUID], on db: Database
+        inProjects projectIDs: [UUID], on db: PostgresStoreContext
     ) async throws {
         guard !projectIDs.isEmpty else { return }
         let vmProjects = try await LegacyVMStore.vms(projectIDs: projectIDs, on: db).map(\.projectID)
@@ -213,7 +220,7 @@ struct OrganizationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
 
-        guard let organization = try await Organization.find(organizationID, on: req.db) else {
+        guard let organization = try await Organization.find(organizationID, on: database) else {
             throw Abort(.notFound)
         }
 
@@ -231,15 +238,15 @@ struct OrganizationController: RouteCollection {
         // `ResourceBindingCleanup`, which re-reads this set there rather than
         // trusting a snapshot taken outside it.
         let orgProjectIDs = try await LegacyProjectStore.projects(
-            organizationIDs: [organizationID], on: req.db
+            organizationIDs: [organizationID], on: database
         ).compactMap(\.id)
         let ouIDs = try await LegacyOrganizationalUnitStore.organizationalUnits(
-            organizationIDs: [organizationID], on: req.db
+            organizationIDs: [organizationID], on: database
         ).compactMap(\.id)
         var ouProjectIDs: [UUID] = []
         if !ouIDs.isEmpty {
             ouProjectIDs = try await LegacyProjectStore.projects(
-                organizationalUnitIDs: ouIDs, on: req.db
+                organizationalUnitIDs: ouIDs, on: database
             ).compactMap(\.id)
         }
         let cascadedProjectIDs = orgProjectIDs + ouProjectIDs
@@ -250,7 +257,7 @@ struct OrganizationController: RouteCollection {
         // surfacing a constraint violation — and it runs ahead of the user
         // updates because those are not inside the transaction and would
         // otherwise persist through a failed delete.
-        try await Self.requireNoWorkloads(inProjects: cascadedProjectIDs, on: req.db)
+        try await Self.requireNoWorkloads(inProjects: cascadedProjectIDs, on: database)
 
         guard let users else {
             throw Abort(.internalServerError, reason: "User persistence is unavailable")
@@ -269,7 +276,7 @@ struct OrganizationController: RouteCollection {
         // nowhere, while still contributing a grants-field pair to the Cedar
         // schema. That makes this a policy-set change, so it runs inside
         // `withPolicySetChange` and bumps the version when roles actually went.
-        let removed = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
+        let removed = try await PolicySetVersionService.withPolicySetChange(on: database) { db in
             // Bindings first: the sweep reads the rows the delete cascades
             // away — the org node, its folders, its projects, and everything
             // each project carries (STR-137) — so it cannot run after them.
@@ -282,7 +289,7 @@ struct OrganizationController: RouteCollection {
             // translate that into an answer a caller can act on.
             do {
                 _ = try await LegacyOrganizationStore.delete(id: organizationID, on: db)
-            } catch let error as any DatabaseError where error.isConstraintFailure {
+            } catch let error as any PostgresConstraintError where error.isConstraintFailure {
                 throw Abort(
                     .conflict,
                     reason: "Cannot delete organization: its projects still contain VMs or sandboxes. "

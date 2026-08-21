@@ -1,7 +1,5 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
-import SQLKit
 import Testing
 import Vapor
 import VaporTesting
@@ -14,7 +12,7 @@ struct OAuthDeviceFlowTests {
 
     // MARK: - Helpers
 
-    func createTestUser(on db: Database, username: String = "clitester") async throws -> User {
+    func createTestUser(on db: PostgresStoreContext, username: String = "clitester") async throws -> User {
         let user = User(
             username: username,
             email: "\(username)@example.com",
@@ -157,7 +155,7 @@ struct OAuthDeviceFlowTests {
     @Test("Happy path: authorize, approve, redeem, authenticate")
     func testDeviceFlowHappyPath() async throws {
         try await withTestApp { app in
-            let user = try await createTestUser(on: app.db)
+            let user = try await createTestUser(on: app.testPostgres)
             let apiKey = try await user.generateAPIKey(on: app)
 
             let start = try await startDeviceFlow(app)
@@ -234,7 +232,7 @@ struct OAuthDeviceFlowTests {
         try await withTestApp { app in
             let start = try await startDeviceFlow(app)
 
-            let sql = try #require(app.db as? any SQLDatabase)
+            let sql = try #require(Optional(app.testPostgres))
             try await sql.raw(
                 """
                 UPDATE oauth_device_authorizations
@@ -252,7 +250,7 @@ struct OAuthDeviceFlowTests {
     @Test("Denied requests return access_denied and disappear from lookup")
     func testDeniedDeviceCode() async throws {
         try await withTestApp { app in
-            let user = try await createTestUser(on: app.db)
+            let user = try await createTestUser(on: app.testPostgres)
             let apiKey = try await user.generateAPIKey(on: app)
             let start = try await startDeviceFlow(app)
 
@@ -293,7 +291,7 @@ struct OAuthDeviceFlowTests {
     @Test("Approval accepts sloppy user-code input")
     func testApprovalNormalizesUserCode() async throws {
         try await withTestApp { app in
-            let user = try await createTestUser(on: app.db)
+            let user = try await createTestUser(on: app.testPostgres)
             let apiKey = try await user.generateAPIKey(on: app)
             let start = try await startDeviceFlow(app)
 
@@ -324,7 +322,7 @@ struct OAuthDeviceFlowTests {
     @Test("Refresh rotates both tokens; replaying an old refresh revokes the session")
     func testRefreshRotationAndReplayDetection() async throws {
         try await withTestApp { app in
-            let user = try await createTestUser(on: app.db)
+            let user = try await createTestUser(on: app.testPostgres)
             let apiKey = try await user.generateAPIKey(on: app)
             let start = try await startDeviceFlow(app)
             _ = try await approve(app, userCode: start.userCode, apiKey: apiKey)
@@ -374,7 +372,7 @@ struct OAuthDeviceFlowTests {
     @Test("POST /oauth/revoke invalidates the session by either token")
     func testRevokeEndpoint() async throws {
         try await withTestApp { app in
-            let user = try await createTestUser(on: app.db)
+            let user = try await createTestUser(on: app.testPostgres)
             let apiKey = try await user.generateAPIKey(on: app)
             let start = try await startDeviceFlow(app)
             _ = try await approve(app, userCode: start.userCode, apiKey: apiKey)
@@ -420,9 +418,9 @@ struct OAuthDeviceFlowTests {
     @Test("Settings can list and revoke CLI sessions, scoped to the owner")
     func testSessionManagement() async throws {
         try await withTestApp { app in
-            let user = try await createTestUser(on: app.db)
+            let user = try await createTestUser(on: app.testPostgres)
             let apiKey = try await user.generateAPIKey(on: app)
-            let other = try await createTestUser(on: app.db, username: "someoneelse")
+            let other = try await createTestUser(on: app.testPostgres, username: "someoneelse")
             let otherKey = try await other.generateAPIKey(on: app)
 
             let start = try await startDeviceFlow(app)
@@ -488,7 +486,7 @@ struct OAuthDeviceFlowTests {
     @Test("Read-only CLI tokens are forbidden from writes")
     func testCLITokenRestrictionEnforcement() async throws {
         try await withTestApp { app in
-            let user = try await createTestUser(on: app.db)
+            let user = try await createTestUser(on: app.testPostgres)
             let apiKey = try await user.generateAPIKey(on: app)
             let start = try await startDeviceFlow(
                 app, restriction: CredentialRestrictionPayload(.readOnly))
@@ -504,7 +502,7 @@ struct OAuthDeviceFlowTests {
             let protected = app.grouped(
                 BearerAuthorizationHeaderAuthenticator(
                     apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
-                    users: app.userDirectoryPersistence
+                    users: app.userDirectoryPersistence, workloads: app.workloadsPersistence
                 ),
                 CredentialRestrictionMiddleware()
             )
@@ -554,7 +552,7 @@ struct OAuthDeviceFlowTests {
     @Test("Expired access tokens stop authenticating but refresh still works")
     func testExpiredAccessToken() async throws {
         try await withTestApp { app in
-            let user = try await createTestUser(on: app.db)
+            let user = try await createTestUser(on: app.testPostgres)
             let apiKey = try await user.generateAPIKey(on: app)
             let start = try await startDeviceFlow(app)
             _ = try await approve(app, userCode: start.userCode, apiKey: apiKey)
@@ -562,7 +560,7 @@ struct OAuthDeviceFlowTests {
             let (_, issuedToken, _) = try await pollToken(app, deviceCode: start.deviceCode)
             let issued = try #require(issuedToken)
 
-            let sql = try #require(app.db as? any SQLDatabase)
+            let sql = try #require(Optional(app.testPostgres))
             try await sql.raw(
                 """
                 UPDATE cli_sessions

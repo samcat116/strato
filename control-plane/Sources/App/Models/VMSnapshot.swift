@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import StratoShared
 import Vapor
@@ -137,24 +137,24 @@ struct VMSnapshot: Content, Sendable {
         return id
     }
 
-    func persisted(on db: any Database) async throws -> Self {
+    func persisted(on db: PostgresStoreContext) async throws -> Self {
         try await LegacyVMSnapshotStore.upsert(self, on: db)
     }
-    func persist(on db: any Database) async throws { _ = try await persisted(on: db) }
-    func save(on db: any Database) async throws { try await persist(on: db) }
-    func remove(on db: any Database) async throws {
+    func persist(on db: PostgresStoreContext) async throws { _ = try await persisted(on: db) }
+    func save(on db: PostgresStoreContext) async throws { try await persist(on: db) }
+    func remove(on db: PostgresStoreContext) async throws {
         guard let id else { return }
         _ = try await LegacyVMSnapshotStore.delete(id: id, on: db)
     }
-    func delete(on db: any Database) async throws { try await remove(on: db) }
-    static func load(_ id: UUID?, on db: any Database) async throws -> Self? {
+    func delete(on db: PostgresStoreContext) async throws { try await remove(on: db) }
+    static func load(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await LegacyVMSnapshotStore.snapshot(id: id, on: db)
     }
-    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+    static func find(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await load(id, on: db)
     }
 
-    static func all(on db: any Database) async throws -> [Self] {
+    static func all(on db: PostgresStoreContext) async throws -> [Self] {
         try await LegacyVMSnapshotStore.snapshots(on: db)
     }
 
@@ -240,23 +240,23 @@ extension VMSnapshot: SnapshotArtifactResource {
         (projectID, environment)
     }
 
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [VMSnapshot] {
+    static func overdueForConvergence(at now: Date, on db: PostgresStoreContext) async throws -> [VMSnapshot] {
         try await LegacyVMSnapshotStore.snapshots(overdueAt: now, on: db)
     }
 
-    static func placed(onAgent agentId: String, on db: any Database) async throws -> [VMSnapshot] {
+    static func placed(onAgent agentId: String, on db: PostgresStoreContext) async throws -> [VMSnapshot] {
         try await LegacyVMSnapshotStore.snapshots(agentID: agentId, on: db)
     }
 
-    static func matching(ids: [UUID], on db: any Database) async throws -> [VMSnapshot] {
+    static func matching(ids: [UUID], on db: PostgresStoreContext) async throws -> [VMSnapshot] {
         try await LegacyVMSnapshotStore.snapshots(ids: ids, on: db)
     }
 
-    static func expired(at now: Date, on db: any Database) async throws -> [VMSnapshot] {
+    static func expired(at now: Date, on db: PostgresStoreContext) async throws -> [VMSnapshot] {
         try await LegacyVMSnapshotStore.snapshots(expiredAt: now, on: db)
     }
 
-    static func terminating(on db: any Database) async throws -> [VMSnapshot] {
+    static func terminating(on db: PostgresStoreContext) async throws -> [VMSnapshot] {
         try await LegacyVMSnapshotStore.snapshots(terminating: true, on: db)
     }
 

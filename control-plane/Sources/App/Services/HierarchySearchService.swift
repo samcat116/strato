@@ -1,6 +1,6 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
-import Fluent
 
 /// Case-insensitive search across OUs, projects, and VMs in the hierarchy.
 /// Extracted from `HierarchyController`; handlers keep authentication and response
@@ -47,7 +47,7 @@ struct HierarchySearchService {
 
     /// Searches OUs, projects, and VMs within a single organization.
     /// - Parameter entityType: optional filter — `"ou"`, `"project"`, or `"vm"`.
-    static func search(organizationID: UUID, query: String, entityType: String?, on db: Database) async throws
+    static func search(organizationID: UUID, query: String, entityType: String?, on db: PostgresStoreContext) async throws
         -> [HierarchySearchResult]
     {
         var results: [HierarchySearchResult] = []
@@ -128,7 +128,7 @@ struct HierarchySearchService {
     }
 
     /// Searches OUs and projects across all organizations the user belongs to.
-    static func globalSearch(organizationIDs: [UUID], query: String, entityType: String?, on db: Database) async throws
+    static func globalSearch(organizationIDs: [UUID], query: String, entityType: String?, on db: PostgresStoreContext) async throws
         -> [HierarchySearchResult]
     {
         var results: [HierarchySearchResult] = []

@@ -1,7 +1,6 @@
 import Testing
 import Foundation
 import Vapor
-import Fluent
 import VaporTesting
 import SwiftSCIM
 import AppTestSupport
@@ -38,7 +37,7 @@ final class SCIMFilterTests: BaseTestCase {
         value: String
     ) async throws -> [String] {
         let handler = UserSCIMHandler(
-            db: app.db,
+            users: app.userDirectoryPersistence,
             externalIDs: app.scimExternalIDsPersistence,
             organizationID: org.id!
         )

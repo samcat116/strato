@@ -1,4 +1,3 @@
-import Fluent
 import ControlPlanePostgres
 import Foundation
 import StratoShared
@@ -18,6 +17,7 @@ import Vapor
 /// the grant can never be tighter or later than what the agent is handed.
 struct DesiredStateAssembler {
     let app: Application
+    let database: PostgresStoreContext
     let workloads: WorkloadsPersistence
     let floatingIPAllocations: FloatingIPAllocationsPersistence
 
@@ -41,7 +41,7 @@ struct DesiredStateAssembler {
     /// assembly expires or needs re-signing. Safe to call redundantly:
     /// identical syncs diff to nothing on the agent.
     func assemble(agentId: String) async throws -> DesiredStateMessage {
-        let db = app.db
+        let db = database
         // Capability, site, and rollout decisions all read the same agent
         // row. Load it once instead of issuing four point queries during one
         // assembly. Unknown ids retain the legacy permissive behavior used by
@@ -513,7 +513,7 @@ struct DesiredStateAssembler {
     /// address is reachable — and the alternative (per-site subsets of one
     /// zone) would make a zone's contents depend on where you asked, which is
     /// what split-horizon views exist to express deliberately.
-    private func desiredDNSZones(networkIDs: Set<UUID>, on db: any Database) async throws
+    private func desiredDNSZones(networkIDs: Set<UUID>, on db: PostgresStoreContext) async throws
         -> [DesiredDNSZone]
     {
         guard !networkIDs.isEmpty else { return [] }
@@ -560,7 +560,7 @@ struct DesiredStateAssembler {
     /// An agent this assembly could not load at all is not asked — the caller
     /// sends nil rather than an opinion, because `false` here is a teardown
     /// instruction rather than silence.
-    private func resolverCapableSiteWide(agent: Agent, site: Site?, on db: any Database)
+    private func resolverCapableSiteWide(agent: Agent, site: Site?, on db: PostgresStoreContext)
         async throws -> Bool
     {
         guard let site, let siteID = site.id else {
@@ -599,7 +599,7 @@ struct DesiredStateAssembler {
     /// Like volumes, nothing here carries a path or a size. The agent owns
     /// artifact layout and is the only party that can measure what it wrote, so
     /// both travel the other way, on the observed report.
-    private func desiredSnapshots(agentId: String, on db: any Database) async throws
+    private func desiredSnapshots(agentId: String, on db: PostgresStoreContext) async throws
         -> [DesiredSnapshotState]
     {
         var entries: [DesiredSnapshotState] = []
@@ -686,7 +686,7 @@ struct DesiredStateAssembler {
     /// agent told it. And it does not carry a pool: placement is expressed by
     /// *which agent's sync the entry appears in*, and a second encoding of the
     /// same fact is a thing that can drift.
-    private func desiredVolumes(agentId: String, on db: any Database) async throws -> [DesiredVolumeState] {
+    private func desiredVolumes(agentId: String, on db: PostgresStoreContext) async throws -> [DesiredVolumeState] {
         let replicaScope = try await VolumeService.replicaScope(onAgent: agentId, on: db)
         guard !replicaScope.allVolumeIDs.isEmpty else { return [] }
         let volumes = try await LegacyImageStore.loadingSourceImages(
@@ -828,7 +828,7 @@ struct DesiredStateAssembler {
     /// derived from the assembly's own queries, which is the point — a sync
     /// that under-lists an agent produces no tombstones at all, so a scoping
     /// bug can no longer authorize its own cleanup.
-    private func tombstones(agentId: String, on db: any Database) async throws
+    private func tombstones(agentId: String, on db: PostgresStoreContext) async throws
         -> [DesiredWorkloadTombstone]
     {
         try await workloads.claims(agentID: agentId, disposition: .tombstoned)
@@ -905,7 +905,7 @@ struct DesiredStateAssembler {
     /// Load an id-indexed logical-network slice without ever issuing an
     /// unbounded table scan. Empty scopes intentionally produce no query.
     private func logicalNetworks(
-        ids: Set<UUID>, on db: any Database
+        ids: Set<UUID>, on db: PostgresStoreContext
     ) async throws -> [UUID: LogicalNetwork] {
         guard !ids.isEmpty else { return [:] }
         return Dictionary(
@@ -930,7 +930,7 @@ struct DesiredStateAssembler {
     private func sandboxRegistryMaterial(
         _ sandbox: Sandbox,
         secrets: [RegistryPullSecretSnapshot],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async -> (credential: RegistryCredential?, imageDigest: String?) {
         // A sandbox on its way out pulls nothing: no digest pin, no
         // credential material toward the agent tearing it down.
@@ -1119,7 +1119,7 @@ struct DesiredStateAssembler {
         site: Site?,
         ownVMs: [VM],
         ownSandboxes: [Sandbox],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> NetworkAssemblyScope {
         // A network referenced by either a VM or a sandbox on this host must be
         // realized here (issue #416).
@@ -1189,7 +1189,7 @@ struct DesiredStateAssembler {
     /// VM NIC id → attached security-group ids (sorted for stable wire output)
     /// for the given interfaces.
     private func nicSecurityGroupMemberships(
-        interfaceIDs: [UUID], on db: any Database
+        interfaceIDs: [UUID], on db: PostgresStoreContext
     ) async throws -> [UUID: [UUID]] {
         guard !interfaceIDs.isEmpty else { return [:] }
         return try await LegacyInterfaceSecurityGroupStore.securityGroupIDsByInterface(
@@ -1214,7 +1214,7 @@ struct DesiredStateAssembler {
     /// `@Parent` fields are differently typed, so it would buy two call sites a
     /// layer of Fluent generics.
     private func sandboxNICSecurityGroupMemberships(
-        interfaceIDs: [UUID], on db: any Database
+        interfaceIDs: [UUID], on db: PostgresStoreContext
     ) async throws -> [UUID: [UUID]] {
         guard !interfaceIDs.isEmpty else { return [:] }
         return try await LegacyInterfaceSecurityGroupStore.securityGroupIDsByInterface(
@@ -1236,7 +1236,7 @@ struct DesiredStateAssembler {
     /// port group with no members matches nothing, so realizing it early costs
     /// an OVN row and changes no traffic.
     private func desiredSecurityGroups(
-        forVMs vms: [VM], sandboxes: [Sandbox], on db: any Database
+        forVMs vms: [VM], sandboxes: [Sandbox], on db: PostgresStoreContext
     ) async throws -> [DesiredSecurityGroup] {
         let vmInterfaceIDs = vms.flatMap { $0.networkInterfaces.compactMap(\.id) }
         let sandboxInterfaceIDs = sandboxes.flatMap { $0.networkInterfaces.compactMap(\.id) }
@@ -1306,7 +1306,7 @@ struct DesiredStateAssembler {
     /// the hosts whose topology the receiving agent authors — so a site-less
     /// agent never NATs for a VM on some other node's private NB.
     private func desiredLoadBalancers(
-        networkIDs: Set<UUID>, on db: any Database
+        networkIDs: Set<UUID>, on db: PostgresStoreContext
     ) async throws -> [UUID: [DesiredLoadBalancer]] {
         guard !networkIDs.isEmpty else { return [:] }
         let rows = try await LegacyLoadBalancerStore.rows(

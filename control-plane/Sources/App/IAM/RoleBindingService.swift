@@ -1,7 +1,5 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
-import SQLKit
 import Vapor
 
 /// The authoritative write and read path for grants. `role_bindings` is the
@@ -350,7 +348,7 @@ enum RoleBindingService {
         roleID: UUID,
         node: IAMNode,
         createdBy: UUID?,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await withMembershipNodeLocked(node, on: db) { transaction in
             let existing = try await activeBindings(
@@ -373,7 +371,7 @@ enum RoleBindingService {
         roleID: UUID,
         node: IAMNode,
         createdBy: UUID?,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await withMembershipNodeLocked(node, on: db) { transaction in
             let existing = try await activeBindings(
@@ -400,7 +398,7 @@ enum RoleBindingService {
         roleID: UUID?,
         node: IAMNode,
         createdBy: UUID?,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await withMembershipNodeLocked(node, on: db) { transaction in
             try await revoke(
@@ -421,7 +419,7 @@ enum RoleBindingService {
         principalType: IAMPrincipalType,
         principalID: UUID,
         node: IAMNode,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> [UUID] {
         try await withMembershipNodeLocked(node, on: db) { transaction in
             let existing = try await activeBindings(
@@ -442,8 +440,8 @@ enum RoleBindingService {
     /// checks atomic with the membership and binding writes.
     static func withMembershipNodeLocked<T: Sendable>(
         _ node: IAMNode,
-        on db: Database,
-        _ body: @Sendable @escaping (any Database) async throws -> T
+        on db: PostgresStoreContext,
+        _ body: @Sendable @escaping (PostgresStoreContext) async throws -> T
     ) async throws -> T {
         let table: String
         switch node.type {
@@ -456,7 +454,7 @@ enum RoleBindingService {
                 reason: "Exclusive membership grants are unsupported on \(node.type.rawValue)")
         }
         return try await db.transaction { transaction in
-            guard let sql = transaction as? any SQLDatabase else {
+            guard let sql = transaction as? PostgresStoreContext else {
                 throw Abort(.internalServerError, reason: "Membership grant writes require a SQL database")
             }
             let rows = try await sql.raw(
@@ -481,7 +479,7 @@ enum RoleBindingService {
         nodeID: UUID,
         createdBy: UUID?,
         expiresAt: Date? = nil,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await grant(
             principalType: principalType,
@@ -511,7 +509,7 @@ enum RoleBindingService {
         nodeID: UUID,
         createdBy: UUID?,
         expiresAt: Date? = nil,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         func find() async throws -> LegacyRoleBindingRecord? {
             try await LegacyRoleBindingStore.binding(
@@ -545,7 +543,7 @@ enum RoleBindingService {
                 createdBy: createdBy
             ), on: db)
         } catch {
-            guard let dbError = error as? any DatabaseError, dbError.isConstraintFailure else { throw error }
+            guard let dbError = error as? any PostgresConstraintError, dbError.isConstraintFailure else { throw error }
             // A concurrent writer won the insert race on the uniqueness key. Outside a
             // transaction this is recoverable: adopt the winner's row and
             // apply our expiry. Inside an already-aborted Postgres transaction
@@ -565,7 +563,7 @@ enum RoleBindingService {
         role: IAMRole? = nil,
         nodeType: IAMNodeType,
         nodeID: UUID,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         try await revoke(
             principalType: principalType,
@@ -585,7 +583,7 @@ enum RoleBindingService {
         roleID: UUID?,
         nodeType: IAMNodeType,
         nodeID: UUID,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         let rows = try await LegacyRoleBindingStore.bindings(
             principalType: principalType.rawValue,
@@ -602,7 +600,7 @@ enum RoleBindingService {
     /// group deletion): a departing principal's bindings do not live only in
     /// its own org — cross-org bindings are supported by design (issue #485) —
     /// so the sweep keys on the principal alone.
-    static func revokeAll(principalType: IAMPrincipalType, principalID: UUID, on db: Database) async throws {
+    static func revokeAll(principalType: IAMPrincipalType, principalID: UUID, on db: PostgresStoreContext) async throws {
         let rows = try await LegacyRoleBindingStore.bindings(
             principalType: principalType.rawValue, principalID: principalID, on: db)
         try await LegacyRoleBindingStore.delete(ids: rows.map(\.id), on: db)
@@ -624,7 +622,7 @@ enum RoleBindingService {
         principalType: IAMPrincipalType,
         principalID: UUID,
         rootedInOrganization organizationID: UUID,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         let bindings = try await LegacyRoleBindingStore.bindings(
             principalType: principalType.rawValue, principalID: principalID, on: db)
@@ -648,7 +646,7 @@ enum RoleBindingService {
 
     /// Remove every binding attached to a node. Called when the node itself is
     /// deleted (bindings have no FK to the resources they protect).
-    static func revokeAll(nodeType: IAMNodeType, nodeID: UUID, on db: Database) async throws {
+    static func revokeAll(nodeType: IAMNodeType, nodeID: UUID, on db: PostgresStoreContext) async throws {
         let rows = try await LegacyRoleBindingStore.bindings(
             nodeType: nodeType.rawValue, nodeID: nodeID, on: db)
         try await LegacyRoleBindingStore.delete(ids: rows.map(\.id), on: db)
@@ -658,7 +656,7 @@ enum RoleBindingService {
     /// the form a cascade delete needs, where removing one row takes a set of
     /// child nodes with it (a VM's checkpoints, a sandbox's snapshots, or
     /// every image and volume in an organization).
-    static func revokeAll(nodeType: IAMNodeType, nodeIDs: [UUID], on db: Database) async throws {
+    static func revokeAll(nodeType: IAMNodeType, nodeIDs: [UUID], on db: PostgresStoreContext) async throws {
         for chunk in chunked(nodeIDs) {
             let rows = try await LegacyRoleBindingStore.bindings(
                 nodeType: nodeType.rawValue, nodeIDs: Array(chunk), on: db)
@@ -671,7 +669,7 @@ enum RoleBindingService {
     /// principals with it (a project's service accounts, an organization's
     /// groups and registered workloads).
     static func revokeAll(
-        principalType: IAMPrincipalType, principalIDs: [UUID], on db: Database
+        principalType: IAMPrincipalType, principalIDs: [UUID], on db: PostgresStoreContext
     ) async throws {
         for chunk in chunked(principalIDs) {
             let rows = try await LegacyRoleBindingStore.bindings(
@@ -696,7 +694,7 @@ enum RoleBindingService {
 
     /// The unexpired bindings on a node.
     static func activeBindings(
-        nodeType: IAMNodeType, nodeID: UUID, on db: Database
+        nodeType: IAMNodeType, nodeID: UUID, on db: PostgresStoreContext
     ) async throws -> [LegacyRoleBindingRecord] {
         try await LegacyRoleBindingStore.bindings(
             nodeType: nodeType.rawValue,
@@ -714,7 +712,7 @@ enum RoleBindingService {
         principalID: UUID,
         nodeType: IAMNodeType,
         nodeID: UUID,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> [LegacyRoleBindingRecord] {
         try await LegacyRoleBindingStore.bindings(
             principalType: principalType.rawValue,
@@ -727,7 +725,7 @@ enum RoleBindingService {
 
     /// The unexpired bindings held by a principal.
     static func activeBindings(
-        principalType: IAMPrincipalType, principalID: UUID, on db: Database
+        principalType: IAMPrincipalType, principalID: UUID, on db: PostgresStoreContext
     ) async throws -> [LegacyRoleBindingRecord] {
         try await LegacyRoleBindingStore.bindings(
             principalType: principalType.rawValue,

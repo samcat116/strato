@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -14,9 +13,8 @@ final class LoadBalancerControllerTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "lbuser",
                 email: "lb@example.com",
@@ -25,7 +23,7 @@ final class LoadBalancerControllerTests {
             let organization = try await builder.createOrganization(name: "LB Org")
             try await builder.addUserToOrganization(
                 user: user, organization: organization, role: "admin")
-            try await user.replacingCurrentOrganization(try organization.requireID()).save(on: app.db)
+            try await user.replacingCurrentOrganization(try organization.requireID()).save(on: app.testPostgres)
             let project = try await builder.createProject(
                 name: "LB Project",
                 description: "Project for load-balancer tests",
@@ -49,8 +47,8 @@ final class LoadBalancerControllerTests {
                 name: "site-a", organizationScope: .organization(organizationID))
             let siteB = Site(
                 name: "site-b", organizationScope: .organization(organizationID))
-            try await siteA.save(on: app.db)
-            try await siteB.save(on: app.db)
+            try await siteA.save(on: app.testPostgres)
+            try await siteB.save(on: app.testPostgres)
 
             let vipNetwork = LogicalNetwork(
                 name: "vip-network",
@@ -64,8 +62,8 @@ final class LoadBalancerControllerTests {
                 gateway: "10.20.0.1",
                 projectID: projectID,
                 siteID: try siteB.requireID())
-            try await vipNetwork.save(on: app.db)
-            try await remoteBackendNetwork.save(on: app.db)
+            try await vipNetwork.save(on: app.testPostgres)
+            try await remoteBackendNetwork.save(on: app.testPostgres)
 
             let loadBalancer = try await LegacyLoadBalancerStore.insert(
                 name: "api",
@@ -73,15 +71,15 @@ final class LoadBalancerControllerTests {
                 logicalNetworkID: try vipNetwork.requireID(),
                 vip: "10.10.0.10",
                 protocolName: .tcp,
-                on: app.db)
+                on: app.testPostgres)
 
-            let vm = try await TestDataBuilder(db: app.db).createVM(
+            let vm = try await TestDataBuilder(db: app.testPostgres).createVM(
                 name: "remote-backend", project: project)
             let nic = VMNetworkInterface(
                 vmID: try vm.requireID(),
                 logicalNetworkID: try remoteBackendNetwork.requireID(),
                 macAddress: VMNetworkInterface.generateMACAddress())
-            try await nic.save(on: app.db)
+            try await nic.save(on: app.testPostgres)
             try await LegacyInterfaceAddressStore.insert(
                 kind: .vm,
                 interfaceID: try nic.requireID(),
@@ -90,7 +88,7 @@ final class LoadBalancerControllerTests {
                 address: "10.20.0.20",
                 prefixLength: 24,
                 gateway: remoteBackendNetwork.gateway,
-                on: app.db)
+                on: app.testPostgres)
 
             try await app.test(
                 .POST,
@@ -106,9 +104,9 @@ final class LoadBalancerControllerTests {
                 #expect(body.contains("pinned to a different site"))
             }
 
-            #expect(try await LegacyLoadBalancerTargetStore.backendCount(on: app.db) == 0)
+            #expect(try await LegacyLoadBalancerTargetStore.backendCount(on: app.testPostgres) == 0)
             let unchanged = try #require(
-                try await LegacyLoadBalancerStore.find(id: loadBalancer.id, on: app.db))
+                try await LegacyLoadBalancerStore.find(id: loadBalancer.id, on: app.testPostgres))
             #expect(unchanged.generation == 1)
         }
     }
@@ -120,7 +118,7 @@ final class LoadBalancerControllerTests {
             let projectID = try project.requireID()
             let site = Site(
                 name: "delete-site", organizationScope: .organization(organizationID))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
 
             let network = LogicalNetwork(
                 name: "delete-network",
@@ -128,7 +126,7 @@ final class LoadBalancerControllerTests {
                 gateway: "10.30.0.1",
                 projectID: projectID,
                 siteID: try site.requireID())
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
 
             let loadBalancer = try await LegacyLoadBalancerStore.insert(
                 name: "delete-api",
@@ -136,7 +134,7 @@ final class LoadBalancerControllerTests {
                 logicalNetworkID: try network.requireID(),
                 vip: "10.30.0.10",
                 protocolName: .tcp,
-                on: app.db)
+                on: app.testPostgres)
 
             let pool = try await TestDataBuilder(app: app).createFloatingIPPool(
                 name: "delete-public",
@@ -149,7 +147,7 @@ final class LoadBalancerControllerTests {
                 address: "203.0.113.10",
                 projectID: projectID,
                 loadBalancerID: loadBalancer.id,
-                on: app.db)
+                on: app.testPostgres)
 
             try await app.test(
                 .DELETE, "/api/load-balancers/\(loadBalancer.id)"
@@ -160,12 +158,12 @@ final class LoadBalancerControllerTests {
             }
 
             let reloadedNetwork = try #require(
-                try await LogicalNetwork.find(try network.requireID(), on: app.db))
+                try await LogicalNetwork.find(try network.requireID(), on: app.testPostgres))
             #expect(reloadedNetwork.generation == 2)
-            #expect(try await LegacyLoadBalancerStore.find(id: loadBalancer.id, on: app.db) == nil)
+            #expect(try await LegacyLoadBalancerStore.find(id: loadBalancer.id, on: app.testPostgres) == nil)
 
             let reservedFloatingIP = try #require(
-                try await LegacyFloatingIPStore.find(id: floatingIP.id, on: app.db))
+                try await LegacyFloatingIPStore.find(id: floatingIP.id, on: app.testPostgres))
             #expect(reservedFloatingIP.loadBalancerID == nil)
         }
     }

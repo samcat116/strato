@@ -61,8 +61,14 @@ public struct PostgresSession: Sendable {
     @discardableResult
     public func command(_ sql: String, operation: PostgresOperation) async throws -> String {
         try await observe(operation: operation) {
-            let rows = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: logger)
-            for try await _ in rows {}
+            // The extended-query protocol accepts one statement at a time.
+            // Split trusted migration and test schema scripts while preserving
+            // quoted strings, comments, and PL/pgSQL dollar-quoted bodies.
+            for statement in PostgreSQLScript.statements(in: sql) {
+                let rows = try await connection.query(
+                    PostgresQuery(unsafeSQL: statement), logger: logger)
+                for try await _ in rows {}
+            }
             return "completed"
         }
     }

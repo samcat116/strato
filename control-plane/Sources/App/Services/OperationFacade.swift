@@ -1,4 +1,3 @@
-import Fluent
 import ControlPlanePostgres
 import StratoShared
 import Vapor
@@ -242,7 +241,7 @@ enum OperationFacade {
     }
 
     static func view(
-        of kind: OperationResourceKind, id: UUID, on db: any Database
+        of kind: OperationResourceKind, id: UUID, on db: PostgresStoreContext
     ) async throws -> ResourceView {
         let conditions: ResourceConditions?
         switch kind {
@@ -266,7 +265,7 @@ enum OperationFacade {
     ///
     /// `event` must be a `.requested` row; terminal rows are the *evidence*
     /// this reads, not its subject.
-    static func response(for event: ResourceEvent, on db: any Database) async throws -> OperationResponse {
+    static func response(for event: ResourceEvent, on db: PostgresStoreContext) async throws -> OperationResponse {
         let view = try await view(of: event.resourceKind, id: event.resourceID, on: db)
         return response(for: event, in: view)
     }
@@ -375,7 +374,7 @@ enum OperationFacade {
         resourceID: UUID,
         limit: Int,
         vmCommands: VMCommandExecutionsPersistence? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [OperationResponse] {
         let events = try await ResourceEvent.matching(
             resourceKind: resourceKind,

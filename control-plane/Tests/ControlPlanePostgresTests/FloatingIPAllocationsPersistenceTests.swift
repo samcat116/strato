@@ -323,7 +323,7 @@ struct FloatingIPAllocationsPersistenceTests {
     private func generation(networkID: UUID, database: PostgresDatabase) async throws -> Int64 {
         try await database.withSession(operation: "test.floating_ips.generation") { session in
             let rows = try await session.query(
-                "SELECT generation FROM logical_networks WHERE id = '\(networkID.uuidString)'::uuid",
+                "SELECT generation FROM logical_networks WHERE id = \(networkID)",
                 operation: "test.floating_ips.generation.query")
             return try #require(rows.first).decode(Int64.self)
         }

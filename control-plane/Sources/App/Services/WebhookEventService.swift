@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import StratoShared
 import Vapor
@@ -118,7 +118,7 @@ struct QuotaUsageSnapshot: Sendable {
 
 /// Enqueues webhook events into the `webhook_deliveries` outbox.
 ///
-/// `enqueue` is the transactional entry point: called on the same `Database`
+/// `enqueue` is the transactional entry point: called on the same `PostgresStoreContext`
 /// handle as the state change that produced the event, the delivery rows
 /// commit (or roll back) atomically with it. `emit` is the fire-and-forget
 /// variant for call sites outside any transaction, where a webhook bookkeeping
@@ -126,7 +126,7 @@ struct QuotaUsageSnapshot: Sendable {
 enum WebhookEvents {
     /// Fan the event out to every matching active subscription. Throws on
     /// database errors so transactional callers stay atomic.
-    static func enqueue(_ event: WebhookEvent, on db: Database) async throws {
+    static func enqueue(_ event: WebhookEvent, on db: PostgresStoreContext) async throws {
         let subscriptions = try await LegacyWebhookStore.activeSubscriptions(
             organizationID: event.organizationID, on: db)
 
@@ -153,7 +153,7 @@ enum WebhookEvents {
     }
 
     /// Non-throwing wrapper for call sites outside a transaction.
-    static func emit(_ event: WebhookEvent, on db: Database, logger: Logger) async {
+    static func emit(_ event: WebhookEvent, on db: PostgresStoreContext, logger: Logger) async {
         do {
             try await enqueue(event, on: db)
         } catch {
@@ -195,7 +195,7 @@ enum WebhookEvents {
     /// guard without the event loses the event permanently, because nothing
     /// re-enters.
     static func enqueueMutationOutcome<R: ConvergingResource>(
-        for resource: R, succeeded: Bool, error: String?, on db: Database
+        for resource: R, succeeded: Bool, error: String?, on db: PostgresStoreContext
     ) async throws {
         let resourceID = try resource.requireID()
         let mutation = try await ResourceEvent.latest(
@@ -244,7 +244,7 @@ enum WebhookEvents {
     /// for a reap with no recorded request, where there is nothing to
     /// correlate against anyway.
     static func enqueueDeletionCompleted(
-        _ terminalEvent: ResourceEvent, requestID: UUID?, on db: Database
+        _ terminalEvent: ResourceEvent, requestID: UUID?, on db: PostgresStoreContext
     ) async throws {
         guard let organizationID = terminalEvent.organizationID else { return }
         let event = WebhookEvent(
@@ -270,7 +270,7 @@ enum WebhookEvents {
     /// already runs to stamp the same context onto the event row; this is the
     /// delivery-shaped view of it, for the events that carry none.
     static func resourceContext(
-        kind: OperationResourceKind, id: UUID, on db: Database
+        kind: OperationResourceKind, id: UUID, on db: PostgresStoreContext
     ) async throws -> (organizationID: UUID, projectID: UUID?, resourceName: String?)? {
         let scope = try await ResourceEvent.scope(of: kind, id: id, on: db)
         guard let organizationID = scope.organizationID else { return nil }
@@ -283,7 +283,7 @@ enum WebhookEvents {
     /// Fire-and-forget: observed-state bookkeeping must not fail on webhook
     /// machinery.
     static func emitVMStateChanged(
-        vm: VM, previous: VMStatus, current: VMStatus, on db: Database, logger: Logger
+        vm: VM, previous: VMStatus, current: VMStatus, on db: PostgresStoreContext, logger: Logger
     ) async {
         guard let vmID = vm.id else { return }
         guard let project = try? await Project.find(vm.projectID, on: db),
@@ -316,7 +316,7 @@ enum WebhookEvents {
         quota: ResourceQuota,
         baseline: QuotaUsageSnapshot,
         project: Project,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         guard quota.isEnabled, let quotaID = quota.id else { return }
         guard let organizationID = try await project.getRootOrganizationId(on: db) else { return }
@@ -368,7 +368,7 @@ enum WebhookEvents {
     /// Enqueue `agent.connected`/`agent.disconnected`. Agents without an
     /// organization scope have no tenant to notify and are skipped.
     static func emitAgentPresence(
-        agent: Agent, connected: Bool, reason: String, on db: Database, logger: Logger
+        agent: Agent, connected: Bool, reason: String, on db: PostgresStoreContext, logger: Logger
     ) async {
         guard let agentID = agent.id,
             let organizationID = try? await agent.rootOrganizationID(on: db)

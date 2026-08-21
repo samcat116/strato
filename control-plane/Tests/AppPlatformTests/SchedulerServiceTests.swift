@@ -558,7 +558,7 @@ struct SchedulerServiceTests {
         let logger = Logger(label: "test")
         let scheduler = SchedulerService(logger: logger)
         let isoVM = createTestVM()
-        let imdsVM = createTestVM()
+        var imdsVM = createTestVM()
         imdsVM.metadataSource = .imds
 
         #expect(!SchedulerService.placementRequirements(for: isoVM).requiresInterVMNetworking)
@@ -586,7 +586,7 @@ struct SchedulerServiceTests {
     @Test("IMDS bootstrap fails closed when no OVN agent advertises metadata serving")
     func testIMDSBootstrapRejectsMetadataDisabledFleet() throws {
         let scheduler = SchedulerService(logger: Logger(label: "test"))
-        let imdsVM = createTestVM()
+        var imdsVM = createTestVM()
         imdsVM.metadataSource = .imds
         let agents = [
             createTestAgent(
@@ -868,7 +868,7 @@ struct SchedulerServiceTests {
         let plain = createTestVM(cpu: 2)
         #expect(!SchedulerService.placementRequirements(for: plain).requiresVTPM)
 
-        let windows = createTestVM(cpu: 2)
+        var windows = createTestVM(cpu: 2)
         windows.secureBoot = true
         windows.tpmEnabled = true
         #expect(SchedulerService.placementRequirements(for: windows).requiresVTPM)
@@ -924,7 +924,7 @@ struct SchedulerServiceTests {
         let plain = createTestVM(cpu: 2)
         #expect(!SchedulerService.placementRequirements(for: plain).requiresVsock)
 
-        let managed = createTestVM(cpu: 2)
+        var managed = createTestVM(cpu: 2)
         managed.guestAgentEnabled = true
         #expect(SchedulerService.placementRequirements(for: managed).requiresVsock)
     }

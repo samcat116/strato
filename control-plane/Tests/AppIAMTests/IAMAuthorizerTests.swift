@@ -1,4 +1,3 @@
-import Fluent
 import ControlPlanePostgres
 import Foundation
 import Testing
@@ -18,7 +17,6 @@ final class IAMAuthorizerTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             // Enable decision-row recording (off by default under .testing).
             // After configure — which resets the config from the environment —
             // and before the recorder is lazily built with it at boot.
@@ -39,7 +37,7 @@ final class IAMAuthorizerTests {
     }
 
     private func buildTree(_ app: Application, prefix: String) async throws -> Tree {
-        let builder = TestDataBuilder(db: app.db)
+        let builder = TestDataBuilder(db: app.testPostgres)
         let org = try await builder.createOrganization(name: "\(prefix) Org")
         let project = try await builder.createProject(
             name: "\(prefix) Project", description: "d", organization: org)
@@ -68,7 +66,7 @@ final class IAMAuthorizerTests {
             state: state,
             cache: cache,
             app: app,
-            db: app.db
+            db: app.testPostgres
         ).allowed
     }
 
@@ -86,9 +84,9 @@ final class IAMAuthorizerTests {
             let tree = try await buildTree(app, prefix: "agree")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: tree.user.id!, role: .viewer,
-                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.testPostgres)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
             let allowed = try await check(
                 app, user: tree.user, action: "vm:read",
@@ -114,8 +112,8 @@ final class IAMAuthorizerTests {
             let tree = try await buildTree(app, prefix: "mismatch")
             // No binding: Cedar denies (org members no longer see every
             // project).
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
             let allowed = try await check(
                 app, user: tree.user, action: "project:read",
@@ -136,14 +134,14 @@ final class IAMAuthorizerTests {
             let tree = try await buildTree(app, prefix: "ceiling")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: tree.user.id!, role: .admin,
-                nodeType: .organization, nodeID: tree.org.id!, createdBy: nil, on: app.db)
+                nodeType: .organization, nodeID: tree.org.id!, createdBy: nil, on: app.testPostgres)
             let guardrail = try await GuardrailStore.create(
                 name: "no-vm-lifecycle", description: nil, effect: nil,
                 node: IAMNode(type: .organization, id: tree.org.id!),
                 actions: ["vm:*"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+                createdBy: nil, on: app.testPostgres)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
             let allowed = try await check(
                 app, user: tree.user, action: "vm:start",
@@ -163,9 +161,9 @@ final class IAMAuthorizerTests {
             let tree = try await buildTree(app, prefix: "memo")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: tree.user.id!, role: .viewer,
-                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.testPostgres)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
             // The shape of a guarded object route: the middleware checks, then
             // the handler re-checks the identical triple through
@@ -197,9 +195,9 @@ final class IAMAuthorizerTests {
             let tree = try await buildTree(app, prefix: "memokey")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: tree.user.id!, role: .viewer,
-                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.db)
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+                nodeType: .project, nodeID: tree.project.id!, createdBy: nil, on: app.testPostgres)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
             // Same principal, same VM, different action: a viewer may read it
             // but not start it, so a memo keyed on the resource alone would
@@ -231,7 +229,7 @@ final class IAMAuthorizerTests {
                 context: IAMCheckContext(path: "/api/vms", method: "GET", requestID: nil),
                 state: .detached,
                 app: app,
-                db: app.db
+                db: app.testPostgres
             )
         } catch {
             thrown = error
@@ -244,8 +242,8 @@ final class IAMAuthorizerTests {
     func membershipGrant() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "member")
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
             let allowed = try await check(
                 app, user: tree.user, action: "org:read",
@@ -263,10 +261,10 @@ final class IAMAuthorizerTests {
     func adminThroughEvaluator() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "admin")
-            let admin = try await TestDataBuilder(db: app.db).createUser(
+            let admin = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "authz-admin", email: "authz-admin@example.com", isSystemAdmin: true)
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
             let state = IAMRequestAuthState()
             let allowed = try await check(
@@ -287,8 +285,8 @@ final class IAMAuthorizerTests {
     func canonicalRequestCanIsCedar() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "e2e")
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
             let request = Request(application: app, method: .GET, url: "/api/vms", on: app.eventLoopGroup.next())
             request.auth.login(tree.user)
@@ -344,8 +342,8 @@ final class IAMAuthorizerTests {
     func multiCheckRequestRecordsEveryDecision() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "multi")
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
             let node = IAMNode(type: .virtualMachine, id: tree.vm.id!)
             for action in ["vm:read", "vm:update", "vm:delete"] {
@@ -378,8 +376,8 @@ final class IAMAuthorizerTests {
     func retentionSweep() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "sweep")
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
             _ = try await check(
                 app, user: tree.user, action: "org:read",
                 node: IAMNode(type: .organization, id: tree.org.id!))
@@ -411,7 +409,6 @@ final class IAMAuthorizerBackstopTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             app.iamDecisionLogConfig.recordDecisions = true
             try await test(app)
         } catch {
@@ -424,7 +421,7 @@ final class IAMAuthorizerBackstopTests {
     @Test("A truncated ancestor chain is denied outright — a ceiling must not silently detach")
     func truncatedChainFailsClosed() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             // A network in a project that belongs to no organization: the chain
             // is [network, project] and never reaches an organization, so an
             // org-anchored guardrail could not match it.
@@ -433,12 +430,12 @@ final class IAMAuthorizerBackstopTests {
             // The network's required site must not repair the intentionally
             // truncated ownership chain, so keep it scopeless as well.
             let orphanSite = Site(name: "orphan-site")
-            try await orphanSite.save(on: app.db)
+            try await orphanSite.save(on: app.testPostgres)
             let network = LogicalNetwork(
                 name: "orphan-net", subnet: "10.99.0.0/24", gateway: "10.99.0.1",
                 projectID: try orphanProject.requireID(), externalAccess: false,
                 siteID: try orphanSite.requireID())
-            try await network.save(on: app.db)
+            try await network.save(on: app.testPostgres)
 
             let user = try await builder.createUser(
                 username: "trunc-user", email: "trunc-user@example.com")
@@ -447,9 +444,9 @@ final class IAMAuthorizerBackstopTests {
             // above the break could not.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .network, nodeID: network.id!, createdBy: nil, on: app.db)
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+                nodeType: .network, nodeID: network.id!, createdBy: nil, on: app.testPostgres)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
             let state = IAMRequestAuthState()
             let decision = try await IAMAuthorizer.authorize(
@@ -459,7 +456,7 @@ final class IAMAuthorizerBackstopTests {
                 context: IAMCheckContext(path: "/api/networks", method: "GET", requestID: nil),
                 state: state,
                 app: app,
-                db: app.db
+                db: app.testPostgres
             )
             #expect(!decision.allowed)
             #expect(decision.determiningPolicyIDs.isEmpty)
@@ -470,7 +467,7 @@ final class IAMAuthorizerBackstopTests {
     @Test("A network is readable only through a grant on its project's chain")
     func networkReadRequiresAGrant() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Net Read Org")
             let project = try await builder.createProject(
                 name: "Net Read Project", description: "d", organization: org)
@@ -479,8 +476,8 @@ final class IAMAuthorizerBackstopTests {
                 externalAccess: false)
             let user = try await builder.createUser(
                 username: "net-read-user", email: "net-read-user@example.com")
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
             let node = IAMNode(type: .network, id: network.id!)
             let context = IAMCheckContext(path: "/api/networks", method: "GET", requestID: nil)
@@ -490,16 +487,16 @@ final class IAMAuthorizerBackstopTests {
             // with global networks themselves (issue #765).
             let ungranted = try await IAMAuthorizer.authorize(
                 userID: user.id!, action: "network:read", node: node,
-                context: context, state: .detached, app: app, db: app.db)
+                context: context, state: .detached, app: app, db: app.testPostgres)
             #expect(!ungranted.allowed)
 
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .viewer,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
 
             let granted = try await IAMAuthorizer.authorize(
                 userID: user.id!, action: "network:read", node: node,
-                context: context, state: .detached, app: app, db: app.db)
+                context: context, state: .detached, app: app, db: app.testPostgres)
             #expect(granted.allowed)
         }
     }
@@ -507,7 +504,7 @@ final class IAMAuthorizerBackstopTests {
     @Test("requireSystemAdmin denies non-admins, marks the decision, and flags admins for audit")
     func requireSystemAdminBranches() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(username: "rsa-user", email: "rsa-user@example.com")
             let admin = try await builder.createUser(
                 username: "rsa-admin", email: "rsa-admin@example.com", isSystemAdmin: true)
@@ -538,7 +535,7 @@ final class IAMAuthorizerBackstopTests {
     @Test("A handler-checked mutation that evaluates nothing is a hard 500 under .testing")
     func handlerAssertionCatchesMissingCheck() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "forgetful-user", email: "forgetful-user@example.com")
 

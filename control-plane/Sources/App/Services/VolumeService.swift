@@ -1,6 +1,6 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
-import Fluent
 import StratoShared
 
 /// What is left of the volume agent path after ADR 0001 stages 5 and 8
@@ -45,14 +45,14 @@ enum VolumeService {
     /// freshly accepted create is still routable before its first observation.
     static func replicas(
         of volume: Volume,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [VolumeReplicaSnapshot] {
         guard let volumeID = volume.id else { return [] }
         return try await replicas(volumeIDs: [volumeID], on: db)[volumeID] ?? []
     }
 
     /// Batched counterpart used by assemblers and API lists.
-    static func replicas(volumeIDs: [UUID], on db: any Database) async throws
+    static func replicas(volumeIDs: [UUID], on db: PostgresStoreContext) async throws
         -> [UUID: [VolumeReplicaSnapshot]]
     {
         guard !volumeIDs.isEmpty else { return [:] }
@@ -67,7 +67,7 @@ enum VolumeService {
 
     /// All physical copies for API/inventory views, including copies that are
     /// degraded, resyncing, or faulted and therefore cannot drive placement.
-    static func allReplicas(volumeIDs: [UUID], on db: any Database) async throws
+    static func allReplicas(volumeIDs: [UUID], on db: PostgresStoreContext) async throws
         -> [UUID: [VolumeReplicaSnapshot]]
     {
         guard !volumeIDs.isEmpty else { return [:] }
@@ -80,7 +80,7 @@ enum VolumeService {
     /// Live volumes use only placement-authoritative copies, while terminating
     /// volumes include every physical copy so degraded, resyncing, and faulted
     /// data must also be torn down before the logical row can be reaped.
-    static func replicaScope(onAgent agentId: String, on db: any Database) async throws
+    static func replicaScope(onAgent agentId: String, on db: PostgresStoreContext) async throws
         -> AgentReplicaScope
     {
         let replicas = try await LegacyVolumeReplicaStore.replicas(agentId: agentId, on: db)
@@ -94,7 +94,7 @@ enum VolumeService {
 
     /// Every logical volume this agent must reconcile. Inactive copies are
     /// excluded from live placement, but remain visible while terminating.
-    static func volumes(onAgent agentId: String, on db: any Database) async throws -> [Volume] {
+    static func volumes(onAgent agentId: String, on db: PostgresStoreContext) async throws -> [Volume] {
         let scope = try await replicaScope(onAgent: agentId, on: db)
         guard !scope.allVolumeIDs.isEmpty else { return [] }
         return try await LegacyVolumeStore.volumes(ids: Array(scope.allVolumeIDs), on: db)
@@ -102,14 +102,14 @@ enum VolumeService {
     }
 
     /// Agent IDs whose active replica authoritatively places this volume.
-    static func agentIDs(holding volume: Volume, on db: any Database) async throws -> [String] {
+    static func agentIDs(holding volume: Volume, on db: PostgresStoreContext) async throws -> [String] {
         try await replicas(of: volume, on: db).map(\.agentId)
     }
 
     /// Every agent with a physical copy, regardless of replica health. This is
     /// the teardown/finalizer scope and must not be used for placement or attachments.
     static func agentIDsWithPhysicalReplicas(
-        of volume: Volume, on db: any Database
+        of volume: Volume, on db: PostgresStoreContext
     ) async throws -> [String] {
         guard let volumeID = volume.id else { return [] }
         return try await allReplicas(volumeIDs: [volumeID], on: db)[volumeID]?.map(\.agentId) ?? []
@@ -124,7 +124,7 @@ enum VolumeService {
     /// since STR-150, rather than re-derived per request: a desired entry has to
     /// appear in exactly one agent's sync, and a volume that moves must not
     /// silently orphan its snapshots into another host's tombstone set.
-    static func agentHolding(_ volume: Volume, on db: any Database) async throws -> String? {
+    static func agentHolding(_ volume: Volume, on db: PostgresStoreContext) async throws -> String? {
         try await replicas(of: volume, on: db).first?.agentId
     }
 
@@ -133,7 +133,7 @@ enum VolumeService {
     /// only to a future shared pool; today's local-pool reachability guard makes
     /// the first branch mandatory before an attachment is accepted.
     static func diskAttachment(
-        for volume: Volume, accessibleFrom agentId: String? = nil, on db: any Database
+        for volume: Volume, accessibleFrom agentId: String? = nil, on db: PostgresStoreContext
     ) async throws -> DiskAttachment? {
         let replicas = try await replicas(of: volume, on: db)
         if let agentId,
@@ -146,7 +146,7 @@ enum VolumeService {
 
     /// Batch attachment projection for VM desired-state assembly.
     static func diskAttachments(
-        for volumes: [Volume], accessibleFrom agentId: String, on db: any Database
+        for volumes: [Volume], accessibleFrom agentId: String, on db: PostgresStoreContext
     ) async throws -> [UUID: DiskAttachment] {
         let ids = volumes.compactMap(\.id)
         let grouped = try await replicas(volumeIDs: ids, on: db)
@@ -162,12 +162,12 @@ enum VolumeService {
         return result
     }
 
-    static func response(for volume: Volume, on db: any Database) async throws -> VolumeResponse {
+    static func response(for volume: Volume, on db: PostgresStoreContext) async throws -> VolumeResponse {
         let grouped = try await allReplicas(volumeIDs: volume.id.map { [$0] } ?? [], on: db)
         return VolumeResponse(from: volume, replicas: volume.id.flatMap { grouped[$0] } ?? [])
     }
 
-    static func responses(for volumes: [Volume], on db: any Database) async throws -> [VolumeResponse] {
+    static func responses(for volumes: [Volume], on db: PostgresStoreContext) async throws -> [VolumeResponse] {
         let grouped = try await allReplicas(volumeIDs: volumes.compactMap(\.id), on: db)
         return volumes.map { volume in
             VolumeResponse(from: volume, replicas: volume.id.flatMap { grouped[$0] } ?? [])

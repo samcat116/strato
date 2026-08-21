@@ -1,5 +1,5 @@
+import ControlPlanePostgres
 import Vapor
-import Fluent
 
 extension Request {
     /// Fetch a sandbox and enforce a canonical action on it in one call, through
@@ -12,8 +12,10 @@ extension Request {
     ///
     /// - Throws: `.unauthorized` if unauthenticated, `.notFound` if the sandbox
     ///   does not exist, `.forbidden` if the user lacks `action` on it.
-    func authorizedSandbox(_ sandboxID: UUID, action: String) async throws -> Sandbox {
-        guard let sandbox = try await Sandbox.find(sandboxID, on: db) else {
+    func authorizedSandbox(
+        _ sandboxID: UUID, action: String, on database: PostgresStoreContext
+    ) async throws -> Sandbox {
+        guard let sandbox = try await Sandbox.find(sandboxID, on: database) else {
             throw Abort(.notFound)
         }
 

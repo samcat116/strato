@@ -1,12 +1,11 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 /// Explicit logical-network access for code that still owns a Fluent
 /// transaction. Only immutable values cross this compatibility boundary.
 enum LegacyLogicalNetworkStore {
-    static func network(id: UUID?, on db: any Database) async throws -> LogicalNetwork? {
+    static func network(id: UUID?, on db: PostgresStoreContext) async throws -> LogicalNetwork? {
         guard let id else { return nil }
         return try await networks(ids: [id], on: db).first
     }
@@ -21,12 +20,12 @@ enum LegacyLogicalNetworkStore {
         primaryDNSZoneIDs: [UUID]? = nil,
         excludingID: UUID? = nil,
         resolverIndexPresent: Bool? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [LogicalNetwork] {
         if ids?.isEmpty == true || projectIDs?.isEmpty == true || primaryDNSZoneIDs?.isEmpty == true {
             return []
         }
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT \(unsafeRaw: columns) FROM logical_networks AS n WHERE TRUE"
         if let ids { query += " AND n.id = ANY(\(bind: ids))" }
         if let projectID { query += " AND n.project_id = \(bind: projectID)" }
@@ -49,7 +48,7 @@ enum LegacyLogicalNetworkStore {
         return try await requireSQL(db).raw(query).all(decoding: Record.self).map(\.network)
     }
 
-    static func ids(projectIDs: [UUID], on db: any Database) async throws -> [UUID] {
+    static func ids(projectIDs: [UUID], on db: PostgresStoreContext) async throws -> [UUID] {
         guard !projectIDs.isEmpty else { return [] }
         struct IDRecord: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
@@ -57,7 +56,7 @@ enum LegacyLogicalNetworkStore {
         ).all(decoding: IDRecord.self).map(\.id)
     }
 
-    static func count(on db: any Database) async throws -> Int {
+    static func count(on db: PostgresStoreContext) async throws -> Int {
         struct Count: Decodable { let count: Int }
         return try await requireSQL(db).raw(
             "SELECT count(*)::bigint AS count FROM logical_networks"
@@ -65,7 +64,7 @@ enum LegacyLogicalNetworkStore {
     }
 
     @discardableResult
-    static func upsert(_ network: LogicalNetwork, on db: any Database) async throws -> LogicalNetwork {
+    static func upsert(_ network: LogicalNetwork, on db: PostgresStoreContext) async throws -> LogicalNetwork {
         let id = try network.requireID()
         guard let row = try await requireSQL(db).raw(
             """
@@ -115,7 +114,7 @@ enum LegacyLogicalNetworkStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM logical_networks WHERE id = \(bind: id) RETURNING id"
@@ -220,8 +219,8 @@ enum LegacyLogicalNetworkStore {
         updated_at AS "updatedAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase, sql.dialect.name == "postgresql" else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext, sql.dialect.name == "postgresql" else {
             throw Abort(
                 .internalServerError,
                 reason: "Logical-network compatibility access requires PostgreSQL"

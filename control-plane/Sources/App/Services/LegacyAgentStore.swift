@@ -1,13 +1,12 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
 /// Explicit agent access for callers that still own a Fluent transaction.
 /// JSON columns are encoded at the boundary and only immutable values escape.
 enum LegacyAgentStore {
-    static func agent(id: UUID?, on db: any Database) async throws -> Agent? {
+    static func agent(id: UUID?, on db: PostgresStoreContext) async throws -> Agent? {
         guard let id else { return nil }
         return try await agents(ids: [id], on: db).first
     }
@@ -23,15 +22,15 @@ enum LegacyAgentStore {
         excludingID: UUID? = nil,
         autoUpdateOrAssigned: Bool = false,
         orderByName: Bool = false,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [Agent] {
         if ids?.isEmpty == true { return [] }
-        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM agents AS a WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT \(unsafeRaw: columns) FROM agents AS a WHERE TRUE"
         if let ids { query += " AND a.id = ANY(\(bind: ids))" }
         if let trustDomain { query += " AND a.trust_domain = \(bind: trustDomain)" }
         if let name { query += " AND a.name = \(bind: name)" }
         if let siteID { query += " AND a.site_id = \(bind: siteID)" }
-        if let status { query += " AND a.status = \(bind: status.rawValue)" }
+        if let status { query += " AND a.status = \(bind: status.rawValue)::agent_status" }
         if let organizationID { query += " AND a.organization_id = \(bind: organizationID)" }
         if let organizationalUnitID {
             query += " AND a.organizational_unit_id = \(bind: organizationalUnitID)"
@@ -49,17 +48,17 @@ enum LegacyAgentStore {
     static func count(
         siteID: UUID? = nil,
         excludingID: UUID? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Int {
         struct Count: Decodable { let count: Int }
-        var query: SQLQueryString = "SELECT count(*)::bigint AS count FROM agents WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT count(*)::bigint AS count FROM agents WHERE TRUE"
         if let siteID { query += " AND site_id = \(bind: siteID)" }
         if let excludingID { query += " AND id <> \(bind: excludingID)" }
         return try await requireSQL(db).raw(query).first(decoding: Count.self)?.count ?? 0
     }
 
     @discardableResult
-    static func upsert(_ agent: Agent, on db: any Database) async throws -> Agent {
+    static func upsert(_ agent: Agent, on db: PostgresStoreContext) async throws -> Agent {
         let id = try agent.requireID()
         let hypervisors = try json(agent.hypervisors)
         let hostInfo = try jsonIfPresent(agent.hostInfo)
@@ -85,17 +84,24 @@ enum LegacyAgentStore {
                 manifest_inventory_complete, created_at, updated_at
             ) VALUES (
                 \(bind: id), \(bind: agent.name), \(bind: agent.trustDomain),
-                \(bind: agent.hostname), \(bind: agent.version), \(bind: agent.status.rawValue),
+                \(bind: agent.hostname), \(bind: agent.version),
+                \(bind: agent.status.rawValue)::agent_status,
                 \(bind: agent.totalCPU), \(bind: agent.totalMemory), \(bind: agent.totalDisk),
                 \(bind: agent.availableCPU), \(bind: agent.availableMemory),
                 \(bind: agent.availableDisk), \(bind: agent.lastHeartbeat),
                 \(bind: agent.architecture), \(bind: agent.operatingSystem),
-                CAST(\(bind: hypervisors) AS jsonb), \(bind: agent.networkCapability),
+                ARRAY(
+                    SELECT value FROM jsonb_array_elements(CAST(\(bind: hypervisors) AS jsonb))
+                ), \(bind: agent.networkCapability),
                 CAST(\(bind: hostInfo) AS jsonb), \(bind: agent.siteID),
                 \(bind: agent.wireProtocolVersion), \(bind: agent.sandboxCapable),
                 \(bind: agent.sandboxNetworkingCapable), \(bind: agent.tpmCapable),
                 \(bind: agent.resolverCapable), \(bind: agent.metadataServiceCapable),
-                CAST(\(bind: dependencyObservations) AS jsonb),
+                ARRAY(
+                    SELECT value FROM jsonb_array_elements(
+                        CAST(\(bind: dependencyObservations) AS jsonb)
+                    )
+                ),
                 \(bind: agent.dependencyObservationsReceivedAt),
                 \(bind: agent.organizationID), \(bind: agent.organizationalUnitID),
                 \(bind: agent.autoUpdate), \(bind: agent.updateDesiredVersion),
@@ -158,7 +164,7 @@ enum LegacyAgentStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM agents WHERE id = \(bind: id) RETURNING id"
@@ -279,7 +285,7 @@ enum LegacyAgentStore {
         a.last_heartbeat AS "lastHeartbeat",
         a.architecture,
         a.operating_system AS "operatingSystem",
-        a.hypervisors::text AS "hypervisorsJSON",
+        to_jsonb(a.hypervisors)::text AS "hypervisorsJSON",
         a.network_capability AS "networkCapability",
         a.host_info::text AS "hostInfoJSON",
         a.site_id AS "siteID",
@@ -289,7 +295,7 @@ enum LegacyAgentStore {
         a.tpm_capable AS "tpmCapable",
         a.resolver_capable AS "resolverCapable",
         a.metadata_service_capable AS "metadataServiceCapable",
-        a.dependency_observations::text AS "dependencyObservationsJSON",
+        to_jsonb(a.dependency_observations)::text AS "dependencyObservationsJSON",
         a.dependency_observations_received_at AS "dependencyObservationsReceivedAt",
         a.organization_id AS "organizationID",
         a.organizational_unit_id AS "organizationalUnitID",
@@ -331,8 +337,8 @@ enum LegacyAgentStore {
         return try decode(T.self, value)
     }
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase, sql.dialect.name == "postgresql" else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext, sql.dialect.name == "postgresql" else {
             throw Abort(.internalServerError, reason: "Agent compatibility access requires PostgreSQL")
         }
         return sql

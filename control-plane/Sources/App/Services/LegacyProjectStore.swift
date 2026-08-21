@@ -1,11 +1,10 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 /// Explicit project access for callers that still own a Fluent transaction.
 enum LegacyProjectStore {
-    static func project(id: UUID?, on db: any Database) async throws -> Project? {
+    static func project(id: UUID?, on db: PostgresStoreContext) async throws -> Project? {
         guard let id else { return nil }
         let rows = try await requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM projects AS p WHERE p.id = \(bind: id)"
@@ -20,7 +19,7 @@ enum LegacyProjectStore {
         ids: [UUID]? = nil,
         organizationIDs: [UUID] = [],
         organizationalUnitIDs: [UUID] = [],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [Project] {
         if ids?.isEmpty == true { return [] }
         if ids == nil && organizationIDs.isEmpty && organizationalUnitIDs.isEmpty {
@@ -29,7 +28,7 @@ enum LegacyProjectStore {
             ).all(decoding: Record.self).map(\.project)
         }
 
-        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM projects AS p WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT \(unsafeRaw: columns) FROM projects AS p WHERE TRUE"
         if let ids { query += " AND p.id = ANY(\(bind: ids))" }
         if !organizationIDs.isEmpty || !organizationalUnitIDs.isEmpty {
             query += " AND (FALSE"
@@ -48,10 +47,10 @@ enum LegacyProjectStore {
         organizationalUnitIDs: [UUID] = [],
         query term: String,
         limit: Int = 10,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [Project] {
         guard !organizationIDs.isEmpty || !organizationalUnitIDs.isEmpty else { return [] }
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT \(unsafeRaw: columns) FROM projects AS p WHERE (FALSE"
         if !organizationIDs.isEmpty { query += " OR p.organization_id = ANY(\(bind: organizationIDs))" }
         if !organizationalUnitIDs.isEmpty {
@@ -62,15 +61,15 @@ enum LegacyProjectStore {
         return try await requireSQL(db).raw(query).all(decoding: Record.self).map(\.project)
     }
 
-    static func count(name: String? = nil, on db: any Database) async throws -> Int {
+    static func count(name: String? = nil, on db: PostgresStoreContext) async throws -> Int {
         struct Count: Decodable { let count: Int }
-        var query: SQLQueryString = "SELECT count(*)::bigint AS count FROM projects AS p WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT count(*)::bigint AS count FROM projects AS p WHERE TRUE"
         if let name { query += " AND p.name = \(bind: name)" }
         return try await requireSQL(db).raw(query).first(decoding: Count.self)?.count ?? 0
     }
 
     @discardableResult
-    static func upsert(_ project: Project, on db: any Database) async throws -> Project {
+    static func upsert(_ project: Project, on db: PostgresStoreContext) async throws -> Project {
         let id = try project.requireID()
         guard let row = try await requireSQL(db).raw(
             """
@@ -101,7 +100,7 @@ enum LegacyProjectStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM projects WHERE id = \(bind: id) RETURNING id"
@@ -155,8 +154,8 @@ enum LegacyProjectStore {
         updated_at AS "updatedAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase, sql.dialect.name == "postgresql" else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext, sql.dialect.name == "postgresql" else {
             throw Abort(.internalServerError, reason: "Project compatibility access requires PostgreSQL")
         }
         return sql

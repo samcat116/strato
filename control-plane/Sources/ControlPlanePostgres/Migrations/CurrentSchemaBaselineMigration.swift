@@ -95,6 +95,9 @@ enum PostgreSQLScript {
             }
             index += 1
         }
+        let tail = String(decoding: bytes[statementStart...], as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !tail.isEmpty { statements.append(tail) }
         return statements
     }
 

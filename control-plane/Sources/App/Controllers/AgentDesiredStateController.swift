@@ -24,9 +24,11 @@ import Vapor
 /// lane.
 struct AgentDesiredStateController: RouteCollection {
     private let agents: AgentsPersistence
+    private let workloads: WorkloadsPersistence
 
-    init(agents: AgentsPersistence) {
+    init(agents: AgentsPersistence, workloads: WorkloadsPersistence) {
         self.agents = agents
+        self.workloads = workloads
     }
 
     /// How long a poll parks before answering `304`.
@@ -74,7 +76,8 @@ struct AgentDesiredStateController: RouteCollection {
         guard AgentMTLSAuthenticator.hasClientCertificate(req) else {
             throw Abort(.unauthorized, reason: "Desired state requires an agent client certificate")
         }
-        let agent = try await AgentMTLSAuthenticator.authenticateAgent(req: req)
+        let agent = try await AgentMTLSAuthenticator.authenticateAgent(
+            req: req, workloads: workloads)
 
         // Resolved by the SVID's full identity, not its bare name: two
         // organizations may each enroll an `agent-1` (issue #613), and one

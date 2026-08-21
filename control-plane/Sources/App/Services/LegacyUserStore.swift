@@ -1,12 +1,11 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 /// Explicit account access for callers that still own a Fluent transaction.
 /// The value interface prevents Fluent models or row streams escaping a lease.
 enum LegacyUserStore {
-    static func user(id: UUID?, on db: any Database) async throws -> User? {
+    static func user(id: UUID?, on db: PostgresStoreContext) async throws -> User? {
         guard let id else { return nil }
         let rows = try await requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM users AS u WHERE u.id = \(bind: id)"
@@ -28,10 +27,10 @@ enum LegacyUserStore {
         disabled: Bool? = nil,
         excludingID: UUID? = nil,
         orderByUsername: Bool = false,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [User] {
         if ids?.isEmpty == true { return [] }
-        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM users AS u WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT \(unsafeRaw: columns) FROM users AS u WHERE TRUE"
         if let ids { query += " AND u.id = ANY(\(bind: ids))" }
         if let username { query += " AND u.username = \(bind: username)" }
         if let email { query += " AND u.email = \(bind: email)" }
@@ -53,16 +52,16 @@ enum LegacyUserStore {
         username: String,
         email: String,
         excludingID: UUID? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> User? {
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT \(unsafeRaw: columns) FROM users AS u WHERE (u.username = \(bind: username) OR u.email = \(bind: email))"
         if let excludingID { query += " AND u.id <> \(bind: excludingID)" }
         query += " ORDER BY u.created_at, u.id LIMIT 1"
         return try await requireSQL(db).raw(query).first(decoding: Record.self)?.user
     }
 
-    static func count(on db: any Database) async throws -> Int {
+    static func count(on db: PostgresStoreContext) async throws -> Int {
         struct Count: Decodable { let count: Int }
         return try await requireSQL(db).raw(
             "SELECT count(*)::bigint AS count FROM users"
@@ -70,7 +69,7 @@ enum LegacyUserStore {
     }
 
     @discardableResult
-    static func upsert(_ user: User, on db: any Database) async throws -> User {
+    static func upsert(_ user: User, on db: PostgresStoreContext) async throws -> User {
         let id = try user.requireID()
         guard let row = try await requireSQL(db).raw(
             """
@@ -111,7 +110,7 @@ enum LegacyUserStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM users WHERE id = \(bind: id) RETURNING id"
@@ -184,8 +183,8 @@ enum LegacyUserStore {
         updated_at AS "updatedAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase, sql.dialect.name == "postgresql" else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext, sql.dialect.name == "postgresql" else {
             throw Abort(.internalServerError, reason: "User compatibility access requires PostgreSQL")
         }
         return sql

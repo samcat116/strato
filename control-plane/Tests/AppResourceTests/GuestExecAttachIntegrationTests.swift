@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import NIOConcurrencyHelpers
 import NIOCore
@@ -40,18 +39,18 @@ struct GuestExecAttachIntegrationTests {
                 httpClient: app.client)
 
             let org = Organization(name: "Exec WS Org", description: "org for exec attach test")
-            try await org.save(on: app.db)
+            try await org.save(on: app.testPostgres)
             let site = Site(
                 name: "exec-ws-dc",
                 organizationScope: .organization(try org.requireID()))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
             let enrollment = TestAgentEnrollment(
                 agentName: agentName,
                 spiffeID: "spiffe://strato.local/agent/\(agentName)",
                 expirationHours: 1,
                 siteID: try site.requireID(),
                 organizationScope: .organization(try org.requireID()))
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             var agentHeaders = HTTPHeaders()
             agentHeaders.add(
@@ -68,7 +67,7 @@ struct GuestExecAttachIntegrationTests {
             // A user whose API key authenticates the browser socket. System
             // admin, so attach authorization flows through the
             // platform-system-admin policy without bindings.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "execattach",
                 email: "execattach@example.com",
@@ -82,7 +81,7 @@ struct GuestExecAttachIntegrationTests {
             let project = try await builder.createProject(
                 name: "Exec WS Project", description: "p", organization: org)
             let registeredAgent = try #require(
-                try await LegacyAgentStore.agents(name: agentName, on: app.db).first)
+                try await LegacyAgentStore.agents(name: agentName, on: app.testPostgres).first)
 
             let collection: String
             let resourceId: String
@@ -91,7 +90,7 @@ struct GuestExecAttachIntegrationTests {
                 var sandbox = try await builder.createSandbox(name: "exec-ws-sb", project: project)
                 sandbox.hypervisorId = try registeredAgent.requireID().uuidString
                 sandbox.setStatus(.running)
-                try await sandbox.save(on: app.db)
+                try await sandbox.save(on: app.testPostgres)
                 collection = "sandboxes"
                 resourceId = try sandbox.requireID().uuidString
             case .virtualMachine:
@@ -99,7 +98,7 @@ struct GuestExecAttachIntegrationTests {
                 vm.hypervisorId = try registeredAgent.requireID().uuidString
                 vm.guestAgentEnabled = true
                 vm.setStatus(.running)
-                try await vm.save(on: app.db)
+                try await vm.save(on: app.testPostgres)
                 collection = "vms"
                 resourceId = try vm.requireID().uuidString
             }
@@ -303,7 +302,7 @@ private func drainAndStopExecServer(_ app: Application) async {
     await app.server.shutdown()
     for iteration in 0..<200 {
         try? await Task.sleep(for: .milliseconds(10))
-        let agents = (try? await Agent.all(on: app.db)) ?? []
+        let agents = (try? await Agent.all(on: app.testPostgres)) ?? []
         let stillOnline = agents.contains { $0.status == .online }
         if !stillOnline && iteration >= 3 {
             break

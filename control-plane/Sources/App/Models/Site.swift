@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -159,7 +158,7 @@ package struct Site: Content, Equatable, Sendable {
         return nil
     }
 
-    func rootOrganizationID(on db: Database) async throws -> UUID? {
+    func rootOrganizationID(on db: PostgresStoreContext) async throws -> UUID? {
         try await organizationScope?.rootOrganizationID(on: db)
     }
 
@@ -173,7 +172,7 @@ package struct Site: Content, Equatable, Sendable {
     /// Transitional test-builder convenience. Production writes use
     /// `SitesPersistence` through the native persistence root.
     @discardableResult
-    func save(on db: any Database) async throws -> Self {
+    func save(on db: PostgresStoreContext) async throws -> Self {
         try await LegacySiteStore.insert(self, on: db)
     }
 }

@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -31,7 +30,6 @@ final class AgentAutoUpdateTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             // Test processes have no STRATO_VERSION/AGENT_TARGET_VERSION, so
             // the compiled-in target is nil; inject one, plus an artifact
@@ -39,7 +37,7 @@ final class AgentAutoUpdateTests {
             await app.agentService.setAutoUpdateTargetForTesting(Self.target)
             app.agentArtifactResolver = AgentArtifactResolver { _, _, _ in Self.stubArtifact }
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let admin = try await builder.createUser(
                 username: "autoupdateadmin",
                 email: "autoupdate@example.com",
@@ -94,12 +92,12 @@ final class AgentAutoUpdateTests {
             wireProtocolVersion: .some(wireProtocolVersion),
             autoUpdate: autoUpdate
         ).replacingOrganizationScope(.organization(try org.requireID()))
-        try await agent.save(on: app.db)
+        try await agent.save(on: app.testPostgres)
         return agent
     }
 
     private func reload(_ agent: Agent, on app: Application) async throws -> Agent {
-        let row = try await Agent.find(agent.requireID(), on: app.db)
+        let row = try await Agent.find(agent.requireID(), on: app.testPostgres)
         return try #require(row)
     }
 
@@ -139,7 +137,7 @@ final class AgentAutoUpdateTests {
             // v-prefixed tag — canonical comparison must count that as
             // converged.
             let firstRow = try await self.reload(first, on: app)
-            try await firstRow.replacing(version: "v\(Self.target)").save(on: app.db)
+            try await firstRow.replacing(version: "v\(Self.target)").save(on: app.testPostgres)
 
             await self.sweep(app)
 
@@ -165,7 +163,7 @@ final class AgentAutoUpdateTests {
             try await firstRow.replacing(
                 updateAttemptedAt: .some(Date(
                     timeIntervalSinceNow: -(AgentService.autoUpdateHealthBudgetSeconds + 60)))
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             await self.sweep(app)
 
@@ -194,7 +192,7 @@ final class AgentAutoUpdateTests {
                 updateAttemptedAt: .some(Date(
                     timeIntervalSinceNow: -(AgentService.autoUpdateHealthBudgetSeconds + 60))),
                 updateBlockedReason: .some("2 reconcile work item(s) are in flight")
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             await self.sweep(app)
 
@@ -220,7 +218,7 @@ final class AgentAutoUpdateTests {
                 updateDesiredVersion: .some("1.3.0"),
                 updateAttemptedAt: .some(Date(timeIntervalSinceNow: -3600)),
                 updateFailureReason: .some("did not re-register at 1.3.0")
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             await self.sweep(app)
 
@@ -263,7 +261,7 @@ final class AgentAutoUpdateTests {
                 app: app, org: org, name: "aa-manual", autoUpdate: false)
             try await manual.assigningUpdate(
                 version: "1.9.0-rc1", source: .manual
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             await self.sweep(app)
 
@@ -273,7 +271,7 @@ final class AgentAutoUpdateTests {
 
             // And it converges the same way: re-registering at the assigned
             // version clears the assignment.
-            try await row.replacing(version: "1.9.0-rc1").save(on: app.db)
+            try await row.replacing(version: "1.9.0-rc1").save(on: app.testPostgres)
             await self.sweep(app)
             let converged = try await self.reload(manual, on: app)
             #expect(converged.updateDesiredVersion == nil)
@@ -293,13 +291,13 @@ final class AgentAutoUpdateTests {
                 app: app, org: org, name: "aa-manual", autoUpdate: false)
             try await agent.assigningUpdate(
                 version: "1.9.0-rc1", source: .manual
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             await self.sweep(app)
             #expect(try await self.reload(agent, on: app).updateDesiredVersion == "1.9.0-rc1")
 
             let row = try await self.reload(agent, on: app)
-            try await row.replacing(version: "1.9.0-rc1").save(on: app.db)
+            try await row.replacing(version: "1.9.0-rc1").save(on: app.testPostgres)
             await self.sweep(app)
             #expect(try await self.reload(agent, on: app).updateDesiredVersion == nil)
         }
@@ -312,7 +310,7 @@ final class AgentAutoUpdateTests {
                 app: app, org: org, name: "aa-manual", autoUpdate: false)
             try await manual.assigningUpdate(
                 version: Self.target, source: .manual
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
             let enrolled = try await self.makeAgent(app: app, org: org, name: "bb-enrolled")
 
             await self.sweep(app)
@@ -337,7 +335,7 @@ final class AgentAutoUpdateTests {
                 source: .manual,
                 artifact: Self.stubArtifact,
                 at: Date(timeIntervalSinceNow: -(AgentService.autoUpdateHealthBudgetSeconds + 60))
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
             let enrolled = try await self.makeAgent(app: app, org: org, name: "bb-enrolled")
 
             // First tick records the failure.
@@ -367,7 +365,7 @@ final class AgentAutoUpdateTests {
             try await firstRow.replacing(
                 updateAttemptedAt: .some(Date(
                     timeIntervalSinceNow: -(AgentService.autoUpdateHealthBudgetSeconds + 60)))
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             await self.sweep(app)
             await self.sweep(app)
@@ -384,7 +382,7 @@ final class AgentAutoUpdateTests {
                 app: app, org: org, name: "aa-agent", autoUpdate: false, online: false)
             try await agent.assigningUpdate(
                 version: "1.9.0-rc1", source: .manual, artifact: Self.stubArtifact
-            ).recordingUpdateFailure("did not re-register at 1.9.0-rc1").save(on: app.db)
+            ).recordingUpdateFailure("did not re-register at 1.9.0-rc1").save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/agents/\(agent.id!)/actions/update") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -416,7 +414,7 @@ final class AgentAutoUpdateTests {
             let agent = try await self.makeAgent(app: app, org: org, name: "aa-agent")
             try await agent.assigningUpdate(
                 version: "1.9.0-rc1", source: .manual
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             try await app.test(.PATCH, "/api/agents/\(agent.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -459,7 +457,7 @@ final class AgentAutoUpdateTests {
             try await agent.replacing(
                 updateDesiredVersion: .some(Self.target),
                 updateAttemptedAt: .some(Date())
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             let sync = try await app.desiredStateAssembler.assemble(
                 agentId: agent.requireID().uuidString)
@@ -481,7 +479,7 @@ final class AgentAutoUpdateTests {
             let converged = try await self.makeAgent(app: app, org: org, name: "bb-converged", version: "v1.4.0")
             try await converged.replacing(
                 updateDesiredVersion: .some(Self.target)
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             for agent in [unassigned, converged] {
                 let sync = try await app.desiredStateAssembler.assemble(
@@ -500,7 +498,7 @@ final class AgentAutoUpdateTests {
             let agent = try await self.makeAgent(app: app, org: org, name: "aa-agent")
             try await agent.replacing(
                 updateDesiredVersion: .some(Self.target)
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             let sync = try await app.desiredStateAssembler.assemble(
                 agentId: agent.requireID().uuidString)
@@ -533,7 +531,7 @@ final class AgentAutoUpdateTests {
             try await agent.replacing(
                 updateDesiredVersion: .some(Self.target),
                 updateAttemptedAt: .some(Date())
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             let blocked = ObservedAgentUpdateStatus(
                 targetVersion: Self.target,
@@ -560,7 +558,7 @@ final class AgentAutoUpdateTests {
             try await first.replacing(
                 updateDesiredVersion: .some(Self.target),
                 updateAttemptedAt: .some(Date())
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
             let second = try await self.makeAgent(app: app, org: org, name: "bb-agent")
 
             let failed = ObservedAgentUpdateStatus(
@@ -587,7 +585,7 @@ final class AgentAutoUpdateTests {
             try await agent.replacing(
                 updateDesiredVersion: .some(Self.target),
                 updateAttemptedAt: .some(Date())
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             let stale = ObservedAgentUpdateStatus(
                 targetVersion: "1.3.0",
@@ -626,7 +624,7 @@ final class AgentAutoUpdateTests {
                 updateAttemptedAt: .some(Date()),
                 updateBlockedReason: .some("blocked"),
                 updateFailureReason: .some("failed")
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             try await app.test(.PATCH, "/api/agents/\(agent.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -653,7 +651,7 @@ final class AgentAutoUpdateTests {
             let agent = try await self.makeAgent(app: app, org: org, name: "aa-agent", autoUpdate: false)
             try await agent.replacing(
                 updateFailureReason: .some("did not re-register")
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             try await app.test(.PATCH, "/api/agents/\(agent.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -678,7 +676,7 @@ final class AgentAutoUpdateTests {
             let staleClock = Date(timeIntervalSinceNow: -(AgentService.autoUpdateHealthBudgetSeconds + 60))
             try await agent.assigningUpdate(
                 version: Self.target, source: .rollout, at: staleClock
-            ).recordingUpdateFailure("did not re-register at \(Self.target)").save(on: app.db)
+            ).recordingUpdateFailure("did not re-register at \(Self.target)").save(on: app.testPostgres)
 
             try await app.test(.PATCH, "/api/agents/\(agent.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -703,7 +701,7 @@ final class AgentAutoUpdateTests {
             let agent = try await self.makeAgent(app: app, org: org, name: "aa-agent")
             try await agent.assigningUpdate(
                 version: Self.target, source: .manual, artifact: Self.stubArtifact
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             let failed = ObservedAgentUpdateStatus(
                 targetVersion: Self.target,

@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 /// Immutable persistence snapshot for one sandbox NIC.
@@ -69,7 +68,7 @@ struct SandboxNetworkInterface: Equatable, Sendable {
     /// Transitional test-builder convenience. Production uses the intent-
     /// oriented insert operation below and receives the returned snapshot.
     @discardableResult
-    func save(on db: any Database) async throws -> Self {
+    func save(on db: PostgresStoreContext) async throws -> Self {
         try await LegacySandboxNetworkInterfaceStore.insert(self, on: db)
     }
 }
@@ -81,11 +80,11 @@ enum LegacySandboxNetworkInterfaceStore {
     static func interfaces(
         sandboxIDs: [UUID]? = nil,
         logicalNetworkID: UUID? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [SandboxNetworkInterface] {
         if let sandboxIDs, sandboxIDs.isEmpty { return [] }
         let sql = try requireSQL(db)
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT \(unsafeRaw: columns) FROM sandbox_network_interfaces AS sni LEFT JOIN logical_networks AS ln ON ln.id = sni.logical_network_id WHERE TRUE"
         if let sandboxIDs { query += " AND sni.sandbox_id = ANY(\(bind: sandboxIDs))" }
         if let logicalNetworkID { query += " AND sni.logical_network_id = \(bind: logicalNetworkID)" }
@@ -93,13 +92,13 @@ enum LegacySandboxNetworkInterfaceStore {
         return try await sql.raw(query).all(decoding: Record.self).map(\.snapshot)
     }
 
-    static func interfaces(sandboxID: UUID, on db: any Database) async throws
+    static func interfaces(sandboxID: UUID, on db: PostgresStoreContext) async throws
         -> [SandboxNetworkInterface]
     {
         try await interfaces(sandboxIDs: [sandboxID], on: db)
     }
 
-    static func loading(_ sandboxes: [Sandbox], on db: any Database) async throws -> [Sandbox] {
+    static func loading(_ sandboxes: [Sandbox], on db: PostgresStoreContext) async throws -> [Sandbox] {
         let sandboxIDs = sandboxes.compactMap(\.id)
         let bySandbox = Dictionary(
             grouping: try await interfaces(sandboxIDs: sandboxIDs, on: db),
@@ -109,7 +108,7 @@ enum LegacySandboxNetworkInterfaceStore {
         }
     }
 
-    static func loadingWithAddresses(_ sandboxes: [Sandbox], on db: any Database) async throws
+    static func loadingWithAddresses(_ sandboxes: [Sandbox], on db: PostgresStoreContext) async throws
         -> [Sandbox]
     {
         let loaded = try await loading(sandboxes, on: db)
@@ -122,7 +121,7 @@ enum LegacySandboxNetworkInterfaceStore {
     }
 
     @discardableResult
-    static func insert(_ interface: SandboxNetworkInterface, on db: any Database) async throws
+    static func insert(_ interface: SandboxNetworkInterface, on db: PostgresStoreContext) async throws
         -> SandboxNetworkInterface
     {
         let id = try interface.requireID()
@@ -150,7 +149,7 @@ enum LegacySandboxNetworkInterfaceStore {
         return record.snapshot
     }
 
-    static func count(logicalNetworkID: UUID, on db: any Database) async throws -> Int {
+    static func count(logicalNetworkID: UUID, on db: PostgresStoreContext) async throws -> Int {
         struct Count: Decodable { let count: Int }
         return try await requireSQL(db).raw(
             """
@@ -198,8 +197,8 @@ enum LegacySandboxNetworkInterfaceStore {
         sni.updated_at AS "updatedAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Sandbox interfaces require PostgreSQL")
         }
         return sql

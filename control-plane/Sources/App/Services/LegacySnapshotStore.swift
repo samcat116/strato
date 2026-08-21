@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -8,7 +7,7 @@ import Vapor
 /// Fluent transaction. The records themselves are immutable values; no Fluent
 /// model, relation loader, or dirty-tracking state escapes this boundary.
 enum LegacyVolumeSnapshotStore {
-    static func snapshot(id: UUID?, on db: any Database) async throws -> VolumeSnapshot? {
+    static func snapshot(id: UUID?, on db: PostgresStoreContext) async throws -> VolumeSnapshot? {
         guard let id else { return nil }
         return try await snapshots(ids: [id], on: db).first
     }
@@ -23,10 +22,10 @@ enum LegacyVolumeSnapshotStore {
         expiredAt: Date? = nil,
         terminating: Bool? = nil,
         orderByCreatedDescending: Bool = false,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [VolumeSnapshot] {
         if ids?.isEmpty == true || projectIDs?.isEmpty == true { return [] }
-        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM volume_snapshots AS s WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT \(unsafeRaw: columns) FROM volume_snapshots AS s WHERE TRUE"
         if let ids { query += " AND s.id = ANY(\(bind: ids))" }
         if let volumeID { query += " AND s.volume_id = \(bind: volumeID)" }
         if let projectID { query += " AND s.project_id = \(bind: projectID)" }
@@ -48,7 +47,7 @@ enum LegacyVolumeSnapshotStore {
     }
 
     @discardableResult
-    static func upsert(_ snapshot: VolumeSnapshot, on db: any Database) async throws -> VolumeSnapshot {
+    static func upsert(_ snapshot: VolumeSnapshot, on db: PostgresStoreContext) async throws -> VolumeSnapshot {
         let id = try snapshot.requireID()
         guard let row = try await requireSQL(db).raw(
             """
@@ -99,7 +98,7 @@ enum LegacyVolumeSnapshotStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM volume_snapshots WHERE id = \(bind: id) RETURNING id"
@@ -168,7 +167,7 @@ enum LegacyVolumeSnapshotStore {
 }
 
 enum LegacyVMSnapshotStore {
-    static func snapshot(id: UUID?, on db: any Database) async throws -> VMSnapshot? {
+    static func snapshot(id: UUID?, on db: PostgresStoreContext) async throws -> VMSnapshot? {
         guard let id else { return nil }
         return try await snapshots(ids: [id], on: db).first
     }
@@ -182,10 +181,10 @@ enum LegacyVMSnapshotStore {
         expiredAt: Date? = nil,
         terminating: Bool? = nil,
         orderByCreatedDescending: Bool = false,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [VMSnapshot] {
         if ids?.isEmpty == true || projectIDs?.isEmpty == true { return [] }
-        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM vm_snapshots AS s WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT \(unsafeRaw: columns) FROM vm_snapshots AS s WHERE TRUE"
         if let ids { query += " AND s.id = ANY(\(bind: ids))" }
         if let vmID { query += " AND s.vm_id = \(bind: vmID)" }
         if let projectIDs { query += " AND s.project_id = ANY(\(bind: projectIDs))" }
@@ -206,7 +205,7 @@ enum LegacyVMSnapshotStore {
     }
 
     @discardableResult
-    static func upsert(_ snapshot: VMSnapshot, on db: any Database) async throws -> VMSnapshot {
+    static func upsert(_ snapshot: VMSnapshot, on db: PostgresStoreContext) async throws -> VMSnapshot {
         let id = try snapshot.requireID()
         guard let row = try await requireSQL(db).raw(
             """
@@ -259,7 +258,7 @@ enum LegacyVMSnapshotStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM vm_snapshots WHERE id = \(bind: id) RETURNING id"
@@ -329,7 +328,7 @@ enum LegacyVMSnapshotStore {
 }
 
 enum LegacySandboxSnapshotStore {
-    static func snapshot(id: UUID?, on db: any Database) async throws -> SandboxSnapshot? {
+    static func snapshot(id: UUID?, on db: PostgresStoreContext) async throws -> SandboxSnapshot? {
         guard let id else { return nil }
         return try await snapshots(ids: [id], on: db).first
     }
@@ -343,10 +342,10 @@ enum LegacySandboxSnapshotStore {
         expiredAt: Date? = nil,
         terminating: Bool? = nil,
         orderByCreatedDescending: Bool = false,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [SandboxSnapshot] {
         if ids?.isEmpty == true || projectIDs?.isEmpty == true { return [] }
-        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM sandbox_snapshots AS s WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT \(unsafeRaw: columns) FROM sandbox_snapshots AS s WHERE TRUE"
         if let ids { query += " AND s.id = ANY(\(bind: ids))" }
         if let sandboxID { query += " AND s.sandbox_id = \(bind: sandboxID)" }
         if let projectIDs { query += " AND s.project_id = ANY(\(bind: projectIDs))" }
@@ -367,7 +366,7 @@ enum LegacySandboxSnapshotStore {
     }
 
     @discardableResult
-    static func upsert(_ snapshot: SandboxSnapshot, on db: any Database) async throws
+    static func upsert(_ snapshot: SandboxSnapshot, on db: PostgresStoreContext) async throws
         -> SandboxSnapshot
     {
         let id = try snapshot.requireID()
@@ -394,7 +393,7 @@ enum LegacySandboxSnapshotStore {
                 \(bind: snapshot.guestControlProtocolVersion),
                 \(bind: snapshot.forkLayoutVersion), \(bind: snapshot.cpuTemplate),
                 \(bind: snapshot.sourceCPUModel), \(bind: snapshot.exportedAt),
-                CASE WHEN \(bind: artifacts) IS NULL THEN NULL
+                CASE WHEN \(bind: artifacts)::text IS NULL THEN NULL
                      ELSE ARRAY(SELECT value FROM jsonb_array_elements(CAST(\(bind: artifacts) AS jsonb))) END,
                 \(bind: snapshot.errorMessage), \(bind: snapshot.desiredStatus.rawValue),
                 \(bind: snapshot.generation), \(bind: snapshot.observedGeneration),
@@ -442,7 +441,7 @@ enum LegacySandboxSnapshotStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM sandbox_snapshots WHERE id = \(bind: id) RETURNING id"
@@ -533,8 +532,8 @@ enum LegacySandboxSnapshotStore {
     private static let returningColumns = columns.replacingOccurrences(of: "s.", with: "")
 }
 
-private func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-    guard let sql = db as? any SQLDatabase else {
+private func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+    guard let sql = db as? PostgresStoreContext else {
         throw Abort(.internalServerError, reason: "PostgreSQL SQL interface is unavailable")
     }
     return sql

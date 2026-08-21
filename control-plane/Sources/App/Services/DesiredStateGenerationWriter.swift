@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 
 /// The database boundary for every desired-state generation write.
 ///
@@ -33,9 +32,9 @@ enum DesiredStateGenerationWriter {
         schema: String,
         id: UUID,
         expectedGeneration: Int64? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Outcome {
-        guard let sql = db as? any SQLDatabase else { throw Error.unsupportedDatabase }
+        guard let sql = db as? PostgresStoreContext else { throw Error.unsupportedDatabase }
 
         let advanced: GenerationRow?
         if let expectedGeneration {
@@ -70,9 +69,9 @@ enum DesiredStateGenerationWriter {
         schema: String,
         id: UUID,
         expectedGeneration: Int64? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Outcome {
-        guard let sql = db as? any SQLDatabase else { throw Error.unsupportedDatabase }
+        guard let sql = db as? PostgresStoreContext else { throw Error.unsupportedDatabase }
         guard
             let row = try await sql.raw(
                 "SELECT generation FROM \(ident: schema) WHERE id = \(bind: id) FOR UPDATE"
@@ -86,7 +85,7 @@ enum DesiredStateGenerationWriter {
     }
 
     private static func currentOutcome(
-        schema: String, id: UUID, on sql: any SQLDatabase
+        schema: String, id: UUID, on sql: PostgresStoreContext
     ) async throws -> Outcome {
         guard
             let row = try await sql.raw(

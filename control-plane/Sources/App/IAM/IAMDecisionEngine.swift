@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Vapor
 
 /// The one authorization evaluator: every concrete "may principal P perform
@@ -122,8 +121,7 @@ enum IAMDecisionEngine {
         built: CedarPolicySetCache.Built,
         cache: IAMRequestCache? = nil,
         restriction: CredentialRestriction? = nil,
-        using iam: IAMPersistence? = nil,
-        on db: any Database
+        using iam: IAMPersistence
     ) async throws -> Decision {
         let target = IAMCheckTarget(principal: principal, node: node)
         guard
@@ -133,8 +131,7 @@ enum IAMDecisionEngine {
                 built: built,
                 cache: cache,
                 restriction: restriction,
-                using: iam,
-                on: db
+                using: iam
             )[target]
         else {
             // Unreachable: the batch is total over its inputs.
@@ -166,15 +163,13 @@ enum IAMDecisionEngine {
         built: CedarPolicySetCache.Built,
         cache: IAMRequestCache? = nil,
         restriction: CredentialRestriction? = nil,
-        using iam: IAMPersistence? = nil,
-        on db: any Database
+        using iam: IAMPersistence
     ) async throws -> [IAMCheckTarget: Decision] {
         let slices = try await EntitySliceLoader.load(
             targets,
             action: action,
             cache: cache,
-            using: iam,
-            on: db
+            using: iam
         )
         var decisions: [IAMCheckTarget: Decision] = [:]
         decisions.reserveCapacity(slices.count)

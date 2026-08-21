@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -257,7 +256,7 @@ extension CredentialRestriction {
     static func resolve(
         _ payload: CredentialRestrictionPayload,
         issuedUnder issuer: CredentialRestriction,
-        on db: any Database
+        using iam: IAMPersistence
     ) async throws -> CredentialRestriction {
         guard payload.role == nil || payload.actions == nil else {
             throw Abort(
@@ -267,7 +266,7 @@ extension CredentialRestriction {
 
         let actions: [String]
         if let roleID = payload.role {
-            guard let role = try await RoleStore.legacyRole(id: roleID, on: db) else {
+            guard let role = try await iam.role(id: roleID) else {
                 throw Abort(.badRequest, reason: "Unknown role '\(roleID)' in credential restriction")
             }
             guard !role.actions.isEmpty else {

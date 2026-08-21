@@ -1,5 +1,4 @@
 import Crypto
-import Fluent
 import Foundation
 import StratoShared
 import Vapor
@@ -68,7 +67,7 @@ extension SandboxController {
             agentId, kind: .sandboxSnapshot, app: req.application)
 
         let userID = try user.requireID()
-        let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+        let accepted = try await database.transaction { db -> ResourceMutation.Accepted in
             try await Self.lockSnapshotLineage([snapshotID], on: db)
             guard let current = try await SandboxSnapshot.find(snapshotID, on: db), current.isReady
             else {
@@ -165,7 +164,7 @@ extension SandboxController {
         // Record the integrity entry. Agents upload sequentially, so this
         // read-modify-write never races itself; a lost entry only means the
         // export completeness check fails closed.
-        guard let current = try await SandboxSnapshot.find(snapshotID, on: req.db) else {
+        guard let current = try await SandboxSnapshot.find(snapshotID, on: database) else {
             try? await store.delete(key: key)
             throw Abort(.notFound, reason: "Snapshot no longer exists")
         }
@@ -195,7 +194,7 @@ extension SandboxController {
         }
         let updated = current.replacing(
             exportedAt: .some(completedAt), exportedArtifacts: .some(artifacts))
-        try await updated.persist(on: req.db)
+        try await updated.persist(on: database)
 
         req.logger.info(
             "Sandbox snapshot artifact stored",
@@ -237,7 +236,8 @@ extension SandboxController {
                 .unauthorized,
                 reason: "Snapshot artifact transfer requires agent mTLS authentication")
         }
-        let agent = try await AgentMTLSAuthenticator.authenticateAgent(req: req)
+        let agent = try await AgentMTLSAuthenticator.authenticateAgent(
+            req: req, workloads: workloads)
 
         guard let sandboxID = req.parameters.get("sandboxID", as: UUID.self),
             let snapshotID = req.parameters.get("snapshotID", as: UUID.self),
@@ -246,7 +246,7 @@ extension SandboxController {
         else {
             throw Abort(.badRequest, reason: "Invalid snapshot artifact path")
         }
-        guard let snapshot = try await SandboxSnapshot.find(snapshotID, on: req.db),
+        guard let snapshot = try await SandboxSnapshot.find(snapshotID, on: database),
             snapshot.sandboxID == sandboxID
         else {
             throw Abort(.notFound, reason: "Snapshot not found")

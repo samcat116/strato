@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import StratoShared
 import Testing
@@ -77,7 +76,7 @@ struct VMCommandExecutionTests {
 
             let history = try await OperationFacade.history(
                 resourceKind: .virtualMachine, resourceID: execution.vmID,
-                limit: 100, vmCommands: app.vmCommandExecutionsPersistence, on: app.db)
+                limit: 100, vmCommands: app.vmCommandExecutionsPersistence, on: app.testPostgres)
             #expect(history.count == 1)
             #expect(history[0].result == nil)
         }

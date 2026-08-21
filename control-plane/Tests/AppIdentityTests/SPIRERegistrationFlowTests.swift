@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import SPIREServerAPI
 import StratoShared
@@ -27,7 +26,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             displayName: "SPIRE Admin",
             isSystemAdmin: true
         )
-        try await admin.save(on: app.db)
+        try await admin.save(on: app.testPostgres)
         return try await admin.generateAPIKey(on: app)
     }
 
@@ -56,7 +55,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     }
 
     /// Enrollments must carry an owning organization; mint one per test app.
-    private func makeOrg(on db: Database) async throws -> UUID {
+    private func makeOrg(on db: PostgresStoreContext) async throws -> UUID {
         let org = Organization(name: "SPIRE Org", description: "org for SPIRE tests")
         try await org.save(on: db)
         return try org.requireID()
@@ -65,7 +64,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     /// A site for the org to enroll agents into. Enrollment now requires one,
     /// so tests that drive `createEnrollment` to success need a real site whose
     /// scope contains the enrollment's org.
-    private func makeSite(on db: Database, org: UUID, name: String = "spire-dc") async throws -> UUID {
+    private func makeSite(on db: PostgresStoreContext, org: UUID, name: String = "spire-dc") async throws -> UUID {
         let site = Site(name: name, organizationScope: .organization(org))
         try await site.save(on: db)
         return try site.requireID()
@@ -109,8 +108,8 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     func createEnrollmentProvisionsSPIRE() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app)
-            let orgId = try await makeOrg(on: app.db)
-            let siteId = try await makeSite(on: app.db, org: orgId)
+            let orgId = try await makeOrg(on: app.testPostgres)
+            let siteId = try await makeSite(on: app.testPostgres, org: orgId)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
             var created: AgentEnrollmentResponse?
@@ -185,7 +184,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
 
             // The persisted row carries the scope a registering agent inherits.
             let row = try #require(
-                try await findTestAgentEnrollment(agentName: "node-a", on: app.db)
+                try await findTestAgentEnrollment(agentName: "node-a", on: app.testPostgres)
             )
             #expect(row.organizationID == orgId)
             #expect(row.siteID == siteId)
@@ -202,7 +201,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 agentName: "node-a",
                 spiffeID: "spiffe://strato.local/agent/node-a",
                 bootstrapTokenHash: AgentEnrollment.hashBootstrapToken(token))
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
             await fake.holdNextJoinTokenRequest()
@@ -230,7 +229,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 agentName: "node-a",
                 spiffeID: "spiffe://strato.local/agent/node-a",
                 bootstrapTokenHash: AgentEnrollment.hashBootstrapToken(token))
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
             await fake.setFailJoinToken(true)
@@ -251,7 +250,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 agentName: "node-a",
                 spiffeID: "spiffe://strato.local/agent/node-a",
                 bootstrapTokenHash: AgentEnrollment.hashBootstrapToken(token))
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
             let enrollmentID = try enrollment.requireID()
 
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
@@ -267,12 +266,12 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             // complete after the reported revocation and survive it.
             try await Task.sleep(for: .milliseconds(100))
             #expect(await fake.deletedSPIFFEIDs.isEmpty)
-            #expect(try await findTestAgentEnrollment(enrollmentID, on: app.db) != nil)
+            #expect(try await findTestAgentEnrollment(enrollmentID, on: app.testPostgres) != nil)
 
             await fake.releaseHeldJoinTokenRequest()
             #expect(try await redemptionStatus == .ok)
             #expect(try await revocationStatus == .noContent)
-            #expect(try await findTestAgentEnrollment(enrollmentID, on: app.db) == nil)
+            #expect(try await findTestAgentEnrollment(enrollmentID, on: app.testPostgres) == nil)
             #expect(
                 await fake.deletedSPIFFEIDs
                     == [
@@ -287,8 +286,8 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     func createEnrollmentReusesExistingEntry() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app)
-            let orgId = try await makeOrg(on: app.db)
-            let siteId = try await makeSite(on: app.db, org: orgId)
+            let orgId = try await makeOrg(on: app.testPostgres)
+            let siteId = try await makeSite(on: app.testPostgres, org: orgId)
             let fake = FakeSPIREServerAPI()
             await fake.setEntryResult(.alreadyExists(entryID: "existing-entry"))
             installFakeSPIRE(on: app, fake: fake)
@@ -309,8 +308,8 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     func createEnrollmentFailsClosedWhenSPIREUnreachable() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app)
-            let orgId = try await makeOrg(on: app.db)
-            let siteId = try await makeSite(on: app.db, org: orgId)
+            let orgId = try await makeOrg(on: app.testPostgres)
+            let siteId = try await makeSite(on: app.testPostgres, org: orgId)
             let fake = FakeSPIREServerAPI()
             await fake.setFailCreateEntry(true)
             installFakeSPIRE(on: app, fake: fake)
@@ -323,7 +322,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(res.status == .badGateway)
             }
 
-            let enrollmentCount = try await testAgentEnrollmentCount(on: app.db)
+            let enrollmentCount = try await testAgentEnrollmentCount(on: app.testPostgres)
             #expect(enrollmentCount == 0)
         }
     }
@@ -332,7 +331,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     func createEnrollmentRejectsInvalidSPIFFEName() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app)
-            let orgId = try await makeOrg(on: app.db)
+            let orgId = try await makeOrg(on: app.testPostgres)
             installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
             try await app.test(.POST, "/api/agent-enrollments") { req in
@@ -342,7 +341,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(res.status == .badRequest)
             }
 
-            let enrollmentCount = try await testAgentEnrollmentCount(on: app.db)
+            let enrollmentCount = try await testAgentEnrollmentCount(on: app.testPostgres)
             #expect(enrollmentCount == 0)
         }
     }
@@ -351,7 +350,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     func createEnrollmentRequiresSPIRE() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app)
-            let orgId = try await makeOrg(on: app.db)
+            let orgId = try await makeOrg(on: app.testPostgres)
 
             // No `spireRegistrationService`: mTLS is the only agent auth path,
             // so without SPIRE there is no way to enroll a node at all. A
@@ -368,7 +367,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(body.contains("SPIRE_SERVER_API_ADDRESS"))
             }
 
-            let enrollmentCount = try await testAgentEnrollmentCount(on: app.db)
+            let enrollmentCount = try await testAgentEnrollmentCount(on: app.testPostgres)
             #expect(enrollmentCount == 0)
         }
     }
@@ -377,8 +376,8 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     func createEnrollmentRejectsDuplicateName() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app)
-            let orgId = try await makeOrg(on: app.db)
-            let siteId = try await makeSite(on: app.db, org: orgId)
+            let orgId = try await makeOrg(on: app.testPostgres)
+            let siteId = try await makeSite(on: app.testPostgres, org: orgId)
             installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
             try await app.test(.POST, "/api/agent-enrollments") { req in
@@ -400,7 +399,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(res.status == .conflict)
             }
 
-            let enrollmentCount = try await testAgentEnrollmentCount(on: app.db)
+            let enrollmentCount = try await testAgentEnrollmentCount(on: app.testPostgres)
             #expect(enrollmentCount == 1)
         }
     }
@@ -409,7 +408,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
     func createEnrollmentRequiresSite() async throws {
         try await withApp { app in
             let adminToken = try await makeAdmin(on: app)
-            let orgId = try await makeOrg(on: app.db)
+            let orgId = try await makeOrg(on: app.testPostgres)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
             try await app.test(.POST, "/api/agent-enrollments") { req in
@@ -421,7 +420,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             }
 
             // Rejected before any SPIRE provisioning, so nothing is persisted.
-            let enrollmentCount = try await testAgentEnrollmentCount(on: app.db)
+            let enrollmentCount = try await testAgentEnrollmentCount(on: app.testPostgres)
             #expect(enrollmentCount == 0)
             let joinTokenRequests = await fake.joinTokenRequests
             #expect(joinTokenRequests.isEmpty)
@@ -437,7 +436,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
             var enrollment = makeEnrollment()
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -455,7 +454,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let evicted = await fake.evictedAgentIDs
             #expect(evicted == ["spiffe://strato.local/node/node-a"])
 
-            let remaining = try await testAgentEnrollmentCount(on: app.db)
+            let remaining = try await testAgentEnrollmentCount(on: app.testPostgres)
             #expect(remaining == 0)
         }
     }
@@ -480,7 +479,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
             let enrollment = makeOrphanedDomainEnrollment()
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -494,7 +493,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let deleted = await fake.deletedSPIFFEIDs
             #expect(deleted.isEmpty)
 
-            let remaining = try await testAgentEnrollmentCount(on: app.db)
+            let remaining = try await testAgentEnrollmentCount(on: app.testPostgres)
             #expect(remaining == 1)
         }
     }
@@ -506,7 +505,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
             let enrollment = makeOrphanedDomainEnrollment()
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             // Without this escape hatch the row is permanently undeletable:
             // no `org_trust_domains` row will ever come back, so there is
@@ -524,7 +523,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let deleted = await fake.deletedSPIFFEIDs
             #expect(deleted.isEmpty)
 
-            let remaining = try await testAgentEnrollmentCount(on: app.db)
+            let remaining = try await testAgentEnrollmentCount(on: app.testPostgres)
             #expect(remaining == 0)
         }
     }
@@ -535,24 +534,24 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let adminToken = try await makeAdmin(on: app)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            let agent = try await makeAgent(named: "node-orphan", on: app.db)
+            let agent = try await makeAgent(named: "node-orphan", on: app.testPostgres)
             try await agent.replacing(
                 trustDomain: "org-deadbeefdeadbeef.strato.local"
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/agents/\(agent.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .serviceUnavailable)
             }
-            #expect(try await Agent.count(on: app.db) == 1)
+            #expect(try await Agent.count(on: app.testPostgres) == 1)
 
             try await app.test(.DELETE, "/api/agents/\(agent.id!)?skipSpireDeprovision=true") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            #expect(try await Agent.count(on: app.db) == 0)
+            #expect(try await Agent.count(on: app.testPostgres) == 0)
 
             let deleted = await fake.deletedSPIFFEIDs
             #expect(deleted.isEmpty)
@@ -570,7 +569,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             // strato-agent registers), so the grant can still be live.
             var enrollment = makeEnrollment()
             enrollment.expiresAt = Date().addingTimeInterval(-3600)
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -583,7 +582,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let evicted = await fake.evictedAgentIDs
             #expect(evicted == ["spiffe://strato.local/node/node-a"])
 
-            let remaining = try await testAgentEnrollmentCount(on: app.db)
+            let remaining = try await testAgentEnrollmentCount(on: app.testPostgres)
             #expect(remaining == 0)
         }
     }
@@ -599,9 +598,9 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             // deregistering it, not by revoking the enrollment it came from.
             var enrollment = makeEnrollment()
             enrollment.markAsUsed()
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
-            let agent = try await makeAgent(named: "node-a", on: app.db)
-            try await agent.save(on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
+            let agent = try await makeAgent(named: "node-a", on: app.testPostgres)
+            try await agent.save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -614,7 +613,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let evicted = await fake.evictedAgentIDs
             #expect(evicted.isEmpty)
 
-            let remaining = try await testAgentEnrollmentCount(on: app.db)
+            let remaining = try await testAgentEnrollmentCount(on: app.testPostgres)
             #expect(remaining == 0)
         }
     }
@@ -630,7 +629,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             // deregistered must not keep a live grant behind a "used" flag.
             var enrollment = makeEnrollment()
             enrollment.markAsUsed()
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -652,7 +651,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             installFakeSPIRE(on: app, fake: fake)
 
             let enrollment = makeEnrollment()
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -661,7 +660,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             }
 
             // The enrollment must remain revocable after SPIRE recovers
-            let remaining = try await testAgentEnrollmentCount(on: app.db)
+            let remaining = try await testAgentEnrollmentCount(on: app.testPostgres)
             #expect(remaining == 1)
         }
     }
@@ -678,7 +677,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             installFakeSPIRE(on: app, fake: fake)
 
             let enrollment = makeEnrollment()
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -690,7 +689,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             // was a no-op.
             let deleted = await fake.deletedSPIFFEIDs
             #expect(deleted == ["spiffe://strato.local/agent/node-a", "spiffe://strato.local/node/node-a"])
-            let remaining = try await testAgentEnrollmentCount(on: app.db)
+            let remaining = try await testAgentEnrollmentCount(on: app.testPostgres)
             #expect(remaining == 0)
         }
     }
@@ -706,8 +705,8 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             await fake.setDeleteInvalidArgument(true)
             installFakeSPIRE(on: app, fake: fake)
 
-            let agent = try await makeAgent(named: "node-a", on: app.db)
-            try await agent.save(on: app.db)
+            let agent = try await makeAgent(named: "node-a", on: app.testPostgres)
+            try await agent.save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/agents/\(agent.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -715,7 +714,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(res.status == .noContent)
             }
 
-            let remaining = try await Agent.count(on: app.db)
+            let remaining = try await Agent.count(on: app.testPostgres)
             #expect(remaining == 0)
         }
     }
@@ -739,8 +738,8 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let adminToken = try await makeAdmin(on: app)
             installSPIREAuthWithoutRegistrationAPI(on: app)
 
-            let agent = try await makeAgent(named: "node-a", on: app.db)
-            try await agent.save(on: app.db)
+            let agent = try await makeAgent(named: "node-a", on: app.testPostgres)
+            try await agent.save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/agents/\(agent.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -748,7 +747,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(res.status == .serviceUnavailable)
             }
 
-            let remaining = try await Agent.count(on: app.db)
+            let remaining = try await Agent.count(on: app.testPostgres)
             #expect(remaining == 1)
 
             // Explicit operator override for out-of-band-managed entries
@@ -758,7 +757,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(res.status == .noContent)
             }
 
-            let afterOverride = try await Agent.count(on: app.db)
+            let afterOverride = try await Agent.count(on: app.testPostgres)
             #expect(afterOverride == 0)
         }
     }
@@ -770,7 +769,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             installSPIREAuthWithoutRegistrationAPI(on: app)
 
             var enrollment = makeEnrollment()
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -778,13 +777,13 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 #expect(res.status == .serviceUnavailable)
             }
 
-            let remaining = try await testAgentEnrollmentCount(on: app.db)
+            let remaining = try await testAgentEnrollmentCount(on: app.testPostgres)
             #expect(remaining == 1)
 
             // Expiry doesn't unblock it — the join token may have been
             // redeemed before expiry. Only the explicit override does.
             enrollment.expiresAt = Date().addingTimeInterval(-3600)
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/agent-enrollments/\(enrollment.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -810,8 +809,8 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let adminToken = try await makeAdmin(on: app)
             let fake = installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
 
-            let agent = try await makeAgent(named: "node-a", on: app.db)
-            try await agent.save(on: app.db)
+            let agent = try await makeAgent(named: "node-a", on: app.testPostgres)
+            try await agent.save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/agents/\(agent.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -825,7 +824,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let evicted = await fake.evictedAgentIDs
             #expect(evicted == ["spiffe://strato.local/node/node-a"])
 
-            let remaining = try await Agent.count(on: app.db)
+            let remaining = try await Agent.count(on: app.testPostgres)
             #expect(remaining == 0)
         }
     }
@@ -838,8 +837,8 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             await fake.setFailDelete(true)
             installFakeSPIRE(on: app, fake: fake)
 
-            let agent = try await makeAgent(named: "node-a", on: app.db)
-            try await agent.save(on: app.db)
+            let agent = try await makeAgent(named: "node-a", on: app.testPostgres)
+            try await agent.save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/agents/\(agent.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -848,12 +847,12 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             }
 
             // The agent (and thus the operator's revocation lever) must survive
-            let remaining = try await Agent.count(on: app.db)
+            let remaining = try await Agent.count(on: app.testPostgres)
             #expect(remaining == 1)
         }
     }
 
-    private func makeAgent(named name: String, on db: Database) async throws -> Agent {
+    private func makeAgent(named name: String, on db: PostgresStoreContext) async throws -> Agent {
         let organization = Organization(
             name: "\(name) agent org",
             description: "organization fixture for agent deregistration")
@@ -1203,3 +1202,4 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
         return trustDomains
     }
 }
+import ControlPlanePostgres

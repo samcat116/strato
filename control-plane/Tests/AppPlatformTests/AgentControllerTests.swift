@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Vapor
 import VaporTesting
@@ -38,7 +37,7 @@ struct AgentControllerTests {
     @Test("Agent GET endpoints derive heartbeat status without persisting it")
     func readsDoNotPersistHeartbeatStatus() async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let admin = try await builder.createUser(
                 username: "agent-reader",
                 email: "agent-reader@example.com",
@@ -52,13 +51,13 @@ struct AgentControllerTests {
                 status: .offline,
                 lastHeartbeat: Date(),
                 organization: organization,
-                on: app.db)
+                on: app.testPostgres)
             let staleOnline = try await makeAgent(
                 name: "stale-online",
                 status: .online,
                 lastHeartbeat: Date().addingTimeInterval(-120),
                 organization: organization,
-                on: app.db)
+                on: app.testPostgres)
 
             try await app.test(.GET, "/api/agents") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -78,8 +77,8 @@ struct AgentControllerTests {
                 #expect(response.status == .online)
             }
 
-            let persistedFresh = try #require(try await Agent.find(freshOffline.id, on: app.db))
-            let persistedStale = try #require(try await Agent.find(staleOnline.id, on: app.db))
+            let persistedFresh = try #require(try await Agent.find(freshOffline.id, on: app.testPostgres))
+            let persistedStale = try #require(try await Agent.find(staleOnline.id, on: app.testPostgres))
             #expect(persistedFresh.status == .offline)
             #expect(persistedStale.status == .online)
         }
@@ -90,8 +89,11 @@ struct AgentControllerTests {
         status: AgentStatus,
         lastHeartbeat: Date,
         organization: Organization,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> Agent {
+        let organizationID = try organization.requireID()
+        let site = try #require(
+            try await LegacySiteStore.sites(organizationID: organizationID, on: db).first)
         let agent = Agent(
             name: name,
             hostname: "\(name).example",
@@ -104,9 +106,11 @@ struct AgentControllerTests {
                 availableMemory: 16_000_000_000,
                 totalDisk: 100_000_000_000,
                 availableDisk: 100_000_000_000),
+            siteID: try site.requireID(),
             lastHeartbeat: lastHeartbeat
-        ).replacingOrganizationScope(.organization(try organization.requireID()))
+        ).replacingOrganizationScope(.organization(organizationID))
         try await agent.save(on: db)
         return agent
     }
 }
+import ControlPlanePostgres

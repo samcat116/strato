@@ -4,6 +4,7 @@
 /// Vapor inject only the capability each controller or worker needs.
 public struct ControlPlanePersistence: Sendable {
     public let database: PostgresDatabase
+    public let storeContext: PostgresStoreContext
     public let appSettings: AppSettingsPersistence
     public let auditEvents: AuditEventsPersistence
     public let decisionLogs: DecisionLogsPersistence
@@ -23,6 +24,7 @@ public struct ControlPlanePersistence: Sendable {
     public let agentEnrollments: AgentEnrollmentsPersistence
     public let agents: AgentsPersistence
     public let oidcProviders: OIDCProvidersPersistence
+    public let orgTrustDomains: OrgTrustDomainsPersistence
     public let scimExternalIDs: SCIMExternalIDsPersistence
     public let groups: GroupsPersistence
     public let iam: IAMPersistence
@@ -41,6 +43,7 @@ public struct ControlPlanePersistence: Sendable {
 
     public init(database: PostgresDatabase) {
         self.database = database
+        self.storeContext = PostgresStoreContext(database: database)
         self.appSettings = AppSettingsPersistence(database: database)
         self.auditEvents = AuditEventsPersistence(database: database)
         self.decisionLogs = DecisionLogsPersistence(database: database)
@@ -60,6 +63,7 @@ public struct ControlPlanePersistence: Sendable {
         self.agentEnrollments = AgentEnrollmentsPersistence(database: database)
         self.agents = AgentsPersistence(database: database)
         self.oidcProviders = OIDCProvidersPersistence(database: database)
+        self.orgTrustDomains = OrgTrustDomainsPersistence(database: database)
         self.scimExternalIDs = SCIMExternalIDsPersistence(database: database)
         self.groups = GroupsPersistence(database: database)
         self.iam = IAMPersistence(database: database)

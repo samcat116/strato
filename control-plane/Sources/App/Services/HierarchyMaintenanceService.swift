@@ -1,6 +1,6 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
-import Fluent
 
 /// Hierarchy validation and repair.
 ///
@@ -24,11 +24,11 @@ import Fluent
 /// to report what remains). Chunking per organization would only move the loop,
 /// so it stays whole until an installation is large enough for that to hurt.
 struct HierarchyMaintenanceService {
-    static func findHierarchyIssues(on db: Database) async throws -> [HierarchyIssue] {
+    static func findHierarchyIssues(on db: PostgresStoreContext) async throws -> [HierarchyIssue] {
         try await scan(on: db).issues
     }
 
-    static func performHierarchyRepair(repairRequest: HierarchyRepairRequest, on db: Database) async throws
+    static func performHierarchyRepair(repairRequest: HierarchyRepairRequest, on db: PostgresStoreContext) async throws
         -> HierarchyRepairResponse
     {
         let scan = try await scan(on: db)
@@ -123,7 +123,7 @@ struct HierarchyMaintenanceService {
         var projectFixes: [UUID: (project: Project, path: String)] = [:]
     }
 
-    private static func scan(on db: Database) async throws -> Scan {
+    private static func scan(on db: PostgresStoreContext) async throws -> Scan {
         let folders = try await OrganizationalUnit.all(on: db)
         let projects = try await Project.all(on: db)
 

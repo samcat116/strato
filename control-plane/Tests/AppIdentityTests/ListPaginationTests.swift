@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -20,7 +19,7 @@ final class ListPaginationTests: BaseTestCase {
     func vmListPages() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app)
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let project = try await builder.createProject(
                 name: "Paging Project", description: "pagination coverage", organization: testOrganization)
             for index in 0..<5 {
@@ -89,13 +88,13 @@ final class ListPaginationTests: BaseTestCase {
     func totalRespectsAuthorization() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app)
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
 
             let member = try await builder.createUser(
                 username: "pagingmember", email: "pagingmember@example.com", isSystemAdmin: false)
             try await builder.addUserToOrganization(
                 user: member, organization: testOrganization, role: "member")
-            try await member.replacingCurrentOrganization(testOrganization.id).save(on: app.db)
+            try await member.replacingCurrentOrganization(testOrganization.id).save(on: app.testPostgres)
             let memberToken = try await member.generateAPIKey(on: app)
 
             let granted = try await builder.createProject(
@@ -104,7 +103,7 @@ final class ListPaginationTests: BaseTestCase {
                 name: "Withheld", description: "not readable", organization: testOrganization)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: member.id!, role: .viewer,
-                nodeType: .project, nodeID: granted.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: granted.id!, createdBy: nil, on: app.testPostgres)
 
             for index in 0..<3 {
                 _ = try await builder.createVM(name: "granted-vm-\(index)", project: granted)

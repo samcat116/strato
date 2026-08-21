@@ -1,6 +1,6 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
-import Fluent
 import AsyncHTTPClient
 import NIOCore
 import NIOHTTP1
@@ -16,13 +16,15 @@ protocol ImageFetchServiceProtocol: Sendable {
 /// Actor service for managing background image fetches from URLs
 actor ImageFetchService: ImageFetchServiceProtocol {
     private let app: Application
+    private let database: PostgresStoreContext
     private var activeArtifactFetches: [UUID: Task<Void, Error>] = [:]
 
     /// Progress update interval in bytes (update every 1MB)
     private let progressUpdateInterval: Int64 = 1024 * 1024
 
-    init(app: Application) {
+    init(app: Application, database: PostgresStoreContext) {
         self.app = app
+        self.database = database
     }
 
     /// Starts fetching a single artifact from its source URL.
@@ -46,7 +48,7 @@ actor ImageFetchService: ImageFetchServiceProtocol {
     private func performArtifactFetch(artifactId: UUID) async throws {
         defer { activeArtifactFetches.removeValue(forKey: artifactId) }
         try Task.checkCancellation()
-        let db = app.db
+        let db = database
         let logger = app.logger
 
         guard let artifact = try await LegacyImageArtifactStore.artifact(id: artifactId, on: db) else {
@@ -126,17 +128,17 @@ actor ImageFetchService: ImageFetchServiceProtocol {
 
     /// Recomputes the parent image's status from its (freshly loaded) artifact
     /// set, including download and error lifecycle when no bootable set exists.
-    private func recomputeImageStatus(imageId: UUID, db: Database) async throws {
+    private func recomputeImageStatus(imageId: UUID, db: PostgresStoreContext) async throws {
         guard let image = try await LegacyImageStore.image(id: imageId, on: db) else { return }
         _ = try await image.recomputedStatus(on: db)
     }
 
-    private func updateArtifactProgress(artifactId: UUID, progress: Int, db: Database) async throws {
+    private func updateArtifactProgress(artifactId: UUID, progress: Int, db: PostgresStoreContext) async throws {
         _ = try await LegacyImageArtifactStore.updateProgress(
             id: artifactId, progress: progress, on: db)
     }
 
-    private func updateArtifactError(artifactId: UUID, error: String, db: Database) async throws {
+    private func updateArtifactError(artifactId: UUID, error: String, db: PostgresStoreContext) async throws {
         _ = try await LegacyImageArtifactStore.markError(id: artifactId, error: error, on: db)
     }
 
@@ -343,7 +345,10 @@ extension Application {
 
     var imageFetchService: ImageFetchServiceProtocol {
         get {
-            lazyService(ImageFetchServiceKey.self) { ImageFetchService(app: self) }
+            guard let service = storage[ImageFetchServiceKey.self] else {
+                preconditionFailure("Image fetch service has not been configured")
+            }
+            return service
         }
         set {
             setStorageValue(ImageFetchServiceKey.self, to: newValue)

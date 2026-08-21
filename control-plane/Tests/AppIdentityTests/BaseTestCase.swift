@@ -1,6 +1,5 @@
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import AppTestSupport
 @testable import App
@@ -21,7 +20,7 @@ class BaseTestCase {
 
     /// Set up common test data
     func setupCommonTestData(on app: Application) async throws {
-        let db = app.db
+        let db = app.testPostgres
         // Create test user
         testUser = User(
             username: "testuser",

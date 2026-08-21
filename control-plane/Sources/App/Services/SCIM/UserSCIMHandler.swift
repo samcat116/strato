@@ -1,18 +1,14 @@
 import ControlPlanePostgres
-import Fluent
 import Vapor
 import SwiftSCIM
 
-/// Fluent's database handle predates checked sendability. It is immutable here;
-/// every mutable model is created or reloaded inside one method and never sent
-/// to a child task or retained by the handler.
 struct UserSCIMHandler: SCIMResourceHandler, Sendable {
     typealias Resource = SCIMUser
 
     static let endpoint = "Users"
     static let schemaURI = "urn:ietf:params:scim:schemas:core:2.0:User"
 
-    let db: Database
+    let users: UserDirectoryPersistence
     let externalIDs: SCIMExternalIDsPersistence
     let organizationID: UUID
 
@@ -20,7 +16,7 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
 
     func create(_ resource: SCIMUser, context: SCIMRequestContext) async throws -> SCIMUser {
         // Check for existing user with same username
-        if try await LegacyUserStore.users(username: resource.userName, on: db).first != nil {
+        if try await users.user(username: resource.userName) != nil {
             throw SCIMServerError.conflict(detail: "User with username '\(resource.userName)' already exists")
         }
 
@@ -31,25 +27,24 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
             ?? "\(resource.userName)@scim.local"
 
         // Create user
-        let user = try await User(
+        let write = UserDirectoryWrite(
             username: resource.userName,
             email: email,
             displayName: resource.displayName ?? resource.name?.formatted ?? resource.userName,
-            source: .scim,
+            source: "scim",
             scimProvisioned: true,
             scimActive: resource.active ?? true
-        ).persisted(on: db)
-
-        guard let userID = user.id else {
+        )
+        let user: UserDirectorySnapshot
+        switch try await users.createSCIMUser(write, organizationID: organizationID) {
+        case .saved(let saved): user = saved
+        case .identifierConflict:
+            throw SCIMServerError.conflict(
+                detail: "User with username '\(resource.userName)' already exists")
+        case .notMember:
             throw SCIMServerError.internalError(detail: "Failed to create user")
         }
-
-        // Add user to organization as member
-        _ = try await OrganizationMembershipStore.insert(
-            userID: userID,
-            organizationID: organizationID,
-            on: db
-        )
+        let userID = user.id
 
         // Store external ID mapping if provided
         if let externalId = resource.externalId {
@@ -71,15 +66,7 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
-        guard let user = try await User.find(uuid, on: db) else {
-            throw SCIMServerError.notFound(resourceType: "User", id: id)
-        }
-
-        // Verify user is in this organization
-        let isMember = try await OrganizationMembershipStore.membership(
-            userID: uuid, organizationID: organizationID, on: db) != nil
-
-        guard isMember else {
+        guard let user = try await users.scimUser(id: uuid, organizationID: organizationID) else {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
@@ -93,59 +80,53 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
-        guard var user = try await User.find(uuid, on: db) else {
-            throw SCIMServerError.notFound(resourceType: "User", id: id)
-        }
-
-        // Verify user is in this organization
-        let isMember = try await OrganizationMembershipStore.membership(
-            userID: uuid, organizationID: organizationID, on: db) != nil
-
-        guard isMember else {
+        guard let current = try await users.scimUser(id: uuid, organizationID: organizationID) else {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
         // Check if new username is already taken by another user
-        if user.username != resource.userName {
-            let existingUser = try await LegacyUserStore.users(
-                username: resource.userName,
-                excludingID: uuid,
-                on: db
-            ).first
-            if existingUser != nil {
-                throw SCIMServerError.conflict(detail: "User with username '\(resource.userName)' already exists")
-            }
-        }
-
-        // Update user fields
-        user = user.replacing(
-            username: resource.userName,
-            displayName: resource.displayName ?? resource.name?.formatted ?? resource.userName
-        )
-        let wasActive = user.scimActive
-        user = user.replacing(scimActive: resource.active ?? true)
+        let wasActive = current.scimActive
+        let active = resource.active ?? true
+        var disabledAt = current.disabledAt
+        var sessionEpoch = current.sessionEpoch
 
         // SCIM deactivation is the IdP's offboarding/suspension signal, so it
         // must revoke access immediately — `scimActive` alone is only checked
         // at OIDC login. Mirror the SSF disable path: `disabledAt` makes
         // `UserSecurityMiddleware` and the passkey login path reject the user,
         // and the `sessionEpoch` bump invalidates existing sessions.
-        if wasActive && !user.scimActive {
-            if user.disabledAt == nil {
-                user = user.replacing(disabledAt: .some(Date()))
-            }
-            user = user.replacing(sessionEpoch: user.sessionEpoch + 1)
-        } else if !wasActive && user.scimActive {
-            user = user.replacing(disabledAt: .some(nil))
+        if wasActive && !active {
+            disabledAt = disabledAt ?? Date()
+            sessionEpoch += 1
+        } else if !wasActive && active {
+            disabledAt = nil
         }
 
-        if let email = resource.emails?.first(where: { $0.primary == true })?.value
-            ?? resource.emails?.first?.value
-        {
-            user = user.replacing(email: email)
+        let email = resource.emails?.first(where: { $0.primary == true })?.value
+            ?? resource.emails?.first?.value ?? current.email
+        let write = UserDirectoryWrite(
+            id: current.id,
+            username: resource.userName,
+            email: email,
+            displayName: resource.displayName ?? resource.name?.formatted ?? resource.userName,
+            currentOrganizationID: current.currentOrganizationID,
+            isSystemAdmin: current.isSystemAdmin,
+            source: current.source,
+            oidcProviderID: current.oidcProviderID,
+            oidcSubject: current.oidcSubject,
+            scimProvisioned: current.scimProvisioned,
+            scimActive: active,
+            sessionEpoch: sessionEpoch,
+            disabledAt: disabledAt)
+        let user: UserDirectorySnapshot
+        switch try await users.updateSCIMUser(write, organizationID: organizationID) {
+        case .saved(let saved): user = saved
+        case .identifierConflict:
+            throw SCIMServerError.conflict(
+                detail: "User with username '\(resource.userName)' already exists")
+        case .notMember:
+            throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
-
-        user = try await user.persisted(on: db)
 
         // Update external ID mapping if provided
         if let externalId = resource.externalId {
@@ -167,38 +148,14 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
-        guard var user = try await User.find(uuid, on: db) else {
+        guard try await users.scimUser(id: uuid, organizationID: organizationID) != nil else {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
-        // Verify user is in this organization
-        guard
-            let membership = try await OrganizationMembershipStore.membership(
-                userID: uuid, organizationID: organizationID, on: db)
-        else {
-            throw SCIMServerError.notFound(resourceType: "User", id: id)
-        }
-
-        // Soft delete - set scimActive to false, and revoke access immediately
-        // (mirrors the SSF disable path): `disabledAt` makes the security
-        // middleware and passkey login reject the user, and the epoch bump
-        // invalidates existing sessions.
-        user = user.replacing(scimActive: false)
-        if user.disabledAt == nil {
-            user = user.replacing(disabledAt: .some(Date()))
-        }
-        user = user.replacing(sessionEpoch: user.sessionEpoch + 1)
-        try await user.save(on: db)
-
-        // Remove the organization membership and everything held inside the
-        // org — group memberships and role bindings
-        // across the org's whole subtree (issue #485). Bindings the user
-        // holds in other orgs are those orgs' grants and stay.
-        try await db.transaction { transaction in
-            _ = try await OrganizationMembershipStore.delete(id: membership.id, on: transaction)
-            try await OffboardingSweep.userLeftOrganization(
-                userID: uuid, organizationID: organizationID, on: transaction)
-        }
+        guard try await users.offboardSCIMUser(
+            id: uuid,
+            organizationID: organizationID) != nil
+        else { throw SCIMServerError.notFound(resourceType: "User", id: id) }
 
         // Delete external ID mapping
         _ = try await externalIDs.remove(
@@ -212,19 +169,16 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
 
     func search(query: SCIMServerQuery, context: SCIMRequestContext) async throws -> SCIMListResponse<SCIMUser> {
         // Get all users in this organization
-        let memberIDs = try await OrganizationMembershipStore.memberships(
-            organizationID: organizationID, on: db
-        ).map(\.userID)
-        var users = try await LegacyUserStore.users(ids: memberIDs, on: db)
+        var rows = try await users.scimUsers(organizationID: organizationID)
         if let filter = query.filter {
-            users = try users.filter { try matches(filter, user: $0) }
+            rows = try rows.filter { try matches(filter, user: $0) }
         }
-        let totalCount = users.count
-        users = Array(users.dropFirst(query.offset).prefix(query.count))
+        let totalCount = rows.count
+        rows = Array(rows.dropFirst(query.offset).prefix(query.count))
 
         // Convert to SCIM resources
         var scimUsers: [SCIMUser] = []
-        for user in users {
+        for user in rows {
             let scimUser = try await userToSCIMUser(user, context: context)
             scimUsers.append(scimUser)
         }
@@ -239,10 +193,11 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
 
     // MARK: - Helpers
 
-    private func userToSCIMUser(_ user: User, context: SCIMRequestContext) async throws -> SCIMUser {
-        guard let userID = user.id else {
-            throw SCIMServerError.internalError(detail: "User has no ID")
-        }
+    private func userToSCIMUser(
+        _ user: UserDirectorySnapshot,
+        context: SCIMRequestContext
+    ) async throws -> SCIMUser {
+        let userID = user.id
 
         let location = context.resourceLocation(endpoint: Self.endpoint, id: userID.uuidString)
 
@@ -282,7 +237,7 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
         )
     }
 
-    private func matches(_ filter: SCIMFilterExpression, user: User) throws -> Bool {
+    private func matches(_ filter: SCIMFilterExpression, user: UserDirectorySnapshot) throws -> Bool {
         switch filter {
         case .attribute(let path, let op, let value):
             return try matchesAttribute(path: path, op: op, value: value, user: user)
@@ -320,7 +275,7 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
         path: String,
         op: SCIMFilterOperator,
         value: SCIMComparisonValue,
-        user: User
+        user: UserDirectorySnapshot
     ) throws -> Bool {
         let lowercasePath = path.lowercased()
 

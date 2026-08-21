@@ -1,6 +1,4 @@
 import ControlPlanePostgres
-import Fluent
-import SQLKit
 import Testing
 import Vapor
 import VaporTesting
@@ -26,7 +24,7 @@ struct ResourceBindingCleanupTests {
     @Test("Every cascading descendant of a declared parent is a node type the cleanup revokes")
     func cascadingChildrenAreCovered() async throws {
         try await withTestApp { app in
-            let sql = try #require(app.db as? any SQLDatabase)
+            let sql = try #require(Optional(app.testPostgres))
 
             /// The tables a delete of `table` removes, transitively — one
             /// cascade feeds the next, so `dns_records` go with a project
@@ -137,7 +135,7 @@ struct ResourceBindingCleanupTests {
             let snapshot = VMSnapshot(
                 name: "checkpoint", vmID: vmID, projectID: project.id!,
                 environment: vm.environment, agentId: nil, createdByID: user.id!)
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
             let snapshotID = try snapshot.requireID()
 
             // A sibling VM's binding stands in for every binding the sweep must
@@ -152,16 +150,16 @@ struct ResourceBindingCleanupTests {
             ] {
                 try await RoleBindingService.grant(
                     principalType: .user, principalID: user.id!, role: .admin,
-                    nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: app.db)
+                    nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: app.testPostgres)
             }
 
-            try await ResourceBindingCleanup.revokeBindings(forDeletedVM: vmID, on: app.db)
+            try await ResourceBindingCleanup.revokeBindings(forDeletedVM: vmID, on: app.testPostgres)
 
             func count(_ nodeType: IAMNodeType, _ nodeID: UUID) async throws -> Int {
                 try await LegacyRoleBindingStore.bindings(
                     nodeType: nodeType.rawValue,
                     nodeID: nodeID,
-                    on: app.db
+                    on: app.testPostgres
                 ).count
             }
             let vmBindings = try await count(.virtualMachine, vmID)
@@ -191,7 +189,7 @@ struct ResourceBindingCleanupTests {
             // VM's delete does not reach — this is the row the `vm_id` cascade
             // would strand.
             let identity = try await GuestIdentity.register(
-                vmID: vmID, organizationID: orgID, createdBy: user.id, on: app.db)
+                vmID: vmID, organizationID: orgID, createdBy: user.id, on: app.testPostgres)
             let identityID = identity.id
 
             // A workload principal with no VM behind it, standing in for every
@@ -201,22 +199,22 @@ struct ResourceBindingCleanupTests {
                     spiffeID: "spiffe://strato.local/sa/bystander",
                     kind: WorkloadRegistrationKind.workload.rawValue,
                     organizationID: orgID),
-                on: app.db)
+                on: app.testPostgres)
             let bystanderID = bystander.id
 
             for principalID in [identityID, bystanderID] {
                 try await RoleBindingService.grant(
                     principalType: .workload, principalID: principalID, role: .viewer,
-                    nodeType: .project, nodeID: projectID, createdBy: user.id!, on: app.db)
+                    nodeType: .project, nodeID: projectID, createdBy: user.id!, on: app.testPostgres)
             }
 
-            try await ResourceBindingCleanup.revokeBindings(forDeletedVM: vmID, on: app.db)
+            try await ResourceBindingCleanup.revokeBindings(forDeletedVM: vmID, on: app.testPostgres)
 
             func count(_ principalID: UUID) async throws -> Int {
                 try await LegacyRoleBindingStore.bindings(
                     principalType: IAMPrincipalType.workload.rawValue,
                     principalID: principalID,
-                    on: app.db
+                    on: app.testPostgres
                 ).count
             }
             let identityBindings = try await count(identityID)
@@ -245,7 +243,7 @@ struct ResourceBindingCleanupTests {
             for (nodeType, nodeID) in nodes + bystanderNodes {
                 try await RoleBindingService.grant(
                     principalType: .user, principalID: user.id!, role: .admin,
-                    nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: app.db)
+                    nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: app.testPostgres)
             }
             // The doomed project's service account also holds a grant of its
             // own, on a node outside the project entirely — the principal
@@ -253,23 +251,23 @@ struct ResourceBindingCleanupTests {
             let serviceAccountID = try #require(nodes.first { $0.0 == .serviceAccount }?.1)
             try await RoleBindingService.grant(
                 principalType: .serviceAccount, principalID: serviceAccountID, role: .viewer,
-                nodeType: .organization, nodeID: org.id!, createdBy: user.id!, on: app.db)
+                nodeType: .organization, nodeID: org.id!, createdBy: user.id!, on: app.testPostgres)
 
             try await ResourceBindingCleanup.revokeBindings(
-                forDeletedProject: try project.requireID(), on: app.db)
+                forDeletedProject: try project.requireID(), on: app.testPostgres)
 
             for (nodeType, nodeID) in nodes {
-                let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.db)
+                let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.testPostgres)
                 #expect(remaining == 0, "\(nodeType.rawValue) bindings survived the project delete")
             }
             for (nodeType, nodeID) in bystanderNodes {
-                let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.db)
+                let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.testPostgres)
                 #expect(remaining == 1, "\(nodeType.rawValue) bindings of an unrelated project were swept")
             }
             let heldByAccount = try await LegacyRoleBindingStore.bindings(
                 principalType: IAMPrincipalType.serviceAccount.rawValue,
                 principalID: serviceAccountID,
-                on: app.db
+                on: app.testPostgres
             ).count
             #expect(heldByAccount == 0)
         }
@@ -286,18 +284,18 @@ struct ResourceBindingCleanupTests {
             let projectID = try project.requireID()
 
             let zone = try await LegacyDNSZoneStore.insert(
-                name: "acme.internal", projectID: projectID, on: app.db)
+                name: "acme.internal", projectID: projectID, on: app.testPostgres)
             let record = try await LegacyDNSRecordStore.insert(
                 zoneID: zone.id, name: "www", type: .a,
-                value: "192.0.2.1", on: app.db)
+                value: "192.0.2.1", on: app.testPostgres)
 
             // A record in a second zone: it cascades with *its* zone, not this
             // one, so the sweep must key on the zone rather than the project.
             let otherZone = try await LegacyDNSZoneStore.insert(
-                name: "other.internal", projectID: projectID, on: app.db)
+                name: "other.internal", projectID: projectID, on: app.testPostgres)
             let otherRecord = try await LegacyDNSRecordStore.insert(
                 zoneID: otherZone.id, name: "www", type: .a,
-                value: "192.0.2.2", on: app.db)
+                value: "192.0.2.2", on: app.testPostgres)
 
             for (nodeType, nodeID) in [
                 (IAMNodeType.dnsZone, zone.id),
@@ -307,18 +305,18 @@ struct ResourceBindingCleanupTests {
             ] {
                 try await RoleBindingService.grant(
                     principalType: .user, principalID: user.id!, role: .admin,
-                    nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: app.db)
+                    nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: app.testPostgres)
             }
 
             try await ResourceBindingCleanup.revokeBindings(
-                forDeletedDNSZone: zone.id, on: app.db)
+                forDeletedDNSZone: zone.id, on: app.testPostgres)
 
-            let zoneBindings = try await Self.bindingCount(.dnsZone, zone.id, on: app.db)
-            let recordBindings = try await Self.bindingCount(.dnsRecord, record.id, on: app.db)
+            let zoneBindings = try await Self.bindingCount(.dnsZone, zone.id, on: app.testPostgres)
+            let recordBindings = try await Self.bindingCount(.dnsRecord, record.id, on: app.testPostgres)
             let otherZoneBindings = try await Self.bindingCount(
-                .dnsZone, otherZone.id, on: app.db)
+                .dnsZone, otherZone.id, on: app.testPostgres)
             let otherRecordBindings = try await Self.bindingCount(
-                .dnsRecord, otherRecord.id, on: app.db)
+                .dnsRecord, otherRecord.id, on: app.testPostgres)
             #expect(zoneBindings == 0)
             #expect(recordBindings == 0)
             #expect(otherZoneBindings == 1)
@@ -347,16 +345,16 @@ struct ResourceBindingCleanupTests {
             for (nodeType, nodeID) in nodes + [(.organizationalUnit, siblingID)] {
                 try await RoleBindingService.grant(
                     principalType: .user, principalID: user.id!, role: .admin,
-                    nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: app.db)
+                    nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: app.testPostgres)
             }
 
-            try await ResourceBindingCleanup.revokeBindings(forDeletedFolder: folder, on: app.db)
+            try await ResourceBindingCleanup.revokeBindings(forDeletedFolder: folder, on: app.testPostgres)
 
             for (nodeType, nodeID) in nodes {
-                let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.db)
+                let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.testPostgres)
                 #expect(remaining == 0, "\(nodeType.rawValue) bindings survived the folder delete")
             }
-            let siblingBindings = try await Self.bindingCount(.organizationalUnit, siblingID, on: app.db)
+            let siblingBindings = try await Self.bindingCount(.organizationalUnit, siblingID, on: app.testPostgres)
             #expect(siblingBindings == 1)
         }
     }
@@ -392,7 +390,7 @@ struct ResourceBindingCleanupTests {
                     kind: WorkloadRegistrationKind.workload.rawValue,
                     organizationID: organizationID,
                     displayName: "ci"),
-                on: app.db)
+                on: app.testPostgres)
             let workloadID = workload.id
 
             let other = try await builder.createOrganization(name: "Untouched Org")
@@ -401,21 +399,21 @@ struct ResourceBindingCleanupTests {
             for (nodeType, nodeID) in nodes + [(.organization, otherID)] {
                 try await RoleBindingService.grant(
                     principalType: .user, principalID: user.id!, role: .admin,
-                    nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: app.db)
+                    nodeType: nodeType, nodeID: nodeID, createdBy: user.id!, on: app.testPostgres)
             }
             for (principalType, principalID) in [
                 (IAMPrincipalType.group, groupID), (.workload, workloadID),
             ] {
                 try await RoleBindingService.grant(
                     principalType: principalType, principalID: principalID, role: .viewer,
-                    nodeType: .organization, nodeID: otherID, createdBy: user.id!, on: app.db)
+                    nodeType: .organization, nodeID: otherID, createdBy: user.id!, on: app.testPostgres)
             }
 
             try await ResourceBindingCleanup.revokeBindings(
-                forDeletedOrganization: organizationID, on: app.db)
+                forDeletedOrganization: organizationID, on: app.testPostgres)
 
             for (nodeType, nodeID) in nodes {
-                let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.db)
+                let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.testPostgres)
                 #expect(remaining == 0, "\(nodeType.rawValue) bindings survived the organization delete")
             }
             for (principalType, principalID) in [
@@ -424,13 +422,13 @@ struct ResourceBindingCleanupTests {
                 let held = try await LegacyRoleBindingStore.bindings(
                     principalType: principalType.rawValue,
                     principalID: principalID,
-                    on: app.db
+                    on: app.testPostgres
                 ).count
                 #expect(held == 0, "\(principalType.rawValue) grants survived the organization delete")
             }
             // The other org's own node binding is those former grants'
             // neighbour: sweeping the principal must not take the node with it.
-            let otherBindings = try await Self.bindingCount(.organization, otherID, on: app.db)
+            let otherBindings = try await Self.bindingCount(.organization, otherID, on: app.testPostgres)
             #expect(otherBindings == 1)
         }
     }
@@ -449,7 +447,7 @@ struct ResourceBindingCleanupTests {
             let project = try await builder.createProject(
                 name: "Doomed", description: "", organization: org)
             let nodes = try await Self.populate(project: project, owner: user, app: app)
-            try await Self.grantAll(nodes, to: user, on: app.db)
+            try await Self.grantAll(nodes, to: user, on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/projects/\(try project.requireID())") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -457,7 +455,7 @@ struct ResourceBindingCleanupTests {
                 #expect(res.status == .noContent)
             }
 
-            try await Self.expectNoBindings(nodes, on: app.db)
+            try await Self.expectNoBindings(nodes, on: app.testPostgres)
         }
     }
 
@@ -468,7 +466,7 @@ struct ResourceBindingCleanupTests {
             let project = try await builder.createProject(
                 name: "Occupied", description: "", organization: org)
             let nodes = try await Self.populate(project: project, owner: user, app: app)
-            try await Self.grantAll(nodes, to: user, on: app.db)
+            try await Self.grantAll(nodes, to: user, on: app.testPostgres)
             _ = try await builder.createVM(name: "resident", project: project)
 
             try await app.test(.DELETE, "/api/projects/\(try project.requireID())") { req in
@@ -484,7 +482,7 @@ struct ResourceBindingCleanupTests {
             // foreign key — rolls back the same transaction but cannot be
             // provoked without interleaving a commit mid-request.
             for (nodeType, nodeID) in nodes {
-                let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.db)
+                let remaining = try await Self.bindingCount(nodeType, nodeID, on: app.testPostgres)
                 #expect(remaining == 1, "\(nodeType.rawValue) bindings were swept by a refused delete")
             }
         }
@@ -496,7 +494,7 @@ struct ResourceBindingCleanupTests {
             let builder = TestDataBuilder(app: app)
             let folder = try await builder.createOU(name: "team", description: "", organization: org)
             let folderID = try folder.requireID()
-            try await Self.grantAll([(.organizationalUnit, folderID)], to: user, on: app.db)
+            try await Self.grantAll([(.organizationalUnit, folderID)], to: user, on: app.testPostgres)
 
             try await app.test(
                 .DELETE, "/api/organizations/\(try org.requireID())/ous/\(folderID)"
@@ -506,7 +504,7 @@ struct ResourceBindingCleanupTests {
                 #expect(res.status == .noContent)
             }
 
-            try await Self.expectNoBindings([(.organizationalUnit, folderID)], on: app.db)
+            try await Self.expectNoBindings([(.organizationalUnit, folderID)], on: app.testPostgres)
         }
     }
 
@@ -521,7 +519,7 @@ struct ResourceBindingCleanupTests {
                 (.organization, organizationID), (.organizationalUnit, try folder.requireID()),
             ]
             nodes += try await Self.populate(project: project, owner: user, app: app)
-            try await Self.grantAll(nodes, to: user, on: app.db)
+            try await Self.grantAll(nodes, to: user, on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/organizations/\(organizationID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -529,7 +527,7 @@ struct ResourceBindingCleanupTests {
                 #expect(res.status == .noContent)
             }
 
-            try await Self.expectNoBindings(nodes, on: app.db)
+            try await Self.expectNoBindings(nodes, on: app.testPostgres)
         }
     }
 
@@ -549,7 +547,7 @@ struct ResourceBindingCleanupTests {
     }
 
     private static func grantAll(
-        _ nodes: [(IAMNodeType, UUID)], to user: User, on db: any Database
+        _ nodes: [(IAMNodeType, UUID)], to user: User, on db: PostgresStoreContext
     ) async throws {
         for (nodeType, nodeID) in nodes {
             try await RoleBindingService.grant(
@@ -559,7 +557,7 @@ struct ResourceBindingCleanupTests {
     }
 
     private static func expectNoBindings(
-        _ nodes: [(IAMNodeType, UUID)], on db: any Database
+        _ nodes: [(IAMNodeType, UUID)], on db: PostgresStoreContext
     ) async throws {
         for (nodeType, nodeID) in nodes {
             let remaining = try await bindingCount(nodeType, nodeID, on: db)
@@ -572,7 +570,7 @@ struct ResourceBindingCleanupTests {
     private static func populate(
         project: Project, owner: User, app: Application
     ) async throws -> [(IAMNodeType, UUID)] {
-        let db = app.db
+        let db = app.testPostgres
         let projectID = try project.requireID()
         let ownerID = try owner.requireID()
         let suffix = projectID.uuidString.prefix(8)
@@ -639,7 +637,7 @@ struct ResourceBindingCleanupTests {
     }
 
     private static func bindingCount(
-        _ nodeType: IAMNodeType, _ nodeID: UUID, on db: any Database
+        _ nodeType: IAMNodeType, _ nodeID: UUID, on db: PostgresStoreContext
     ) async throws -> Int {
         try await LegacyRoleBindingStore.bindings(
             nodeType: nodeType.rawValue,

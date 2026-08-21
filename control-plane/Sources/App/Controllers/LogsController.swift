@@ -1,7 +1,10 @@
+import ControlPlanePostgres
 import Vapor
 import StratoShared
 
 struct LogsController: RouteCollection {
+    let database: PostgresStoreContext
+
     func boot(routes: RoutesBuilder) throws {
         let logs = routes.grouped("api", "vms", ":vmID", "logs")
 
@@ -28,7 +31,7 @@ struct LogsController: RouteCollection {
 
         // Verify the VM exists and enforce the per-VM read permission through
         // the evaluator (defense in depth alongside AuthorizationMiddleware).
-        _ = try await req.authorizedVM(vmId, action: "vm:read")
+        _ = try await req.authorizedVM(vmId, action: "vm:read", on: database)
 
         // Check if Loki is enabled
         guard req.application.lokiEnabled else {
@@ -78,7 +81,7 @@ struct LogsController: RouteCollection {
         // Verify the sandbox exists and enforce the per-sandbox read
         // permission through the evaluator (defense in depth alongside
         // AuthorizationMiddleware).
-        _ = try await req.authorizedSandbox(sandboxId, action: "sandbox:read")
+        _ = try await req.authorizedSandbox(sandboxId, action: "sandbox:read", on: database)
 
         // Check if Loki is enabled
         guard req.application.lokiEnabled else {

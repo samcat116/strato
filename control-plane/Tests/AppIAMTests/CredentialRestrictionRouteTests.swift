@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import Testing
 import Vapor
@@ -17,7 +16,6 @@ final class CredentialRestrictionRouteTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -35,7 +33,7 @@ final class CredentialRestrictionRouteTests {
     }
 
     private func fixture(_ app: Application, admin: Bool = false) async throws -> Fixture {
-        let builder = TestDataBuilder(db: app.db)
+        let builder = TestDataBuilder(db: app.testPostgres)
         let org = try await builder.createOrganization(name: "Restriction Org")
         let project = try await builder.createProject(
             name: "Restriction Project", description: "d", organization: org)
@@ -45,8 +43,8 @@ final class CredentialRestrictionRouteTests {
         try await builder.addUserToOrganization(user: user, organization: org, role: "member")
         try await RoleBindingService.grant(
             principalType: .user, principalID: try user.requireID(), role: .admin,
-            nodeType: .organization, nodeID: try org.requireID(), createdBy: nil, on: app.db)
-        try await user.replacingCurrentOrganization(try org.requireID()).save(on: app.db)
+            nodeType: .organization, nodeID: try org.requireID(), createdBy: nil, on: app.testPostgres)
+        try await user.replacingCurrentOrganization(try org.requireID()).save(on: app.testPostgres)
         return Fixture(
             org: org,
             project: project,
@@ -126,7 +124,7 @@ final class CredentialRestrictionRouteTests {
                 agentName: "restriction-agent",
                 spiffeID: "spiffe://example.org/agent/restriction-agent",
                 organizationScope: .organization(try fixture.org.requireID()))
-            _ = try await saveTestAgentEnrollment(enrollment, on: app.db)
+            _ = try await saveTestAgentEnrollment(enrollment, on: app.testPostgres)
 
             struct Page: Content { let total: Int }
 

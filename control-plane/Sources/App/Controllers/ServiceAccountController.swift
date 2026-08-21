@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -13,13 +12,28 @@ import Vapor
 struct ServiceAccountController: RouteCollection {
     private let serviceAccounts: ServiceAccountsPersistence
     private let workloads: WorkloadsPersistence
+    private let projects: ProjectsPersistence
+    private let iam: IAMPersistence
+    private let groups: GroupsPersistence
+    private let hierarchy: HierarchyPersistence
+    private let users: UserDirectoryPersistence
 
     init(
         serviceAccounts: ServiceAccountsPersistence,
-        workloads: WorkloadsPersistence
+        workloads: WorkloadsPersistence,
+        projects: ProjectsPersistence,
+        iam: IAMPersistence,
+        groups: GroupsPersistence,
+        hierarchy: HierarchyPersistence,
+        users: UserDirectoryPersistence
     ) {
         self.serviceAccounts = serviceAccounts
         self.workloads = workloads
+        self.projects = projects
+        self.iam = iam
+        self.groups = groups
+        self.hierarchy = hierarchy
+        self.users = users
     }
     func boot(routes: RoutesBuilder) throws {
         let projectScoped = routes.grouped("api", "projects", ":projectID", "service-accounts")
@@ -111,13 +125,12 @@ struct ServiceAccountController: RouteCollection {
 
     /// GET /api/projects/:projectID/service-accounts
     func list(req: Request) async throws -> [ServiceAccountResponse] {
-        let project = try await req.requireProject()
-        let projectID = try project.requireID()
+        let projectID = try await requireProjectID(req)
         try await req.authorize("serviceaccount:list", on: IAMNode(type: .project, id: projectID))
 
         let accounts = try await serviceAccounts.accounts(projectID: projectID)
         let rolesByAccount = try await projectRolesByAccount(
-            accountIDs: accounts.map(\.id), projectID: projectID, on: req.db)
+            accountIDs: accounts.map(\.id), projectID: projectID)
         return accounts.map { account in
             response(account, projectRoles: rolesByAccount[account.id] ?? [])
         }
@@ -125,8 +138,7 @@ struct ServiceAccountController: RouteCollection {
 
     /// POST /api/projects/:projectID/service-accounts
     func create(req: Request) async throws -> Response {
-        let project = try await req.requireProject()
-        let projectID = try project.requireID()
+        let projectID = try await requireProjectID(req)
         try await req.authorize("serviceaccount:create", on: IAMNode(type: .project, id: projectID))
 
         let body = try req.content.decodeValidated(CreateServiceAccountRequest.self)
@@ -162,7 +174,7 @@ struct ServiceAccountController: RouteCollection {
         let accountID = account.id
         try await req.authorize("serviceaccount:read", on: IAMNode(type: .serviceAccount, id: accountID))
         let roles = try await projectRolesByAccount(
-            accountIDs: [accountID], projectID: account.projectID, on: req.db)
+            accountIDs: [accountID], projectID: account.projectID)
         return response(account, projectRoles: roles[accountID] ?? [])
     }
 
@@ -183,7 +195,7 @@ struct ServiceAccountController: RouteCollection {
             updated = account
         }
         let roles = try await projectRolesByAccount(
-            accountIDs: [accountID], projectID: account.projectID, on: req.db)
+            accountIDs: [accountID], projectID: account.projectID)
         return response(updated, projectRoles: roles[accountID] ?? [])
     }
 
@@ -226,27 +238,21 @@ struct ServiceAccountController: RouteCollection {
         )
 
         let actorID = req.auth.get(User.self)?.id
-        try await req.db.transaction { db in
-            // Replace, not accumulate: one project role per account, the same
-            // shape the member endpoints keep for users.
-            try await RoleBindingService.revoke(
-                principalType: .serviceAccount,
-                principalID: accountID,
-                nodeType: .project,
-                nodeID: projectID,
-                on: db
-            )
-            try await RoleBindingService.grant(
-                principalType: .serviceAccount,
-                principalID: accountID,
-                role: role,
-                nodeType: .project,
-                nodeID: projectID,
-                createdBy: actorID,
-                on: db
-            )
-        }
-        return try await GuardrailWriteReport.report(for: proposed, req: req)
+        try await RoleBindingService.setExclusiveGrant(
+            principalType: .serviceAccount,
+            principalID: accountID,
+            roleID: role.seededID,
+            node: IAMNode(type: .project, id: projectID),
+            createdBy: actorID,
+            using: iam)
+        return try await GuardrailWriteReport.report(
+            for: proposed,
+            using: iam,
+            groups: groups,
+            hierarchy: hierarchy,
+            projects: projects,
+            users: users,
+            req: req)
             .encodeResponse(status: .ok, for: req)
     }
 
@@ -262,7 +268,7 @@ struct ServiceAccountController: RouteCollection {
             principalID: accountID,
             nodeType: .project,
             nodeID: projectID,
-            on: req.db
+            using: iam
         )
         return .noContent
     }
@@ -354,22 +360,30 @@ struct ServiceAccountController: RouteCollection {
     /// active bindings. Custom-role bindings are not representable in this
     /// summary and are omitted; the who-can API reports them.
     private func projectRolesByAccount(
-        accountIDs: [UUID], projectID: UUID, on db: any Database
+        accountIDs: [UUID], projectID: UUID
     ) async throws -> [UUID: [String]] {
         guard !accountIDs.isEmpty else { return [:] }
-        let bindings = try await LegacyRoleBindingStore.bindings(
-            principalType: IAMPrincipalType.serviceAccount.rawValue,
-            principalIDs: accountIDs,
-            nodeType: IAMNodeType.project.rawValue,
-            nodeID: projectID,
-            activeAt: Date(),
-            on: db)
+        let bindings = try await iam.activeBindings(
+            subjects: accountIDs.map {
+                IAMOwnerReference(type: IAMPrincipalType.serviceAccount.rawValue, id: $0)
+            },
+            nodes: [IAMNodeReference(type: IAMNodeType.project.rawValue, id: projectID)])
         var roles: [UUID: [String]] = [:]
         for binding in bindings {
             guard let role = IAMRole(seededID: binding.roleID) else { continue }
             roles[binding.principalID, default: []].append(role.rawValue)
         }
         return roles.mapValues { $0.sorted() }
+    }
+
+    private func requireProjectID(_ req: Request) async throws -> UUID {
+        guard let projectID = req.parameters.get("projectID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid project ID")
+        }
+        guard try await projects.project(id: projectID) != nil else {
+            throw Abort(.notFound, reason: "Project not found")
+        }
+        return projectID
     }
 
     private func loadAccount(_ req: Request) async throws -> ServiceAccountSnapshot {

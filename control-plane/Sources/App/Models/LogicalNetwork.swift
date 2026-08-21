@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import StratoShared
 import Vapor
 
@@ -112,28 +111,28 @@ struct LogicalNetwork: Content, Equatable, Sendable {
     }
 
     @discardableResult
-    func persisted(on db: any Database) async throws -> Self {
+    func persisted(on db: PostgresStoreContext) async throws -> Self {
         try await LegacyLogicalNetworkStore.upsert(self, on: db)
     }
 
-    func save(on db: any Database) async throws {
+    func save(on db: PostgresStoreContext) async throws {
         _ = try await persisted(on: db)
     }
 
-    func delete(on db: any Database) async throws {
+    func delete(on db: PostgresStoreContext) async throws {
         guard let id else { return }
         _ = try await LegacyLogicalNetworkStore.delete(id: id, on: db)
     }
 
-    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+    static func find(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await LegacyLogicalNetworkStore.network(id: id, on: db)
     }
 
-    static func all(on db: any Database) async throws -> [Self] {
+    static func all(on db: PostgresStoreContext) async throws -> [Self] {
         try await LegacyLogicalNetworkStore.networks(on: db)
     }
 
-    static func count(on db: any Database) async throws -> Int {
+    static func count(on db: PostgresStoreContext) async throws -> Int {
         try await LegacyLogicalNetworkStore.count(on: db)
     }
 

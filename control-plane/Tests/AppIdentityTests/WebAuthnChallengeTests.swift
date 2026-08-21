@@ -1,6 +1,5 @@
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import WebAuthn
 import AppTestSupport
@@ -141,7 +140,7 @@ struct WebAuthnChallengeTests {
                 displayName: "No Passkeys",
                 source: .oidc
             )
-            try await user.save(on: app.db)
+            try await user.save(on: app.testPostgres)
 
             let a = try await service.beginAuthentication(for: username, decoyKey: "deploy-key-A")
             let b = try await service.beginAuthentication(for: username, decoyKey: "deploy-key-A")
@@ -165,7 +164,7 @@ struct WebAuthnChallengeTests {
                 email: "\(username)@example.com",
                 displayName: "Has Passkey"
             )
-            try await user.save(on: app.db)
+            try await user.save(on: app.testPostgres)
 
             let credentialID = Data((0..<32).map { _ in UInt8.random(in: .min ... .max) })
             _ = try await createTestPasskey(

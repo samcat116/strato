@@ -1,9 +1,14 @@
 import Foundation
-import Fluent
 import StratoShared
+import ControlPlanePostgres
 import Vapor
 
 struct ConsoleWebSocketController: RouteCollection {
+    private let database: PostgresStoreContext
+
+    init(database: PostgresStoreContext) {
+        self.database = database
+    }
     func boot(routes: RoutesBuilder) throws {
         // WebSocket endpoint for VM console: /api/vms/:vmID/console
         let vmRoutes = routes.grouped("api", "vms")
@@ -183,7 +188,7 @@ struct ConsoleWebSocketController: RouteCollection {
             }
 
             // Query VM from database
-            guard let vm = try await VM.find(vmId, on: req.db) else {
+            guard let vm = try await VM.find(vmId, on: database) else {
                 try? await ws.send("error: VM not found")
                 try? await ws.close(code: .unacceptableData)
                 return nil
@@ -207,7 +212,7 @@ struct ConsoleWebSocketController: RouteCollection {
 
             // Look up the agent for its identity key: agent sockets are keyed
             // by full SPIFFE ID, not by bare name (issue #613).
-            guard let agent = try await Agent.find(agentId, on: req.db) else {
+            guard let agent = try await Agent.find(agentId, on: database) else {
                 try? await ws.send("error: Agent not found for VM")
                 try? await ws.close(code: .unexpectedServerError)
                 return nil

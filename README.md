@@ -15,7 +15,7 @@ Strato is a fast, secure, and easy to deploy private cloud platform based on bat
 - 🔐 **Fine-grained Authorization**: built-in Cedar policy engine (IAM roles, guardrails, decision logs) — no external authz service
 - 🛡️ **Secure by Default**: Deployments generate strong secrets on first run; agents authenticate only by SPIFFE/SPIRE mTLS
 - 🌐 **Software-defined Networking**: OVN/OVS on Linux — multi-node overlay networks, security groups, floating IPs, IPv4/IPv6 dual-stack
-- 📊 **PostgreSQL Backend**: Reliable data persistence with Fluent ORM
+- 📊 **PostgreSQL Backend**: Native, pooled data persistence with PostgresNIO
 
 ## Quick Start
 

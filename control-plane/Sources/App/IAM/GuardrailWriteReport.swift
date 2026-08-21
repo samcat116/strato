@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -154,38 +153,6 @@ enum GuardrailWriteReport {
     /// refused writes. What is *not* best-effort is saying which happened:
     /// a failure is named in `analysisUnavailable` rather than rendered as an
     /// all-clear.
-    static func report(for binding: ProposedBinding, req: Request) async -> GrantWriteResponse {
-        let found: [GrantCeiling]
-        do {
-            found = try await ceilings(
-                narrowing: binding,
-                analyzer: req.application.guardrailAnalyzer,
-                on: req.db,
-                logger: req.logger
-            )
-        } catch {
-            req.logger.error(
-                "Could not report the ceilings narrowing a role binding",
-                metadata: [
-                    "role": .string(binding.roleLabel),
-                    "node": .string("\(binding.node.type.rawValue)/\(binding.node.id)"),
-                    "error": .string("\(error)"),
-                ])
-            return GrantWriteResponse(ceilings: [], analysisUnavailable: "\(error)")
-        }
-        for ceiling in found {
-            req.logger.notice(
-                "Granted a role binding a guardrail narrows",
-                metadata: [
-                    "guardrail": .string(ceiling.guardrail),
-                    "role": .string(binding.roleLabel),
-                    "node": .string("\(binding.node.type.rawValue)/\(binding.node.id)"),
-                    "ceilinged_actions": .string(ceiling.ceilingedActions.joined(separator: ", ")),
-                ])
-        }
-        return GrantWriteResponse(ceilings: found, analysisUnavailable: nil)
-    }
-
     static func report(
         for binding: ProposedBinding,
         using iam: IAMPersistence,
@@ -240,7 +207,7 @@ enum GuardrailWriteReport {
     static func ceilings(
         narrowing binding: ProposedBinding,
         analyzer: any GuardrailAnalyzer,
-        on db: any Database,
+        on db: PostgresStoreContext,
         logger: Logger
     ) async throws -> [GrantCeiling] {
         let deadline = ContinuousClock.now + analysisBudget
@@ -346,7 +313,7 @@ enum GuardrailWriteReport {
     static func shadowedBindings(
         by guardrail: IAMGuardrailSnapshot,
         analyzer: any GuardrailAnalyzer,
-        on db: any Database,
+        on db: PostgresStoreContext,
         logger: Logger
     ) async throws -> [ShadowedBinding] {
         let deadline = ContinuousClock.now + analysisBudget
@@ -534,7 +501,7 @@ enum GuardrailWriteReport {
         _ rendering: GuardrailRendering,
         to binding: ProposedBinding,
         organizationID: UUID?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Bool {
         switch binding.principalType {
         case .user:
@@ -575,12 +542,12 @@ enum GuardrailWriteReport {
         }
     }
 
-    private static func sharesMember(_ a: UUID, _ b: UUID, on db: any Database) async throws -> Bool {
+    private static func sharesMember(_ a: UUID, _ b: UUID, on db: PostgresStoreContext) async throws -> Bool {
         try await LegacyGroupSQLBridge.groupsShareMember(a, b, on: db)
     }
 
     private static func hasMemberOutside(
-        _ organizationID: UUID, of groupID: UUID, on db: any Database
+        _ organizationID: UUID, of groupID: UUID, on db: PostgresStoreContext
     ) async throws -> Bool {
         try await LegacyGroupSQLBridge.hasMemberOutsideOrganization(
             groupID: groupID, organizationID: organizationID, on: db)
@@ -746,7 +713,7 @@ enum GuardrailWriteReport {
         _ guardrail: IAMGuardrailSnapshot,
         binding: ProposedBinding,
         overlap: Overlap,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> GrantCeiling {
         let node = guardrail.node
         let path: String
@@ -831,7 +798,7 @@ enum GuardrailWriteReport {
         return reason
     }
 
-    private static func nodeName(_ node: IAMNode, on db: any Database) async throws -> String? {
+    private static func nodeName(_ node: IAMNode, on db: PostgresStoreContext) async throws -> String? {
         switch node.type {
         case .organization:
             return try await Organization.find(node.id, on: db)?.name

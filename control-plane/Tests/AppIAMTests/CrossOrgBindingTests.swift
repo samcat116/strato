@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -36,7 +35,6 @@ final class CrossOrgBindingTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(app: app)
             let homeOrg = try await builder.createOrganization(name: "XOrg Home")
@@ -45,7 +43,7 @@ final class CrossOrgBindingTests {
             let actor = try await builder.createUser(
                 username: "xorg-actor", email: "xorg-actor@example.com", displayName: "XOrg Actor")
             try await builder.addUserToOrganization(user: actor, organization: homeOrg, role: "admin")
-            try await actor.replacingCurrentOrganization(homeOrg.id).save(on: app.db)
+            try await actor.replacingCurrentOrganization(homeOrg.id).save(on: app.testPostgres)
 
             let externalUser = try await builder.createUser(
                 username: "xorg-external", email: "xorg-external@example.com", displayName: "XOrg External")
@@ -107,7 +105,7 @@ final class CrossOrgBindingTests {
             let bindings = try await LegacyRoleBindingStore.bindings(
                 principalID: fx.externalUser.id!,
                 nodeID: fx.project.id!,
-                on: app.db
+                on: app.testPostgres
             ).count
             #expect(bindings == 1)
 
@@ -167,9 +165,9 @@ final class CrossOrgBindingTests {
                 name: "no-external-grants", description: nil, effect: nil,
                 node: IAMNode(type: .organization, id: fx.homeOrg.id!),
                 actions: ["iam:grantExternal"], principalMatch: .any, resourceMatch: .any,
-                createdBy: nil, on: app.db)
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+                createdBy: nil, on: app.testPostgres)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
             try await app.test(.POST, "/api/projects/\(fx.project.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fx.actorToken)
@@ -183,7 +181,7 @@ final class CrossOrgBindingTests {
             let bindings = try await LegacyRoleBindingStore.bindings(
                 principalID: fx.externalUser.id!,
                 nodeID: fx.project.id!,
-                on: app.db
+                on: app.testPostgres
             ).count
             #expect(bindings == 0)
             // The internal grant is untouched by the ceiling.
@@ -214,7 +212,7 @@ final class CrossOrgBindingTests {
                 principalType: IAMPrincipalType.group.rawValue,
                 principalID: fx.externalGroup.id!,
                 nodeID: fx.project.id!,
-                on: app.db
+                on: app.testPostgres
             ).count
             #expect(bindings == 1)
 
@@ -263,16 +261,16 @@ final class CrossOrgBindingTests {
         try await withApp { app, fx in
             try await RoleBindingService.grant(
                 principalType: .user, principalID: fx.externalUser.id!, role: .viewer,
-                nodeType: .project, nodeID: fx.project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: fx.project.id!, createdBy: nil, on: app.testPostgres)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: fx.internalUser.id!, role: .viewer,
-                nodeType: .project, nodeID: fx.project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: fx.project.id!, createdBy: nil, on: app.testPostgres)
             try await RoleBindingService.grant(
                 principalType: .group, principalID: fx.externalGroup.id!, role: .viewer,
-                nodeType: .project, nodeID: fx.project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: fx.project.id!, createdBy: nil, on: app.testPostgres)
 
             let result = try await WhoCanService.whoCan(
-                action: "vm:read", node: IAMNode(type: .project, id: fx.project.id!), app: app, on: app.db)
+                action: "vm:read", node: IAMNode(type: .project, id: fx.project.id!), app: app, on: app.testPostgres)
 
             func entry(_ type: IAMPrincipalType, _ id: UUID) -> WhoCanEntry? {
                 result.principals.first { $0.principal.type == type && $0.principal.id == id && $0.via == nil }
@@ -309,7 +307,7 @@ final class CrossOrgBindingTests {
                 name: "XOrg Other Project", description: "d", organization: fx.otherOrg)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .viewer,
-                nodeType: .project, nodeID: otherProject.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: otherProject.id!, createdBy: nil, on: app.testPostgres)
 
             try await app.test(
                 .DELETE, "/api/organizations/\(fx.homeOrg.id!)/members/\(user.id!)"
@@ -322,7 +320,7 @@ final class CrossOrgBindingTests {
             let homeBindings = try await LegacyRoleBindingStore.bindings(
                 principalID: user.id!,
                 nodeID: fx.project.id!,
-                on: app.db
+                on: app.testPostgres
             ).count
             #expect(homeBindings == 0)
             let groupMemberships = try await app.groupsPersistence.memberships(
@@ -333,7 +331,7 @@ final class CrossOrgBindingTests {
             let otherBindings = try await LegacyRoleBindingStore.bindings(
                 principalID: user.id!,
                 nodeID: otherProject.id!,
-                on: app.db
+                on: app.testPostgres
             ).count
             #expect(otherBindings == 1)
         }
@@ -352,10 +350,10 @@ final class CrossOrgBindingTests {
                 name: "XOrg Sweep Project", description: "d", organization: fx.otherOrg)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .viewer,
-                nodeType: .project, nodeID: fx.project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: fx.project.id!, createdBy: nil, on: app.testPostgres)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .editor,
-                nodeType: .project, nodeID: otherProject.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: otherProject.id!, createdBy: nil, on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/users/\(user.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: sysadminToken)
@@ -366,7 +364,7 @@ final class CrossOrgBindingTests {
             let remaining = try await LegacyRoleBindingStore.bindings(
                 principalType: IAMPrincipalType.user.rawValue,
                 principalID: user.id!,
-                on: app.db
+                on: app.testPostgres
             ).count
             #expect(remaining == 0)
         }
@@ -384,10 +382,10 @@ final class CrossOrgBindingTests {
                 name: "XOrg Group Sweep Project", description: "d", organization: fx.otherOrg)
             try await RoleBindingService.grant(
                 principalType: .group, principalID: group.id!, role: .viewer,
-                nodeType: .project, nodeID: fx.project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: fx.project.id!, createdBy: nil, on: app.testPostgres)
             try await RoleBindingService.grant(
                 principalType: .group, principalID: group.id!, role: .viewer,
-                nodeType: .project, nodeID: otherProject.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: otherProject.id!, createdBy: nil, on: app.testPostgres)
 
             try await app.test(
                 .DELETE, "/api/organizations/\(fx.homeOrg.id!)/groups/\(group.id!)"
@@ -400,7 +398,7 @@ final class CrossOrgBindingTests {
             let remaining = try await LegacyRoleBindingStore.bindings(
                 principalType: IAMPrincipalType.group.rawValue,
                 principalID: group.id!,
-                on: app.db
+                on: app.testPostgres
             ).count
             #expect(remaining == 0)
         }

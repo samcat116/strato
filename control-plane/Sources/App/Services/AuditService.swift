@@ -171,7 +171,7 @@ private let auditJSONEncoder: JSONEncoder = {
     return encoder
 }()
 
-// MARK: - Database backend
+// MARK: - PostgresStoreContext backend
 
 /// Persists audit-event rows — the default backend, and the one the
 /// query API (`/api/audit-events`) reads from.

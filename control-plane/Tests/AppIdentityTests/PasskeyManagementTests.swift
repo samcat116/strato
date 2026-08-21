@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -45,7 +44,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     private func makeUser(
         username: String,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> User {
         let user = User(
             username: username,
@@ -62,7 +61,7 @@ final class PasskeyManagementTests: BaseTestCase {
     func testListScopedToCaller() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app)
-            let other = try await makeUser(username: "other", on: app.db)
+            let other = try await makeUser(username: "other", on: app.testPostgres)
             try await makeCredential(for: testUser, name: "Mine", on: app)
             try await makeCredential(for: other, name: "Theirs", on: app)
 
@@ -129,7 +128,7 @@ final class PasskeyManagementTests: BaseTestCase {
     func testRenameOtherUsersPasskey() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app)
-            let other = try await makeUser(username: "other", on: app.db)
+            let other = try await makeUser(username: "other", on: app.testPostgres)
             let credential = try await makeCredential(for: other, on: app)
             let cookies = try await sessionCookie(for: testUser, on: app)
 
@@ -192,7 +191,7 @@ final class PasskeyManagementTests: BaseTestCase {
                 encryptedClientSecret: "secret",
                 issuer: "https://idp.example.com"
             ))
-            try await testUser.linkedToOIDCProvider(provider.id, subject: "sub-1").save(on: app.db)
+            try await testUser.linkedToOIDCProvider(provider.id, subject: "sub-1").save(on: app.testPostgres)
 
             let credential = try await makeCredential(for: testUser, on: app)
             let cookies = try await sessionCookie(for: testUser, on: app)
@@ -278,7 +277,7 @@ final class PasskeyManagementTests: BaseTestCase {
     func testAddBeginRejectsDisabledAccount() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app)
-            try await testUser.replacing(disabledAt: .some(Date())).save(on: app.db)
+            try await testUser.replacing(disabledAt: .some(Date())).save(on: app.testPostgres)
             let cookies = try await sessionCookie(for: testUser, on: app)
 
             try await app.test(.POST, "/api/users/me/passkeys/begin") { req in
@@ -329,7 +328,7 @@ final class PasskeyManagementTests: BaseTestCase {
     func testUsernameConflict() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app)
-            _ = try await makeUser(username: "taken", on: app.db)
+            _ = try await makeUser(username: "taken", on: app.testPostgres)
 
             try await app.test(.PUT, "/api/users/\(testUser.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -358,7 +357,7 @@ final class PasskeyManagementTests: BaseTestCase {
     func testSCIMProvisionedUpdateForbidden() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app)
-            testUser = try await testUser.replacing(scimProvisioned: true).persisted(on: app.db)
+            testUser = try await testUser.replacing(scimProvisioned: true).persisted(on: app.testPostgres)
 
             try await app.test(.PUT, "/api/users/\(testUser.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)

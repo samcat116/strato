@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -90,24 +89,24 @@ protocol SnapshotArtifactResource: ConvergingResource, FinalizableResource {
     func replacingExpiration(_ expiresAt: Date?) -> Self
 
     /// Rows this agent holds, for sync assembly.
-    static func placed(onAgent agentId: String, on db: any Database) async throws -> [Self]
+    static func placed(onAgent agentId: String, on db: PostgresStoreContext) async throws -> [Self]
 
     /// Batch lookup used when one report names unrecognized artifacts. Keeping
     /// it on the persistence contract avoids exposing a generic query builder.
-    static func matching(ids: [UUID], on db: any Database) async throws -> [Self]
+    static func matching(ids: [UUID], on db: PostgresStoreContext) async throws -> [Self]
 
     /// Rows whose retention deadline has passed, for the sweep.
-    static func expired(at now: Date, on db: any Database) async throws -> [Self]
+    static func expired(at now: Date, on db: PostgresStoreContext) async throws -> [Self]
 
     /// Rows whose deletion has been accepted, for the orphaned-terminating
     /// backstop. A protocol requirement for `overdueForConvergence`'s reason:
     /// Fluent filters on the model's own field *projection*, which a protocol
     /// cannot name.
-    static func terminating(on db: any Database) async throws -> [Self]
+    static func terminating(on db: PostgresStoreContext) async throws -> [Self]
 }
 
 extension SnapshotArtifactResource {
-    func placementAgentIDs(on db: any Database) async throws -> [String] {
+    func placementAgentIDs(on db: PostgresStoreContext) async throws -> [String] {
         agentId.map { [$0] } ?? []
     }
     var isTerminating: Bool { desiredStatus == .absent }

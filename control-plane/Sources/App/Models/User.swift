@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -103,39 +102,39 @@ struct User: Content, Equatable, Sendable {
     }
 
     @discardableResult
-    func persisted(on db: any Database) async throws -> Self {
+    func persisted(on db: PostgresStoreContext) async throws -> Self {
         try await LegacyUserStore.upsert(self, on: db)
     }
 
-    func save(on db: any Database) async throws {
+    func save(on db: PostgresStoreContext) async throws {
         _ = try await persisted(on: db)
     }
 
-    func delete(on db: any Database) async throws {
+    func delete(on db: PostgresStoreContext) async throws {
         guard let id else { return }
         _ = try await LegacyUserStore.delete(id: id, on: db)
     }
 
-    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+    static func find(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await LegacyUserStore.user(id: id, on: db)
     }
 
-    static func all(on db: any Database) async throws -> [Self] {
+    static func all(on db: PostgresStoreContext) async throws -> [Self] {
         try await LegacyUserStore.users(on: db)
     }
 
-    static func count(on db: any Database) async throws -> Int {
+    static func count(on db: PostgresStoreContext) async throws -> Int {
         try await LegacyUserStore.count(on: db)
     }
 
-    static func isFirstUser(on database: any Database) async throws -> Bool {
+    static func isFirstUser(on database: PostgresStoreContext) async throws -> Bool {
         try await count(on: database) == 0
     }
 
     static func findOIDCUser(
         subject: String,
         providerID: UUID,
-        on database: any Database
+        on database: PostgresStoreContext
     ) async throws -> User? {
         try await LegacyUserStore.users(
             oidcProviderID: providerID,

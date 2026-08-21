@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -132,7 +131,7 @@ final class RegistrationPolicyTests: BaseTestCase {
 
             try await register(app, username: "neo", expect: .forbidden)
 
-            let created = try await LegacyUserStore.users(username: "neo", on: app.db).first
+            let created = try await LegacyUserStore.users(username: "neo", on: app.testPostgres).first
             #expect(created == nil)
         }
     }
@@ -146,12 +145,12 @@ final class RegistrationPolicyTests: BaseTestCase {
 
             try await register(app, username: "first", expect: .ok)
 
-            let created = try await LegacyUserStore.users(username: "first", on: app.db).first
+            let created = try await LegacyUserStore.users(username: "first", on: app.testPostgres).first
             #expect(created?.isSystemAdmin == true)
 
             // ...and the door closes again behind it.
             try await register(app, username: "second", expect: .forbidden)
-            let second = try await LegacyUserStore.users(username: "second", on: app.db).first
+            let second = try await LegacyUserStore.users(username: "second", on: app.testPostgres).first
             #expect(second == nil)
         }
     }
@@ -164,7 +163,7 @@ final class RegistrationPolicyTests: BaseTestCase {
 
             try await register(app, username: "neo", expect: .ok)
 
-            let created = try await LegacyUserStore.users(username: "neo", on: app.db).first
+            let created = try await LegacyUserStore.users(username: "neo", on: app.testPostgres).first
             #expect(created != nil)
             // Not the first account, so no free system-admin bit.
             #expect(created?.isSystemAdmin == false)
@@ -193,7 +192,7 @@ final class RegistrationPolicyTests: BaseTestCase {
             #expect(statuses.filter { $0 == .ok }.count == 1)
             #expect(statuses.filter { $0 == .forbidden }.count == attempts - 1)
 
-            let users = try await User.all(on: app.db)
+            let users = try await User.all(on: app.testPostgres)
             #expect(users.count == 1)
             #expect(users.first?.isSystemAdmin == true)
         }

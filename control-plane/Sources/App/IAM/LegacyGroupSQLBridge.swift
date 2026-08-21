@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 
 /// Temporary transaction-preserving bridge for hierarchy/IAM code that still
 /// owns Fluent transactions while group persistence moves to PostgresNIO.
@@ -34,40 +33,40 @@ enum LegacyGroupSQLBridge {
         case requiresSQLDatabase
     }
 
-    static func group(id: UUID, on db: any Database) async throws -> GroupIdentity? {
+    static func group(id: UUID, on db: PostgresStoreContext) async throws -> GroupIdentity? {
         try await sql(db).raw(
             "SELECT id, organization_id FROM groups WHERE id = \(bind: id)"
         ).first(decoding: GroupIdentity.self)
     }
 
-    static func groups(ids: [UUID], on db: any Database) async throws -> [GroupIdentity] {
+    static func groups(ids: [UUID], on db: PostgresStoreContext) async throws -> [GroupIdentity] {
         guard !ids.isEmpty else { return [] }
         return try await sql(db).raw(
             "SELECT id, organization_id FROM groups WHERE id = ANY(\(bind: ids))"
         ).all(decoding: GroupIdentity.self)
     }
 
-    static func groupIDs(organizationID: UUID, on db: any Database) async throws -> [UUID] {
+    static func groupIDs(organizationID: UUID, on db: PostgresStoreContext) async throws -> [UUID] {
         try await sql(db).raw(
             "SELECT id FROM groups WHERE organization_id = \(bind: organizationID)"
         ).all(decoding: IDRow.self).map(\.id)
     }
 
-    static func memberships(userIDs: [UUID], on db: any Database) async throws -> [Membership] {
+    static func memberships(userIDs: [UUID], on db: PostgresStoreContext) async throws -> [Membership] {
         guard !userIDs.isEmpty else { return [] }
         return try await sql(db).raw(
             "SELECT user_id, group_id FROM user_groups WHERE user_id = ANY(\(bind: userIDs))"
         ).all(decoding: Membership.self)
     }
 
-    static func memberships(groupIDs: [UUID], on db: any Database) async throws -> [Membership] {
+    static func memberships(groupIDs: [UUID], on db: PostgresStoreContext) async throws -> [Membership] {
         guard !groupIDs.isEmpty else { return [] }
         return try await sql(db).raw(
             "SELECT user_id, group_id FROM user_groups WHERE group_id = ANY(\(bind: groupIDs))"
         ).all(decoding: Membership.self)
     }
 
-    static func hasMember(userID: UUID, groupID: UUID, on db: any Database) async throws -> Bool {
+    static func hasMember(userID: UUID, groupID: UUID, on db: PostgresStoreContext) async throws -> Bool {
         try await sql(db).raw(
             """
             SELECT EXISTS(
@@ -78,7 +77,7 @@ enum LegacyGroupSQLBridge {
         ).first(decoding: BoolRow.self)?.value ?? false
     }
 
-    static func groupsShareMember(_ first: UUID, _ second: UUID, on db: any Database) async throws -> Bool {
+    static func groupsShareMember(_ first: UUID, _ second: UUID, on db: PostgresStoreContext) async throws -> Bool {
         try await sql(db).raw(
             """
             SELECT EXISTS(
@@ -94,7 +93,7 @@ enum LegacyGroupSQLBridge {
     }
 
     static func hasMemberOutsideOrganization(
-        groupID: UUID, organizationID: UUID, on db: any Database
+        groupID: UUID, organizationID: UUID, on db: PostgresStoreContext
     ) async throws -> Bool {
         try await sql(db).raw(
             """
@@ -115,7 +114,7 @@ enum LegacyGroupSQLBridge {
     /// Must be called on the transaction that removes the organization
     /// membership, so group-derived grants cannot survive a partial commit.
     static func removeMemberships(
-        userID: UUID, inOrganization organizationID: UUID, on db: any Database
+        userID: UUID, inOrganization organizationID: UUID, on db: PostgresStoreContext
     ) async throws {
         try await sql(db).raw(
             """
@@ -136,8 +135,8 @@ enum LegacyGroupSQLBridge {
         let value: Bool
     }
 
-    private static func sql(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else { throw Error.requiresSQLDatabase }
+    private static func sql(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else { throw Error.requiresSQLDatabase }
         return sql
     }
 }

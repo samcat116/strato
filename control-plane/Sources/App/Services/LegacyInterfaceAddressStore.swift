@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -26,11 +25,11 @@ enum LegacyInterfaceAddressStore {
         interfaceIDs: [UUID]? = nil,
         logicalNetworkID: UUID? = nil,
         family: IPFamily? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [InterfaceAddressSnapshot] {
         if let interfaceIDs, interfaceIDs.isEmpty { return [] }
         let sql = try requireSQL(db)
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT \(unsafeRaw: columns) FROM \(unsafeRaw: addressTable(for: kind)) WHERE TRUE"
         if let interfaceIDs { query += " AND interface_id = ANY(\(bind: interfaceIDs))" }
         if let logicalNetworkID { query += " AND logical_network_id = \(bind: logicalNetworkID)" }
@@ -42,7 +41,7 @@ enum LegacyInterfaceAddressStore {
     static func address(
         kind: InterfaceWorkloadKind,
         id: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> InterfaceAddressSnapshot? {
         try await requireSQL(db).raw(
             """
@@ -64,7 +63,7 @@ enum LegacyInterfaceAddressStore {
         address: String,
         prefixLength: Int,
         gateway: String? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> InterfaceAddressSnapshot {
         guard let row = try await requireSQL(db).raw(
             """
@@ -89,12 +88,12 @@ enum LegacyInterfaceAddressStore {
         interfaceIDs: [UUID]? = nil,
         logicalNetworkID: UUID? = nil,
         family: IPFamily? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Int {
         if let interfaceIDs, interfaceIDs.isEmpty { return 0 }
         struct Count: Decodable { let count: Int }
         let sql = try requireSQL(db)
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT count(*)::bigint AS count FROM \(unsafeRaw: addressTable(for: kind)) WHERE TRUE"
         if let interfaceIDs { query += " AND interface_id = ANY(\(bind: interfaceIDs))" }
         if let logicalNetworkID { query += " AND logical_network_id = \(bind: logicalNetworkID)" }
@@ -105,7 +104,7 @@ enum LegacyInterfaceAddressStore {
     static func addressesByInterface(
         kind: InterfaceWorkloadKind,
         interfaceIDs: [UUID],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [UUID: [InterfaceAddressSnapshot]] {
         Dictionary(grouping: try await addresses(
             kind: kind, interfaceIDs: interfaceIDs, on: db), by: \.interfaceID)
@@ -113,7 +112,7 @@ enum LegacyInterfaceAddressStore {
 
     static func loading(
         _ interfaces: [VMNetworkInterface],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [VMNetworkInterface] {
         let byInterface = try await addressesByInterface(
             kind: .vm, interfaceIDs: interfaces.compactMap(\.id), on: db)
@@ -124,7 +123,7 @@ enum LegacyInterfaceAddressStore {
 
     static func loading(
         _ interfaces: [SandboxNetworkInterface],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [SandboxNetworkInterface] {
         let byInterface = try await addressesByInterface(
             kind: .sandbox, interfaceIDs: interfaces.compactMap(\.id), on: db)
@@ -177,8 +176,8 @@ enum LegacyInterfaceAddressStore {
         }
     }
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Interface addresses require PostgreSQL")
         }
         return sql

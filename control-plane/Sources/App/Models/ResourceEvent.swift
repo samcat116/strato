@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -123,7 +122,7 @@ extension ResourceEvent {
     /// resolve this *after* applying it: the generation it captures is the one
     /// the mutation just set.
     static func scope(
-        of kind: OperationResourceKind, id: UUID, on db: any Database
+        of kind: OperationResourceKind, id: UUID, on db: PostgresStoreContext
     ) async throws -> Scope {
         var scope = Scope()
         switch kind {
@@ -178,7 +177,7 @@ extension ResourceEvent {
     /// a single `Int64`. Only `generation` may be read off the returned model
     /// — no other property was selected.
     static func generation(
-        of kind: OperationResourceKind, id: UUID, on db: any Database
+        of kind: OperationResourceKind, id: UUID, on db: PostgresStoreContext
     ) async throws -> Int64? {
         switch kind {
         case .virtualMachine:
@@ -218,7 +217,7 @@ extension ResourceEvent {
         actor: MutationActor,
         phase: ResourceEventPhase = .requested,
         scope: Scope? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> ResourceEvent {
         let resolved: Scope
         if let scope {
@@ -227,7 +226,7 @@ extension ResourceEvent {
             resolved = try await Self.scope(of: resourceKind, id: resourceID, on: db)
         }
 
-        guard let sql = db as? any SQLDatabase else {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Resource events require a SQL database")
         }
         let rows = try await sql.raw(
@@ -263,7 +262,7 @@ extension ResourceEvent {
         _ phase: ResourceEventPhase,
         resourceKind: OperationResourceKind,
         resourceID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> ResourceEvent? {
         try await matching(
             resourceKind: resourceKind,
@@ -274,8 +273,8 @@ extension ResourceEvent {
         ).first
     }
 
-    static func find(_ id: UUID, on db: any Database) async throws -> ResourceEvent? {
-        guard let sql = db as? any SQLDatabase else {
+    static func find(_ id: UUID, on db: PostgresStoreContext) async throws -> ResourceEvent? {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Resource events require a SQL database")
         }
         return try await sql.raw(
@@ -292,12 +291,12 @@ extension ResourceEvent {
         phase: ResourceEventPhase? = nil,
         ascending: Bool = false,
         limit: Int? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [ResourceEvent] {
-        guard let sql = db as? any SQLDatabase else {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Resource events require a SQL database")
         }
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT \(unsafeRaw: eventColumns) FROM resource_events WHERE TRUE"
         if let resourceKind {
             query += " AND resource_kind = \(bind: resourceKind.rawValue)"
@@ -322,13 +321,13 @@ extension ResourceEvent {
 
     static func count(
         resourceKind: OperationResourceKind? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Int {
         struct CountRow: Decodable { let count: Int }
-        guard let sql = db as? any SQLDatabase else {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Resource events require a SQL database")
         }
-        var query: SQLQueryString = "SELECT COUNT(*)::bigint AS count FROM resource_events WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT COUNT(*)::bigint AS count FROM resource_events WHERE TRUE"
         if let resourceKind {
             query += " AND resource_kind = \(bind: resourceKind.rawValue)"
         }

@@ -1,7 +1,5 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
-import SQLKit
 import Vapor
 
 /// Immutable workload-registration state for operations that still have to
@@ -27,7 +25,7 @@ struct LegacyWorkloadRegistrationRecord: Decodable, Sendable {
 enum LegacyWorkloadRegistrationStore {
     static func registration(
         id: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LegacyWorkloadRegistrationRecord? {
         try await requireSQL(db).raw(
             """
@@ -40,7 +38,7 @@ enum LegacyWorkloadRegistrationStore {
 
     static func registration(
         spiffeID: String,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LegacyWorkloadRegistrationRecord? {
         try await requireSQL(db).raw(
             """
@@ -53,7 +51,7 @@ enum LegacyWorkloadRegistrationStore {
 
     static func registrations(
         vmIDs: [UUID],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [LegacyWorkloadRegistrationRecord] {
         guard !vmIDs.isEmpty else { return [] }
         return try await requireSQL(db).raw(
@@ -66,7 +64,7 @@ enum LegacyWorkloadRegistrationStore {
         ).all(decoding: LegacyWorkloadRegistrationRecord.self)
     }
 
-    static func all(on db: any Database) async throws -> [LegacyWorkloadRegistrationRecord] {
+    static func all(on db: PostgresStoreContext) async throws -> [LegacyWorkloadRegistrationRecord] {
         try await requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM workload_registrations ORDER BY spiffe_id, id"
         ).all(decoding: LegacyWorkloadRegistrationRecord.self)
@@ -75,7 +73,7 @@ enum LegacyWorkloadRegistrationStore {
     @discardableResult
     static func insert(
         _ write: WorkloadRegistrationWrite,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LegacyWorkloadRegistrationRecord {
         guard let row = try await requireSQL(db).raw(
             """
@@ -97,13 +95,13 @@ enum LegacyWorkloadRegistrationStore {
         return row
     }
 
-    static func delete(id: UUID, on db: any Database) async throws {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws {
         try await requireSQL(db).raw(
             "DELETE FROM workload_registrations WHERE id = \(bind: id)"
         ).run()
     }
 
-    static func deleteAgent(spiffeID: String, on db: any Database) async throws {
+    static func deleteAgent(spiffeID: String, on db: PostgresStoreContext) async throws {
         try await requireSQL(db).raw(
             """
             DELETE FROM workload_registrations
@@ -117,7 +115,7 @@ enum LegacyWorkloadRegistrationStore {
         organizationIDs: [UUID] = [],
         serviceAccountIDs: [UUID] = [],
         kind: WorkloadRegistrationKind? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [UUID] {
         struct Identifier: Decodable { let id: UUID }
         guard !vmIDs.isEmpty || !organizationIDs.isEmpty || !serviceAccountIDs.isEmpty else {
@@ -153,8 +151,8 @@ enum LegacyWorkloadRegistrationStore {
         vm_id AS "vmID"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Workload registry requires PostgreSQL")
         }
         return sql

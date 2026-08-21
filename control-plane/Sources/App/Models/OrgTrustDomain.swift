@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 /// Lifecycle phase of one organization's SPIRE instance.
@@ -158,21 +157,21 @@ enum OrgTrustDomainStore {
         deleted_at AS "deletedAt"
         """
 
-    static func find(organizationID: UUID, on db: any Database) async throws -> OrgTrustDomainRecord? {
+    static func find(organizationID: UUID, on db: PostgresStoreContext) async throws -> OrgTrustDomainRecord? {
         let sql = try sqlDatabase(db)
         return try await sql.raw(
             "SELECT \(unsafeRaw: columns) FROM org_trust_domains WHERE organization_id = \(bind: organizationID)"
         ).first(decoding: OrgTrustDomainRecord.self)
     }
 
-    static func find(trustDomain: String, on db: any Database) async throws -> OrgTrustDomainRecord? {
+    static func find(trustDomain: String, on db: PostgresStoreContext) async throws -> OrgTrustDomainRecord? {
         let sql = try sqlDatabase(db)
         return try await sql.raw(
             "SELECT \(unsafeRaw: columns) FROM org_trust_domains WHERE trust_domain = \(bind: trustDomain)"
         ).first(decoding: OrgTrustDomainRecord.self)
     }
 
-    static func active(on db: any Database) async throws -> [OrgTrustDomainRecord] {
+    static func active(on db: PostgresStoreContext) async throws -> [OrgTrustDomainRecord] {
         let sql = try sqlDatabase(db)
         return try await sql.raw(
             "SELECT \(unsafeRaw: columns) FROM org_trust_domains WHERE phase = 'active' ORDER BY id"
@@ -180,7 +179,7 @@ enum OrgTrustDomainStore {
     }
 
     @discardableResult
-    static func insert(_ write: OrgTrustDomainWrite, on db: any Database) async throws
+    static func insert(_ write: OrgTrustDomainWrite, on db: PostgresStoreContext) async throws
         -> OrgTrustDomainRecord
     {
         let sql = try sqlDatabase(db)
@@ -192,7 +191,7 @@ enum OrgTrustDomainStore {
                 last_error, created_at, updated_at, deleted_at
             ) VALUES (
                 \(bind: write.id), \(bind: write.organizationID), \(bind: write.trustDomain),
-                \(bind: write.phase.rawValue), \(bind: write.generation),
+                \(bind: write.phase.rawValue)::org_trust_domain_phase, \(bind: write.generation),
                 \(bind: write.observedGeneration), \(bind: write.serverAddress),
                 \(bind: write.bundleEndpointURL), \(bind: write.nodeAddress),
                 \(bind: write.orgBundlePEM), \(bind: write.lastError),
@@ -220,13 +219,13 @@ enum OrgTrustDomainStore {
         orgBundlePEM: String?,
         lastError: String?,
         deletedAt: Date?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> OrgTrustDomainRecord? {
         let sql = try sqlDatabase(db)
         return try await sql.raw(
             """
             UPDATE org_trust_domains
-            SET phase = \(bind: phase.rawValue),
+            SET phase = \(bind: phase.rawValue)::org_trust_domain_phase,
                 generation = \(bind: generation),
                 observed_generation = \(bind: observedGeneration),
                 server_address = \(bind: serverAddress),
@@ -244,7 +243,7 @@ enum OrgTrustDomainStore {
 
     /// Atomically records teardown intent and advances its convergence key.
     @discardableResult
-    static func markForTeardown(organizationID: UUID, on db: any Database) async throws
+    static func markForTeardown(organizationID: UUID, on db: PostgresStoreContext) async throws
         -> OrgTrustDomainRecord?
     {
         let sql = try sqlDatabase(db)
@@ -259,7 +258,7 @@ enum OrgTrustDomainStore {
         ).first(decoding: OrgTrustDomainRecord.self)
     }
 
-    static func count(organizationID: UUID, on db: any Database) async throws -> Int {
+    static func count(organizationID: UUID, on db: PostgresStoreContext) async throws -> Int {
         struct CountRow: Decodable { let count: Int }
         let sql = try sqlDatabase(db)
         return try await sql.raw(
@@ -267,8 +266,8 @@ enum OrgTrustDomainStore {
         ).first(decoding: CountRow.self)?.count ?? 0
     }
 
-    private static func sqlDatabase(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else { throw Error.unsupportedDatabase }
+    private static func sqlDatabase(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else { throw Error.unsupportedDatabase }
         return sql
     }
 }

@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -69,7 +68,7 @@ enum GuardrailStore {
         resourceMatch: GuardrailResourceMatch,
         enabled: Bool = true,
         createdBy: UUID?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> IAMGuardrailSnapshot {
         try validateEffect(effect)
         guard attachableNodeTypes.contains(node.type) else {
@@ -115,7 +114,7 @@ enum GuardrailStore {
         )
         do {
             return try await LegacyGuardrailStore.insert(guardrail, on: db)
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw GuardrailError.duplicateName(name)
         }
     }
@@ -201,7 +200,7 @@ enum GuardrailStore {
         enabled: Bool = true,
         createdBy: UUID?,
         engine: any CedarEngine,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> IAMGuardrailSnapshot {
         guard attachableNodeTypes.contains(node.type) else {
             throw GuardrailError.unattachableNode(node.type.rawValue)
@@ -229,7 +228,7 @@ enum GuardrailStore {
         )
         do {
             return try await LegacyGuardrailStore.insert(guardrail, on: db)
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw GuardrailError.duplicateName(name)
         }
     }
@@ -326,7 +325,7 @@ enum GuardrailStore {
         cedarText: String?,
         enabled: Bool?,
         engine: any CedarEngine,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> IAMGuardrailSnapshot {
         var updatedDescription = guardrail.description
         var updatedActions = guardrail.actions
@@ -417,7 +416,7 @@ enum GuardrailStore {
                 throw Abort(.notFound, reason: "Guardrail not found")
             }
             return saved
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw GuardrailError.duplicateName(guardrail.name)
         }
     }
@@ -543,7 +542,7 @@ enum GuardrailStore {
     /// Only matcher-built rows can be NULL here — an authored row always
     /// carries the text it was written with.
     @discardableResult
-    static func backfillCedarText(on db: any Database, logger: Logger) async throws -> Int {
+    static func backfillCedarText(on db: PostgresStoreContext, logger: Logger) async throws -> Int {
         let rows = try await LegacyGuardrailStore.missingCedarText(on: db)
         guard !rows.isEmpty else { return 0 }
 
@@ -574,7 +573,6 @@ enum GuardrailStore {
     @discardableResult
     static func backfillCedarText(
         using iam: IAMPersistence,
-        hierarchyDB: any Database,
         logger: Logger
     ) async throws -> Int {
         let rows = try await iam.guardrailsMissingCedarText()
@@ -582,7 +580,7 @@ enum GuardrailStore {
 
         var filled = 0
         for row in rows {
-            guard let text = try await GuardrailRendering.cedarText(for: row, on: hierarchyDB) else {
+            guard let text = try await GuardrailRendering.cedarText(for: row, using: iam) else {
                 continue
             }
             if try await iam.backfillGuardrailCedarText(id: row.id, cedarText: text) {
@@ -603,7 +601,7 @@ enum GuardrailStore {
     /// admin of that node manages.
     static func attached(
         to node: IAMNode,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [IAMGuardrailSnapshot] {
         try await LegacyGuardrailStore.attached(to: node, on: db)
     }
@@ -625,7 +623,7 @@ enum GuardrailStore {
     /// conjunction of the whole chain.
     static func effective(
         at node: IAMNode,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [IAMGuardrailSnapshot] {
         let chain = try await IAMResourceTree.ancestors(of: node, on: db)
         return try await effective(along: chain, on: db)
@@ -634,7 +632,7 @@ enum GuardrailStore {
     /// `effective(at:)` for a chain the caller already walked.
     static func effective(
         along chain: [IAMNode],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [IAMGuardrailSnapshot] {
         try await LegacyGuardrailStore.enabled(along: chain, on: db)
     }
@@ -660,7 +658,7 @@ enum GuardrailStore {
         principalType: IAMPrincipalType,
         principalID: UUID,
         node: IAMNode,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [IAMGuardrailSnapshot] {
         let resolution = try await IAMResourceTree.resolve(node, on: db)
         let chain = resolution.chain
@@ -705,9 +703,9 @@ enum GuardrailStore {
         principalID: UUID,
         node: IAMNode,
         using iam: IAMPersistence,
-        hierarchyDB: any Database
+        groups: GroupsPersistence
     ) async throws -> [IAMGuardrailSnapshot] {
-        let resolution = try await IAMResourceTree.resolve(node, on: hierarchyDB)
+        let resolution = try await IAMResourceTree.resolve(node, using: iam)
         let chain = resolution.chain
         let candidates = try await effective(along: chain, using: iam)
         guard !candidates.isEmpty else { return [] }
@@ -725,7 +723,8 @@ enum GuardrailStore {
                     principalType: principalType,
                     principalID: principalID,
                     organizationID: organizationID,
-                    on: hierarchyDB
+                    using: iam,
+                    groups: groups
                 )
             else { continue }
             matched.append(guardrail)

@@ -1,6 +1,5 @@
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import AppTestSupport
 @testable import App
@@ -14,7 +13,6 @@ final class OrganizationalUnitTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             // Create test user and organization
             let testUser = User(
@@ -23,20 +21,20 @@ final class OrganizationalUnitTests {
                 displayName: "Test User",
                 isSystemAdmin: false
             )
-            try await testUser.save(on: app.db)
+            try await testUser.save(on: app.testPostgres)
 
             let testOrganization = Organization(
                 name: "Test Organization",
                 description: "Test organization for unit tests"
             )
-            try await testOrganization.save(on: app.db)
+            try await testOrganization.save(on: app.testPostgres)
 
             // Add user to organization as admin
             _ = try await OrganizationMembershipStore.insert(
                 userID: testUser.id!,
                 organizationID: testOrganization.id!,
                 roleID: IAMRole.admin.seededID,
-                on: app.db
+                on: app.testPostgres
             )
 
             // The admin role binding the API/backfill would have written
@@ -44,7 +42,7 @@ final class OrganizationalUnitTests {
             // answers from `role_bindings`.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: testUser.id!, role: .admin,
-                nodeType: .organization, nodeID: testOrganization.id!, createdBy: nil, on: app.db)
+                nodeType: .organization, nodeID: testOrganization.id!, createdBy: nil, on: app.testPostgres)
 
             let authToken = try await testUser.generateAPIKey(on: app)
 
@@ -93,13 +91,13 @@ final class OrganizationalUnitTests {
                 path: "",
                 depth: 0
             )
-            try await parentOU.save(on: app.db)
+            try await parentOU.save(on: app.testPostgres)
             parentOU = OrganizationalUnit(
                 id: parentOU.id, name: parentOU.name, description: parentOU.description,
                 organizationID: parentOU.organizationID, parentOUID: parentOU.parentOUID,
-                path: try await parentOU.buildPath(on: app.db), depth: parentOU.depth,
+                path: try await parentOU.buildPath(on: app.testPostgres), depth: parentOU.depth,
                 createdAt: parentOU.createdAt, updatedAt: parentOU.updatedAt)
-            try await parentOU.save(on: app.db)
+            try await parentOU.save(on: app.testPostgres)
 
             // Create nested OU
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous") { req in
@@ -132,7 +130,7 @@ final class OrganizationalUnitTests {
                 path: "",
                 depth: 0
             )
-            try await firstOU.save(on: app.db)
+            try await firstOU.save(on: app.testPostgres)
 
             // Try to create second OU with same name
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous") { req in
@@ -161,7 +159,7 @@ final class OrganizationalUnitTests {
                 path: "",
                 depth: 0
             )
-            try await ou1.save(on: app.db)
+            try await ou1.save(on: app.testPostgres)
 
             let ou2 = OrganizationalUnit(
                 name: "Sales",
@@ -170,7 +168,7 @@ final class OrganizationalUnitTests {
                 path: "",
                 depth: 0
             )
-            try await ou2.save(on: app.db)
+            try await ou2.save(on: app.testPostgres)
 
             // Create nested OU (should not appear in top-level list)
             let nestedOU = OrganizationalUnit(
@@ -181,7 +179,7 @@ final class OrganizationalUnitTests {
                 path: "",
                 depth: 1
             )
-            try await nestedOU.save(on: app.db)
+            try await nestedOU.save(on: app.testPostgres)
 
             try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/ous") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -210,9 +208,9 @@ final class OrganizationalUnitTests {
                 path: "",
                 depth: 0
             )
-            try await rootOU.save(on: app.db)
-            rootOU = rootOU.replacingPath(try await rootOU.buildPath(on: app.db))
-            try await rootOU.save(on: app.db)
+            try await rootOU.save(on: app.testPostgres)
+            rootOU = rootOU.replacingPath(try await rootOU.buildPath(on: app.testPostgres))
+            try await rootOU.save(on: app.testPostgres)
 
             var childOU1 = OrganizationalUnit(
                 name: "Backend",
@@ -222,9 +220,9 @@ final class OrganizationalUnitTests {
                 path: "",
                 depth: 1
             )
-            try await childOU1.save(on: app.db)
-            childOU1 = childOU1.replacingPath(try await childOU1.buildPath(on: app.db))
-            try await childOU1.save(on: app.db)
+            try await childOU1.save(on: app.testPostgres)
+            childOU1 = childOU1.replacingPath(try await childOU1.buildPath(on: app.testPostgres))
+            try await childOU1.save(on: app.testPostgres)
 
             var childOU2 = OrganizationalUnit(
                 name: "Frontend",
@@ -234,9 +232,9 @@ final class OrganizationalUnitTests {
                 path: "",
                 depth: 1
             )
-            try await childOU2.save(on: app.db)
-            childOU2 = childOU2.replacingPath(try await childOU2.buildPath(on: app.db))
-            try await childOU2.save(on: app.db)
+            try await childOU2.save(on: app.testPostgres)
+            childOU2 = childOU2.replacingPath(try await childOU2.buildPath(on: app.testPostgres))
+            try await childOU2.save(on: app.testPostgres)
 
             try await app.test(.GET, "/api/organizations/\(testOrganization.id!)/ous/\(rootOU.id!)/tree") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -263,9 +261,9 @@ final class OrganizationalUnitTests {
                 path: "",
                 depth: 0
             )
-            try await ou1.save(on: app.db)
-            ou1 = ou1.replacingPath(try await ou1.buildPath(on: app.db))
-            try await ou1.save(on: app.db)
+            try await ou1.save(on: app.testPostgres)
+            ou1 = ou1.replacingPath(try await ou1.buildPath(on: app.testPostgres))
+            try await ou1.save(on: app.testPostgres)
 
             var ou2 = OrganizationalUnit(
                 name: "Department B",
@@ -274,9 +272,9 @@ final class OrganizationalUnitTests {
                 path: "",
                 depth: 0
             )
-            try await ou2.save(on: app.db)
-            ou2 = ou2.replacingPath(try await ou2.buildPath(on: app.db))
-            try await ou2.save(on: app.db)
+            try await ou2.save(on: app.testPostgres)
+            ou2 = ou2.replacingPath(try await ou2.buildPath(on: app.testPostgres))
+            try await ou2.save(on: app.testPostgres)
 
             var childOU = OrganizationalUnit(
                 name: "Team X",
@@ -286,13 +284,13 @@ final class OrganizationalUnitTests {
                 path: "",
                 depth: 1
             )
-            try await childOU.save(on: app.db)
+            try await childOU.save(on: app.testPostgres)
             childOU = OrganizationalUnit(
                 id: childOU.id, name: childOU.name, description: childOU.description,
                 organizationID: childOU.organizationID, parentOUID: childOU.parentOUID,
-                path: try await childOU.buildPath(on: app.db), depth: childOU.depth,
+                path: try await childOU.buildPath(on: app.testPostgres), depth: childOU.depth,
                 createdAt: childOU.createdAt, updatedAt: childOU.updatedAt)
-            try await childOU.save(on: app.db)
+            try await childOU.save(on: app.testPostgres)
 
             // Move childOU from ou1 to ou2
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous/\(childOU.id!)/move") { req in
@@ -314,7 +312,7 @@ final class OrganizationalUnitTests {
     @Test("Move OU rewrites the paths of descendant projects")
     func testMoveOURewritesProjectPaths() async throws {
         try await withOUTestApp { app, testUser, testOrganization, authToken in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
 
             // engineering > platform > deep, with a project on `platform` and one
             // on `deep`, then move `platform` under `research` (issue #871).
@@ -339,10 +337,10 @@ final class OrganizationalUnitTests {
                 #expect(res.status == .ok)
             }
 
-            let movedPlatform = try #require(try await OrganizationalUnit.find(platform.id!, on: app.db))
-            let movedDeep = try #require(try await OrganizationalUnit.find(deep.id!, on: app.db))
-            let movedDirect = try #require(try await Project.find(direct.id!, on: app.db))
-            let movedInfra = try #require(try await Project.find(infra.id!, on: app.db))
+            let movedPlatform = try #require(try await OrganizationalUnit.find(platform.id!, on: app.testPostgres))
+            let movedDeep = try #require(try await OrganizationalUnit.find(deep.id!, on: app.testPostgres))
+            let movedDirect = try #require(try await Project.find(direct.id!, on: app.testPostgres))
+            let movedInfra = try #require(try await Project.find(infra.id!, on: app.testPostgres))
 
             // Every project path extends its parent folder's, and nothing below
             // the moved subtree still names the folder it left.
@@ -355,7 +353,7 @@ final class OrganizationalUnitTests {
             #expect(movedDeep.depth == 2)
 
             // ...and the validator agrees the tree is consistent afterwards.
-            #expect(try await HierarchyMaintenanceService.findHierarchyIssues(on: app.db).isEmpty)
+            #expect(try await HierarchyMaintenanceService.findHierarchyIssues(on: app.testPostgres).isEmpty)
 
             // Move it again, this time to the top level: the depth shift is what
             // the descendants' rewrite derives rather than re-walking for.
@@ -366,13 +364,13 @@ final class OrganizationalUnitTests {
                 #expect(res.status == .ok)
             }
 
-            let rootPlatform = try #require(try await OrganizationalUnit.find(platform.id!, on: app.db))
-            let rootDeep = try #require(try await OrganizationalUnit.find(deep.id!, on: app.db))
+            let rootPlatform = try #require(try await OrganizationalUnit.find(platform.id!, on: app.testPostgres))
+            let rootDeep = try #require(try await OrganizationalUnit.find(deep.id!, on: app.testPostgres))
             #expect(rootPlatform.depth == 0)
             #expect(rootDeep.depth == 1)
             #expect(rootPlatform.path == "/\(testOrganization.id!.uuidString)/\(platform.id!.uuidString)")
             #expect(rootDeep.path == "\(rootPlatform.path)/\(deep.id!.uuidString)")
-            #expect(try await HierarchyMaintenanceService.findHierarchyIssues(on: app.db).isEmpty)
+            #expect(try await HierarchyMaintenanceService.findHierarchyIssues(on: app.testPostgres).isEmpty)
         }
     }
 
@@ -388,7 +386,7 @@ final class OrganizationalUnitTests {
                 path: "",
                 depth: 0
             )
-            try await ou.save(on: app.db)
+            try await ou.save(on: app.testPostgres)
 
             try await app.test(.PUT, "/api/organizations/\(testOrganization.id!)/ous/\(ou.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -419,7 +417,7 @@ final class OrganizationalUnitTests {
                 path: "",
                 depth: 0
             )
-            try await ou.save(on: app.db)
+            try await ou.save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/organizations/\(testOrganization.id!)/ous/\(ou.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -427,7 +425,7 @@ final class OrganizationalUnitTests {
                 #expect(res.status == .noContent)
             }
 
-            let deletedOU = try await OrganizationalUnit.find(ou.id, on: app.db)
+            let deletedOU = try await OrganizationalUnit.find(ou.id, on: app.testPostgres)
             #expect(deletedOU == nil)
         }
     }
@@ -442,7 +440,7 @@ final class OrganizationalUnitTests {
                 path: "",
                 depth: 0
             )
-            try await parentOU.save(on: app.db)
+            try await parentOU.save(on: app.testPostgres)
 
             let childOU = OrganizationalUnit(
                 name: "Child",
@@ -452,7 +450,7 @@ final class OrganizationalUnitTests {
                 path: "",
                 depth: 1
             )
-            try await childOU.save(on: app.db)
+            try await childOU.save(on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/organizations/\(testOrganization.id!)/ous/\(parentOU.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)

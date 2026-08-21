@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 
@@ -23,7 +23,7 @@ enum OrgTrustDomainProvisioning {
     static func claim(
         organizationID: UUID,
         configuration: ControlPlaneConfiguration,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         guard configuration.bool(.spireOrgTrustDomainsEnabled) == true else { return }
 
@@ -70,7 +70,7 @@ enum OrgTrustDomainProvisioning {
     /// records teardown intent — leaving an orphaned row (there is no FK to
     /// `organizations`) whose CA is resurrected if the flag comes back on. No
     /// row means nothing to do, so this is a no-op in the flag-off case anyway.
-    static func markForTeardown(organizationID: UUID, on db: Database) async throws {
+    static func markForTeardown(organizationID: UUID, on db: PostgresStoreContext) async throws {
         _ = try await OrgTrustDomainStore.markForTeardown(
             organizationID: organizationID, on: db)
     }

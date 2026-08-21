@@ -68,7 +68,6 @@ struct HealthControllerTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         try await app.test(.GET, "/health/ready") { res async throws in
             #expect(res.status == .ok)
@@ -89,7 +88,6 @@ struct HealthControllerTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         try await app.test(.GET, "/health/ready") { res async throws in
             let health = try res.content.decode(HealthResponse.self)
@@ -133,7 +131,6 @@ struct HealthControllerTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         try await app.test(.GET, "/health/live") { res async throws in
             let contentType = res.headers.contentType
@@ -158,7 +155,6 @@ struct HealthControllerTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         try await app.test(.GET, "/health/ready") { res async throws in
             let health = try res.content.decode(HealthResponse.self)
@@ -181,7 +177,6 @@ struct HealthControllerTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         try await app.test(.GET, "/health/ready") { res async throws in
             let health = try res.content.decode(HealthResponse.self)
@@ -203,7 +198,6 @@ struct HealthControllerTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         try await app.test(.GET, "/health/ready") { res async throws in
             let health = try res.content.decode(HealthResponse.self)
@@ -226,7 +220,6 @@ struct HealthControllerTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
         app.valkeyConfiguration = Self.storeConfiguration(sessionHost: "sessions")
         app.sessionStore = UnreachableSessionStore()
 
@@ -252,7 +245,6 @@ struct HealthControllerTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
         app.valkeyConfiguration = Self.storeConfiguration(sessionHost: nil)
         app.sessionStore = UnreachableSessionStore()
 
@@ -279,7 +271,6 @@ struct HealthControllerTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
         app.sessionStore = ReachableSessionStore()
 
         try await app.test(.GET, "/health/ready") { res async throws in
@@ -298,7 +289,6 @@ struct HealthControllerTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         // The migrations gate stands in for any fatal check: it is the one a
         // test can close without tearing down a live dependency. What is being
@@ -324,7 +314,6 @@ struct HealthControllerTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
         app.readiness.closeMigrationsGateForTesting()
 
         // Liveness must not follow readiness: a dependency outage should pull
@@ -345,7 +334,6 @@ struct HealthControllerTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         app.readiness.beginDraining()
 
@@ -377,7 +365,6 @@ struct HealthControllerTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
         app.readiness.beginDraining()
 
         // Killing a draining pod on a failed liveness probe would cut exactly

@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -101,7 +100,7 @@ package struct ImageArtifactSnapshot: Equatable, Sendable {
 package enum LegacyImageArtifactStore {
     static func artifacts(
         imageIDs: [UUID],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [ImageArtifactSnapshot] {
         guard !imageIDs.isEmpty else { return [] }
         return try await snapshots(from: requireSQL(db).raw(
@@ -116,14 +115,14 @@ package enum LegacyImageArtifactStore {
 
     static func artifacts(
         imageID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [ImageArtifactSnapshot] {
         try await artifacts(imageIDs: [imageID], on: db)
     }
 
     static func artifact(
         id: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> ImageArtifactSnapshot? {
         guard let row = try await requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM image_artifacts WHERE id = \(bind: id) LIMIT 1"
@@ -135,10 +134,10 @@ package enum LegacyImageArtifactStore {
         imageID: UUID,
         kind: ArtifactKind,
         status: ArtifactStatus? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> ImageArtifactSnapshot? {
         let sql = try requireSQL(db)
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT \(unsafeRaw: columns) FROM image_artifacts WHERE image_id = \(bind: imageID) AND kind = \(bind: kind.rawValue)"
         if let status { query += " AND status = \(bind: status.rawValue)" }
         query += " LIMIT 1"
@@ -160,7 +159,7 @@ package enum LegacyImageArtifactStore {
         status: ArtifactStatus = .ready,
         sourceURL: String? = nil,
         expectedChecksum: String? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> ImageArtifactSnapshot {
         guard let row = try await requireSQL(db).raw(
             """
@@ -186,7 +185,7 @@ package enum LegacyImageArtifactStore {
     @discardableResult
     static func markDownloading(
         id: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> ImageArtifactSnapshot? {
         try await update(
             id: id,
@@ -198,7 +197,7 @@ package enum LegacyImageArtifactStore {
     static func updateProgress(
         id: UUID,
         progress: Int,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> ImageArtifactSnapshot? {
         try await update(id: id, assignments: "download_progress = \(bind: progress)", on: db)
     }
@@ -209,7 +208,7 @@ package enum LegacyImageArtifactStore {
         size: Int64,
         checksum: String,
         format: ImageFormat?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> ImageArtifactSnapshot? {
         try await update(
             id: id,
@@ -226,7 +225,7 @@ package enum LegacyImageArtifactStore {
     static func markError(
         id: UUID,
         error: String,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> ImageArtifactSnapshot? {
         try await update(
             id: id,
@@ -235,21 +234,21 @@ package enum LegacyImageArtifactStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM image_artifacts WHERE id = \(bind: id) RETURNING id"
         ).first(decoding: Deleted.self)?.id
     }
 
-    static func count(on db: any Database) async throws -> Int {
+    static func count(on db: PostgresStoreContext) async throws -> Int {
         struct Count: Decodable { let count: Int }
         return try await requireSQL(db).raw(
             "SELECT count(*)::bigint AS count FROM image_artifacts"
         ).first(decoding: Count.self)?.count ?? 0
     }
 
-    static func loading(_ images: [Image], on db: any Database) async throws -> [Image] {
+    static func loading(_ images: [Image], on db: PostgresStoreContext) async throws -> [Image] {
         let byImage = Dictionary(grouping: try await artifacts(
             imageIDs: images.compactMap(\.id), on: db), by: \.imageID)
         return images.map { image in
@@ -257,14 +256,14 @@ package enum LegacyImageArtifactStore {
         }
     }
 
-    static func loading(_ image: Image, on db: any Database) async throws -> Image {
+    static func loading(_ image: Image, on db: PostgresStoreContext) async throws -> Image {
         try await loading([image], on: db).first ?? image.loading(artifacts: [])
     }
 
     private static func update(
         id: UUID,
-        assignments: SQLQueryString,
-        on db: any Database
+        assignments: PostgresSQLQuery,
+        on db: PostgresStoreContext
     ) async throws -> ImageArtifactSnapshot? {
         guard let row = try await requireSQL(db).raw(
             "UPDATE image_artifacts SET \(assignments), updated_at = CURRENT_TIMESTAMP WHERE id = \(bind: id) RETURNING \(unsafeRaw: columns)"
@@ -322,8 +321,8 @@ package enum LegacyImageArtifactStore {
         try rows.map { try $0.snapshot() }
     }
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Image artifacts require PostgreSQL")
         }
         return sql

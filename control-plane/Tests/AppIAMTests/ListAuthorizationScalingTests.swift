@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -37,7 +36,6 @@ final class ListAuthorizationScalingTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -58,11 +56,11 @@ final class ListAuthorizationScalingTests {
         let req = Request(
             application: app, method: .GET, url: URI(path: path), on: app.eventLoopGroup.next())
         req.auth.login(user)
-        req.fluent.history.start()
+        req.application.testPostgres.history.start()
         let result = try await handler(req)
-        req.fluent.history.stop()
+        req.application.testPostgres.history.stop()
         #expect(check(result))
-        return req.fluent.history.queries.count
+        return req.application.testPostgres.history.count
     }
 
     /// A pool's read action follows the kind of scope owning it — `org:read`
@@ -85,7 +83,7 @@ final class ListAuthorizationScalingTests {
             try await builder.addUserToOrganization(user: user, organization: org, role: "member")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .viewer,
-                nodeType: .organization, nodeID: org.id!, createdBy: nil, on: app.db)
+                nodeType: .organization, nodeID: org.id!, createdBy: nil, on: app.testPostgres)
 
             // Allocated addresses need a project and a creator to hang on.
             let project = try await builder.createProject(
@@ -108,7 +106,7 @@ final class ListAuthorizationScalingTests {
                     address: "\(prefix).\(base % 256 + 1)",
                     projectID: project.id!,
                     createdByID: user.id!,
-                    on: app.db)
+                    on: app.testPostgres)
             }
 
             // Pool 0 is org-owned; every later pool gets a folder of its own.
@@ -132,7 +130,8 @@ final class ListAuthorizationScalingTests {
                             iam: app.iamPersistence,
                             projects: app.projectsPersistence,
                             pools: app.floatingIPPoolsPersistence,
-                            sites: app.sitesPersistence
+                            sites: app.sitesPersistence,
+                            database: app.testPostgres
                         ).visiblePools(req: $0)
                     },
                     expecting: { pools in
@@ -174,7 +173,7 @@ final class ListAuthorizationScalingTests {
                         spiffeID: "spiffe://example.org/agent/enroll-node-\(index)",
                         organizationScope: scope
                     ),
-                    on: app.db
+                    on: app.testPostgres
                 )
             }
 
@@ -329,7 +328,7 @@ final class ListAuthorizationScalingTests {
 
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .user, nodeID: subject.id!, createdBy: nil, on: app.db)
+                nodeType: .user, nodeID: subject.id!, createdBy: nil, on: app.testPostgres)
 
             let req = Request(
                 application: app, method: .GET, url: URI(path: "/api/users"),
@@ -362,7 +361,7 @@ final class ListAuthorizationScalingTests {
 
             try await RoleBindingService.grant(
                 principalType: .group, principalID: group.id!, role: .admin,
-                nodeType: .user, nodeID: subject.id!, createdBy: nil, on: app.db)
+                nodeType: .user, nodeID: subject.id!, createdBy: nil, on: app.testPostgres)
 
             let req = Request(
                 application: app, method: .GET, url: URI(path: "/api/users"),
@@ -402,8 +401,8 @@ final class ListAuthorizationScalingTests {
     /// written directly rather than through `PolicyStore`, so nothing bumps the
     /// version for us.
     private func rebuildPolicySet(_ app: Application) async throws {
-        let version = try await PolicySetVersionService.current(on: app.db)
-        await app.cedarPolicySet.rebuild(version: version, on: app.db)
+        let version = try await PolicySetVersionService.current(on: app.testPostgres)
+        await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
     }
 
     /// Write an authored policy row straight to the table, bypassing

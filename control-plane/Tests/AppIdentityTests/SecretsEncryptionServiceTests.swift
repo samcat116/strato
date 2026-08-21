@@ -118,7 +118,7 @@ struct SecretsEncryptionServiceTests {
     func testStartupSweep() async throws {
         try await withTestApp { app in
             let org = Organization(name: "Sweep Org", description: "")
-            try await org.save(on: app.db)
+            try await org.save(on: app.testPostgres)
 
             let service = try makeService()
 
@@ -177,7 +177,7 @@ struct SecretsEncryptionServiceTests {
     @Test("Startup sweep encrypts plaintext SSF auth tokens and skips token-less streams")
     func testStartupSweepSSFAuthTokens() async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(username: "ssfsweep", email: "ssfsweep@example.com")
             let org = try await builder.createOrganization(name: "SSF Sweep Org")
 

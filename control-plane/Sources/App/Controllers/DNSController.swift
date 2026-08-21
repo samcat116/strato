@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import StratoShared
 import Vapor
 
@@ -27,6 +26,13 @@ import Vapor
 struct DNSController: RouteCollection {
     let iam: IAMPersistence
     let projects: ProjectsPersistence
+    let database: PostgresStoreContext
+
+    init(iam: IAMPersistence, projects: ProjectsPersistence, database: PostgresStoreContext) {
+        self.iam = iam
+        self.projects = projects
+        self.database = database
+    }
     func boot(routes: RoutesBuilder) throws {
         let zones = routes.grouped("api", "dns-zones").grouped(User.guardMiddleware())
         zones.get(use: listZones)
@@ -83,11 +89,11 @@ struct DNSController: RouteCollection {
             visibility = resolved
         }
 
-        var zones = try await LegacyDNSZoneStore.zones(projectIDs: projectIDs, on: req.db)
+        var zones = try await LegacyDNSZoneStore.zones(projectIDs: projectIDs, on: database)
         if let visibility {
             zones = try await visibility.readableRows(zones, projectID: \.projectID, on: req)
         }
-        return try await Self.responses(for: zones, on: req.db)
+        return try await Self.responses(for: zones, on: database)
     }
 
     /// POST /api/dns-zones
@@ -98,14 +104,14 @@ struct DNSController: RouteCollection {
 
         let project = try await req.authorizedProjectForCreate(
             requested: request.projectId,
-            action: "dns:create", resourceKind: "DNS zones")
+            action: "dns:create", resourceKind: "DNS zones", on: database)
         let projectID = try project.requireID()
 
         let name = try DNSName.normalizedZoneName(request.name)
         let creatorID = try user.requireID()
         let zone: DNSZoneSnapshot
         do {
-            zone = try await req.db.transaction { db in
+            zone = try await database.transaction { db in
                 let zone = try await LegacyDNSZoneStore.insert(
                     name: name,
                     description: request.description?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -125,7 +131,7 @@ struct DNSController: RouteCollection {
                 )
                 return zone
             }
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A DNS zone named '\(name)' already exists in this project")
         }
 
@@ -143,7 +149,7 @@ struct DNSController: RouteCollection {
     @Sendable
     func getZone(req: Request) async throws -> DNSZoneResponse {
         let zone = try await fetchZone(req: req, action: "dns:read")
-        return try await Self.responses(for: [zone], on: req.db)[0]
+        return try await Self.responses(for: [zone], on: database)[0]
     }
 
     /// PUT /api/dns-zones/:zoneId
@@ -169,7 +175,7 @@ struct DNSController: RouteCollection {
 
         let updated: DNSZoneSnapshot
         do {
-            updated = try await req.db.transaction { db in
+            updated = try await database.transaction { db in
                 guard let updated = try await LegacyDNSZoneStore.update(
                     id: zone.id, name: nextName, description: nextDescription, on: db)
                 else { throw Abort(.notFound, reason: "DNS zone no longer exists") }
@@ -191,7 +197,7 @@ struct DNSController: RouteCollection {
                 }
                 return updated
             }
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A DNS zone named '\(nextName)' already exists in this project")
         }
         // A rename moves every name in the zone; a description edit realizes
@@ -199,7 +205,7 @@ struct DNSController: RouteCollection {
         if updated.name != originalName {
             await req.application.agentService.syncDesiredStateToFleet()
         }
-        return try await Self.responses(for: [updated], on: req.db)[0]
+        return try await Self.responses(for: [updated], on: database)[0]
     }
 
     /// DELETE /api/dns-zones/:zoneId
@@ -211,14 +217,14 @@ struct DNSController: RouteCollection {
         // Attachments are the zone's blast radius: deleting one that networks
         // still resolve would silently stop answering for every VM on them.
         // Detach first, so losing resolution is always an explicit act.
-        let attachments = try await DNSZoneNetworkStore.count(zoneID: zoneID, on: req.db)
+        let attachments = try await DNSZoneNetworkStore.count(zoneID: zoneID, on: database)
         guard attachments == 0 else {
             throw Abort(
                 .conflict,
                 reason: "DNS zone is attached to \(attachments) network(s); detach them first")
         }
 
-        try await req.db.transaction { db in
+        try await database.transaction { db in
             // Records cascade with the zone; bindings have no FK to the
             // resources they protect, so the zone's node bindings *and* its
             // records' are dropped here (STR-137) — before the delete, which
@@ -240,7 +246,7 @@ struct DNSController: RouteCollection {
     @Sendable
     func getRecordSet(req: Request) async throws -> AssembledDNSZone {
         let zone = try await fetchZone(req: req, action: "dns:read")
-        return try await DNSZoneAssembler.assemble(zone: zone, on: req.db)
+        return try await DNSZoneAssembler.assemble(zone: zone, on: database)
     }
 
     // MARK: - Records
@@ -251,7 +257,7 @@ struct DNSController: RouteCollection {
         let paging = try ListPaging.decode(from: req)
         let zone = try await fetchZone(req: req, action: "dns:read")
         let zoneID = zone.id
-        let records = try await LegacyDNSRecordStore.records(zoneID: zoneID, on: req.db)
+        let records = try await LegacyDNSRecordStore.records(zoneID: zoneID, on: database)
         return paging.page(records.map { DNSRecordResponse(from: $0, zoneName: zone.name) })
     }
 
@@ -279,7 +285,7 @@ struct DNSController: RouteCollection {
             // way `attachNetwork` has one). Serializing a zone's record writes
             // on an advisory lock costs nothing — record writes are rare — and
             // makes the checks mean what they say.
-            record = try await req.db.transaction { db in
+            record = try await database.transaction { db in
                 try await DNSZoneService.lockZone(zoneID, on: db)
 
                 let count = try await LegacyDNSRecordStore.count(zoneID: zoneID, on: db)
@@ -297,7 +303,7 @@ struct DNSController: RouteCollection {
                     zoneID: zoneID, name: name, type: request.type, value: value,
                     ttl: ttl, view: view, createdByID: user.requireID(), on: db)
             }
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw Abort(
                 .conflict,
                 reason: "A \(request.type.rawValue) record with that value already exists at "
@@ -338,7 +344,7 @@ struct DNSController: RouteCollection {
 
         let updated: DNSRecordSnapshot
         do {
-            updated = try await req.db.transaction { db in
+            updated = try await database.transaction { db in
                 try await DNSZoneService.lockZone(zoneID, on: db)
                 guard let saved = try await LegacyDNSRecordStore.update(
                     id: record.id, value: value, ttl: ttl, view: view, on: db)
@@ -350,7 +356,7 @@ struct DNSController: RouteCollection {
                 }
                 return saved
             }
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw Abort(
                 .conflict,
                 reason: "A \(record.type.rawValue) record with that value already exists at "
@@ -364,7 +370,7 @@ struct DNSController: RouteCollection {
     @Sendable
     func deleteRecord(req: Request) async throws -> HTTPStatus {
         let (_, record) = try await fetchRecord(req: req, action: "dns:delete")
-        _ = try await LegacyDNSRecordStore.delete(id: record.id, on: req.db)
+        _ = try await LegacyDNSRecordStore.delete(id: record.id, on: database)
         await req.application.agentService.syncDesiredStateToFleet()
         return .noContent
     }
@@ -379,7 +385,7 @@ struct DNSController: RouteCollection {
         let zoneID = zone.id
         let request = try req.content.decode(AttachDNSZoneRequest.self)
 
-        let network = try await Self.authorizedNetwork(req: req, id: request.networkId, zone: zone)
+        let network = try await authorizedNetwork(req: req, id: request.networkId, zone: zone)
         let networkID = try network.requireID()
 
         // Checked before anything is written, so a request that asks for
@@ -389,8 +395,8 @@ struct DNSController: RouteCollection {
         var promotedDomainName: String?
         if promoting {
             try await DNSZoneService.assertPrimaryZoneAssignable(
-                zone: zone, networkID: networkID, on: req.db)
-            let outgoing = try await DNSZoneService.primaryZoneName(of: network, on: req.db)
+                zone: zone, networkID: networkID, on: database)
+            let outgoing = try await DNSZoneService.primaryZoneName(of: network, on: database)
             // Zone names are stored through `normalizedZoneName`, whose rules
             // are stricter than a search domain's. Derive this before writing
             // the attachment so promotion still has no later validation path
@@ -406,7 +412,7 @@ struct DNSController: RouteCollection {
         // primary-zone update that follows. Promotion is validated before this
         // write so a rejected request still cannot leave an attachment behind.
         _ = try await DNSZoneNetworkStore.attach(
-            zoneID: zoneID, networkID: networkID, on: req.db)
+            zoneID: zoneID, networkID: networkID, on: database)
         if promoting {
             // The search domain follows the zone unless an operator has set one
             // of their own (STR-201). Without it a guest resolves
@@ -417,7 +423,7 @@ struct DNSController: RouteCollection {
             try await network.replacing(
                 domainName: .some(promotedDomainName),
                 primaryDNSZoneID: .some(zoneID)
-            ).save(on: req.db)
+            ).save(on: database)
         }
 
         await req.application.agentService.syncDesiredStateToFleet()
@@ -429,7 +435,7 @@ struct DNSController: RouteCollection {
                 "networkId": .string(networkID.uuidString),
                 "primary": .string(String(request.primary == true)),
             ])
-        return try await Self.responses(for: [zone], on: req.db)[0]
+        return try await Self.responses(for: [zone], on: database)[0]
     }
 
     /// DELETE /api/dns-zones/:zoneId/networks/:networkId
@@ -440,7 +446,7 @@ struct DNSController: RouteCollection {
         guard let networkID = req.parameters.get("networkId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid network ID")
         }
-        let network = try await Self.authorizedNetwork(req: req, id: networkID, zone: zone)
+        let network = try await authorizedNetwork(req: req, id: networkID, zone: zone)
 
         // Detaching a network's primary zone would strand its VMs' derived
         // records with no zone to live in, so clearing the primary is a
@@ -453,7 +459,7 @@ struct DNSController: RouteCollection {
         }
 
         guard try await DNSZoneNetworkStore.detach(
-            zoneID: zoneID, networkID: networkID, on: req.db)
+            zoneID: zoneID, networkID: networkID, on: database)
         else {
             return .noContent
         }
@@ -475,7 +481,7 @@ struct DNSController: RouteCollection {
         guard let zoneID = req.parameters.get("zoneId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid DNS zone ID")
         }
-        guard let zone = try await LegacyDNSZoneStore.find(id: zoneID, on: req.db) else {
+        guard let zone = try await LegacyDNSZoneStore.find(id: zoneID, on: database) else {
             throw Abort(.notFound, reason: "DNS zone not found")
         }
         let allowed = try await req.can(action, on: IAMNode(type: .dnsZone, id: zoneID))
@@ -497,11 +503,11 @@ struct DNSController: RouteCollection {
         guard let recordID = req.parameters.get("recordId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid DNS record ID")
         }
-        guard let zone = try await LegacyDNSZoneStore.find(id: zoneID, on: req.db) else {
+        guard let zone = try await LegacyDNSZoneStore.find(id: zoneID, on: database) else {
             throw Abort(.notFound, reason: "DNS zone not found")
         }
         guard let record = try await LegacyDNSRecordStore.record(
-            id: recordID, zoneID: zoneID, on: req.db) else {
+            id: recordID, zoneID: zoneID, on: database) else {
             throw Abort(.notFound, reason: "Record not found in this DNS zone")
         }
         let allowed = try await req.can(action, on: IAMNode(type: .dnsRecord, id: recordID))
@@ -514,10 +520,10 @@ struct DNSController: RouteCollection {
     /// The attachment target: a network in the zone's project that the caller
     /// may also modify. Attaching changes what the network's VMs resolve, so
     /// owning the zone alone is not enough (the volume/floating-IP rule).
-    private static func authorizedNetwork(
+    private func authorizedNetwork(
         req: Request, id networkID: UUID, zone: DNSZoneSnapshot
     ) async throws -> LogicalNetwork {
-        guard let network = try await LogicalNetwork.find(networkID, on: req.db) else {
+        guard let network = try await LogicalNetwork.find(networkID, on: database) else {
             throw Abort(.badRequest, reason: "Network \(networkID) does not exist")
         }
         let allowed = try await req.can("network:update", on: IAMNode(type: .network, id: networkID))
@@ -547,7 +553,7 @@ struct DNSController: RouteCollection {
     /// Build responses for a page of zones with two batched queries rather
     /// than a pair per zone.
     private static func responses(
-        for zones: [DNSZoneSnapshot], on db: any Database
+        for zones: [DNSZoneSnapshot], on db: PostgresStoreContext
     ) async throws -> [DNSZoneResponse] {
         let zoneIDs = zones.map(\.id)
         guard !zoneIDs.isEmpty else { return [] }

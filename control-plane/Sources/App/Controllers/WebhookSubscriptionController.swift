@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -15,13 +14,16 @@ import Vapor
 struct WebhookSubscriptionController: RouteCollection {
     private let subscriptions: WebhookSubscriptionsPersistence
     private let deliveries: WebhookDeliveriesPersistence
+    private let projects: ProjectsPersistence
 
     init(
         subscriptions: WebhookSubscriptionsPersistence,
-        deliveries: WebhookDeliveriesPersistence
+        deliveries: WebhookDeliveriesPersistence,
+        projects: ProjectsPersistence
     ) {
         self.subscriptions = subscriptions
         self.deliveries = deliveries
+        self.projects = projects
     }
 
     func boot(routes: RoutesBuilder) throws {
@@ -60,7 +62,7 @@ struct WebhookSubscriptionController: RouteCollection {
         try await validateTargetURL(request.url, on: req)
         let eventTypes = try parseEventTypes(request.eventTypes)
         if let projectID = request.projectId {
-            try await validateProjectScope(projectID, organizationID: organizationID, on: req.db)
+            try await validateProjectScope(projectID, organizationID: organizationID)
         }
 
         let secret = WebhookSigningSecret.generate()
@@ -302,10 +304,10 @@ struct WebhookSubscriptionController: RouteCollection {
     }
 
     private func validateProjectScope(
-        _ projectID: UUID, organizationID: UUID, on db: Database
+        _ projectID: UUID, organizationID: UUID
     ) async throws {
-        guard let project = try await Project.find(projectID, on: db),
-            try await project.getRootOrganizationId(on: db) == organizationID
+        guard let project = try await projects.project(id: projectID),
+            project.rootOrganizationID == organizationID
         else {
             throw Abort(.badRequest, reason: "Project does not belong to this organization")
         }

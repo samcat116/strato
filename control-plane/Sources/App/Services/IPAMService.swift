@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 
 /// Control-plane IP address management: allocates static NIC addresses from a
@@ -74,8 +73,8 @@ enum IPAMService {
     /// Postgres only: `pg_advisory_xact_lock` is held until the enclosing
     /// transaction ends, giving cross-replica serialization (see
     /// `QuotaEnforcementService.lockQuotas` for the same pattern).
-    private static func lockAllocations(key: String, on db: Database) async throws {
-        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
+    private static func lockAllocations(key: String, on db: PostgresStoreContext) async throws {
+        guard let sql = db as? PostgresStoreContext, sql.dialect.name == "postgresql" else { return }
         try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: key)))").run()
     }
 
@@ -85,7 +84,7 @@ enum IPAMService {
     }
 
     /// Allocates the lowest free host address in `network`'s subnet.
-    static func allocateIP(for network: LogicalNetwork, on db: Database) async throws -> Allocation {
+    static func allocateIP(for network: LogicalNetwork, on db: PostgresStoreContext) async throws -> Allocation {
         // The used set is the union of VM and sandbox addresses on the network
         // (issue #416): both draw from the same subnet, so an allocation must
         // see the other's addresses or two workloads could get the same IP.
@@ -161,7 +160,7 @@ enum IPAMService {
 
     /// Allocates the next IPv6 address in `network`'s /64, or nil when the
     /// network is v4-only.
-    static func allocateIPv6(for network: LogicalNetwork, on db: Database) async throws -> Allocation6? {
+    static func allocateIPv6(for network: LogicalNetwork, on db: PostgresStoreContext) async throws -> Allocation6? {
         guard let subnet6 = network.subnet6 else { return nil }
         // Union of VM and sandbox interface IDs on the network (issue #416),
         // for the same reason as the v4 path, under the same advisory lock.

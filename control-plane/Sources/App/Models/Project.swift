@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -56,24 +55,24 @@ struct Project: Content, Equatable, Sendable {
         return id
     }
 
-    func save(on db: any Database) async throws {
+    func save(on db: PostgresStoreContext) async throws {
         _ = try await LegacyProjectStore.upsert(self, on: db)
     }
 
-    func delete(on db: any Database) async throws {
+    func delete(on db: PostgresStoreContext) async throws {
         guard let id else { return }
         _ = try await LegacyProjectStore.delete(id: id, on: db)
     }
 
-    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+    static func find(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await LegacyProjectStore.project(id: id, on: db)
     }
 
-    static func all(on db: any Database) async throws -> [Self] {
+    static func all(on db: PostgresStoreContext) async throws -> [Self] {
         try await LegacyProjectStore.projects(on: db)
     }
 
-    static func count(name: String? = nil, on db: any Database) async throws -> Int {
+    static func count(name: String? = nil, on db: PostgresStoreContext) async throws -> Int {
         try await LegacyProjectStore.count(name: name, on: db)
     }
 
@@ -141,7 +140,7 @@ extension Project {
 
 extension Project {
     /// Builds the path string for this project based on its hierarchy
-    func buildPath(on db: Database) async throws -> String {
+    func buildPath(on db: PostgresStoreContext) async throws -> String {
         var parentPath = ""
 
         // If project belongs to an OU, get the OU's path
@@ -173,7 +172,7 @@ extension Project {
     }
 
     /// Gets the root organization ID for this project
-    func getRootOrganizationId(on db: Database) async throws -> UUID? {
+    func getRootOrganizationId(on db: PostgresStoreContext) async throws -> UUID? {
         if let orgId = self.organizationID {
             return orgId
         }

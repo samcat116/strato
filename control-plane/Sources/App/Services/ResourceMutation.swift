@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import StratoShared
 import Vapor
 
@@ -49,6 +49,7 @@ struct ResourceMutation {
     /// The agent seam. Injected so tests substitute a fake for the live actor.
     let agentDispatch: any AgentDispatch
     let logger: Logger
+    let database: PostgresStoreContext
 
     /// How an accepted mutation reaches the agent after the transaction
     /// commits. The uniform scaffolding — background hand-off, drain guards,
@@ -62,13 +63,13 @@ struct ResourceMutation {
         /// Background work that reaches an agent (create: schedule, place,
         /// first sync). Degrades the resource on throw; success is left to the
         /// agent's observed report.
-        case placement(@Sendable (any Database) async throws -> Void)
+        case placement(@Sendable (PostgresStoreContext) async throws -> Void)
         /// Resolve locally with no agent teardown (the offline/unplaced
         /// delete): run the removal work. Returning `false` means another
         /// finalizer still owes cleanup, so the deletion is under way rather
         /// than done and nothing is recorded — `sweepOrphanedTerminatingResources`
         /// is the backstop.
-        case directResolution(@Sendable (any Database) async throws -> Bool)
+        case directResolution(@Sendable (PostgresStoreContext) async throws -> Bool)
     }
 
     /// What the `202` needs: the generation the client waits for, and the id of
@@ -100,9 +101,9 @@ struct ResourceMutation {
         on resource: R,
         actor: MutationActor,
         dispatch strategy: Dispatch,
-        on db: any Database,
+        on db: PostgresStoreContext,
         app: Application,
-        applying mutation: @escaping @Sendable (R, any Database) async throws -> R = { value, _ in value }
+        applying mutation: @escaping @Sendable (R, PostgresStoreContext) async throws -> R = { value, _ in value }
     ) async throws -> (resource: R, accepted: Accepted) {
         let resourceID = try resource.requireID()
         let (committed, accepted, placementAgentIDs) = try await db.transaction { db in
@@ -193,9 +194,8 @@ struct ResourceMutation {
 
         case .placement(let work):
             app.backgroundTasks.spawn {
-                // Bail if shutdown's drain already cancelled us — placement work
-                // dereferences `app.db` immediately (see `Application.liveDB`).
-                guard let db = app.liveDB else { return }
+                // The registry drains this work before the native pool closes.
+                let db = database
                 do {
                     try await work(db)
                 } catch {
@@ -208,7 +208,7 @@ struct ResourceMutation {
 
         case .directResolution(let work):
             app.backgroundTasks.spawn {
-                guard let db = app.liveDB else { return }
+                let db = database
                 do {
                     _ = try await work(db)
                 } catch {
@@ -225,9 +225,8 @@ struct ResourceMutation {
     /// its `conditions`, plus the resolution of whatever in-flight state the
     /// failed mutation left behind.
     ///
-    /// Every effect is drain-safe — it bails before touching a torn-down
-    /// `app.db`, the crash gap `ResourceOperationCoordinator.recordVerdict`
-    /// documents.
+    /// Every effect is drain-safe because the registry completes or cancels it
+    /// before the native pool closes.
     private func degrade<R: ConvergingResource>(
         _ type: R.Type,
         id: UUID,
@@ -236,7 +235,7 @@ struct ResourceMutation {
         reason: String,
         app: Application
     ) async {
-        guard let db = app.liveDB else { return }
+        let db = database
         do {
             guard let resource = try await R.load(id, on: db) else { return }
             guard resource.generation == expectedGeneration else {
@@ -284,11 +283,19 @@ struct ResourceMutation {
 }
 
 extension Application {
-    /// Cheap to construct (it holds references), so it is materialized per
-    /// access rather than stored — the same idiom as
-    /// `resourceOperationCoordinator`.
+    private struct ResourceMutationKey: StorageKey {
+        typealias Value = ResourceMutation
+    }
+
     var resourceMutation: ResourceMutation {
-        ResourceMutation(agentDispatch: agentService, logger: logger)
+        guard let mutation = storage[ResourceMutationKey.self] else {
+            preconditionFailure("Resource mutation service has not been configured")
+        }
+        return mutation
+    }
+
+    func configureResourceMutation(_ mutation: ResourceMutation) {
+        storage[ResourceMutationKey.self] = mutation
     }
 }
 
@@ -328,7 +335,7 @@ enum ResourceConvergence {
         reason: String,
         telemetryReason: String,
         alreadyRecordedAt: Int64?? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> ValueWrite<R> {
         let expectedGeneration = resource.generation
         let recorded = alreadyRecordedAt ?? resource.failedGeneration
@@ -401,7 +408,7 @@ enum ResourceConvergence {
     }
 
     static func recordValueSuccess<R: ConvergingResource>(
-        _ resource: R, on db: any Database
+        _ resource: R, on db: PostgresStoreContext
     ) async throws -> ValueWrite<R> {
         let expectedGeneration = resource.generation
         let wasOutstanding = resource.convergenceDeadline != nil

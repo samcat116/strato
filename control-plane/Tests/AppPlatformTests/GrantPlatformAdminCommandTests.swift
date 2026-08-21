@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Testing
 import Vapor
@@ -26,7 +25,7 @@ struct GrantPlatformAdminCommandTests {
     private func makeUser(_ app: Application, username: String = "morpheus") async throws -> User {
         let user = User(
             username: username, email: "\(username)@example.com", displayName: username)
-        try await user.save(on: app.db)
+        try await user.save(on: app.testPostgres)
         return user
     }
 
@@ -38,7 +37,7 @@ struct GrantPlatformAdminCommandTests {
 
             try await run(app, arguments: ["--email", "morpheus@example.com"])
 
-            let promoted = try #require(try await User.find(user.id, on: app.db))
+            let promoted = try #require(try await User.find(user.id, on: app.testPostgres))
             #expect(promoted.isSystemAdmin)
             // No invite unless asked for: a promotion is not an enrollment.
             let claimCount = try await testAccountClaimCount(on: app)
@@ -51,7 +50,7 @@ struct GrantPlatformAdminCommandTests {
         try await withTestApp { app in
             let user = try await makeUser(app)
             try await run(app, arguments: ["--username", "morpheus"])
-            let promoted = try #require(try await User.find(user.id, on: app.db))
+            let promoted = try #require(try await User.find(user.id, on: app.testPostgres))
             #expect(promoted.isSystemAdmin)
         }
     }
@@ -74,7 +73,7 @@ struct GrantPlatformAdminCommandTests {
             #expect(claim.tokenHash == AccountClaimSecret.hashToken(rawToken))
             #expect(claim.userID == user.id)
             #expect(claim.isValid())
-            let promoted = try #require(try await User.find(user.id, on: app.db))
+            let promoted = try #require(try await User.find(user.id, on: app.testPostgres))
             #expect(promoted.isSystemAdmin)
         }
     }
@@ -117,7 +116,7 @@ struct GrantPlatformAdminCommandTests {
             }
             // Refusal is total: no promotion either, so the operator retries
             // deliberately rather than discovering a half-applied change.
-            let untouched = try #require(try await User.find(user.id, on: app.db))
+            let untouched = try #require(try await User.find(user.id, on: app.testPostgres))
             #expect(!untouched.isSystemAdmin)
             let claimCount = try await testAccountClaimCount(on: app)
             #expect(claimCount == 0)
@@ -134,7 +133,7 @@ struct GrantPlatformAdminCommandTests {
             let console = try await run(app, arguments: ["--quiet", "--email", "morpheus@example.com"])
 
             #expect(console.lines.isEmpty)
-            let promoted = try #require(try await User.find(user.id, on: app.db))
+            let promoted = try #require(try await User.find(user.id, on: app.testPostgres))
             #expect(promoted.isSystemAdmin)
             let claimCount = try await testAccountClaimCount(on: app)
             #expect(claimCount == 0)
@@ -156,7 +155,7 @@ struct GrantPlatformAdminCommandTests {
 
             try await run(app, arguments: ["--quiet", "--email", "morpheus@example.com"])
 
-            let promoted = try #require(try await User.find(user.id, on: app.db))
+            let promoted = try #require(try await User.find(user.id, on: app.testPostgres))
             #expect(promoted.isSystemAdmin)
         }
     }
@@ -167,7 +166,7 @@ struct GrantPlatformAdminCommandTests {
     func claimRefusesDisabledAccount() async throws {
         try await withTestApp { app in
             let user = try await makeUser(app)
-            try await user.replacing(disabledAt: .some(Date())).save(on: app.db)
+            try await user.replacing(disabledAt: .some(Date())).save(on: app.testPostgres)
 
             await #expect(throws: GrantPlatformAdminCommand.DisabledAccountError.self) {
                 try await run(app, arguments: ["--claim", "--email", "morpheus@example.com"])
@@ -182,14 +181,14 @@ struct GrantPlatformAdminCommandTests {
     func claimRefusesNonLocalAccount() async throws {
         try await withTestApp { app in
             let user = try await makeUser(app)
-            try await user.replacing(source: .oidc).save(on: app.db)
+            try await user.replacing(source: .oidc).save(on: app.testPostgres)
 
             await #expect(throws: GrantPlatformAdminCommand.NonLocalAccountError.self) {
                 try await run(app, arguments: ["--claim", "--email", "morpheus@example.com"])
             }
             // Promotion itself stays available for federated identities.
             try await run(app, arguments: ["--email", "morpheus@example.com"])
-            let promoted = try #require(try await User.find(user.id, on: app.db))
+            let promoted = try #require(try await User.find(user.id, on: app.testPostgres))
             #expect(promoted.isSystemAdmin)
         }
     }
@@ -239,11 +238,11 @@ struct GrantPlatformAdminCommandTests {
         try await withTestApp { app in
             let user = User(
                 username: "oracle", email: "oracle@example.com", displayName: "Oracle", isSystemAdmin: true)
-            try await user.save(on: app.db)
+            try await user.save(on: app.testPostgres)
 
             let console = try await run(app, arguments: ["--email", "oracle@example.com"])
 
-            let promoted = try #require(try await User.find(user.id, on: app.db))
+            let promoted = try #require(try await User.find(user.id, on: app.testPostgres))
             #expect(promoted.isSystemAdmin)
             #expect(console.lines.contains { $0.contains("was already a system administrator") })
         }

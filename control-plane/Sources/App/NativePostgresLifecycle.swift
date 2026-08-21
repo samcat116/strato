@@ -13,6 +13,22 @@ struct NativePostgresLifecycleHandler: LifecycleHandler {
 }
 
 extension Application {
+    private struct TestPostgresStoreKey: StorageKey {
+        typealias Value = PostgresStoreContext
+    }
+
+    /// Direct SQL fixture access for package tests. Production request and
+    /// service code receives domain modules or an explicitly injected context.
+    package var testPostgres: PostgresStoreContext {
+        get {
+            guard let database = storage[TestPostgresStoreKey.self] else {
+                preconditionFailure("PostgreSQL test context has not been configured")
+            }
+            return database
+        }
+        set { storage[TestPostgresStoreKey.self] = newValue }
+    }
+
     private struct NativePostgresConfigurationOverrideKey: StorageKey {
         typealias Value = ControlPlanePostgres.PostgresDatabase.Configuration
     }
@@ -71,6 +87,14 @@ extension Application {
 
     private struct IAMPersistenceKey: StorageKey {
         typealias Value = IAMPersistence
+    }
+
+    private struct ServiceAccountsPersistenceKey: StorageKey {
+        typealias Value = ServiceAccountsPersistence
+    }
+
+    private struct OrgTrustDomainsPersistenceKey: StorageKey {
+        typealias Value = OrgTrustDomainsPersistence
     }
 
     private struct ProjectsPersistenceKey: StorageKey {
@@ -272,6 +296,28 @@ extension Application {
             return persistence
         }
         set { setStorageValue(IAMPersistenceKey.self, to: newValue) }
+    }
+
+    /// Test-construction seam. Production service-account paths receive this module by initializer.
+    package var serviceAccountsPersistence: ServiceAccountsPersistence {
+        get {
+            guard let persistence = storage[ServiceAccountsPersistenceKey.self] else {
+                preconditionFailure("Service-account persistence has not been configured")
+            }
+            return persistence
+        }
+        set { setStorageValue(ServiceAccountsPersistenceKey.self, to: newValue) }
+    }
+
+    /// Test-construction seam. Production SPIRE services receive this module by initializer.
+    package var orgTrustDomainsPersistence: OrgTrustDomainsPersistence {
+        get {
+            guard let persistence = storage[OrgTrustDomainsPersistenceKey.self] else {
+                preconditionFailure("Organization trust-domain persistence has not been configured")
+            }
+            return persistence
+        }
+        set { setStorageValue(OrgTrustDomainsPersistenceKey.self, to: newValue) }
     }
 
     /// Construction-only test input. The runtime itself is never published in

@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -31,7 +30,7 @@ struct QuotaUsageAggregatorTests {
         let marketingProject: Project
     }
 
-    private func seed(on db: Database) async throws -> Fixture {
+    private func seed(on db: PostgresStoreContext) async throws -> Fixture {
         let builder = TestDataBuilder(db: db)
         let org = try await builder.createOrganization(name: "Aggregate Org \(UUID().uuidString)")
 
@@ -73,7 +72,7 @@ struct QuotaUsageAggregatorTests {
 
     /// The pre-#692 measurement: hydrate every workload in scope, reduce in Swift.
     private func reduceUsage(
-        projectIDs: [UUID], environment: String?, on db: Database
+        projectIDs: [UUID], environment: String?, on db: PostgresStoreContext
     ) async throws -> QuotaMeasuredUsage {
         guard !projectIDs.isEmpty else { return .none }
 
@@ -109,7 +108,7 @@ struct QuotaUsageAggregatorTests {
     }
 
     private func expectMatchesReduce(
-        quota: ResourceQuota, projectIDs: [UUID], on db: Database, _ label: Comment
+        quota: ResourceQuota, projectIDs: [UUID], on db: PostgresStoreContext, _ label: Comment
     ) async throws {
         let expected = try await reduceUsage(
             projectIDs: projectIDs, environment: quota.environment, on: db)
@@ -125,15 +124,15 @@ struct QuotaUsageAggregatorTests {
     @Test("Aggregates match a full-row reduce for every scope shape")
     func aggregatesMatchReduce() async throws {
         try await withTestApp { app in
-            let fixture = try await seed(on: app.db)
-            let builder = TestDataBuilder(db: app.db)
+            let fixture = try await seed(on: app.testPostgres)
+            let builder = TestDataBuilder(db: app.testPostgres)
 
             let projectQuota = try await builder.createResourceQuota(
                 name: "project", project: fixture.teamAProject)
             try await expectMatchesReduce(
                 quota: projectQuota,
                 projectIDs: [try fixture.teamAProject.requireID()],
-                on: app.db,
+                on: app.testPostgres,
                 "project scope")
 
             // A folder quota measures its whole subtree, so the grandchild
@@ -143,7 +142,7 @@ struct QuotaUsageAggregatorTests {
             try await expectMatchesReduce(
                 quota: folderQuota,
                 projectIDs: [try fixture.teamAProject.requireID()],
-                on: app.db,
+                on: app.testPostgres,
                 "folder subtree scope")
 
             let orgQuota = try await builder.createResourceQuota(
@@ -155,7 +154,7 @@ struct QuotaUsageAggregatorTests {
                     try fixture.teamAProject.requireID(),
                     try fixture.marketingProject.requireID(),
                 ],
-                on: app.db,
+                on: app.testPostgres,
                 "organization scope")
         }
     }
@@ -163,8 +162,8 @@ struct QuotaUsageAggregatorTests {
     @Test("An environment-scoped quota measures only that environment")
     func environmentScopedQuotaMeasuresOneEnvironment() async throws {
         try await withTestApp { app in
-            let fixture = try await seed(on: app.db)
-            let builder = TestDataBuilder(db: app.db)
+            let fixture = try await seed(on: app.testPostgres)
+            let builder = TestDataBuilder(db: app.testPostgres)
 
             let prodQuota = try await builder.createResourceQuota(
                 name: "prod", organization: fixture.organization, environment: "production")
@@ -175,11 +174,11 @@ struct QuotaUsageAggregatorTests {
                     try fixture.teamAProject.requireID(),
                     try fixture.marketingProject.requireID(),
                 ],
-                on: app.db,
+                on: app.testPostgres,
                 "production-only organization scope")
 
             // Only the production VM and sandbox of TeamA exist in that environment.
-            let measured = try await QuotaUsageAggregator.measure(quota: prodQuota, on: app.db)
+            let measured = try await QuotaUsageAggregator.measure(quota: prodQuota, on: app.testPostgres)
             #expect(measured.vmCount == 1)
             #expect(measured.sandboxCount == 1)
         }
@@ -188,8 +187,8 @@ struct QuotaUsageAggregatorTests {
     @Test("Networks are counted project-wide and excluded from environment quotas")
     func networksAreProjectWide() async throws {
         try await withTestApp { app in
-            let fixture = try await seed(on: app.db)
-            let builder = TestDataBuilder(db: app.db)
+            let fixture = try await seed(on: app.testPostgres)
+            let builder = TestDataBuilder(db: app.testPostgres)
             _ = try await builder.createNetwork(
                 name: "team-a", project: fixture.teamAProject,
                 subnet: "10.210.0.0/24", gateway: "10.210.0.1")
@@ -202,14 +201,14 @@ struct QuotaUsageAggregatorTests {
 
             let folderQuota = try await builder.createResourceQuota(
                 name: "all-environments", ou: fixture.engineering)
-            let folderUsage = try await QuotaUsageAggregator.measure(quota: folderQuota, on: app.db)
+            let folderUsage = try await QuotaUsageAggregator.measure(quota: folderQuota, on: app.testPostgres)
             #expect(folderUsage.networkCount == 2)
             #expect(folderUsage.asQuotaUsage.networks == 2)
 
             let environmentQuota = try await builder.createResourceQuota(
                 name: "production", organization: fixture.organization, environment: "production")
             let environmentUsage = try await QuotaUsageAggregator.measure(
-                quota: environmentQuota, on: app.db)
+                quota: environmentQuota, on: app.testPostgres)
             #expect(environmentUsage.networkCount == 0)
             #expect(environmentUsage.asQuotaUsage.networks == 0)
         }
@@ -218,8 +217,8 @@ struct QuotaUsageAggregatorTests {
     @Test("Snapshot storage counts stored and exported bytes once each")
     func snapshotStorageCountsBothCopies() async throws {
         try await withTestApp { app in
-            let fixture = try await seed(on: app.db)
-            let builder = TestDataBuilder(db: app.db)
+            let fixture = try await seed(on: app.testPostgres)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "snap-\(UUID().uuidString.prefix(8))", email: "snap-\(UUID().uuidString)@example.com")
             let sandbox = try await builder.createSandbox(name: "snapped", project: fixture.teamAProject)
@@ -239,7 +238,7 @@ struct QuotaUsageAggregatorTests {
                         sha256: String(repeating: "0", count: 64))
                 ],
                 createdByID: try user.requireID())
-            try await ready.save(on: app.db)
+            try await ready.save(on: app.testPostgres)
 
             // A failed checkpoint removes its partial artifacts: not counted.
             let errored = SandboxSnapshot(
@@ -251,19 +250,19 @@ struct QuotaUsageAggregatorTests {
                 size: 9 * 1024 * 1024 * 1024,
                 agentId: "agent-1",
                 createdByID: try user.requireID())
-            try await errored.save(on: app.db)
+            try await errored.save(on: app.testPostgres)
 
             let folderQuota = try await builder.createResourceQuota(
                 name: "folder", ou: fixture.engineering)
-            let scope = try await QuotaUsageAggregator.scope(of: folderQuota, on: app.db)
-            let snapshotBytes = try await QuotaUsageAggregator.snapshotStorageBytes(in: scope, on: app.db)
+            let scope = try await QuotaUsageAggregator.scope(of: folderQuota, on: app.testPostgres)
+            let snapshotBytes = try await QuotaUsageAggregator.snapshotStorageBytes(in: scope, on: app.testPostgres)
             #expect(snapshotBytes == 3 * 1024 * 1024 * 1024 + 512 * 1024 * 1024)
 
             // And the same bytes show up in the quota's storage total.
             try await expectMatchesReduce(
                 quota: folderQuota,
                 projectIDs: [try fixture.teamAProject.requireID()],
-                on: app.db,
+                on: app.testPostgres,
                 "folder scope with snapshots")
         }
     }
@@ -271,7 +270,7 @@ struct QuotaUsageAggregatorTests {
     @Test("A quota whose folder is gone measures nothing, not everything")
     func danglingScopeMeasuresNothing() async throws {
         try await withTestApp { app in
-            _ = try await seed(on: app.db)
+            _ = try await seed(on: app.testPostgres)
 
             // The scoping folder was deleted out from under the quota. The
             // scope must collapse to nothing — a predicate that degenerated to
@@ -284,7 +283,7 @@ struct QuotaUsageAggregatorTests {
                 maxStorage: 8 << 30,
                 maxVMs: 4)
 
-            let measured = try await QuotaUsageAggregator.measure(quota: quota, on: app.db)
+            let measured = try await QuotaUsageAggregator.measure(quota: quota, on: app.testPostgres)
             #expect(measured.vcpus == 0)
             #expect(measured.vmCount == 0)
             #expect(measured.sandboxCount == 0)
@@ -295,14 +294,14 @@ struct QuotaUsageAggregatorTests {
     @Test("The VM breakdown counts the same VMs the totals do")
     func vmBreakdownMatchesTotals() async throws {
         try await withTestApp { app in
-            let fixture = try await seed(on: app.db)
-            let builder = TestDataBuilder(db: app.db)
+            let fixture = try await seed(on: app.testPostgres)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let quota = try await builder.createResourceQuota(
                 name: "org", organization: fixture.organization)
 
-            let scope = try await QuotaUsageAggregator.scope(of: quota, on: app.db)
-            let measured = try await QuotaUsageAggregator.measure(scope, on: app.db)
-            let breakdown = try await QuotaUsageAggregator.vmBreakdown(in: scope, on: app.db)
+            let scope = try await QuotaUsageAggregator.scope(of: quota, on: app.testPostgres)
+            let measured = try await QuotaUsageAggregator.measure(scope, on: app.testPostgres)
+            let breakdown = try await QuotaUsageAggregator.vmBreakdown(in: scope, on: app.testPostgres)
 
             #expect(breakdown.byEnvironment.values.reduce(0, +) == measured.vmCount)
             #expect(breakdown.byStatus.values.reduce(0, +) == measured.vmCount)
@@ -311,3 +310,4 @@ struct QuotaUsageAggregatorTests {
         }
     }
 }
+import ControlPlanePostgres

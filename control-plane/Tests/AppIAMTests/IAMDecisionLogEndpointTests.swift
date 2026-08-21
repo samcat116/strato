@@ -1,4 +1,3 @@
-import Fluent
 import ControlPlanePostgres
 import Foundation
 import Testing
@@ -30,9 +29,8 @@ final class IAMDecisionLogEndpointTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: systemAdmin ? "decisionadmin" : "decisionuser",
                 email: systemAdmin ? "decision-admin@example.com" : "decision-user@example.com",
@@ -41,7 +39,7 @@ final class IAMDecisionLogEndpointTests {
             )
             let org = try await builder.createOrganization(name: "Decision Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let token = try await user.generateAPIKey(on: app)
             try await test(app, Fixture(user: user, token: token))

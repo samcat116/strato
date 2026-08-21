@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import StratoShared
 import Vapor
@@ -22,7 +22,7 @@ enum SnapshotArtifactMutation {
     /// quota and IAM work), so what is shared is the record and the dispatch,
     /// not the transaction.
     static func recordCapture<A: SnapshotArtifactResource>(
-        _ artifact: A, actor: MutationActor, on db: any Database
+        _ artifact: A, actor: MutationActor, on db: PostgresStoreContext
     ) async throws -> ResourceMutation.Accepted {
         let event = try await ResourceEvent.record(
             .create,
@@ -61,7 +61,7 @@ enum SnapshotArtifactMutation {
     static func delete<A: SnapshotArtifactResource>(
         _ artifact: A,
         actor: MutationActor,
-        on db: any Database,
+        on db: PostgresStoreContext,
         app: Application
     ) async throws -> ResourceMutation.Accepted {
         let artifactID = try artifact.requireID()
@@ -129,7 +129,7 @@ enum SnapshotArtifactMutation {
     static func requestExport(
         _ snapshot: SandboxSnapshot,
         actor: MutationActor,
-        on db: any Database,
+        on db: PostgresStoreContext,
         app: Application
     ) async throws -> ResourceMutation.Accepted {
         let result = try await app.resourceMutation.acceptValue(
@@ -186,7 +186,7 @@ enum SnapshotArtifactMutation {
 /// other two families have no dependents.
 enum SnapshotDeletionGuard {
     static func blocker<A: SnapshotArtifactResource>(
-        for artifact: A, on db: any Database
+        for artifact: A, on db: PostgresStoreContext
     ) async throws -> String? {
         guard A.artifactKind == .sandboxSnapshot, let snapshotID = artifact.id else { return nil }
         guard try await SandboxController.liveForkCount(from: snapshotID, on: db) == 0 else {

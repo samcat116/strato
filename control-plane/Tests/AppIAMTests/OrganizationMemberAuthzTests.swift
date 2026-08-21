@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -29,9 +28,8 @@ final class OrganizationMemberAuthzTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Authz Org")
 
             let caller = try await builder.createUser(
@@ -91,7 +89,7 @@ final class OrganizationMemberAuthzTests {
         try await withMemberAuthzApp { app, org, _, _, _ in
             // Not a member of the org: no membership-derived org:read, no
             // binding — the evaluator denies the member list.
-            let outsider = try await TestDataBuilder(db: app.db).createUser(
+            let outsider = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "authz-outsider", email: "authz-outsider@example.com")
             let outsiderToken = try await outsider.generateAPIKey(on: app)
 
@@ -108,7 +106,7 @@ final class OrganizationMemberAuthzTests {
         // Pins the platform-bypass semantics these routes get from `req.can` —
         // the tier-1 `platform-system-admin` policy.
         try await withMemberAuthzApp { app, org, _, _, target in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let sysAdmin = try await builder.createUser(
                 username: "authzsysadmin",
                 email: "authzsysadmin@example.com",

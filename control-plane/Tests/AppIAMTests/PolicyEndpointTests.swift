@@ -1,4 +1,3 @@
-import Fluent
 import ControlPlanePostgres
 import Foundation
 import Testing
@@ -32,16 +31,15 @@ final class PolicyEndpointTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             // The authorizer tests read back the recorded decision's tier.
             app.iamDecisionLogConfig.recordDecisions = true
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "policyuser", email: "policy@example.com", displayName: "Policy User")
             let org = try await builder.createOrganization(name: "Policy Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
             let project = try await builder.createProject(
                 name: "Policy Project", description: "d", organization: org)
 
@@ -115,8 +113,8 @@ final class PolicyEndpointTests {
         let id = UUID()
         let prepared = try await PolicyStore.prepare(
             id: id, cedarText: cedarText, ownerType: ownerType, ownerID: ownerID,
-            engine: app.cedarEngine, on: app.db)
-        return try await PolicySetVersionService.withPolicySetChange(on: app.db) { db in
+            engine: app.cedarEngine, on: app.testPostgres)
+        return try await PolicySetVersionService.withPolicySetChange(on: app.testPostgres) { db in
             let policy = try await PolicyStore.create(
                 id: id, name: name, description: nil, ownerType: ownerType, ownerID: ownerID,
                 prepared: prepared, createdBy: nil, enabled: enabled, on: db)
@@ -131,7 +129,7 @@ final class PolicyEndpointTests {
         try await IAMAuthorizer.authorize(
             principal: .user(user.id!), action: action, node: node,
             context: IAMCheckContext(path: "/api/vms", method: "GET", requestID: "policy-test"),
-            state: .detached, app: app, db: app.db
+            state: .detached, app: app, db: app.testPostgres
         ).allowed
     }
 
@@ -147,7 +145,7 @@ final class PolicyEndpointTests {
     @Test("Creating a policy derives its effect and bumps the version")
     func createDerivesEffectAndBumps() async throws {
         try await withApp { app, fixture in
-            let before = try await PolicySetVersionService.current(on: app.db)
+            let before = try await PolicySetVersionService.current(on: app.testPostgres)
 
             let policy = try await createPolicy(
                 createBody(
@@ -160,7 +158,7 @@ final class PolicyEndpointTests {
             #expect(policy.ownerType == .project)
             #expect(policy.enabled)
 
-            let after = try await PolicySetVersionService.current(on: app.db)
+            let after = try await PolicySetVersionService.current(on: app.testPostgres)
             #expect(after == before + 1)
         }
     }
@@ -196,9 +194,9 @@ final class PolicyEndpointTests {
     func containmentRejectsForeignSubtree() async throws {
         try await withApp { app, fixture in
             // A second project under the same org — a sibling of the owner.
-            let sibling = try await TestDataBuilder(db: app.db).createProject(
+            let sibling = try await TestDataBuilder(db: app.testPostgres).createProject(
                 name: "Sibling", description: "d", organization: fixture.org)
-            let before = try await PolicySetVersionService.current(on: app.db)
+            let before = try await PolicySetVersionService.current(on: app.testPostgres)
 
             try await app.test(
                 .POST, "/api/iam/policies",
@@ -215,9 +213,9 @@ final class PolicyEndpointTests {
                     #expect(res.body.string.contains("not inside its owner"))
                 })
 
-            let stored = try await PolicyStore.count(on: app.db)
+            let stored = try await PolicyStore.count(on: app.testPostgres)
             #expect(stored == 0)
-            let after = try await PolicySetVersionService.current(on: app.db)
+            let after = try await PolicySetVersionService.current(on: app.testPostgres)
             #expect(after == before)
         }
     }
@@ -310,9 +308,9 @@ final class PolicyEndpointTests {
     @Test("Managing policies requires admin over the owner")
     func nonAdminForbidden() async throws {
         try await withApp { app, fixture in
-            let member = try await TestDataBuilder(db: app.db).createUser(
+            let member = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "policy-member", email: "policy-member@example.com")
-            try await TestDataBuilder(db: app.db).addUserToOrganization(
+            try await TestDataBuilder(db: app.testPostgres).addUserToOrganization(
                 user: member, organization: fixture.org, role: "member")
             let memberToken = try await member.generateAPIKey(on: app)
 
@@ -335,7 +333,7 @@ final class PolicyEndpointTests {
                     #expect(res.body.string.contains("Managing policies requires admin on the policy's owner"))
                 })
 
-            let stored = try await PolicyStore.count(on: app.db)
+            let stored = try await PolicyStore.count(on: app.testPostgres)
             #expect(stored == 0)
         }
     }
@@ -359,7 +357,7 @@ final class PolicyEndpointTests {
                     #expect(res.body.string.contains("Authored policies are owned by an organization or a project"))
                 })
 
-            let stored = try await PolicyStore.count(on: app.db)
+            let stored = try await PolicyStore.count(on: app.testPostgres)
             #expect(stored == 0)
         }
     }
@@ -402,7 +400,7 @@ final class PolicyEndpointTests {
                     cedarText: permitText(
                         user: fixture.user.id!, action: "vm:read", project: fixture.project.id!)),
                 token: fixture.token, on: app)
-            let before = try await PolicySetVersionService.current(on: app.db)
+            let before = try await PolicySetVersionService.current(on: app.testPostgres)
 
             try await app.test(
                 .PATCH, "/api/iam/policies/\(policy.id)",
@@ -422,7 +420,7 @@ final class PolicyEndpointTests {
                     #expect(updated.effect == .forbid)
                 })
 
-            let after = try await PolicySetVersionService.current(on: app.db)
+            let after = try await PolicySetVersionService.current(on: app.testPostgres)
             #expect(after == before + 1)
         }
     }
@@ -452,10 +450,10 @@ final class PolicyEndpointTests {
                 })
 
             // Still stored, but the compiled set skips disabled rows.
-            let stored = try await PolicyStore.count(on: app.db)
+            let stored = try await PolicyStore.count(on: app.testPostgres)
             #expect(stored == 1)
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
             let built = try #require(await app.cedarPolicySet.current)
             #expect(built.authoredPolicyCount == 0)
         }
@@ -470,7 +468,7 @@ final class PolicyEndpointTests {
                     cedarText: permitText(
                         user: fixture.user.id!, action: "vm:read", project: fixture.project.id!)),
                 token: fixture.token, on: app)
-            let afterCreate = try await PolicySetVersionService.current(on: app.db)
+            let afterCreate = try await PolicySetVersionService.current(on: app.testPostgres)
 
             try await app.test(
                 .DELETE, "/api/iam/policies/\(policy.id)",
@@ -481,9 +479,9 @@ final class PolicyEndpointTests {
                     #expect(res.status == .noContent)
                 })
 
-            let stored = try await PolicyStore.count(on: app.db)
+            let stored = try await PolicyStore.count(on: app.testPostgres)
             #expect(stored == 0)
-            let after = try await PolicySetVersionService.current(on: app.db)
+            let after = try await PolicySetVersionService.current(on: app.testPostgres)
             #expect(after == afterCreate + 1)
         }
     }
@@ -509,7 +507,7 @@ final class PolicyEndpointTests {
                 })
 
             // Nothing stored, no version bump paths hit.
-            let stored = try await PolicyStore.count(on: app.db)
+            let stored = try await PolicyStore.count(on: app.testPostgres)
             #expect(stored == 0)
         }
     }
@@ -519,7 +517,7 @@ final class PolicyEndpointTests {
     @Test("An authored permit grants an action with no role behind it")
     func authoredPermitGrants() async throws {
         try await withApp { app, fixture in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let subject = try await builder.createUser(
                 username: "grantee", email: "grantee@example.com")
             try await builder.addUserToOrganization(user: subject, organization: fixture.org, role: "member")
@@ -529,8 +527,8 @@ final class PolicyEndpointTests {
                 app, name: "grant-read", ownerType: .project, ownerID: fixture.project.id!,
                 cedarText: permitText(user: subject.id!, action: "vm:read", project: fixture.project.id!))
 
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
             let allowed = try await check(
                 app, user: subject, action: "vm:read",
@@ -548,7 +546,7 @@ final class PolicyEndpointTests {
     @Test("An authored forbid ceilings a role grant and is attributed to the policy tier")
     func authoredForbidCeilingsGrant() async throws {
         try await withApp { app, fixture in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let subject = try await builder.createUser(
                 username: "ceilinged", email: "ceilinged@example.com")
             try await builder.addUserToOrganization(user: subject, organization: fixture.org, role: "member")
@@ -557,14 +555,14 @@ final class PolicyEndpointTests {
             // A role grant that would allow the read…
             try await RoleBindingService.grant(
                 principalType: .user, principalID: subject.id!, role: .viewer,
-                nodeType: .project, nodeID: fixture.project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: fixture.project.id!, createdBy: nil, on: app.testPostgres)
             // …ceilinged by an authored forbid.
             try await insertPolicy(
                 app, name: "no-read", ownerType: .project, ownerID: fixture.project.id!,
                 cedarText: forbidText(user: subject.id!, action: "vm:read", project: fixture.project.id!))
 
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
+            let version = try await PolicySetVersionService.current(on: app.testPostgres)
+            await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
             let allowed = try await check(
                 app, user: subject, action: "vm:read",
@@ -583,7 +581,7 @@ final class PolicyEndpointTests {
     @Test("who-can reports authored policies in scope and flags the caveat")
     func whoCanReportsPoliciesAndCaveat() async throws {
         try await withApp { app, fixture in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let vm = try await builder.createVM(name: "who-vm", project: fixture.project)
 
             try await insertPolicy(
@@ -613,7 +611,7 @@ final class PolicyEndpointTests {
     @Test("who-can does not report a policy scoped to a different subtree")
     func whoCanExcludesForeignSubtree() async throws {
         try await withApp { app, fixture in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let sibling = try await builder.createProject(
                 name: "WC Sibling", description: "d", organization: fixture.org)
             let vm = try await builder.createVM(name: "wc-scoped-vm", project: fixture.project)

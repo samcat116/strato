@@ -1,7 +1,5 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
-import SQLKit
 import Testing
 import Vapor
 import VaporTesting
@@ -19,7 +17,7 @@ struct LastUsedTrackingTests {
 
     // MARK: - Helpers
 
-    private func makeUser(on db: any Database) async throws -> User {
+    private func makeUser(on db: PostgresStoreContext) async throws -> User {
         let user = User(
             username: "lastused-tester",
             email: "lastused@example.com",
@@ -160,9 +158,8 @@ struct LastUsedTrackingTests {
     func testAPIKeyFirstUseRecords() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await makeUser(on: app.db)
+        let user = try await makeUser(on: app.testPostgres)
         let (apiKey, fullKey) = try await makeAPIKey(
             for: user, on: app, lastUsedAt: nil, lastUsedIP: nil)
         let keyID = apiKey.id
@@ -186,9 +183,8 @@ struct LastUsedTrackingTests {
     func testAPIKeyDebouncesRepeatedUse() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await makeUser(on: app.db)
+        let user = try await makeUser(on: app.testPostgres)
         let (apiKey, fullKey) = try await makeAPIKey(
             for: user, on: app, lastUsedAt: nil, lastUsedIP: nil)
         let keyID = apiKey.id
@@ -226,9 +222,8 @@ struct LastUsedTrackingTests {
     func testConcurrentWritersCollapseToOne() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await makeUser(on: app.db)
+        let user = try await makeUser(on: app.testPostgres)
         let (apiKey, _) = try await makeAPIKey(
             for: user, on: app, lastUsedAt: nil, lastUsedIP: nil)
         let keyID = apiKey.id
@@ -263,9 +258,8 @@ struct LastUsedTrackingTests {
     func testAPIKeyWritesAfterWindow() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await makeUser(on: app.db)
+        let user = try await makeUser(on: app.testPostgres)
         let stale = Date().addingTimeInterval(-APIKeyCredential.lastUsedDebounceWindow - 60)
         let (apiKey, fullKey) = try await makeAPIKey(
             for: user, on: app, lastUsedAt: stale, lastUsedIP: "198.51.100.7")
@@ -289,9 +283,8 @@ struct LastUsedTrackingTests {
     func testCLISessionDebounce() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await makeUser(on: app.db)
+        let user = try await makeUser(on: app.testPostgres)
         let (session, accessToken) = try await makeCLISession(
             for: user, on: app, lastUsedAt: nil, lastUsedIP: nil)
         let sessionID = session.id
@@ -304,7 +297,7 @@ struct LastUsedTrackingTests {
                 accessTokenHash: session.accessTokenHash
             ))
         let recordedAt = try #require(afterFirst.lastUsedAt)
-        let sql = try #require(app.db as? any SQLDatabase)
+        let sql = try #require(Optional(app.testPostgres))
         try await sql.raw(
             "UPDATE cli_sessions SET last_used_ip = \(bind: "198.51.100.9") WHERE id = \(bind: sessionID)"
         ).run()

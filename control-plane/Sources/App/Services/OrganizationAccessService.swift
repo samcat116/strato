@@ -1,7 +1,6 @@
 import ControlPlanePostgres
 import Foundation
 import Vapor
-import Fluent
 
 /// Centralized organization- and project-scoped access checks shared by controllers.
 ///
@@ -110,26 +109,6 @@ struct OrganizationAccessService {
     /// entirely) can scope a list at all — and, since STR-203, so a credential
     /// restricted to a subtree can name the organization it is confined to
     /// instead of being refused for a permission the narrowing never used.
-    static func organizationListFilter(on req: Request) async throws -> OrganizationListFilter? {
-        guard let raw = req.query[String.self, at: "organization_id"] else { return nil }
-        guard let organizationID = UUID(uuidString: raw) else {
-            // Unlike the older `project_id` filters, a malformed id is rejected rather
-            // than ignored: silently returning the unfiltered fleet is the failure mode
-            // this filter exists to prevent.
-            throw Abort(.badRequest, reason: "Invalid organization_id")
-        }
-        try await requireMembershipForNarrowing(organizationID: organizationID, on: req)
-        return OrganizationListFilter(
-            organizationID: organizationID,
-            organizationalUnitIDs: try await LegacyOrganizationalUnitStore.organizationalUnits(
-                organizationIDs: [organizationID], on: req.db
-            ).compactMap(\.id)
-        )
-    }
-
-    /// Native-persistence variant used by migrated list endpoints. The query
-    /// parameter remains only a narrowing filter; per-row authorization still
-    /// decides which resources the caller may read.
     static func organizationListFilter(
         on req: Request,
         using hierarchy: HierarchyPersistence
@@ -176,7 +155,7 @@ struct OrganizationListFilter: Sendable {
 
     /// The projects in this organization's hierarchy — the bridge for resources that
     /// reach their org through a project (VMs, sandboxes) rather than owning a scope.
-    func projectIDs(on db: any Database) async throws -> [UUID] {
+    func projectIDs(on db: PostgresStoreContext) async throws -> [UUID] {
         try await LegacyProjectStore.projects(
             organizationIDs: [organizationID],
             organizationalUnitIDs: organizationalUnitIDs,

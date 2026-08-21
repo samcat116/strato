@@ -1,6 +1,5 @@
 import ControlPlanePostgres
 import Crypto
-import Fluent
 import Foundation
 import Vapor
 

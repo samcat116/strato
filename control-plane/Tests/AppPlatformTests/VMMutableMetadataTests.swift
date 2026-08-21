@@ -1,5 +1,4 @@
 import AppTestSupport
-import Fluent
 import Foundation
 import StratoShared
 import Testing
@@ -35,19 +34,18 @@ final class VMMutableMetadataTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let store = InMemoryCoordinationStore()
             app.coordination = CoordinationService(store: store, logger: app.logger)
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "metadata-editor", email: "metadata-editor@example.com",
                 displayName: "Metadata Editor")
             let organization = try await builder.createOrganization(name: "Mutable Metadata Org")
             try await builder.addUserToOrganization(
                 user: user, organization: organization, role: "admin")
-            try await user.replacingCurrentOrganization(try organization.requireID()).save(on: app.db)
+            try await user.replacingCurrentOrganization(try organization.requireID()).save(on: app.testPostgres)
             let project = try await builder.createProject(
                 name: "Mutable Metadata Project", description: "metadata patch tests",
                 organization: organization)
@@ -76,7 +74,7 @@ final class VMMutableMetadataTests {
                 HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
             ],
             protocolVersion: WireProtocol.currentVersion)
-        let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
+        let siteID = try await TestDataBuilder(db: app.testPostgres).placementSite(for: project).requireID()
         return try await app.agentService.registerAgent(
             message, agentName: message.agentId, siteID: siteID,
             organizationScope: .organization(organizationID)
@@ -84,36 +82,33 @@ final class VMMutableMetadataTests {
     }
 
     private func attachBootVolume(app: Application, vm: VM, agentID: String) async throws {
-        let owner = try #require(try await User.all(on: app.db).first)
+        let owner = try #require(try await User.all(on: app.testPostgres).first)
         let boot = Volume(
             name: "\(vm.name)-boot", description: "", projectID: vm.projectID,
             environment: vm.environment, size: vm.disk, format: .qcow2,
-            volumeType: .boot, status: .attached, createdByID: try owner.requireID())
-        boot.$vm.id = try vm.requireID()
-        boot.deviceName = VolumeDeviceName.disk(0).rawValue
-        boot.bootOrder = 0
-        boot.generation = 1
-        boot.observedGeneration = 1
-        try await boot.save(on: app.db)
+            volumeType: .boot, status: .attached, generation: 1, observedGeneration: 1,
+            createdByID: try owner.requireID(), vmID: try vm.requireID(),
+            deviceName: VolumeDeviceName.disk(0).rawValue, bootOrder: 0)
+        try await boot.save(on: app.testPostgres)
         try await placeVolume(
             boot, on: agentID,
             at: "/var/lib/strato/volumes/\(try boot.requireID())/volume.qcow2",
-            state: .healthy, using: app.db)
+            state: .healthy, using: app.testPostgres)
     }
 
     @Test("PATCH persists tags and keys with one generation bump and rings the placed agent")
     func patchConvergesMutableMetadata() async throws {
         try await withApp { app, project, token, store in
-            let organizationID = try #require(await project.getRootOrganizationId(on: app.db))
+            let organizationID = try #require(await project.getRootOrganizationId(on: app.testPostgres))
             let agentID = try await self.registerAgent(
                 app: app, project: project, organizationID: organizationID)
-            let vm = try await TestDataBuilder(db: app.db).createVM(
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(
                 name: "mutable-vm", project: project)
             vm.status = .running
             vm.desiredStatus = .running
             vm.hypervisorId = agentID
             vm.setSSHAuthorizedKeys([Self.firstKey])
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             try await self.attachBootVolume(app: app, vm: vm, agentID: agentID)
             let vmID = try vm.requireID()
             let startingGeneration = vm.generation
@@ -137,7 +132,7 @@ final class VMMutableMetadataTests {
                 #expect(body.conditions.targetGeneration == startingGeneration + 1)
             }
 
-            let updated = try #require(await VM.find(vmID, on: app.db))
+            let updated = try #require(await VM.find(vmID, on: app.testPostgres))
             #expect(updated.generation == startingGeneration + 1)
             #expect(updated.tags == request.tags)
             #expect(updated.sshAuthorizedKeys == [Self.secondKey])
@@ -160,15 +155,15 @@ final class VMMutableMetadataTests {
     @Test("an unchanged or empty PATCH is a no-op, while empty collections clear metadata")
     func noOpAndClearSemantics() async throws {
         try await withApp { app, project, token, store in
-            let organizationID = try #require(await project.getRootOrganizationId(on: app.db))
+            let organizationID = try #require(await project.getRootOrganizationId(on: app.testPostgres))
             let agentID = try await self.registerAgent(
                 app: app, project: project, organizationID: organizationID)
-            let vm = try await TestDataBuilder(db: app.db).createVM(
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(
                 name: "clearable-vm", project: project)
             vm.hypervisorId = agentID
             vm.tags = ["role": "api"]
             vm.setSSHAuthorizedKeys([Self.firstKey])
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             let vmID = try vm.requireID()
             let startingGeneration = vm.generation
 
@@ -183,7 +178,7 @@ final class VMMutableMetadataTests {
             } afterResponse: { response in
                 #expect(response.status == .ok)
             }
-            #expect(try await VM.find(vmID, on: app.db)?.generation == startingGeneration)
+            #expect(try await VM.find(vmID, on: app.testPostgres)?.generation == startingGeneration)
             #expect(await collector.waitFor(count: 1, timeoutMilliseconds: 200).isEmpty)
 
             try await app.test(.PATCH, "/api/vms/\(vmID)") { req in
@@ -196,7 +191,7 @@ final class VMMutableMetadataTests {
                 #expect(body.sshAuthorizedKeys.isEmpty)
             }
 
-            let cleared = try #require(await VM.find(vmID, on: app.db))
+            let cleared = try #require(await VM.find(vmID, on: app.testPostgres))
             #expect(cleared.generation == startingGeneration + 1)
             #expect(cleared.tags.isEmpty)
             #expect(cleared.sshAuthorizedKeys.isEmpty)
@@ -208,7 +203,7 @@ final class VMMutableMetadataTests {
     @Test("invalid authorized keys are rejected before metadata or generation changes")
     func invalidKeyIsRejected() async throws {
         try await withApp { app, project, token, _ in
-            let vm = try await TestDataBuilder(db: app.db).createVM(
+            let vm = try await TestDataBuilder(db: app.testPostgres).createVM(
                 name: "invalid-key-vm", project: project)
             let vmID = try vm.requireID()
             let startingGeneration = vm.generation
@@ -223,7 +218,7 @@ final class VMMutableMetadataTests {
                 #expect(response.status == .badRequest)
             }
 
-            let unchanged = try #require(await VM.find(vmID, on: app.db))
+            let unchanged = try #require(await VM.find(vmID, on: app.testPostgres))
             #expect(unchanged.generation == startingGeneration)
             #expect(unchanged.tags.isEmpty)
             #expect(unchanged.sshAuthorizedKeys.isEmpty)

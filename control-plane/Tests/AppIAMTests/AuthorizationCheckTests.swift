@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -20,9 +19,8 @@ final class AuthorizationCheckTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "authcheckuser",
                 email: "authcheck@example.com",
@@ -31,7 +29,7 @@ final class AuthorizationCheckTests {
             )
             let org = try await builder.createOrganization(name: "Auth Check Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "member")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
             let project = try await builder.createProject(
                 name: "Auth Check Project", description: "d", organization: org)
 
@@ -56,7 +54,7 @@ final class AuthorizationCheckTests {
             // granted by the binding, org member management is not.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .viewer,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
 
             try await app.test(.POST, "/api/authorization/check") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -85,7 +83,7 @@ final class AuthorizationCheckTests {
         try await withApp { app, user, org, project, token in
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .viewer,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
 
             try await app.test(.POST, "/api/authorization/check") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)

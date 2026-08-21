@@ -1,6 +1,6 @@
+import ControlPlanePostgres
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import AppTestSupport
 @testable import App
@@ -122,7 +122,7 @@ final class WorkloadSizeValidationTests {
     @Test("reserveSnapshotStorage answers 403 when the size would overflow the storage counter")
     func reserveSnapshotStorageRejectsOverflow() async throws {
         try await withApp { app, project, _, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             // A VM's disk gives the quota a non-zero measured storage baseline,
             // which is what turns an `Int64.max` snapshot size into an overflow.
             _ = try await builder.createVM(name: "storage-vm", project: project)
@@ -130,7 +130,7 @@ final class WorkloadSizeValidationTests {
 
             let error = await #expect(throws: Abort.self) {
                 try await QuotaEnforcementService.reserveSnapshotStorage(
-                    for: project, environment: "development", size: Int64.max, on: app.db)
+                    for: project, environment: "development", size: Int64.max, on: app.testPostgres)
             }
             #expect(error?.status == .forbidden)
         }
@@ -182,7 +182,7 @@ final class WorkloadSizeValidationTests {
                 // snapshot path later trapped the process on it.
                 self.expectSizeRejection(res)
             }
-            let count = try await VM.all(on: app.db).count
+            let count = try await VM.all(on: app.testPostgres).count
             #expect(count == 0)
         }
     }
@@ -202,7 +202,7 @@ final class WorkloadSizeValidationTests {
             } afterResponse: { res in
                 self.expectSizeRejection(res)
             }
-            let count = try await VM.all(on: app.db).count
+            let count = try await VM.all(on: app.testPostgres).count
             #expect(count == 0)
         }
     }
@@ -219,7 +219,7 @@ final class WorkloadSizeValidationTests {
             } afterResponse: { res in
                 self.expectSizeRejection(res)
             }
-            let count = try await VM.all(on: app.db).count
+            let count = try await VM.all(on: app.testPostgres).count
             #expect(count == 0)
         }
     }
@@ -245,7 +245,7 @@ final class WorkloadSizeValidationTests {
             }
 
             let vmID = try #require(createdVMID)
-            let created = try #require(await VM.find(vmID, on: app.db))
+            let created = try #require(await VM.find(vmID, on: app.testPostgres))
             #expect(created.cpu == WorkloadSizeLimits.maxVCPUs)
             #expect(created.memory == WorkloadSizeLimits.maxMemoryBytes)
             #expect(created.disk == WorkloadSizeLimits.maxDiskBytes)
@@ -253,14 +253,14 @@ final class WorkloadSizeValidationTests {
 
             // The background create dispatch fails (no agents run in tests);
             // let it reach a terminal state before teardown.
-            try await waitForCreateToSettle(resourceID: vmID, on: app.db)
+            try await waitForCreateToSettle(resourceID: vmID, on: app.testPostgres)
         }
     }
 
     @Test("PUT /api/vms/:id rejects an oversized 'memory' with 400")
     func vmResizeRejectsOversizedMemory() async throws {
         try await withApp { app, project, _, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let vm = try await builder.createVM(name: "resize-target", project: project)
 
             try await app.test(.PUT, "/api/vms/\(vm.id!)") { req in
@@ -272,7 +272,7 @@ final class WorkloadSizeValidationTests {
                 self.expectSizeRejection(res)
             }
 
-            let refreshed = try await VM.find(vm.id, on: app.db)
+            let refreshed = try await VM.find(vm.id, on: app.testPostgres)
             #expect(refreshed?.memory == vm.memory)
         }
     }
@@ -280,7 +280,7 @@ final class WorkloadSizeValidationTests {
     @Test("PUT /api/vms/:id accepts a resize to exactly the memory limit")
     func vmResizeAcceptsMemoryAtTheLimit() async throws {
         try await withApp { app, project, _, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let vm = try await builder.createVM(name: "resize-to-limit", project: project)
 
             try await app.test(.PUT, "/api/vms/\(vm.id!)") { req in
@@ -294,7 +294,7 @@ final class WorkloadSizeValidationTests {
                 #expect(res.status == .ok)
             }
 
-            let refreshed = try await VM.find(vm.id, on: app.db)
+            let refreshed = try await VM.find(vm.id, on: app.testPostgres)
             #expect(refreshed?.memory == WorkloadSizeLimits.maxMemoryBytes)
             #expect(refreshed?.maxMemory == WorkloadSizeLimits.maxMemoryBytes)
         }
@@ -317,7 +317,7 @@ final class WorkloadSizeValidationTests {
             } afterResponse: { res in
                 self.expectSizeRejection(res)
             }
-            let count = try await Sandbox.all(on: app.db).count
+            let count = try await Sandbox.all(on: app.testPostgres).count
             #expect(count == 0)
         }
     }
@@ -340,7 +340,7 @@ final class WorkloadSizeValidationTests {
             } afterResponse: { res in
                 self.expectSizeRejection(res)
             }
-            let count = try await Sandbox.all(on: app.db).count
+            let count = try await Sandbox.all(on: app.testPostgres).count
             #expect(count == 0)
         }
     }
@@ -362,11 +362,11 @@ final class WorkloadSizeValidationTests {
             }
 
             let sandboxID = try #require(createdSandboxID)
-            let created = try #require(await Sandbox.find(sandboxID, on: app.db))
+            let created = try #require(await Sandbox.find(sandboxID, on: app.testPostgres))
             #expect(created.cpus == WorkloadSizeLimits.maxVCPUs)
             #expect(created.memory == WorkloadSizeLimits.maxMemoryBytes)
 
-            try await waitForCreateToSettle(resourceID: sandboxID, on: app.db)
+            try await waitForCreateToSettle(resourceID: sandboxID, on: app.testPostgres)
         }
     }
 
@@ -375,7 +375,7 @@ final class WorkloadSizeValidationTests {
     /// lands as `degraded` on the workload itself since STR-152 — there is no
     /// operation row left to poll — so the workload is both the subject and the
     /// evidence, and either kind may be the one under test.
-    private func waitForCreateToSettle(resourceID: UUID, on db: any Database) async throws {
+    private func waitForCreateToSettle(resourceID: UUID, on db: PostgresStoreContext) async throws {
         for _ in 0..<100 {
             if try await VM.find(resourceID, on: db)?.failedGeneration != nil { return }
             if try await Sandbox.find(resourceID, on: db)?.failedGeneration != nil { return }
@@ -394,14 +394,13 @@ final class WorkloadSizeValidationTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "sizeuser", email: "size@example.com", displayName: "Size User")
             let org = try await builder.createOrganization(name: "Size Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Size Project", description: "p", organization: org)

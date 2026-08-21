@@ -1,6 +1,5 @@
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import AppTestSupport
 @testable import App
@@ -18,8 +17,7 @@ final class OrganizationAccessServiceTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
-            try await test(app, TestDataBuilder(db: app.db))
+            try await test(app, TestDataBuilder(db: app.testPostgres))
         } catch {
             try await app.shutdownForTesting()
             throw error
@@ -124,7 +122,7 @@ final class OrganizationAccessServiceTests {
 
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .viewer,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
             try await OrganizationAccessService.requireProjectMember(project: project, on: req)
 
             // A user with no binding anywhere — the check must fail.
@@ -146,14 +144,14 @@ final class OrganizationAccessServiceTests {
 
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
             try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
 
             // Editors may update project metadata, but cannot administer IAM policy.
             let editor = try await builder.createUser(username: "a2", email: "a2@example.com")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: editor.id!, role: .editor,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
             let editorRequest = self.authedRequest(app, user: editor)
             try await OrganizationAccessService.requireProjectAction(
                 "project:update", project: project, on: editorRequest)
@@ -165,7 +163,7 @@ final class OrganizationAccessServiceTests {
             let viewer = try await builder.createUser(username: "a3", email: "a3@example.com")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: viewer.id!, role: .viewer,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
             await self.expectAbort(.forbidden, reason: "Admin access required") {
                 try await OrganizationAccessService.requireProjectPolicyAdmin(
                     project: project, on: self.authedRequest(app, user: viewer))

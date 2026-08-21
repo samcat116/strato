@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Testing
 import Vapor
@@ -18,7 +17,6 @@ final class GuestIdentityTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -49,7 +47,7 @@ final class GuestIdentityTests {
                     platformTrustDomain: PlatformTrustDomain.current),
                 phase: phase,
                 orgBundlePEM: bundlePEM),
-            on: app.db)
+            on: app.testPostgres)
     }
 
     // MARK: - Composition
@@ -93,7 +91,7 @@ final class GuestIdentityTests {
             // The row exists and would qualify — the flag alone keeps the
             // multi-domain path dormant, which is the whole point of phase 2.
             let resolved = try await GuestIdentity.trustDomain(
-                forOrganization: orgID, configuration: configuration, on: app.db)
+                forOrganization: orgID, configuration: configuration, on: app.testPostgres)
             #expect(resolved == PlatformTrustDomain.current)
             #expect(resolved != row.trustDomain)
         }
@@ -109,7 +107,7 @@ final class GuestIdentityTests {
                 bundlePEM: "-----BEGIN CERTIFICATE-----")
 
             let resolved = try await GuestIdentity.trustDomain(
-                forOrganization: orgID, configuration: configuration, on: app.db)
+                forOrganization: orgID, configuration: configuration, on: app.testPostgres)
             #expect(resolved == row.trustDomain)
         }
     }
@@ -126,7 +124,7 @@ final class GuestIdentityTests {
                 app, organizationID: orgID, phase: .active, bundlePEM: nil)
 
             let resolved = try await GuestIdentity.trustDomain(
-                forOrganization: orgID, configuration: configuration, on: app.db)
+                forOrganization: orgID, configuration: configuration, on: app.testPostgres)
             #expect(resolved == PlatformTrustDomain.current)
         }
     }
@@ -142,7 +140,7 @@ final class GuestIdentityTests {
                     bundlePEM: "-----BEGIN CERTIFICATE-----")
 
                 let resolved = try await GuestIdentity.trustDomain(
-                    forOrganization: orgID, configuration: configuration, on: app.db)
+                    forOrganization: orgID, configuration: configuration, on: app.testPostgres)
                 #expect(resolved == PlatformTrustDomain.current, "phase \(phase.rawValue)")
             }
         }
@@ -153,7 +151,7 @@ final class GuestIdentityTests {
         try await withApp { app in
             let configuration = try await self.configuration(orgTrustDomainsEnabled: true)
             let resolved = try await GuestIdentity.trustDomain(
-                forOrganization: nil, configuration: configuration, on: app.db)
+                forOrganization: nil, configuration: configuration, on: app.testPostgres)
             #expect(resolved == PlatformTrustDomain.current)
         }
     }
@@ -163,7 +161,7 @@ final class GuestIdentityTests {
     @Test("A registered VM resolves to a workload principal through the registry")
     func registrationResolvesToAWorkloadPrincipal() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Guest Identity Org")
             let project = try await builder.createProject(
                 name: "Guest Identity Project", description: "d", organization: org)
@@ -172,7 +170,7 @@ final class GuestIdentityTests {
             let orgID = try org.requireID()
 
             let registration = try await GuestIdentity.register(
-                vmID: vmID, organizationID: orgID, createdBy: nil, on: app.db)
+                vmID: vmID, organizationID: orgID, createdBy: nil, on: app.testPostgres)
             let registrationID = registration.id
 
             #expect(registration.kind == .workload)
@@ -186,35 +184,35 @@ final class GuestIdentityTests {
             // The registry — not any parsing of the URI — is what turns the
             // identity into a principal.
             let resolved = try await WorkloadRegistry.resolve(
-                spiffeID: registration.spiffeID, on: app.db)
+                spiffeID: registration.spiffeID, on: app.testPostgres)
             #expect(resolved == .workload(id: registrationID))
             #expect(resolved?.principal == IAMPrincipal.workload(registrationID))
 
             // The batched lookup the sync assembly and the VM list use.
-            let batched = try await GuestIdentity.spiffeIDs(forVMs: [vmID], on: app.db)
+            let batched = try await GuestIdentity.spiffeIDs(forVMs: [vmID], on: app.testPostgres)
             #expect(batched[vmID] == registration.spiffeID)
-            #expect(try await GuestIdentity.spiffeID(forVM: vmID, on: app.db) == registration.spiffeID)
+            #expect(try await GuestIdentity.spiffeID(forVM: vmID, on: app.testPostgres) == registration.spiffeID)
         }
     }
 
     @Test("An unregistered VM has no identity, and the empty batch asks nothing")
     func unregisteredVMHasNoIdentity() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Unregistered Org")
             let project = try await builder.createProject(
                 name: "Unregistered Project", description: "d", organization: org)
             let vm = try await builder.createVM(name: "anonymous-vm", project: project)
 
-            #expect(try await GuestIdentity.spiffeID(forVM: vm.requireID(), on: app.db) == nil)
-            #expect(try await GuestIdentity.spiffeIDs(forVMs: [], on: app.db).isEmpty)
+            #expect(try await GuestIdentity.spiffeID(forVM: vm.requireID(), on: app.testPostgres) == nil)
+            #expect(try await GuestIdentity.spiffeIDs(forVMs: [], on: app.testPostgres).isEmpty)
         }
     }
 
     @Test("An org-less registration is external to every organization")
     func orgLessRegistrationIsExternal() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Gate Org")
             let project = try await builder.createProject(
                 name: "Gate Project", description: "d", organization: org)
@@ -228,7 +226,7 @@ final class GuestIdentityTests {
             // pin what a NULL-org registration means before someone rediscovers
             // it as a bug.
             let registration = try await GuestIdentity.register(
-                vmID: try vm.requireID(), organizationID: nil, createdBy: nil, on: app.db)
+                vmID: try vm.requireID(), organizationID: nil, createdBy: nil, on: app.testPostgres)
             #expect(registration.organizationID == nil)
 
             // External, so binding a role to it needs `iam:grantExternal` — the
@@ -237,7 +235,7 @@ final class GuestIdentityTests {
             // the gate.
             let external = try await CrossOrgBindingGate.isExternal(
                 principalType: .workload, principalID: registration.id,
-                organizationID: try org.requireID(), on: app.db)
+                organizationID: try org.requireID(), on: app.testPostgres)
             #expect(external)
         }
     }
@@ -245,7 +243,7 @@ final class GuestIdentityTests {
     @Test("A VM cannot hold two identities")
     func oneRegistrationPerVM() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "Single Identity Org")
             let project = try await builder.createProject(
                 name: "Single Identity Project", description: "d", organization: org)
@@ -254,7 +252,7 @@ final class GuestIdentityTests {
             let orgID = try org.requireID()
 
             try await GuestIdentity.register(
-                vmID: vmID, organizationID: orgID, createdBy: nil, on: app.db)
+                vmID: vmID, organizationID: orgID, createdBy: nil, on: app.testPostgres)
 
             // A *distinct* SPIFFE ID on the same VM, so the `spiffe_id` index
             // cannot be what refuses it: two rows would give one VM two
@@ -270,7 +268,7 @@ final class GuestIdentityTests {
                         kind: WorkloadRegistrationKind.workload.rawValue,
                         organizationID: orgID,
                         vmID: vmID),
-                    on: app.db)
+                    on: app.testPostgres)
             }
         }
     }

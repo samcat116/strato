@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import NIOConcurrencyHelpers
 import Testing
 import Vapor
@@ -21,9 +20,8 @@ final class AuditLoggingTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "audituser",
                 email: "audit@example.com",
@@ -32,7 +30,7 @@ final class AuditLoggingTests {
             )
             let org = try await builder.createOrganization(name: "Audit Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let token = try await user.generateAPIKey(on: app)
             try await test(app, user, org, token)
@@ -122,10 +120,10 @@ final class AuditLoggingTests {
         try await withApp { app, _, org, _ in
             // Someone whose current org they are not a member of: the
             // middleware's collection gate denies before the handler runs.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let outsider = try await builder.createUser(
                 username: "audit-outsider", email: "audit-outsider@example.com")
-            try await outsider.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await outsider.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
             let outsiderToken = try await outsider.generateAPIKey(on: app)
 
             try await app.test(.POST, "/api/vms") { req in
@@ -272,9 +270,9 @@ final class AuditLoggingTests {
             }
 
             // A bare member is not an org admin, so the same query is denied.
-            let member = try await TestDataBuilder(db: app.db).createUser(
+            let member = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "audit-member", email: "audit-member@example.com")
-            try await TestDataBuilder(db: app.db).addUserToOrganization(
+            try await TestDataBuilder(db: app.testPostgres).addUserToOrganization(
                 user: member, organization: org, role: "member")
             let memberToken = try await member.generateAPIKey(on: app)
             try await app.test(.GET, "/api/organizations/\(org.id!)/audit-events") { req in

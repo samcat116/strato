@@ -1,12 +1,11 @@
+import ControlPlanePostgres
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import NIOCore
 import NIOHTTP1
 import StratoShared
 import AppTestSupport
-import SQLKit
 @testable import App
 
 @Suite("Image Controller Tests", .serialized)
@@ -56,7 +55,7 @@ final class ImageControllerTests {
     /// exercise denial paths (the Cedar evaluator denies without a grant).
     static func makeOutsiderToken(on app: Application) async throws -> String {
         let suffix = UUID().uuidString.prefix(8)
-        let outsider = try await TestDataBuilder(db: app.db).createUser(
+        let outsider = try await TestDataBuilder(db: app.testPostgres).createUser(
             username: "img-outsider-\(suffix)",
             email: "img-outsider-\(suffix)@example.com")
         return try await outsider.generateAPIKey(on: app)
@@ -219,7 +218,6 @@ final class ImageControllerTests {
             // Inject mock ImageFetchService to prevent real HTTP requests
             app.imageFetchService = MockImageFetchService()
 
-            try await app.autoMigrate()
 
             // Create test user
             let testUser = User(
@@ -228,21 +226,21 @@ final class ImageControllerTests {
                 displayName: "Image Test User",
                 isSystemAdmin: false
             )
-            try await testUser.save(on: app.db)
+            try await testUser.save(on: app.testPostgres)
 
             // Create test organization
             let testOrganization = Organization(
                 name: "Image Test Org",
                 description: "Organization for image tests"
             )
-            try await testOrganization.save(on: app.db)
+            try await testOrganization.save(on: app.testPostgres)
 
             // Add user to organization
             _ = try await OrganizationMembershipStore.insert(
                 userID: testUser.id!,
                 organizationID: testOrganization.id!,
                 roleID: IAMRole.admin.seededID,
-                on: app.db
+                on: app.testPostgres
             )
 
             // The admin role binding the API/backfill would have written
@@ -250,7 +248,7 @@ final class ImageControllerTests {
             // answers from `role_bindings`.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: testUser.id!, role: .admin,
-                nodeType: .organization, nodeID: testOrganization.id!, createdBy: nil, on: app.db)
+                nodeType: .organization, nodeID: testOrganization.id!, createdBy: nil, on: app.testPostgres)
 
             // Create test project
             var testProject = Project(
@@ -259,9 +257,9 @@ final class ImageControllerTests {
                 organizationID: testOrganization.id,
                 path: ""
             )
-            try await testProject.save(on: app.db)
-            testProject = testProject.replacingPath(try await testProject.buildPath(on: app.db))
-            try await testProject.save(on: app.db)
+            try await testProject.save(on: app.testPostgres)
+            testProject = testProject.replacingPath(try await testProject.buildPath(on: app.testPostgres))
+            try await testProject.save(on: app.testPostgres)
 
             // Generate auth token
             let authToken = try await testUser.generateAPIKey(on: app)
@@ -284,7 +282,7 @@ final class ImageControllerTests {
         on app: Application,
         _ operation: () async throws -> Void
     ) async throws {
-        let sql = try #require(app.db as? any SQLDatabase)
+        let sql = try #require(Optional(app.testPostgres))
         try await sql.raw(
             """
             CREATE FUNCTION fail_image_artifact_insert() RETURNS trigger AS $$
@@ -540,7 +538,7 @@ final class ImageControllerTests {
             let id = try #require(imageID)
             let artifact = try #require(
                 try await LegacyImageArtifactStore.artifact(
-                    imageID: id, kind: .diskImage, on: app.db))
+                    imageID: id, kind: .diskImage, on: app.testPostgres))
             #expect(artifact.expectedChecksum == supplied.lowercased())
             // The observed digest stays empty until the download actually runs;
             // the caller's claim must never be mistaken for it.
@@ -567,7 +565,7 @@ final class ImageControllerTests {
             let id = try #require(imageID)
             let artifact = try #require(
                 try await LegacyImageArtifactStore.artifact(
-                    imageID: id, kind: .diskImage, on: app.db))
+                    imageID: id, kind: .diskImage, on: app.testPostgres))
             #expect(artifact.expectedChecksum == nil)
         }
     }
@@ -592,7 +590,7 @@ final class ImageControllerTests {
     func testListImagesSuccess() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
             // Create an image
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(
                 name: "Test Image",
                 project: project,
@@ -641,7 +639,7 @@ final class ImageControllerTests {
     @Test("Get image returns image details")
     func testGetImageSuccess() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(
                 name: "Detail Test Image",
                 description: "Image description",
@@ -687,10 +685,10 @@ final class ImageControllerTests {
                 organizationID: org.id,
                 path: ""
             )
-            try await otherProject.save(on: app.db)
+            try await otherProject.save(on: app.testPostgres)
 
             // Create image in the other project
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(
                 name: "Other Image",
                 project: otherProject,
@@ -709,7 +707,7 @@ final class ImageControllerTests {
     @Test("Get image returns 401 without auth token")
     func testGetImageUnauthorized() async throws {
         try await withImageTestApp { app, user, _, project, _, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(project: project, uploadedBy: user)
 
             try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)") { _ in
@@ -765,12 +763,12 @@ final class ImageControllerTests {
                 }
             }
 
-            #expect(try await LegacyImageStore.count(on: app.db) == 0)
-            #expect(try await LegacyImageArtifactStore.count(on: app.db) == 0)
+            #expect(try await LegacyImageStore.count(on: app.testPostgres) == 0)
+            #expect(try await LegacyImageArtifactStore.count(on: app.testPostgres) == 0)
             #expect(
                 try await LegacyRoleBindingStore.bindings(
                     nodeType: IAMNodeType.image.rawValue,
-                    on: app.db).isEmpty)
+                    on: app.testPostgres).isEmpty)
         }
     }
 
@@ -972,7 +970,7 @@ final class ImageControllerTests {
     @Test("Update image succeeds")
     func testUpdateImageSuccess() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(
                 name: "Original Name",
                 description: "Original description",
@@ -1005,7 +1003,7 @@ final class ImageControllerTests {
     @Test("Update image partial update only changes provided fields")
     func testUpdateImagePartialUpdate() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(
                 name: "Original Name",
                 description: "Original description",
@@ -1059,7 +1057,7 @@ final class ImageControllerTests {
     @Test("Update image returns 401 without auth")
     func testUpdateImageUnauthorized() async throws {
         try await withImageTestApp { app, user, _, project, _, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(project: project, uploadedBy: user)
 
             try await app.test(.PUT, "/api/projects/\(project.id!)/images/\(image.id!)") { req in
@@ -1083,7 +1081,7 @@ final class ImageControllerTests {
     @Test("Delete image succeeds")
     func testDeleteImageSuccess() async throws {
         try await withImageTestApp { app, user, _, project, authToken, tempStoragePath in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(project: project, uploadedBy: user)
             let imageId = image.id!
 
@@ -1101,7 +1099,7 @@ final class ImageControllerTests {
             // to drop with the row — bindings have no FK to it (STR-112).
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .image, nodeID: imageId, createdBy: user.id!, on: app.db)
+                nodeType: .image, nodeID: imageId, createdBy: user.id!, on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/projects/\(project.id!)/images/\(imageId)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -1110,13 +1108,13 @@ final class ImageControllerTests {
             }
 
             // Verify image is deleted from database
-            let deletedImage = try await LegacyImageStore.image(id: imageId, on: app.db)
+            let deletedImage = try await LegacyImageStore.image(id: imageId, on: app.testPostgres)
             #expect(deletedImage == nil)
 
             let bindings = try await LegacyRoleBindingStore.bindings(
                 nodeType: IAMNodeType.image.rawValue,
                 nodeID: imageId,
-                on: app.db).count
+                on: app.testPostgres).count
             #expect(bindings == 0)
         }
     }
@@ -1137,7 +1135,7 @@ final class ImageControllerTests {
     @Test("Delete image returns 401 without auth")
     func testDeleteImageUnauthorized() async throws {
         try await withImageTestApp { app, user, _, project, _, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(project: project, uploadedBy: user)
 
             try await app.test(.DELETE, "/api/projects/\(project.id!)/images/\(image.id!)") { _ in
@@ -1153,7 +1151,7 @@ final class ImageControllerTests {
     @Test("Get image status returns status details")
     func testGetImageStatusSuccess() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(
                 project: project,
                 status: .ready,
@@ -1175,7 +1173,7 @@ final class ImageControllerTests {
     @Test("Get image status for pending image")
     func testGetImageStatusPending() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(
                 project: project,
                 status: .pending,
@@ -1210,7 +1208,7 @@ final class ImageControllerTests {
     @Test("Get image status returns 401 without auth")
     func testGetImageStatusUnauthorized() async throws {
         try await withImageTestApp { app, user, _, project, _, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(project: project, uploadedBy: user)
 
             try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)/status") { _ in
@@ -1226,7 +1224,7 @@ final class ImageControllerTests {
     @Test("Download requires an explicit artifact kind")
     func testDownloadRequiresArtifactKind() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(project: project, uploadedBy: user)
 
             try await app.test(
@@ -1242,7 +1240,7 @@ final class ImageControllerTests {
     @Test("Download image returns 400 for non-ready image")
     func testDownloadImageNotReady() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(
                 project: project,
                 status: .pending,
@@ -1275,7 +1273,7 @@ final class ImageControllerTests {
     @Test("Download image returns 401 without auth")
     func testDownloadImageUnauthorized() async throws {
         try await withImageTestApp { app, user, _, project, _, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(project: project, uploadedBy: user)
 
             try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)/download?artifact=disk-image") {
@@ -1485,8 +1483,8 @@ final class ImageControllerTests {
             }
 
             let image = try await LegacyImageArtifactStore.loading(
-                #require(try await LegacyImageStore.image(id: imageID, on: app.db)),
-                on: app.db)
+                #require(try await LegacyImageStore.image(id: imageID, on: app.testPostgres)),
+                on: app.testPostgres)
             let info = try VMSpecBuilder.buildImageInfo(from: image)
             // Only the two ready artifacts are offered; the pending disk-image is withheld.
             #expect(info.artifacts.count == 2)
@@ -1540,7 +1538,7 @@ final class ImageControllerTests {
     @Test("Get image is denied (403) when the caller lacks read")
     func testGetImageForbiddenWhenDenied() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(project: project, uploadedBy: user)
             let outsiderToken = try await Self.makeOutsiderToken(on: app)
 
@@ -1579,7 +1577,7 @@ final class ImageControllerTests {
     @Test("Update image is denied (403) when the caller lacks update")
     func testUpdateImageForbiddenWhenDenied() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(project: project, uploadedBy: user)
             let outsiderToken = try await Self.makeOutsiderToken(on: app)
 
@@ -1604,7 +1602,7 @@ final class ImageControllerTests {
     @Test("Delete image is denied (403) when the caller lacks delete")
     func testDeleteImageForbiddenWhenDenied() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(project: project, uploadedBy: user)
             let outsiderToken = try await Self.makeOutsiderToken(on: app)
 
@@ -1619,7 +1617,7 @@ final class ImageControllerTests {
     @Test("Get image status is denied (403) when the caller lacks read")
     func testGetImageStatusForbiddenWhenDenied() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let image = try await builder.createImage(project: project, uploadedBy: user)
             let outsiderToken = try await Self.makeOutsiderToken(on: app)
 
@@ -1754,7 +1752,7 @@ final class ImageControllerTests {
                 #expect(res.status == .badRequest)
             }
 
-            let images = try await LegacyImageStore.images(on: app.db)
+            let images = try await LegacyImageStore.images(on: app.testPostgres)
             #expect(images.isEmpty)
 
             // And no orphaned bytes under the project prefix.
@@ -1771,7 +1769,7 @@ final class ImageControllerTests {
     func testArtifactPersistenceFailureCleansUpUpload() async throws {
         try await withImageTestApp { app, _, _, project, authToken, tempStoragePath in
             let (body, boundary) = Self.createMultipartFormData(
-                name: "Database failure",
+                name: "PostgresStoreContext failure",
                 description: nil,
                 filename: "failed.qcow2",
                 fileContent: Self.createQCOW2Buffer())
@@ -1788,7 +1786,7 @@ final class ImageControllerTests {
                 }
             }
 
-            #expect(try await LegacyImageStore.count(on: app.db) == 0)
+            #expect(try await LegacyImageStore.count(on: app.testPostgres) == 0)
 
             let projectDirectory = "\(tempStoragePath)/\(project.id!)"
             let subpaths =
@@ -1872,7 +1870,7 @@ final class ImageControllerTests {
             }
 
             // The rejected upload must leave neither a row nor stray bytes.
-            let images = try await LegacyImageStore.images(on: app.db)
+            let images = try await LegacyImageStore.images(on: app.testPostgres)
             #expect(images.isEmpty)
             let leftovers =
                 FileManager.default.enumerator(atPath: tempStoragePath)?
@@ -1920,7 +1918,7 @@ final class ImageControllerTests {
                 #expect(res.status == .badRequest)
             }
 
-            let images = try await LegacyImageStore.images(on: app.db)
+            let images = try await LegacyImageStore.images(on: app.testPostgres)
             #expect(images.isEmpty)
         }
     }
@@ -2011,7 +2009,7 @@ final class ImageControllerTests {
             }
 
             // The temporary row is gone...
-            let remaining = try await LegacyImageStore.count(on: app.db)
+            let remaining = try await LegacyImageStore.count(on: app.testPostgres)
             #expect(remaining == 0)
 
             // ...and so are the bytes it was pointing at. Empty directories may
@@ -2048,7 +2046,7 @@ final class ImageControllerTests {
                 #expect(res.status == .badRequest)
             }
 
-            let remaining = try await LegacyImageStore.count(on: app.db)
+            let remaining = try await LegacyImageStore.count(on: app.testPostgres)
             #expect(remaining == 0)
         }
     }
@@ -2072,7 +2070,7 @@ final class ImageControllerTests {
                 #expect(res.status == .ok)
             }
 
-            let stored = try await LegacyImageStore.images(on: app.db).first
+            let stored = try await LegacyImageStore.images(on: app.testPostgres).first
             #expect(stored?.name == atLimit)
         }
     }

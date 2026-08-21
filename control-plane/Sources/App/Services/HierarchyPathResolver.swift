@@ -1,6 +1,6 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
-import Fluent
 
 /// Resolves the breadcrumb path (organization → OU chain → project → VM) for an
 /// entity in the hierarchy. Extracted from `HierarchyController` so the recursive
@@ -14,7 +14,7 @@ import Fluent
 struct HierarchyPathResolver {
     /// Builds the ordered path components from the organization root down to the
     /// given entity. Unknown entity types yield just the organization root.
-    static func buildEntityPath(entityType: String, entityID: UUID, organizationID: UUID, on db: Database) async throws
+    static func buildEntityPath(entityType: String, entityID: UUID, organizationID: UUID, on db: PostgresStoreContext) async throws
         -> [PathComponent]
     {
         var components: [PathComponent] = []

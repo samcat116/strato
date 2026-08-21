@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -83,7 +82,7 @@ enum GuestIdentity {
     static func trustDomain(
         forOrganization organizationID: UUID?,
         configuration: ControlPlaneConfiguration,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> String {
         let platform = configuration.string(.spireTrustDomain)!
         guard configuration.bool(.spireOrgTrustDomainsEnabled) == true, let organizationID else {
@@ -120,7 +119,7 @@ enum GuestIdentity {
         organizationID: UUID?,
         createdBy: UUID?,
         configuration: ControlPlaneConfiguration,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LegacyWorkloadRegistrationRecord {
         let trustDomain = try await trustDomain(
             forOrganization: organizationID, configuration: configuration, on: db)
@@ -142,7 +141,7 @@ enum GuestIdentity {
         vmID: UUID,
         organizationID: UUID?,
         createdBy: UUID?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LegacyWorkloadRegistrationRecord {
         try await LegacyWorkloadRegistrationStore.insert(
             WorkloadRegistrationWrite(
@@ -156,7 +155,7 @@ enum GuestIdentity {
 
     /// The current names of a set of VMs, for hydrating registry labels.
     /// Chunked and batched for the same reason `spiffeIDs(forVMs:on:)` is.
-    static func names(forVMs vmIDs: [UUID], on db: any Database) async throws -> [UUID: String] {
+    static func names(forVMs vmIDs: [UUID], on db: PostgresStoreContext) async throws -> [UUID: String] {
         guard !vmIDs.isEmpty else { return [:] }
 
         var result: [UUID: String] = [:]
@@ -187,7 +186,7 @@ enum GuestIdentity {
     /// rather than a per-VM cost. A VM missing from the result has no
     /// registration — an administrator revoked it — and is vended no identity.
     static func registrations(
-        forVMs vmIDs: [UUID], on db: any Database
+        forVMs vmIDs: [UUID], on db: PostgresStoreContext
     ) async throws -> [UUID: RegistrationReference] {
         guard !vmIDs.isEmpty else { return [:] }
 
@@ -207,21 +206,21 @@ enum GuestIdentity {
 
     /// The SPIFFE IDs of a set of VMs, for desired-state assembly and other
     /// callers that do not need the principal id.
-    static func spiffeIDs(forVMs vmIDs: [UUID], on db: any Database) async throws -> [UUID: String] {
+    static func spiffeIDs(forVMs vmIDs: [UUID], on db: PostgresStoreContext) async throws -> [UUID: String] {
         try await registrations(forVMs: vmIDs, on: db).mapValues(\.spiffeID)
     }
 
     /// One VM's registration reference. Nil after an administrator revokes
     /// the identity through the one-way registry deletion surface.
     static func registration(
-        forVM vmID: UUID, on db: any Database
+        forVM vmID: UUID, on db: PostgresStoreContext
     ) async throws -> RegistrationReference? {
         try await registrations(forVMs: [vmID], on: db)[vmID]
     }
 
     /// One VM's SPIFFE ID, for the single-resource endpoints. Nil when the VM
     /// has no registration.
-    static func spiffeID(forVM vmID: UUID, on db: any Database) async throws -> String? {
+    static func spiffeID(forVM vmID: UUID, on db: PostgresStoreContext) async throws -> String? {
         try await registration(forVM: vmID, on: db)?.spiffeID
     }
 }

@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import StratoShared
 import Vapor
@@ -144,29 +144,29 @@ struct VolumeSnapshot: Content, Sendable {
         return id
     }
 
-    func persisted(on db: any Database) async throws -> Self {
+    func persisted(on db: PostgresStoreContext) async throws -> Self {
         try await LegacyVolumeSnapshotStore.upsert(self, on: db)
     }
 
-    func persist(on db: any Database) async throws { _ = try await persisted(on: db) }
-    func save(on db: any Database) async throws { try await persist(on: db) }
+    func persist(on db: PostgresStoreContext) async throws { _ = try await persisted(on: db) }
+    func save(on db: PostgresStoreContext) async throws { try await persist(on: db) }
 
-    func remove(on db: any Database) async throws {
+    func remove(on db: PostgresStoreContext) async throws {
         guard let id else { return }
         _ = try await LegacyVolumeSnapshotStore.delete(id: id, on: db)
     }
 
-    func delete(on db: any Database) async throws { try await remove(on: db) }
+    func delete(on db: PostgresStoreContext) async throws { try await remove(on: db) }
 
-    static func load(_ id: UUID?, on db: any Database) async throws -> Self? {
+    static func load(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await LegacyVolumeSnapshotStore.snapshot(id: id, on: db)
     }
 
-    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+    static func find(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await load(id, on: db)
     }
 
-    static func all(on db: any Database) async throws -> [Self] {
+    static func all(on db: PostgresStoreContext) async throws -> [Self] {
         try await LegacyVolumeSnapshotStore.snapshots(on: db)
     }
 
@@ -299,23 +299,23 @@ extension VolumeSnapshot: SnapshotArtifactResource {
     /// unless the pool could absorb it fully grown.
     var storageQuotaScope: (projectID: UUID, environment: String)? { nil }
 
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [VolumeSnapshot] {
+    static func overdueForConvergence(at now: Date, on db: PostgresStoreContext) async throws -> [VolumeSnapshot] {
         try await LegacyVolumeSnapshotStore.snapshots(overdueAt: now, on: db)
     }
 
-    static func placed(onAgent agentId: String, on db: any Database) async throws -> [VolumeSnapshot] {
+    static func placed(onAgent agentId: String, on db: PostgresStoreContext) async throws -> [VolumeSnapshot] {
         try await LegacyVolumeSnapshotStore.snapshots(agentID: agentId, on: db)
     }
 
-    static func matching(ids: [UUID], on db: any Database) async throws -> [VolumeSnapshot] {
+    static func matching(ids: [UUID], on db: PostgresStoreContext) async throws -> [VolumeSnapshot] {
         try await LegacyVolumeSnapshotStore.snapshots(ids: ids, on: db)
     }
 
-    static func expired(at now: Date, on db: any Database) async throws -> [VolumeSnapshot] {
+    static func expired(at now: Date, on db: PostgresStoreContext) async throws -> [VolumeSnapshot] {
         try await LegacyVolumeSnapshotStore.snapshots(expiredAt: now, on: db)
     }
 
-    static func terminating(on db: any Database) async throws -> [VolumeSnapshot] {
+    static func terminating(on db: PostgresStoreContext) async throws -> [VolumeSnapshot] {
         try await LegacyVolumeSnapshotStore.snapshots(terminating: true, on: db)
     }
 

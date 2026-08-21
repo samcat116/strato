@@ -1,7 +1,6 @@
 import Testing
 import Vapor
 import VaporTesting
-import Fluent
 import ControlPlanePostgres
 import AppTestSupport
 @testable import App
@@ -11,7 +10,7 @@ struct APIKeyAuthenticatorTests {
 
     // MARK: - Test Helpers
 
-    func createTestUser(on db: Database) async throws -> User {
+    func createTestUser(on db: PostgresStoreContext) async throws -> User {
         let user = User(
             username: "testuser",
             email: "test@example.com",
@@ -55,9 +54,8 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await createTestUser(on: app.db)
+        let user = try await createTestUser(on: app.testPostgres)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app)
 
         // Create a test route that requires authentication
@@ -68,7 +66,7 @@ struct APIKeyAuthenticatorTests {
         let protected = app.grouped(
             BearerAuthorizationHeaderAuthenticator(
                 apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
-                users: app.userDirectoryPersistence
+                users: app.userDirectoryPersistence, workloads: app.workloadsPersistence
             )
         )
         protected.get("test") { req -> String in
@@ -96,9 +94,8 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await createTestUser(on: app.db)
+        let user = try await createTestUser(on: app.testPostgres)
         _ = try await createTestAPIKey(for: user, on: app)
 
         // Create a test route that requires authentication
@@ -109,7 +106,7 @@ struct APIKeyAuthenticatorTests {
         let protected = app.grouped(
             BearerAuthorizationHeaderAuthenticator(
                 apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
-                users: app.userDirectoryPersistence))
+                users: app.userDirectoryPersistence, workloads: app.workloadsPersistence))
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
                 throw Abort(.unauthorized)
@@ -134,9 +131,8 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await createTestUser(on: app.db)
+        let user = try await createTestUser(on: app.testPostgres)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app)
 
         app.routes.all.removeAll()
@@ -166,7 +162,6 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         // Create a test route that requires authentication
         app.routes.all.removeAll()
@@ -176,7 +171,7 @@ struct APIKeyAuthenticatorTests {
         let protected = app.grouped(
             BearerAuthorizationHeaderAuthenticator(
                 apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
-                users: app.userDirectoryPersistence))
+                users: app.userDirectoryPersistence, workloads: app.workloadsPersistence))
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
                 throw Abort(.unauthorized)
@@ -198,9 +193,8 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await createTestUser(on: app.db)
+        let user = try await createTestUser(on: app.testPostgres)
         _ = try await createTestAPIKey(for: user, on: app)
 
         // Create a test route that requires authentication
@@ -211,7 +205,7 @@ struct APIKeyAuthenticatorTests {
         let protected = app.grouped(
             BearerAuthorizationHeaderAuthenticator(
                 apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
-                users: app.userDirectoryPersistence))
+                users: app.userDirectoryPersistence, workloads: app.workloadsPersistence))
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
                 throw Abort(.unauthorized)
@@ -239,9 +233,8 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await createTestUser(on: app.db)
+        let user = try await createTestUser(on: app.testPostgres)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app, isActive: false)
 
         // Create a test route that requires authentication
@@ -252,7 +245,7 @@ struct APIKeyAuthenticatorTests {
         let protected = app.grouped(
             BearerAuthorizationHeaderAuthenticator(
                 apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
-                users: app.userDirectoryPersistence))
+                users: app.userDirectoryPersistence, workloads: app.workloadsPersistence))
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
                 throw Abort(.unauthorized)
@@ -277,9 +270,8 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await createTestUser(on: app.db)
+        let user = try await createTestUser(on: app.testPostgres)
         let expiredDate = Date().addingTimeInterval(-86400)  // 1 day ago
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app, expiresAt: expiredDate)
 
@@ -291,7 +283,7 @@ struct APIKeyAuthenticatorTests {
         let protected = app.grouped(
             BearerAuthorizationHeaderAuthenticator(
                 apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
-                users: app.userDirectoryPersistence))
+                users: app.userDirectoryPersistence, workloads: app.workloadsPersistence))
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
                 throw Abort(.unauthorized)
@@ -316,9 +308,8 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await createTestUser(on: app.db)
+        let user = try await createTestUser(on: app.testPostgres)
         let futureDate = Date().addingTimeInterval(86400)  // 1 day from now
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app, expiresAt: futureDate)
 
@@ -330,7 +321,7 @@ struct APIKeyAuthenticatorTests {
         let protected = app.grouped(
             BearerAuthorizationHeaderAuthenticator(
                 apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
-                users: app.userDirectoryPersistence))
+                users: app.userDirectoryPersistence, workloads: app.workloadsPersistence))
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
                 throw Abort(.unauthorized)
@@ -358,9 +349,8 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await createTestUser(on: app.db)
+        let user = try await createTestUser(on: app.testPostgres)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app)
 
         // Create a test route that checks user details
@@ -371,7 +361,7 @@ struct APIKeyAuthenticatorTests {
         let protected = app.grouped(
             BearerAuthorizationHeaderAuthenticator(
                 apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
-                users: app.userDirectoryPersistence))
+                users: app.userDirectoryPersistence, workloads: app.workloadsPersistence))
         protected.get("test") { req -> String in
             guard let authUser = req.auth.get(User.self) else {
                 throw Abort(.unauthorized)
@@ -399,9 +389,8 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await createTestUser(on: app.db)
+        let user = try await createTestUser(on: app.testPostgres)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app)
 
         // Create a test route that checks API key storage
@@ -412,7 +401,7 @@ struct APIKeyAuthenticatorTests {
         let protected = app.grouped(
             BearerAuthorizationHeaderAuthenticator(
                 apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
-                users: app.userDirectoryPersistence))
+                users: app.userDirectoryPersistence, workloads: app.workloadsPersistence))
         protected.get("test") { req -> String in
             guard let storedKey = req.apiKey else {
                 throw Abort(.internalServerError, reason: "API key not stored")
@@ -448,7 +437,7 @@ struct APIKeyAuthenticatorTests {
         let protected = app.grouped(
             BearerAuthorizationHeaderAuthenticator(
                 apiKeys: app.apiKeysPersistence, oauthSessions: app.oauthDeviceSessionsPersistence,
-                users: app.userDirectoryPersistence),
+                users: app.userDirectoryPersistence, workloads: app.workloadsPersistence),
             CredentialRestrictionMiddleware()
         )
         protected.get("resource") { _ in "read-ok" }
@@ -459,9 +448,8 @@ struct APIKeyAuthenticatorTests {
     func testReadScopeAllowsGet() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await createTestUser(on: app.db)
+        let user = try await createTestUser(on: app.testPostgres)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app, restriction: .readOnly)
         registerScopedRoutes(on: app)
 
@@ -482,9 +470,8 @@ struct APIKeyAuthenticatorTests {
     func testReadScopeForbidsPost() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await createTestUser(on: app.db)
+        let user = try await createTestUser(on: app.testPostgres)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app, restriction: .readOnly)
         registerScopedRoutes(on: app)
 
@@ -506,9 +493,8 @@ struct APIKeyAuthenticatorTests {
     func testReadOnlyCLISessionForbidsPost() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await createTestUser(on: app.db)
+        let user = try await createTestUser(on: app.testPostgres)
         let accessToken = CLISession.generateAccessToken()
         _ = try await app.oauthDeviceSessionsPersistence.createSession(
             CLISessionWrite(
@@ -549,12 +535,11 @@ struct APIKeyAuthenticatorTests {
     func testScopeDenialRecorded() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
         // Enable decision-row recording (off by default under .testing), after
         // configure resets the config and before the recorder is lazily built.
         app.iamDecisionLogConfig.recordDecisions = true
 
-        let user = try await createTestUser(on: app.db)
+        let user = try await createTestUser(on: app.testPostgres)
         let (apiKey, fullKey) = try await createTestAPIKey(
             for: user, on: app, restriction: .readOnly)
         registerScopedRoutes(on: app)
@@ -601,9 +586,8 @@ struct APIKeyAuthenticatorTests {
     func testUnrestrictedKeyAllowsReadAndWrite() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await createTestUser(on: app.db)
+        let user = try await createTestUser(on: app.testPostgres)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app)
         registerScopedRoutes(on: app)
 
@@ -636,9 +620,8 @@ struct APIKeyAuthenticatorTests {
     func testActionRestrictedKeyCannotMutateIdentityPlane() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
-        let user = try await createTestUser(on: app.db)
+        let user = try await createTestUser(on: app.testPostgres)
         let restriction = try CredentialRestriction.validated(
             actions: ["vm:*"], nodeType: nil, nodeID: nil)
         let (_, fullKey) = try await createTestAPIKey(

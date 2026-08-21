@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 /// Value vocabulary for security-group rules. The namespace deliberately has
@@ -39,7 +38,7 @@ struct SecurityGroupRuleSnapshot: Equatable, Sendable {
 enum LegacySecurityGroupRuleStore {
     static func rules(
         securityGroupIDs: [UUID],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [SecurityGroupRuleSnapshot] {
         guard !securityGroupIDs.isEmpty else { return [] }
         let rows = try await requireSQL(db).raw(
@@ -55,7 +54,7 @@ enum LegacySecurityGroupRuleStore {
 
     static func rules(
         securityGroupID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [SecurityGroupRuleSnapshot] {
         try await rules(securityGroupIDs: [securityGroupID], on: db)
     }
@@ -63,7 +62,7 @@ enum LegacySecurityGroupRuleStore {
     static func rule(
         id: UUID,
         securityGroupID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> SecurityGroupRuleSnapshot? {
         guard let row = try await requireSQL(db).raw(
             """
@@ -89,7 +88,7 @@ enum LegacySecurityGroupRuleStore {
         remoteGroupID: UUID? = nil,
         log: Bool = false,
         description: String? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> SecurityGroupRuleSnapshot {
         guard let row = try await requireSQL(db).raw(
             """
@@ -115,7 +114,7 @@ enum LegacySecurityGroupRuleStore {
     static func delete(
         id: UUID,
         securityGroupID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
@@ -129,7 +128,7 @@ enum LegacySecurityGroupRuleStore {
 
     static func delete(
         securityGroupIDs: [UUID],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws {
         guard !securityGroupIDs.isEmpty else { return }
         try await requireSQL(db).raw(
@@ -139,7 +138,7 @@ enum LegacySecurityGroupRuleStore {
 
     static func count(
         securityGroupID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Int {
         struct Count: Decodable { let count: Int }
         return try await requireSQL(db).raw(
@@ -154,7 +153,7 @@ enum LegacySecurityGroupRuleStore {
     static func externalReferenceCount(
         remoteGroupID: UUID,
         excludingSecurityGroupID: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Int {
         struct Count: Decodable { let count: Int }
         return try await requireSQL(db).raw(
@@ -169,7 +168,7 @@ enum LegacySecurityGroupRuleStore {
 
     static func remoteGroupIDs(
         securityGroupIDs: [UUID],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [UUID] {
         guard !securityGroupIDs.isEmpty else { return [] }
         struct RemoteGroup: Decodable { let id: UUID }
@@ -235,8 +234,8 @@ enum LegacySecurityGroupRuleStore {
         created_at AS "createdAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Security-group rules require PostgreSQL")
         }
         return sql

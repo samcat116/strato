@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -56,15 +55,15 @@ struct OrganizationalUnit: Content, Equatable, Sendable {
         return id
     }
 
-    func save(on db: any Database) async throws {
+    func save(on db: PostgresStoreContext) async throws {
         _ = try await LegacyOrganizationalUnitStore.upsert(self, on: db)
     }
 
-    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+    static func find(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await LegacyOrganizationalUnitStore.organizationalUnit(id: id, on: db)
     }
 
-    static func all(on db: any Database) async throws -> [Self] {
+    static func all(on db: PostgresStoreContext) async throws -> [Self] {
         try await LegacyOrganizationalUnitStore.organizationalUnits(on: db)
     }
 
@@ -128,7 +127,7 @@ extension OrganizationalUnit {
     }
 
     /// Builds the path string for this OU based on its hierarchy
-    func buildPath(on db: Database) async throws -> String {
+    func buildPath(on db: PostgresStoreContext) async throws -> String {
         var pathComponents: [String] = []
 
         // Add organization ID as root
@@ -155,7 +154,7 @@ extension OrganizationalUnit {
     }
 
     /// Calculates the depth of this OU in the hierarchy
-    func calculateDepth(on db: Database) async throws -> Int {
+    func calculateDepth(on db: PostgresStoreContext) async throws -> Int {
         var depth = 0
         var currentOU: OrganizationalUnit? = self
 
@@ -173,7 +172,7 @@ extension OrganizationalUnit {
     /// descendant is exactly a row whose path extends this one. Matching that
     /// prefix is indexable; the `LIKE '%<uuid>%'` contains-match it replaced
     /// could only ever be a sequential scan (issue #692).
-    func descendants(on db: Database) async throws -> [OrganizationalUnit] {
+    func descendants(on db: PostgresStoreContext) async throws -> [OrganizationalUnit] {
         try await OrganizationalUnit.descendants(ofPath: path, on: db)
     }
 
@@ -183,13 +182,13 @@ extension OrganizationalUnit {
     ///
     /// Sorted by name so a caller assembling a tree from one flat load orders
     /// each sibling group the way the per-level queries it replaced did.
-    static func descendants(ofPath path: String, on db: Database) async throws -> [OrganizationalUnit] {
+    static func descendants(ofPath path: String, on db: PostgresStoreContext) async throws -> [OrganizationalUnit] {
         try await LegacyOrganizationalUnitStore.descendants(ofPath: path, on: db)
     }
 
     /// This folder's id plus every descendant's — the folder ids a
     /// folder-scoped quota or listing spans.
-    func selfAndDescendantIDs(on db: Database) async throws -> [UUID] {
+    func selfAndDescendantIDs(on db: PostgresStoreContext) async throws -> [UUID] {
         guard let selfId = self.id else { return [] }
         let descendantIDs = try await descendants(on: db).compactMap { $0.id }
         return [selfId] + descendantIDs

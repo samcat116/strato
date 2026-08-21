@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import StratoShared
 import Vapor
 
@@ -9,19 +8,22 @@ struct NetworkController: RouteCollection {
     let networks: NetworksPersistence
     let sites: SitesPersistence
     let hierarchy: HierarchyPersistence
+    let database: PostgresStoreContext
 
     init(
         iam: IAMPersistence,
         projects: ProjectsPersistence,
         networks: NetworksPersistence,
         sites: SitesPersistence,
-        hierarchy: HierarchyPersistence
+        hierarchy: HierarchyPersistence,
+        database: PostgresStoreContext
     ) {
         self.iam = iam
         self.projects = projects
         self.networks = networks
         self.sites = sites
         self.hierarchy = hierarchy
+        self.database = database
     }
     func boot(routes: RoutesBuilder) throws {
         let networks = routes.grouped("api", "networks")
@@ -313,7 +315,7 @@ struct NetworkController: RouteCollection {
         var network = try await fetchNetworkWithAction(req: req, user: user, action: "network:update")
         let request = try req.content.decodeValidated(UpdateNetworkRequest.self)
 
-        var interfaceCount = try await attachedInterfaceCount(for: network, on: req.db)
+        var interfaceCount = try await attachedInterfaceCount(for: network, on: database)
 
         // Renaming an in-use network is safe since issue #765: NICs, addresses
         // and the agent's OVN objects all key on the row id, so the name is a
@@ -374,7 +376,7 @@ struct NetworkController: RouteCollection {
         if network.subnet != originalSubnet {
             try await Self.assertNoSubnetOverlap(
                 subnet: network.subnet, subnet6: network.subnet6, projectId: network.projectID,
-                excluding: network.id, on: req.db)
+                excluding: network.id, on: database)
         }
 
         if let externalAccess = request.externalAccess {
@@ -385,7 +387,7 @@ struct NetworkController: RouteCollection {
             // dependency explicit: detach first.
             if !externalAccess && network.externalAccess {
                 let attachedFloatingIPs = try await Self.attachedFloatingIPCount(
-                    networkID: networkID, on: req.db)
+                    networkID: networkID, on: database)
                 guard attachedFloatingIPs == 0 else {
                     throw Abort(
                         .conflict,
@@ -432,7 +434,7 @@ struct NetworkController: RouteCollection {
         // moves a live address — moving one would change what guests were told
         // over DHCP and strand every lease until it renewed. Deferred to the
         // save transaction below rather than done here: the allocator's advisory
-        // lock is transaction-scoped, so allocating on `req.db` would release it
+        // lock is transaction-scoped, so allocating on `database` would release it
         // before the chosen index was durable and let two concurrent enables
         // pick the same one.
         // The zone this network's VMs register into (issue #770). Only ever a
@@ -453,12 +455,12 @@ struct NetworkController: RouteCollection {
             requestedPrimaryZoneName = nil
             network = network.replacing(primaryDNSZoneID: .some(nil))
         } else if let zoneID = request.primaryDnsZoneId {
-            guard let zone = try await LegacyDNSZoneStore.find(id: zoneID, on: req.db) else {
+            guard let zone = try await LegacyDNSZoneStore.find(id: zoneID, on: database) else {
                 throw Abort(.badRequest, reason: "DNS zone \(zoneID) does not exist")
             }
             requestedPrimaryZoneName = zone.name
             let attached = try await DNSZoneNetworkStore.count(
-                zoneID: zoneID, networkID: networkID, on: req.db)
+                zoneID: zoneID, networkID: networkID, on: database)
             guard attached > 0 else {
                 throw Abort(
                     .conflict,
@@ -469,7 +471,7 @@ struct NetworkController: RouteCollection {
                 throw Abort(.forbidden, reason: "You don't have permission to modify this DNS zone")
             }
             try await DNSZoneService.assertPrimaryZoneAssignable(
-                zone: zone, networkID: networkID, on: req.db)
+                zone: zone, networkID: networkID, on: database)
             network = network.replacing(primaryDNSZoneID: .some(zoneID))
         } else {
             requestedPrimaryZoneName = nil
@@ -482,7 +484,7 @@ struct NetworkController: RouteCollection {
             // successive generations instead of saving one stale model over
             // the other.
             let prepared = network
-            let committed = try await req.db.transaction { db -> (LogicalNetwork, Int) in
+            let committed = try await database.transaction { db -> (LogicalNetwork, Int) in
                 switch try await DesiredStateGenerationWriter.lockCurrent(
                     schema: LogicalNetwork.schema, id: networkID, expectedGeneration: nil, on: db)
                 {
@@ -659,7 +661,7 @@ struct NetworkController: RouteCollection {
             }
             network = committed.0
             interfaceCount = committed.1
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A network named '\(network.name)' already exists")
         }
 
@@ -679,7 +681,7 @@ struct NetworkController: RouteCollection {
 
         return NetworkResponse(
             from: network, attachedInterfaceCount: interfaceCount,
-            zoneResolutionWarning: try await zoneResolutionWarning(for: network, on: req.db))
+            zoneResolutionWarning: try await zoneResolutionWarning(for: network, on: database))
     }
 
     // MARK: - Delete Network
@@ -739,7 +741,7 @@ struct NetworkController: RouteCollection {
     /// Joined rather than intersected in Swift: the set this counts is a
     /// handful of rows, but the reduction used to load every NIC on the
     /// network and the whole `floating_ips` table to find them.
-    static func attachedFloatingIPCount(networkID: UUID, on db: Database) async throws -> Int {
+    static func attachedFloatingIPCount(networkID: UUID, on db: PostgresStoreContext) async throws -> Int {
         try await LegacyFloatingIPStore.attachedInterfaceCount(networkID: networkID, on: db)
     }
 
@@ -769,7 +771,7 @@ struct NetworkController: RouteCollection {
     /// Each family is checked against its own sibling column.
     static func assertNoSubnetOverlap(
         subnet: String, subnet6: String? = nil, projectId: UUID?, excluding networkId: UUID?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws {
         guard let projectId else { return }
         let siblings = try await LegacyLogicalNetworkStore.networks(
@@ -1040,7 +1042,7 @@ struct NetworkController: RouteCollection {
     /// the in-use check for subnet changes and delete. Both kinds count: a
     /// sandbox NIC holds an address from the same pool, so a network carrying
     /// only sandboxes is not idle.
-    private func attachedInterfaceCount(for network: LogicalNetwork, on db: Database) async throws -> Int {
+    private func attachedInterfaceCount(for network: LogicalNetwork, on db: PostgresStoreContext) async throws -> Int {
         let networkID = try network.requireID()
         let vmInterfaces = try await LegacyVMNetworkInterfaceStore.count(
             logicalNetworkID: networkID, on: db)
@@ -1056,7 +1058,7 @@ struct NetworkController: RouteCollection {
     /// network with no attached zone cannot be failing to deliver one, and that
     /// is the overwhelming majority of networks, so the capability read is only
     /// paid for by the ones the answer could be about.
-    private func zoneResolutionWarning(for network: LogicalNetwork, on db: any Database) async throws
+    private func zoneResolutionWarning(for network: LogicalNetwork, on db: PostgresStoreContext) async throws
         -> String?
     {
         let networkID = try network.requireID()
@@ -1106,7 +1108,7 @@ struct NetworkController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid network ID")
         }
 
-        guard let network = try await LogicalNetwork.find(networkId, on: req.db) else {
+        guard let network = try await LogicalNetwork.find(networkId, on: database) else {
             throw Abort(.notFound, reason: "Network not found")
         }
 

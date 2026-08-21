@@ -1,5 +1,4 @@
-import Fluent
-import SQLKit
+import ControlPlanePostgres
 import StratoShared
 import Vapor
 
@@ -38,7 +37,7 @@ enum ResolverAddressAllocator {
     /// on for a network that had it before, does not consume a second index or
     /// move a live one — moving it would change what guests were told over DHCP
     /// and strand every lease until it renewed.
-    static func ensureIndex(for network: LogicalNetwork, on db: any Database) async throws -> Int {
+    static func ensureIndex(for network: LogicalNetwork, on db: PostgresStoreContext) async throws -> Int {
         if let existing = network.resolverIndex {
             return existing
         }
@@ -51,22 +50,13 @@ enum ResolverAddressAllocator {
         // One column, not the model: with the flag defaulting on this runs for
         // every network create, and hydrating every `LogicalNetwork` in the
         // fleet to read one `Int` off each is the kind of cost that is invisible
-        // until the fleet is large. Fluent has no projection, so this drops to
-        // SQLKit where one is available.
-        let used: Set<Int>
-        if let sql = db as? any SQLDatabase {
-            let rows = try await sql.select()
-                .column("resolver_index")
-                .from("logical_networks")
-                .where("resolver_index", .isNot, SQLLiteral.null)
-                .all()
-            used = Set(rows.compactMap { try? $0.decode(column: "resolver_index", as: Int.self) })
-        } else {
-            used = Set(
-                try await LegacyLogicalNetworkStore.networks(
-                    resolverIndexPresent: true, on: db
-                ).compactMap(\.resolverIndex))
-        }
+        // until the fleet is large.
+        let rows = try await db.raw(
+            "SELECT resolver_index FROM logical_networks WHERE resolver_index IS NOT NULL"
+        ).all()
+        let used = Set(rows.compactMap {
+            try? $0.decode(column: "resolver_index", as: Int.self)
+        })
 
         guard let index = firstFree(after: used) else {
             throw Abort(
@@ -101,8 +91,7 @@ enum ResolverAddressAllocator {
     }
 
     /// Postgres only, and transaction-scoped, matching `IPAMService`.
-    static func lock(on db: any Database) async throws {
-        guard let sql = db as? any SQLDatabase, sql.dialect.name == "postgresql" else { return }
-        try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: lockKey)))").run()
+    static func lock(on db: PostgresStoreContext) async throws {
+        try await db.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: lockKey)))").run()
     }
 }

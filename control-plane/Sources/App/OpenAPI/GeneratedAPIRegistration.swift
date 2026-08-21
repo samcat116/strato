@@ -34,6 +34,7 @@ func registerGeneratedAPIHandlers(
     // request as a task local that the handlers read.
     let transport = VaporTransport(routesBuilder: app.grouped(OpenAPIRequestInjectionMiddleware()))
     try ProjectsAPIService(
+        database: persistence.storeContext,
         projects: persistence.projects,
         quotas: persistence.resourceQuotas,
         iam: persistence.iam,

@@ -1,7 +1,6 @@
+import ControlPlanePostgres
 import Testing
 import Vapor
-import Fluent
-import SQLKit
 import VaporTesting
 import StratoShared
 import AppTestSupport
@@ -37,9 +36,8 @@ final class VMOperationTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "vmopuser",
                 email: "vmop@example.com",
@@ -48,7 +46,7 @@ final class VMOperationTests {
             )
             let org = try await builder.createOrganization(name: "VM Op Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "VM Op Project",
@@ -72,7 +70,7 @@ final class VMOperationTests {
     /// The operation is completed before the VM status is written, so once the
     /// VM matches, the operation is guaranteed terminal.
     private func pollVMStatus(
-        _ vmID: UUID, until expected: VMStatus, on db: any Database
+        _ vmID: UUID, until expected: VMStatus, on db: PostgresStoreContext
     ) async throws {
         for _ in 0..<100 {
             if let vm = try await VM.find(vmID, on: db), vm.status == expected {
@@ -86,7 +84,7 @@ final class VMOperationTests {
     /// Waits for the background dispatch to degrade the VM, returning its
     /// `conditions`. The `202` returns before the dispatch runs, so a test
     /// asserting on the outcome has to poll the row it asserts on.
-    private func pollDegraded(_ vmID: UUID, on db: any Database) async throws -> ResourceConditions? {
+    private func pollDegraded(_ vmID: UUID, on db: PostgresStoreContext) async throws -> ResourceConditions? {
         for _ in 0..<100 {
             if let vm = try await VM.find(vmID, on: db), vm.conditions.degraded != nil {
                 return vm.conditions
@@ -113,7 +111,7 @@ final class VMOperationTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40),
             protocolVersion: wireProtocolVersion)
-        let orgID = try await Organization.all(on: app.db).first?.id
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: "reboot-agent", organizationScope: orgID.map { .organization($0) })
 
@@ -122,7 +120,7 @@ final class VMOperationTests {
         vm.desiredStatus = .running
         vm.generation = 1
         vm.observedGeneration = 1
-        try await vm.save(on: app.db)
+        try await vm.save(on: app.testPostgres)
         return agentUUID.uuidString
     }
 
@@ -130,8 +128,8 @@ final class VMOperationTests {
     func attachNetworkInterfaceUsesLowestFreeSlot() async throws {
         try await withVMTestApp { app, user, vm, token in
             try await placeOnAgent(app: app, vm: &vm)
-            let project = try #require(try await Project.find(vm.projectID, on: app.db))
-            let network = try await TestDataBuilder(db: app.db).createNetwork(
+            let project = try #require(try await Project.find(vm.projectID, on: app.testPostgres))
+            let network = try await TestDataBuilder(db: app.testPostgres).createNetwork(
                 name: "hotplug-net", project: project,
                 subnet: "10.240.0.0/24", gateway: "10.240.0.1")
             for slot in [0, 2] {
@@ -139,7 +137,7 @@ final class VMOperationTests {
                     vmID: vm.id!, logicalNetworkID: network.id!,
                     macAddress: "52:54:00:00:00:0\(slot)",
                     deviceName: "net\(slot)", orderIndex: slot
-                ).save(on: app.db)
+                ).save(on: app.testPostgres)
             }
 
             var accepted: AcceptedMutation<VMDetailResponse>?
@@ -153,7 +151,7 @@ final class VMOperationTests {
 
             let created = try #require(
                 try await LegacyVMNetworkInterfaceStore.interface(
-                    vmID: vm.id!, orderIndex: 1, on: app.db))
+                    vmID: vm.id!, orderIndex: 1, on: app.testPostgres))
             #expect(created.deviceName == "net1")
             #expect(created.mtu == 1450)
             #expect(created.attachGeneration == accepted?.targetGeneration)
@@ -172,8 +170,8 @@ final class VMOperationTests {
     func networkInterfaceAttachRejectsStaticNetwork() async throws {
         try await withVMTestApp { app, user, vm, token in
             try await placeOnAgent(app: app, vm: &vm)
-            let project = try #require(try await Project.find(vm.projectID, on: app.db))
-            let network = try await TestDataBuilder(db: app.db).createNetwork(
+            let project = try #require(try await Project.find(vm.projectID, on: app.testPostgres))
+            let network = try await TestDataBuilder(db: app.testPostgres).createNetwork(
                 name: "static-hotplug-net", project: project,
                 subnet: "10.243.0.0/24", gateway: "10.243.0.1", dhcpEnabled: false)
 
@@ -187,8 +185,8 @@ final class VMOperationTests {
 
             #expect(
                 try await LegacyVMNetworkInterfaceStore.interfaces(
-                    vmID: vm.id!, on: app.db).isEmpty)
-            #expect(try await VM.find(vm.id, on: app.db)?.generation == 1)
+                    vmID: vm.id!, on: app.testPostgres).isEmpty)
+            #expect(try await VM.find(vm.id, on: app.testPostgres)?.generation == 1)
         }
     }
 
@@ -196,15 +194,15 @@ final class VMOperationTests {
     func detachFinalNetworkInterfaceAndRetry() async throws {
         try await withVMTestApp { app, user, vm, token in
             try await placeOnAgent(app: app, vm: &vm)
-            let project = try #require(try await Project.find(vm.projectID, on: app.db))
-            let network = try await TestDataBuilder(db: app.db).createNetwork(
+            let project = try #require(try await Project.find(vm.projectID, on: app.testPostgres))
+            let network = try await TestDataBuilder(db: app.testPostgres).createNetwork(
                 name: "detach-net", project: project,
                 subnet: "10.242.0.0/24", gateway: "10.242.0.1")
             let nic = VMNetworkInterface(
                 vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: "52:54:00:00:00:42", deviceName: "net0", orderIndex: 0,
                 attachGeneration: vm.generation)
-            try await nic.save(on: app.db)
+            try await nic.save(on: app.testPostgres)
             let nicID = try nic.requireID()
 
             try await app.test(.POST, "/api/vms/\(vm.id!)/interfaces/\(nicID)/retry") { req in
@@ -223,16 +221,16 @@ final class VMOperationTests {
                 ).targetGeneration
             }
             let retained = try #require(
-                try await LegacyVMNetworkInterfaceStore.interface(id: nicID, on: app.db))
+                try await LegacyVMNetworkInterfaceStore.interface(id: nicID, on: app.testPostgres))
             #expect(retained.detachGeneration == detachGeneration)
 
             // Model the agent's failed convergence report. The list surface
             // derives the failure from the interface's mutation generation and
             // keeps the row visible and reserved.
-            var failedVM = try #require(try await VM.find(vm.id, on: app.db))
+            var failedVM = try #require(try await VM.find(vm.id, on: app.testPostgres))
             failedVM.failedGeneration = detachGeneration
             failedVM.lastError = "libvirt detach failed"
-            try await failedVM.save(on: app.db)
+            try await failedVM.save(on: app.testPostgres)
             try await app.test(.GET, "/api/vms/\(vm.id!)/interfaces") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
@@ -254,7 +252,7 @@ final class VMOperationTests {
             #expect(retryGeneration == (detachGeneration ?? 0) + 1)
             #expect(
                 try await LegacyVMNetworkInterfaceStore.interface(
-                    id: nicID, on: app.db)?.detachGeneration
+                    id: nicID, on: app.testPostgres)?.detachGeneration
                     == retryGeneration)
         }
     }
@@ -277,7 +275,7 @@ final class VMOperationTests {
             let body = try #require(accepted)
             #expect(body.targetGeneration == 2)
 
-            let stored = try #require(try await VM.find(vm.id, on: app.db))
+            let stored = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(stored.rebootGeneration == 1)
             // Untouched: a reboot is not a power-state change, and saying it was
             // would have the next sync stop or start the guest.
@@ -293,13 +291,13 @@ final class VMOperationTests {
             } afterResponse: { res in
                 #expect(res.status == .accepted)
             }
-            #expect(try await VM.find(vm.id, on: app.db)?.rebootGeneration == 2)
+            #expect(try await VM.find(vm.id, on: app.testPostgres)?.rebootGeneration == 2)
 
             // Attributed and auditable like every other mutation.
             let events = try await ResourceEvent.matching(
                 resourceID: vm.id!,
                 mutation: .reboot,
-                on: app.db
+                on: app.testPostgres
             )
             #expect(events.count == 2)
         }
@@ -329,11 +327,11 @@ final class VMOperationTests {
             // No agent is mapped to the VM, so the background dispatch fails
             // immediately: the VM must go degraded at this generation and be
             // restored to its pre-mutation status (not left `.starting`).
-            let conditions = try await pollDegraded(vm.id!, on: app.db)
+            let conditions = try await pollDegraded(vm.id!, on: app.testPostgres)
             #expect(conditions?.degraded?.sinceGeneration == body.targetGeneration)
             #expect(conditions?.degraded?.reason.isEmpty == false)
 
-            try await pollVMStatus(vm.id!, until: .created, on: app.db)
+            try await pollVMStatus(vm.id!, until: .created, on: app.testPostgres)
 
             // And the operations façade reports the same thing to a client that
             // still polls the old way.
@@ -361,15 +359,15 @@ final class VMOperationTests {
             // row cascades away with the VM and so orphans its binding too.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .virtualMachine, nodeID: vmID, createdBy: user.id!, on: app.db)
+                nodeType: .virtualMachine, nodeID: vmID, createdBy: user.id!, on: app.testPostgres)
             let snapshot = VMSnapshot(
                 name: "checkpoint", vmID: vmID, projectID: vm.projectID,
                 environment: vm.environment, agentId: nil, createdByID: user.id!)
-            try await snapshot.save(on: app.db)
+            try await snapshot.save(on: app.testPostgres)
             let snapshotID = try snapshot.requireID()
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .admin,
-                nodeType: .vmSnapshot, nodeID: snapshotID, createdBy: user.id!, on: app.db)
+                nodeType: .vmSnapshot, nodeID: snapshotID, createdBy: user.id!, on: app.testPostgres)
 
             // Unplaced VM, so the delete resolves directly instead of waiting
             // for an agent to confirm absence.
@@ -381,8 +379,8 @@ final class VMOperationTests {
                 mutationId = try res.content.decode(AcceptedMutation<VMDetailResponse>.self).mutationId
             }
 
-            try await self.pollVMRemoved(vmID, on: app.db)
-            let gone = try await VM.find(vmID, on: app.db)
+            try await self.pollVMRemoved(vmID, on: app.testPostgres)
+            let gone = try await VM.find(vmID, on: app.testPostgres)
             #expect(gone == nil)
 
             // The delete's completion signal: the reap appended a terminal
@@ -401,18 +399,18 @@ final class VMOperationTests {
             let vmBindings = try await LegacyRoleBindingStore.bindings(
                 nodeType: IAMNodeType.virtualMachine.rawValue,
                 nodeID: vmID,
-                on: app.db).count
+                on: app.testPostgres).count
             #expect(vmBindings == 0)
             let snapshotBindings = try await LegacyRoleBindingStore.bindings(
                 nodeType: IAMNodeType.vmSnapshot.rawValue,
                 nodeID: snapshotID,
-                on: app.db).count
+                on: app.testPostgres).count
             #expect(snapshotBindings == 0)
         }
     }
 
     /// Waits for the background dispatch to reap the deleted row.
-    private func pollVMRemoved(_ vmID: UUID, on db: any Database) async throws {
+    private func pollVMRemoved(_ vmID: UUID, on db: PostgresStoreContext) async throws {
         for _ in 0..<100 {
             if try await VM.find(vmID, on: db) == nil { return }
             try await Task.sleep(for: .milliseconds(50))
@@ -429,8 +427,8 @@ final class VMOperationTests {
             // confirmed it, which is what the operation mutex used to key on.
             vm.setFixtureDesiredStatus(.shutdown)
             vm.convergenceDeadline = Date().addingTimeInterval(600)
-            try await vm.save(on: app.db)
-            _ = try await record(.shutdown, on: vm, by: user, on: app.db)
+            try await vm.save(on: app.testPostgres)
+            _ = try await record(.shutdown, on: vm, by: user, on: app.testPostgres)
 
             // Starting the VM is a level-triggered desired-state write, so it
             // is accepted rather than refused with the `409` the operation
@@ -445,7 +443,7 @@ final class VMOperationTests {
             // the background dispatch then does with an unplaced VM is the
             // subject of `startReturnsAcceptedAndDegradesWithoutAgent`.
             let boot = try await ResourceEvent.latest(
-                .requested, resourceKind: .virtualMachine, resourceID: vm.id!, on: app.db)
+                .requested, resourceKind: .virtualMachine, resourceID: vm.id!, on: app.testPostgres)
             #expect(boot?.mutation == .boot)
         }
     }
@@ -460,7 +458,7 @@ final class VMOperationTests {
     @Test("GET /api/operations/:id follows the VM's read permission")
     func operationReadFollowsVMPermission() async throws {
         try await withVMTestApp { app, user, vm, token in
-            let event = try await record(.boot, on: vm, by: user, on: app.db)
+            let event = try await record(.boot, on: vm, by: user, on: app.testPostgres)
             let eventID = try event.requireID()
 
             try await app.test(.GET, "/api/operations/\(eventID)") { req in
@@ -473,7 +471,7 @@ final class VMOperationTests {
             }
 
             // A user with no binding on the VM cannot read its operation.
-            let outsider = try await TestDataBuilder(db: app.db).createUser(
+            let outsider = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "op-outsider", email: "op-outsider@example.com")
             let outsiderToken = try await outsider.generateAPIKey(on: app)
             try await app.test(.GET, "/api/operations/\(eventID)") { req in
@@ -513,11 +511,11 @@ final class VMOperationTests {
                 #expect(operation.result?.stdout == "SECRET=value\n")
             }
 
-            let reader = try await TestDataBuilder(db: app.db).createUser(
+            let reader = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "command-output-reader", email: "command-output-reader@example.com")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: try reader.requireID(), role: .viewer,
-                nodeType: .virtualMachine, nodeID: vmID, createdBy: nil, on: app.db)
+                nodeType: .virtualMachine, nodeID: vmID, createdBy: nil, on: app.testPostgres)
             let readerToken = try await reader.generateAPIKey(on: app)
 
             try await app.test(.GET, "/api/operations/\(executionID)") { req in
@@ -532,11 +530,11 @@ final class VMOperationTests {
     @Test("An operation whose VM is gone is visible to its initiator only")
     func operationForDeletedVMVisibleToInitiatorOnly() async throws {
         try await withVMTestApp { app, user, vm, token in
-            let event = try await record(.delete, on: vm, by: user, on: app.db)
+            let event = try await record(.delete, on: vm, by: user, on: app.testPostgres)
             let eventID = try event.requireID()
 
             // Remove the VM row directly, as a completed delete would.
-            try await vm.delete(on: app.db)
+            try await vm.delete(on: app.testPostgres)
 
             try await app.test(.GET, "/api/operations/\(eventID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -546,7 +544,7 @@ final class VMOperationTests {
 
             // A different (non-admin) user cannot see it — 404, not 403, so the
             // operation's existence is not leaked.
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let other = try await builder.createUser(
                 username: "othervmopuser",
                 email: "othervmop@example.com",
@@ -568,8 +566,8 @@ final class VMOperationTests {
             // Recorded in order and never rewritten: `resource_events` is
             // append-only (its trigger rejects an `UPDATE`), so the insert
             // order is the only way to age one row relative to another.
-            _ = try await record(.boot, on: vm, by: user, on: app.db)
-            let newer = try await record(.shutdown, on: vm, by: user, on: app.db)
+            _ = try await record(.boot, on: vm, by: user, on: app.testPostgres)
+            let newer = try await record(.shutdown, on: vm, by: user, on: app.testPostgres)
 
             try await app.test(.GET, "/api/vms/\(vm.id!)/operations?limit=1") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -595,7 +593,7 @@ final class VMOperationTests {
 
     /// Records a mutation the way `ResourceMutation` does, without the dispatch.
     private func record(
-        _ kind: VMOperationKind, on vm: VM, by user: User, on db: any Database
+        _ kind: VMOperationKind, on vm: VM, by user: User, on db: PostgresStoreContext
     ) async throws -> ResourceEvent {
         try await ResourceEvent.record(
             kind, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
@@ -606,8 +604,8 @@ final class VMOperationTests {
     func facadeFollowsConvergence() async throws {
         try await withVMTestApp { app, user, vm, token in
             vm.setFixtureDesiredStatus(.running)
-            try await vm.save(on: app.db)
-            let event = try await record(.boot, on: vm, by: user, on: app.db)
+            try await vm.save(on: app.testPostgres)
+            let event = try await record(.boot, on: vm, by: user, on: app.testPostgres)
             let eventID = try event.requireID()
 
             try await app.test(.GET, "/api/operations/\(eventID)") { req in
@@ -622,7 +620,7 @@ final class VMOperationTests {
             // the observed status satisfies the desired one.
             vm.observedGeneration = vm.generation
             vm.setStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             try await app.test(.GET, "/api/operations/\(eventID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -637,12 +635,12 @@ final class VMOperationTests {
     func facadeReportsDegradedAsFailed() async throws {
         try await withVMTestApp { app, user, vm, token in
             vm.setFixtureDesiredStatus(.running)
-            try await vm.save(on: app.db)
-            let event = try await record(.boot, on: vm, by: user, on: app.db)
+            try await vm.save(on: app.testPostgres)
+            let event = try await record(.boot, on: vm, by: user, on: app.testPostgres)
 
             vm.lastError = "image download failed"
             vm.failedGeneration = vm.generation
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             try await app.test(.GET, "/api/operations/\(try event.requireID())") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -666,12 +664,12 @@ final class VMOperationTests {
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.observedGeneration = vm.generation
-            try await vm.save(on: app.db)
-            let event = try await record(.resize, on: vm, by: user, on: app.db)
+            try await vm.save(on: app.testPostgres)
+            let event = try await record(.resize, on: vm, by: user, on: app.testPostgres)
 
             vm.lastError = "resize failed: no space left on device"
             vm.failedGeneration = vm.generation
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             try await app.test(.GET, "/api/operations/\(try event.requireID())") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -695,15 +693,15 @@ final class VMOperationTests {
     func facadeReportsSupersededAsSucceeded() async throws {
         try await withVMTestApp { app, user, vm, token in
             vm.setFixtureDesiredStatus(.running)
-            try await vm.save(on: app.db)
-            let event = try await record(.boot, on: vm, by: user, on: app.db)
+            try await vm.save(on: app.testPostgres)
+            let event = try await record(.boot, on: vm, by: user, on: app.testPostgres)
 
             // The agent reached this mutation's generation, and a newer
             // mutation has already moved the target on. The old one is not
             // pending — the reconciler is past it.
             vm.observedGeneration = vm.generation
             vm.setFixtureDesiredStatus(.shutdown)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             try await app.test(.GET, "/api/operations/\(try event.requireID())") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -718,10 +716,10 @@ final class VMOperationTests {
     func facadeAnswersDeleteAfterTheRowIsGone() async throws {
         try await withVMTestApp { app, user, vm, token in
             let vmID = try vm.requireID()
-            try await ResourceFinalizerService.stampForDeletion(vm, on: app.db)
+            try await ResourceFinalizerService.stampForDeletion(vm, on: app.testPostgres)
             vm.setFixtureDesiredStatus(.absent)
-            try await vm.save(on: app.db)
-            let event = try await record(.delete, on: vm, by: user, on: app.db)
+            try await vm.save(on: app.testPostgres)
+            let event = try await record(.delete, on: vm, by: user, on: app.testPostgres)
             let eventID = try event.requireID()
 
             // Still terminating: not done.
@@ -732,8 +730,8 @@ final class VMOperationTests {
                 #expect(operation.status == .pending)
             }
 
-            _ = try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: app.db, app: app)
-            #expect(try await VM.find(vmID, on: app.db) == nil)
+            _ = try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: app.testPostgres, app: app)
+            #expect(try await VM.find(vmID, on: app.testPostgres) == nil)
 
             try await app.test(.GET, "/api/operations/\(eventID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -746,7 +744,7 @@ final class VMOperationTests {
 
             // 404 rather than 403 for a stranger, so the mutation's existence
             // is not leaked now that there is no resource to authorize against.
-            let outsider = try await TestDataBuilder(db: app.db).createUser(
+            let outsider = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "facade-outsider", email: "facade-outsider@example.com")
             let outsiderToken = try await outsider.generateAPIKey(on: app)
             try await app.test(.GET, "/api/operations/\(eventID)") { req in
@@ -761,17 +759,17 @@ final class VMOperationTests {
     func facadeNeverReportsASlowDeleteAsFailed() async throws {
         try await withVMTestApp { app, user, vm, token in
             let vmID = try vm.requireID()
-            try await ResourceFinalizerService.stampForDeletion(vm, on: app.db)
+            try await ResourceFinalizerService.stampForDeletion(vm, on: app.testPostgres)
             vm.setFixtureDesiredStatus(.absent)
             vm.convergenceDeadline = Date().addingTimeInterval(-1)
-            try await vm.save(on: app.db)
-            let event = try await record(.delete, on: vm, by: user, on: app.db)
+            try await vm.save(on: app.testPostgres)
+            let event = try await record(.delete, on: vm, by: user, on: app.testPostgres)
             let eventID = try event.requireID()
 
             // The teardown outran its budget — a large disk, or a finalizer
             // participant waiting on something — so the sweep degrades the VM.
             await app.agentService.sweepStuckConvergence()
-            let degraded = try #require(try await VM.find(vmID, on: app.db))
+            let degraded = try #require(try await VM.find(vmID, on: app.testPostgres))
             #expect(degraded.conditions.degraded != nil)
 
             // The *resource* carries that reason for an operator, but the
@@ -786,8 +784,8 @@ final class VMOperationTests {
             }
 
             // The agent finally confirms absence.
-            _ = try await ResourceFinalizerService.clear(.agentAbsent, from: degraded, on: app.db, app: app)
-            #expect(try await VM.find(vmID, on: app.db) == nil)
+            _ = try await ResourceFinalizerService.clear(.agentAbsent, from: degraded, on: app.testPostgres, app: app)
+            #expect(try await VM.find(vmID, on: app.testPostgres) == nil)
 
             try await app.test(.GET, "/api/operations/\(eventID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -804,7 +802,7 @@ final class VMOperationTests {
         try await withVMTestApp { app, user, vm, token in
             let terminal = try await ResourceEvent.record(
                 .delete, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
-                actor: .user(try user.requireID()), phase: .completed, on: app.db)
+                actor: .user(try user.requireID()), phase: .completed, on: app.testPostgres)
 
             try await app.test(.GET, "/api/operations/\(try terminal.requireID())") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -821,8 +819,8 @@ final class VMOperationTests {
     @Test("GET /api/vms/:id/operations lists every recorded mutation")
     func historyListsRecordedMutations() async throws {
         try await withVMTestApp { app, user, vm, token in
-            _ = try await record(.snapshot, on: vm, by: user, on: app.db)
-            _ = try await record(.boot, on: vm, by: user, on: app.db)
+            _ = try await record(.snapshot, on: vm, by: user, on: app.testPostgres)
+            _ = try await record(.boot, on: vm, by: user, on: app.testPostgres)
 
             try await app.test(.GET, "/api/vms/\(vm.id!)/operations") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -840,12 +838,12 @@ final class VMOperationTests {
         try await withVMTestApp { app, user, vm, _ in
             vm.setFixtureDesiredStatus(.running)
             vm.convergenceDeadline = Date().addingTimeInterval(-1)
-            try await vm.save(on: app.db)
-            _ = try await record(.boot, on: vm, by: user, on: app.db)
+            try await vm.save(on: app.testPostgres)
+            _ = try await record(.boot, on: vm, by: user, on: app.testPostgres)
 
             await app.agentService.sweepStuckConvergence()
 
-            let swept = try #require(try await VM.find(vm.id, on: app.db))
+            let swept = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(swept.conditions.degraded?.reason.contains("Timed out") == true)
             // One behind the target: abandoning the unachieved intent is itself
             // a desired-state change, so the revert bumped the generation past
@@ -863,11 +861,11 @@ final class VMOperationTests {
         try await withVMTestApp { app, user, vm, _ in
             vm.setFixtureDesiredStatus(.running)
             vm.convergenceDeadline = Date().addingTimeInterval(-1)
-            try await vm.save(on: app.db)
-            _ = try await record(.boot, on: vm, by: user, on: app.db)
+            try await vm.save(on: app.testPostgres)
+            _ = try await record(.boot, on: vm, by: user, on: app.testPostgres)
 
             await app.agentService.sweepStuckConvergence()
-            let first = try #require(try await VM.find(vm.id, on: app.db))
+            let first = try #require(try await VM.find(vm.id, on: app.testPostgres))
             let generation = first.generation
             let reason = first.lastError
 
@@ -875,7 +873,7 @@ final class VMOperationTests {
             // the deadline already claimed and changes nothing.
             await app.agentService.sweepStuckConvergence()
 
-            let second = try #require(try await VM.find(vm.id, on: app.db))
+            let second = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(second.generation == generation)
             #expect(second.lastError == reason)
         }
@@ -896,13 +894,13 @@ final class VMOperationTests {
             vm.lastError = "resize failed: no space left on device"
             vm.failedGeneration = vm.generation
             vm.convergenceDeadline = Date().addingTimeInterval(-1)
-            try await vm.save(on: app.db)
-            _ = try await record(.resize, on: vm, by: user, on: app.db)
+            try await vm.save(on: app.testPostgres)
+            _ = try await record(.resize, on: vm, by: user, on: app.testPostgres)
             let generation = vm.generation
 
             await app.agentService.sweepStuckConvergence()
 
-            let swept = try #require(try await VM.find(vm.id, on: app.db))
+            let swept = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(swept.lastError == "resize failed: no space left on device")
             #expect(swept.generation == generation)
             #expect(swept.convergenceDeadline == nil)
@@ -915,11 +913,11 @@ final class VMOperationTests {
             vm.setFixtureDesiredStatus(.shutdown)
             vm.observedGeneration = vm.generation
             vm.convergenceDeadline = Date().addingTimeInterval(-1)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             await app.agentService.sweepStuckConvergence()
 
-            let swept = try #require(try await VM.find(vm.id, on: app.db))
+            let swept = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(swept.conditions.degraded == nil)
             #expect(swept.convergenceDeadline == nil)
         }
@@ -928,15 +926,15 @@ final class VMOperationTests {
     @Test("A stuck delete degrades without resurrecting the VM")
     func sweepDoesNotRevertATerminatingVM() async throws {
         try await withVMTestApp { app, user, vm, _ in
-            try await ResourceFinalizerService.stampForDeletion(vm, on: app.db)
+            try await ResourceFinalizerService.stampForDeletion(vm, on: app.testPostgres)
             vm.setFixtureDesiredStatus(.absent)
             vm.convergenceDeadline = Date().addingTimeInterval(-1)
-            try await vm.save(on: app.db)
-            _ = try await record(.delete, on: vm, by: user, on: app.db)
+            try await vm.save(on: app.testPostgres)
+            _ = try await record(.delete, on: vm, by: user, on: app.testPostgres)
 
             await app.agentService.sweepStuckConvergence()
 
-            let swept = try #require(try await VM.find(vm.id, on: app.db))
+            let swept = try #require(try await VM.find(vm.id, on: app.testPostgres))
             #expect(swept.conditions.degraded != nil)
             // `.absent` is the one intent never abandoned: reverting it would
             // resurrect a VM the user deleted.

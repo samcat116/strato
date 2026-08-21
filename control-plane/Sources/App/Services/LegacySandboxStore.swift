@@ -1,13 +1,12 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
 /// Explicit SQL access for immutable sandbox snapshots while surrounding
 /// multi-resource transactions still expose Fluent's transaction handle.
 enum LegacySandboxStore {
-    static func sandbox(id: UUID?, on db: any Database) async throws -> Sandbox? {
+    static func sandbox(id: UUID?, on db: PostgresStoreContext) async throws -> Sandbox? {
         guard let id else { return nil }
         return try await sandboxes(ids: [id], on: db).first
     }
@@ -24,14 +23,14 @@ enum LegacySandboxStore {
         terminatingBefore: Date? = nil,
         restoredFromSnapshotID: UUID? = nil,
         restoredFromSnapshotIDs: [UUID]? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [Sandbox] {
         if ids?.isEmpty == true || projectIDs?.isEmpty == true || hypervisorIDs?.isEmpty == true
             || restoredFromSnapshotIDs?.isEmpty == true
         {
             return []
         }
-        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM sandboxes AS s WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT \(unsafeRaw: columns) FROM sandboxes AS s WHERE TRUE"
         if let ids { query += " AND s.id = ANY(\(bind: ids))" }
         if let projectID { query += " AND s.project_id = \(bind: projectID)" }
         if let projectIDs { query += " AND s.project_id = ANY(\(bind: projectIDs))" }
@@ -54,7 +53,7 @@ enum LegacySandboxStore {
     }
 
     @discardableResult
-    static func upsert(_ sandbox: Sandbox, on db: any Database) async throws -> Sandbox {
+    static func upsert(_ sandbox: Sandbox, on db: PostgresStoreContext) async throws -> Sandbox {
         let id = try sandbox.requireID()
         let envJSON = String(decoding: try JSONEncoder().encode(sandbox.env), as: UTF8.self)
         guard let row = try await sandboxSQL(db).raw(
@@ -113,14 +112,14 @@ enum LegacySandboxStore {
         return try row.sandbox
     }
 
-    static func updateImageDigest(id: UUID, digest: String, on db: any Database) async throws {
+    static func updateImageDigest(id: UUID, digest: String, on db: PostgresStoreContext) async throws {
         try await sandboxSQL(db).raw(
             "UPDATE sandboxes SET image_digest = \(bind: digest), updated_at = CURRENT_TIMESTAMP WHERE id = \(bind: id)"
         ).run()
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await sandboxSQL(db).raw(
             "DELETE FROM sandboxes WHERE id = \(bind: id) RETURNING id"
@@ -207,8 +206,8 @@ enum LegacySandboxStore {
     private static let returningColumns = columns.replacingOccurrences(of: "s.", with: "")
 }
 
-private func sandboxSQL(_ db: any Database) throws -> any SQLDatabase {
-    guard let sql = db as? any SQLDatabase else {
+private func sandboxSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+    guard let sql = db as? PostgresStoreContext else {
         throw Abort(.internalServerError, reason: "PostgreSQL SQL interface is unavailable")
     }
     return sql

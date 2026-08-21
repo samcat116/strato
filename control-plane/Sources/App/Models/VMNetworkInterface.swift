@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 /// Immutable persistence snapshot for one VM network interface.
@@ -84,7 +83,7 @@ struct VMNetworkInterface: Equatable, Sendable {
     /// Transitional test-builder convenience. Production uses the store's
     /// insert operation and consumes its returned snapshot.
     @discardableResult
-    func save(on db: any Database) async throws -> Self {
+    func save(on db: PostgresStoreContext) async throws -> Self {
         try await LegacyVMNetworkInterfaceStore.insert(self, on: db)
     }
 }
@@ -103,13 +102,13 @@ enum LegacyVMNetworkInterfaceStore {
         ids: [UUID]? = nil,
         logicalNetworkID: UUID? = nil,
         logicalNetworkIDs: [UUID]? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [VMNetworkInterface] {
         if let vmIDs, vmIDs.isEmpty { return [] }
         if let ids, ids.isEmpty { return [] }
         if let logicalNetworkIDs, logicalNetworkIDs.isEmpty { return [] }
         let sql = try requireSQL(db)
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT \(unsafeRaw: columns) FROM vm_network_interfaces AS vni LEFT JOIN logical_networks AS ln ON ln.id = vni.logical_network_id WHERE TRUE"
         if let vmIDs { query += " AND vni.vm_id = ANY(\(bind: vmIDs))" }
         if let ids { query += " AND vni.id = ANY(\(bind: ids))" }
@@ -121,11 +120,11 @@ enum LegacyVMNetworkInterfaceStore {
         return try await sql.raw(query).all(decoding: Record.self).map(\.snapshot)
     }
 
-    static func interfaces(vmID: UUID, on db: any Database) async throws -> [VMNetworkInterface] {
+    static func interfaces(vmID: UUID, on db: PostgresStoreContext) async throws -> [VMNetworkInterface] {
         try await interfaces(vmIDs: [vmID], on: db)
     }
 
-    static func interface(id: UUID, vmID: UUID? = nil, on db: any Database) async throws
+    static func interface(id: UUID, vmID: UUID? = nil, on db: PostgresStoreContext) async throws
         -> VMNetworkInterface?
     {
         let matches = try await interfaces(vmIDs: vmID.map { [$0] }, ids: [id], on: db)
@@ -135,13 +134,13 @@ enum LegacyVMNetworkInterfaceStore {
         return matches.first
     }
 
-    static func interface(vmID: UUID, orderIndex: Int, on db: any Database) async throws
+    static func interface(vmID: UUID, orderIndex: Int, on db: PostgresStoreContext) async throws
         -> VMNetworkInterface?
     {
         try await interfaces(vmID: vmID, on: db).first { $0.orderIndex == orderIndex }
     }
 
-    static func loading(_ vms: [VM], on db: any Database) async throws -> [VM] {
+    static func loading(_ vms: [VM], on db: PostgresStoreContext) async throws -> [VM] {
         let byVM = Dictionary(
             grouping: try await interfaces(vmIDs: vms.compactMap(\.id), on: db),
             by: \.vmID)
@@ -150,7 +149,7 @@ enum LegacyVMNetworkInterfaceStore {
         }
     }
 
-    static func loadingWithAddresses(_ vms: [VM], on db: any Database) async throws -> [VM] {
+    static func loadingWithAddresses(_ vms: [VM], on db: PostgresStoreContext) async throws -> [VM] {
         let loaded = try await loading(vms, on: db)
         let detailed = try await LegacyInterfaceAddressStore.loading(
             loaded.flatMap(\.networkInterfaces), on: db)
@@ -161,7 +160,7 @@ enum LegacyVMNetworkInterfaceStore {
     }
 
     @discardableResult
-    static func insert(_ interface: VMNetworkInterface, on db: any Database) async throws
+    static func insert(_ interface: VMNetworkInterface, on db: PostgresStoreContext) async throws
         -> VMNetworkInterface
     {
         let id = try interface.requireID()
@@ -197,7 +196,7 @@ enum LegacyVMNetworkInterfaceStore {
         id: UUID,
         attachGeneration: Int64?,
         detachGeneration: Int64?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> VMNetworkInterface? {
         try await requireSQL(db).raw(
             """
@@ -218,14 +217,14 @@ enum LegacyVMNetworkInterfaceStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM vm_network_interfaces WHERE id = \(bind: id) RETURNING id"
         ).first(decoding: Deleted.self)?.id
     }
 
-    static func count(logicalNetworkID: UUID, on db: any Database) async throws -> Int {
+    static func count(logicalNetworkID: UUID, on db: PostgresStoreContext) async throws -> Int {
         struct Count: Decodable { let count: Int }
         return try await requireSQL(db).raw(
             """
@@ -240,11 +239,11 @@ enum LegacyVMNetworkInterfaceStore {
         _ hostname: String,
         logicalNetworkIDs: [UUID],
         excludingVMID: UUID?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Bool {
         if logicalNetworkIDs.isEmpty { return false }
         struct Exists: Decodable { let exists: Bool }
-        var query: SQLQueryString = """
+        var query: PostgresSQLQuery = """
             SELECT EXISTS(
                 SELECT 1
                 FROM vms AS vm
@@ -303,8 +302,8 @@ enum LegacyVMNetworkInterfaceStore {
         vni.updated_at AS "updatedAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "VM interfaces require PostgreSQL")
         }
         return sql

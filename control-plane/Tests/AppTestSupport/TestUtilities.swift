@@ -1,10 +1,7 @@
 import ControlPlanePostgres
-import Fluent
-import FluentPostgresDriver
 import NIOCore
 import NIOPosix
 import PostgresNIO
-import SQLKit
 import StratoShared
 import Vapor
 import VaporTesting
@@ -71,7 +68,7 @@ package struct TestAgentEnrollment: Sendable {
 @discardableResult
 package func saveTestAgentEnrollment(
     _ enrollment: TestAgentEnrollment,
-    on db: any Database
+    on db: PostgresStoreContext
 ) async throws -> TestAgentEnrollment {
     let sql = try sqlDatabaseForTest(db)
     try await sql.raw(
@@ -107,14 +104,14 @@ package func saveTestAgentEnrollment(
 @discardableResult
 package func seedTestAgentEnrollment(
     _ enrollment: TestAgentEnrollment,
-    on db: any Database
+    on db: PostgresStoreContext
 ) async throws -> TestAgentEnrollment {
     try await saveTestAgentEnrollment(enrollment, on: db)
 }
 
 package func findTestAgentEnrollment(
     _ id: UUID?,
-    on db: any Database
+    on db: PostgresStoreContext
 ) async throws -> TestAgentEnrollment? {
     guard let id else { return nil }
     let sql = try sqlDatabaseForTest(db)
@@ -134,10 +131,10 @@ package func findTestAgentEnrollment(
 package func findTestAgentEnrollment(
     agentName: String,
     trustDomain: String? = nil,
-    on db: any Database
+    on db: PostgresStoreContext
 ) async throws -> TestAgentEnrollment? {
     let sql = try sqlDatabaseForTest(db)
-    let row: (any SQLRow)?
+    let row: PostgresStoreRow?
     if let trustDomain {
         row = try await sql.raw(
             """
@@ -167,7 +164,7 @@ package func findTestAgentEnrollment(
 
 package func testAgentEnrollmentCount(
     agentName: String? = nil,
-    on db: any Database
+    on db: PostgresStoreContext
 ) async throws -> Int {
     let sql = try sqlDatabaseForTest(db)
     if let agentName {
@@ -179,7 +176,7 @@ package func testAgentEnrollmentCount(
         .first(decodingColumn: "count", as: Int.self) ?? 0
 }
 
-private func decodeTestAgentEnrollment(_ row: any SQLRow) throws -> TestAgentEnrollment {
+private func decodeTestAgentEnrollment(_ row: PostgresStoreRow) throws -> TestAgentEnrollment {
     TestAgentEnrollment(
         id: try row.decode(column: "id", as: UUID.self),
         agentName: try row.decode(column: "agent_name", as: String.self),
@@ -218,6 +215,10 @@ package struct TestAccountClaim: Sendable {
     }
 }
 
+private func accountClaimTestDatabase(_ app: Application) -> PostgresStoreContext {
+    app.testPostgres
+}
+
 /// Seed invitation states that cannot be reached through a public production
 /// operation (expired, already consumed, or superseded claims). Production
 /// behavior reads them through the native account-claim module.
@@ -230,9 +231,7 @@ package func seedTestAccountClaim(
     createdByID: UUID? = nil,
     on app: Application
 ) async throws -> TestAccountClaim {
-    guard let sql = app.db as? any SQLDatabase else {
-        throw Abort(.internalServerError, reason: "Account-claim fixtures require PostgreSQL")
-    }
+    let sql = accountClaimTestDatabase(app)
     let id = UUID()
     let tokenHash = AccountClaimSecret.hashToken(rawToken)
     try await sql.raw(
@@ -263,9 +262,7 @@ package func consumeTestAccountClaim(
     at claimedAt: Date = Date(),
     on app: Application
 ) async throws {
-    guard let sql = app.db as? any SQLDatabase else {
-        throw Abort(.internalServerError, reason: "Account-claim fixtures require PostgreSQL")
-    }
+    let sql = accountClaimTestDatabase(app)
     try await sql.raw(
         "UPDATE account_claim_tokens SET claimed_at = \(bind: claimedAt) WHERE id = \(bind: id)"
     ).run()
@@ -273,9 +270,7 @@ package func consumeTestAccountClaim(
 
 package func testAccountClaimCount(on app: Application) async throws -> Int {
     struct Count: Decodable { let value: Int }
-    guard let sql = app.db as? any SQLDatabase else {
-        throw Abort(.internalServerError, reason: "Account-claim fixtures require PostgreSQL")
-    }
+    let sql = accountClaimTestDatabase(app)
     return try await sql.raw("SELECT COUNT(*)::int AS value FROM account_claim_tokens")
         .first(decoding: Count.self)?.value ?? 0
 }
@@ -296,9 +291,7 @@ package func testAccountClaims(on app: Application) async throws -> [TestAccount
             case claimedAt = "claimed_at"
         }
     }
-    guard let sql = app.db as? any SQLDatabase else {
-        throw Abort(.internalServerError, reason: "Account-claim fixtures require PostgreSQL")
-    }
+    let sql = accountClaimTestDatabase(app)
     return try await sql.raw(
         "SELECT id, user_id, token_hash, expires_at, claimed_at FROM account_claim_tokens ORDER BY created_at"
     ).all(decoding: Row.self).map {
@@ -359,7 +352,7 @@ package func createTestPasskey(
     )
 }
 
-// MARK: - Test Database Templates
+// MARK: - Test PostgresStoreContext Templates
 //
 // The suite runs against Postgres — the engine production uses — so migrations
 // and Postgres-specific SQL are validated everywhere, not just in CI (issue
@@ -397,27 +390,9 @@ private func isTestProcessAlive(_ pid: Int32) -> Bool {
 package actor PostgresTestDatabases {
     package static let shared = PostgresTestDatabases()
 
-    /// Small event-loop group shared by every test app in the suite.
-    /// Fluent's pool opens at most one connection per event loop, so this caps
-    /// each app at two connections and keeps the fully parallel suite well
-    /// under the server's default max_connections=100 — the constraint that
-    /// used to force CI's Postgres run to be --no-parallel.
+    /// Small event-loop group shared by every test app in the suite. Native
+    /// application pools are independently capped at one connection.
     package static let appEventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 2)
-
-    /// Connection parameters from the environment. `DATABASE_NAME` is only the
-    /// anchor database the admin connection logs into — tests themselves run
-    /// in throwaway clones of the template.
-    package static func configuration(database: String) -> SQLPostgresConfiguration {
-        SQLPostgresConfiguration(
-            hostname: Environment.get("DATABASE_HOST") ?? "localhost",
-            port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:))
-                ?? SQLPostgresConfiguration.ianaPortNumber,
-            username: Environment.get("DATABASE_USERNAME") ?? "strato",
-            password: Environment.get("DATABASE_PASSWORD") ?? "strato_password",
-            database: database,
-            tls: .disable
-        )
-    }
 
     package static func nativeConfiguration(database: String) throws
         -> ControlPlanePostgres.PostgresDatabase.Configuration
@@ -425,7 +400,7 @@ package actor PostgresTestDatabases {
         try .init(
             hostname: Environment.get("DATABASE_HOST") ?? "localhost",
             port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:))
-                ?? SQLPostgresConfiguration.ianaPortNumber,
+                ?? 5432,
             username: Environment.get("DATABASE_USERNAME") ?? "strato",
             password: Environment.get("DATABASE_PASSWORD") ?? "strato_password",
             database: database,
@@ -533,7 +508,6 @@ package actor PostgresTestDatabases {
         env.arguments = ["vapor"]
         let app = try await Application.make(env, .shared(Self.appEventLoopGroup))
         app.logger.logLevel = .error
-        app.databases.use(.postgres(configuration: Self.configuration(database: templateName)), as: .psql)
         app.nativePostgresConfigurationOverride = try Self.nativeConfiguration(database: templateName)
         do {
             try await configure(app)
@@ -585,7 +559,7 @@ package actor PostgresTestDatabases {
         let configuration = PostgresConnection.Configuration(
             host: Environment.get("DATABASE_HOST") ?? "localhost",
             port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:))
-                ?? SQLPostgresConfiguration.ianaPortNumber,
+                ?? 5432,
             username: Environment.get("DATABASE_USERNAME") ?? "strato",
             password: Environment.get("DATABASE_PASSWORD") ?? "strato_password",
             database: Environment.get("DATABASE_NAME") ?? "strato_test",
@@ -653,10 +627,6 @@ extension Application {
     ) async throws -> Application {
         let app = try await Application.make(env, .shared(PostgresTestDatabases.appEventLoopGroup))
         app.logger.logLevel = .debug
-        app.databases.use(
-            .postgres(configuration: PostgresTestDatabases.configuration(database: databaseName)),
-            as: .psql
-        )
         app.nativePostgresConfigurationOverride = try PostgresTestDatabases.nativeConfiguration(
             database: databaseName)
         if owningDatabase {
@@ -784,11 +754,11 @@ package struct TestGroup: Sendable {
 }
 
 package struct TestDataBuilder {
-    package let db: Database
+    package let db: PostgresStoreContext
     private let groups: GroupsPersistence?
     private let floatingIPPools: FloatingIPPoolsPersistence?
 
-    package init(db: Database) {
+    package init(db: PostgresStoreContext) {
         self.db = db
         self.groups = nil
         self.floatingIPPools = nil
@@ -798,7 +768,7 @@ package struct TestDataBuilder {
     /// It keeps the existing Fluent builder surface available to unmigrated
     /// cohorts while routing group intent through the production module.
     package init(app: Application) {
-        self.db = app.db
+        self.db = app.testPostgres
         self.groups = app.groupsPersistence
         self.floatingIPPools = app.floatingIPPoolsPersistence
     }
@@ -877,7 +847,7 @@ package struct TestDataBuilder {
             }
             roleID = customRoleID
         }
-        guard let sql = db as? any SQLDatabase else {
+        guard let sql = Optional(db) else {
             throw TestSetupError.message("Organization membership fixtures require PostgreSQL")
         }
         try await sql.raw(
@@ -1224,7 +1194,7 @@ package actor MockImageFetchService: ImageFetchServiceProtocol {
 /// dropping it in place also exercises the migration's idempotent
 /// drop-then-add.)
 package func withConditionedRoleBindingsAllowed<T>(
-    on db: any Database,
+    on db: PostgresStoreContext,
     _ body: () async throws -> T
 ) async throws -> T {
     let sql = try sqlDatabaseForTest(db)
@@ -1263,7 +1233,7 @@ package func insertConditionedRoleBinding(
     nodeType: IAMNodeType,
     nodeID: UUID,
     condition: String,
-    on db: any Database
+    on db: PostgresStoreContext
 ) async throws {
     try await withConditionedRoleBindingsAllowed(on: db) {
         let sql = try sqlDatabaseForTest(db)
@@ -1295,7 +1265,7 @@ package enum ConditionedRoleBindingConstraintState: Equatable, Sendable {
 }
 
 package func conditionedRoleBindingConstraint(
-    on db: any Database
+    on db: PostgresStoreContext
 ) async throws -> ConditionedRoleBindingConstraintState {
     let sql = try sqlDatabaseForTest(db)
     let rows = try await sql.raw(
@@ -1311,7 +1281,7 @@ package func conditionedRoleBindingConstraint(
 
 /// Whether the schema refuses a conditioned write — either constraint state
 /// does, validated or not.
-package func conditionedRoleBindingsAreRefused(on db: any Database) async throws -> Bool {
+package func conditionedRoleBindingsAreRefused(on db: PostgresStoreContext) async throws -> Bool {
     try await conditionedRoleBindingConstraint(on: db) != .absent
 }
 
@@ -1325,7 +1295,7 @@ package func placeVolume(
     on agentID: String?,
     at filePath: String? = "/var/lib/strato/volumes/test/volume.qcow2",
     state: VolumeReplicaState = .healthy,
-    using db: any Database
+    using db: PostgresStoreContext
 ) async throws {
     guard let agentID else { return }
     let diskAttachment: DiskAttachment? = filePath.map {
@@ -1350,11 +1320,8 @@ package func placeVolume(
     ).run()
 }
 
-private func sqlDatabaseForTest(_ db: any Database) throws -> any SQLDatabase {
-    guard let sql = db as? any SQLDatabase else {
-        throw TestSetupError.message("conditioned binding fixtures need a SQL database")
-    }
-    return sql
+private func sqlDatabaseForTest(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+    db
 }
 
 package enum TestSetupError: Error, CustomStringConvertible {

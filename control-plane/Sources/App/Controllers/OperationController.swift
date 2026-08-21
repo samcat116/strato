@@ -1,5 +1,4 @@
 import Vapor
-import Fluent
 import ControlPlanePostgres
 import StratoShared
 
@@ -21,9 +20,11 @@ import StratoShared
 /// Per-resource history lives under `GET /api/vms/:vmID/operations`.
 struct OperationController: RouteCollection {
     private let vmCommands: VMCommandExecutionsPersistence
+    private let database: PostgresStoreContext
 
-    init(vmCommands: VMCommandExecutionsPersistence) {
+    init(vmCommands: VMCommandExecutionsPersistence, database: PostgresStoreContext) {
         self.vmCommands = vmCommands
+        self.database = database
     }
 
     func boot(routes: any RoutesBuilder) throws {
@@ -47,7 +48,7 @@ struct OperationController: RouteCollection {
         // addressable: a terminal row is the evidence a request's verdict is
         // read from, not an operation in its own right, and answering for its
         // id would report one mutation under two ids.
-        guard let event = try await ResourceEvent.find(operationID, on: req.db),
+        guard let event = try await ResourceEvent.find(operationID, on: database),
             event.phase == .requested
         else {
             throw Abort(.notFound)
@@ -57,7 +58,7 @@ struct OperationController: RouteCollection {
             resourceKind: event.resourceKind, resourceID: event.resourceID,
             initiatedBy: event.actorType == .user && event.actorID == user.id,
             req: req)
-        return try await OperationFacade.response(for: event, on: req.db)
+        return try await OperationFacade.response(for: event, on: database)
     }
 
     /// Captured output can contain guest secrets and is therefore part of the
@@ -71,7 +72,7 @@ struct OperationController: RouteCollection {
             try await req.markRowScopedAuthorization()
             return
         }
-        _ = try await req.authorizedVM(execution.vmID, action: "vm:runCommand")
+        _ = try await req.authorizedVM(execution.vmID, action: "vm:runCommand", on: database)
     }
 
     /// Visibility follows the resource's `read` permission while it exists —
@@ -86,24 +87,24 @@ struct OperationController: RouteCollection {
     ) async throws {
         switch resourceKind {
         case .virtualMachine:
-            if try await VM.find(resourceID, on: req.db) != nil {
-                _ = try await req.authorizedVM(resourceID, action: "vm:read")
+            if try await VM.find(resourceID, on: database) != nil {
+                _ = try await req.authorizedVM(resourceID, action: "vm:read", on: database)
                 return
             }
         case .sandbox:
-            if try await Sandbox.find(resourceID, on: req.db) != nil {
-                _ = try await req.authorizedSandbox(resourceID, action: "sandbox:read")
+            if try await Sandbox.find(resourceID, on: database) != nil {
+                _ = try await req.authorizedSandbox(resourceID, action: "sandbox:read", on: database)
                 return
             }
         case .volume:
-            if try await Volume.find(resourceID, on: req.db) != nil {
-                _ = try await req.authorizedVolume(resourceID, action: "volume:read")
+            if try await Volume.find(resourceID, on: database) != nil {
+                _ = try await req.authorizedVolume(resourceID, action: "volume:read", on: database)
                 return
             }
         // Snapshot artifacts (STR-150) authorize against their own Cedar node,
         // exactly as their `GET`/`DELETE` handlers do.
         case .volumeSnapshot:
-            if try await VolumeSnapshot.find(resourceID, on: req.db) != nil {
+            if try await VolumeSnapshot.find(resourceID, on: database) != nil {
                 guard
                     try await req.can(
                         "volume:read", on: IAMNode(type: .volumeSnapshot, id: resourceID))
@@ -113,7 +114,7 @@ struct OperationController: RouteCollection {
                 return
             }
         case .vmCheckpoint:
-            if try await VMSnapshot.find(resourceID, on: req.db) != nil {
+            if try await VMSnapshot.find(resourceID, on: database) != nil {
                 guard
                     try await req.can("vm:read", on: IAMNode(type: .vmSnapshot, id: resourceID))
                 else {
@@ -122,7 +123,7 @@ struct OperationController: RouteCollection {
                 return
             }
         case .sandboxSnapshot:
-            if try await SandboxSnapshot.find(resourceID, on: req.db) != nil {
+            if try await SandboxSnapshot.find(resourceID, on: database) != nil {
                 guard
                     try await req.can(
                         "sandbox:read", on: IAMNode(type: .sandboxSnapshot, id: resourceID))

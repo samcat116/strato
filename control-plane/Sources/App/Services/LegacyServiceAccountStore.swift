@@ -1,7 +1,5 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
-import SQLKit
 import Vapor
 
 /// Immutable service-account state for operations that still participate in a
@@ -19,7 +17,7 @@ struct LegacyServiceAccountRecord: Decodable, Equatable, Sendable {
 enum LegacyServiceAccountStore {
     static func account(
         id: UUID,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LegacyServiceAccountRecord? {
         try await requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM service_accounts WHERE id = \(bind: id)"
@@ -28,7 +26,7 @@ enum LegacyServiceAccountStore {
 
     static func accounts(
         ids: [UUID],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [LegacyServiceAccountRecord] {
         guard !ids.isEmpty else { return [] }
         return try await requireSQL(db).raw(
@@ -43,7 +41,7 @@ enum LegacyServiceAccountStore {
 
     static func ids(
         projectIDs: [UUID],
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [UUID] {
         struct Identifier: Decodable { let id: UUID }
         guard !projectIDs.isEmpty else { return [] }
@@ -55,7 +53,7 @@ enum LegacyServiceAccountStore {
     @discardableResult
     static func insert(
         _ write: ServiceAccountWrite,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LegacyServiceAccountRecord {
         guard let account = try await requireSQL(db).raw(
             """
@@ -73,7 +71,7 @@ enum LegacyServiceAccountStore {
         return account
     }
 
-    static func delete(id: UUID, on db: any Database) async throws {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws {
         try await requireSQL(db).raw(
             "DELETE FROM service_accounts WHERE id = \(bind: id)"
         ).run()
@@ -88,8 +86,8 @@ enum LegacyServiceAccountStore {
         updated_at AS "updatedAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Service accounts require PostgreSQL")
         }
         return sql

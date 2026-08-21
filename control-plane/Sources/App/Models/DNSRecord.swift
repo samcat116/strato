@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 /// The record types the model can carry.
@@ -55,18 +54,18 @@ struct DNSRecordSnapshot: Equatable, Sendable {
 }
 
 enum LegacyDNSRecordStore {
-    static func records(zoneIDs: [UUID], on db: any Database) async throws -> [DNSRecordSnapshot] {
+    static func records(zoneIDs: [UUID], on db: PostgresStoreContext) async throws -> [DNSRecordSnapshot] {
         guard !zoneIDs.isEmpty else { return [] }
         return try await snapshots(from: requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM dns_records WHERE zone_id = ANY(\(bind: zoneIDs)) ORDER BY name, id"
         ).all(decoding: Record.self))
     }
 
-    static func records(zoneID: UUID, on db: any Database) async throws -> [DNSRecordSnapshot] {
+    static func records(zoneID: UUID, on db: PostgresStoreContext) async throws -> [DNSRecordSnapshot] {
         try await records(zoneIDs: [zoneID], on: db)
     }
 
-    static func records(zoneID: UUID, name: String, on db: any Database) async throws
+    static func records(zoneID: UUID, name: String, on db: PostgresStoreContext) async throws
         -> [DNSRecordSnapshot]
     {
         try await snapshots(from: requireSQL(db).raw(
@@ -74,17 +73,17 @@ enum LegacyDNSRecordStore {
         ).all(decoding: Record.self))
     }
 
-    static func records(ids: [UUID], on db: any Database) async throws -> [DNSRecordSnapshot] {
+    static func records(ids: [UUID], on db: PostgresStoreContext) async throws -> [DNSRecordSnapshot] {
         guard !ids.isEmpty else { return [] }
         return try await snapshots(from: requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM dns_records WHERE id = ANY(\(bind: ids)) ORDER BY id"
         ).all(decoding: Record.self))
     }
 
-    static func record(id: UUID, zoneID: UUID? = nil, on db: any Database) async throws
+    static func record(id: UUID, zoneID: UUID? = nil, on db: PostgresStoreContext) async throws
         -> DNSRecordSnapshot?
     {
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT \(unsafeRaw: columns) FROM dns_records WHERE id = \(bind: id)"
         if let zoneID { query += " AND zone_id = \(bind: zoneID)" }
         query += " LIMIT 1"
@@ -94,7 +93,7 @@ enum LegacyDNSRecordStore {
         return try row.snapshot()
     }
 
-    static func first(zoneID: UUID, names: [String], on db: any Database) async throws
+    static func first(zoneID: UUID, names: [String], on db: PostgresStoreContext) async throws
         -> DNSRecordSnapshot?
     {
         guard !names.isEmpty else { return nil }
@@ -108,7 +107,7 @@ enum LegacyDNSRecordStore {
     static func insert(
         id: UUID = UUID(), zoneID: UUID, name: String, type: DNSRecordType,
         value: String, ttl: Int = DNSRecord.defaultTTL, view: DNSRecordView = .both,
-        createdByID: UUID? = nil, on db: any Database
+        createdByID: UUID? = nil, on db: PostgresStoreContext
     ) async throws -> DNSRecordSnapshot {
         guard let row = try await requireSQL(db).raw(
             """
@@ -129,7 +128,7 @@ enum LegacyDNSRecordStore {
 
     @discardableResult
     static func update(
-        id: UUID, value: String, ttl: Int, view: DNSRecordView, on db: any Database
+        id: UUID, value: String, ttl: Int, view: DNSRecordView, on db: PostgresStoreContext
     ) async throws -> DNSRecordSnapshot? {
         guard let row = try await requireSQL(db).raw(
             """
@@ -145,7 +144,7 @@ enum LegacyDNSRecordStore {
 
     static func applyRRsetSettings(
         zoneID: UUID, name: String, type: DNSRecordType, ttl: Int,
-        view: DNSRecordView, on db: any Database
+        view: DNSRecordView, on db: PostgresStoreContext
     ) async throws {
         try await requireSQL(db).raw(
             """
@@ -156,14 +155,14 @@ enum LegacyDNSRecordStore {
         ).run()
     }
 
-    static func count(zoneID: UUID, on db: any Database) async throws -> Int {
+    static func count(zoneID: UUID, on db: PostgresStoreContext) async throws -> Int {
         struct Count: Decodable { let count: Int }
         return try await requireSQL(db).raw(
             "SELECT count(*)::bigint AS count FROM dns_records WHERE zone_id = \(bind: zoneID)"
         ).first(decoding: Count.self)?.count ?? 0
     }
 
-    static func counts(zoneIDs: [UUID], on db: any Database) async throws -> [UUID: Int] {
+    static func counts(zoneIDs: [UUID], on db: PostgresStoreContext) async throws -> [UUID: Int] {
         struct Count: Decodable { let zoneID: UUID; let count: Int }
         guard !zoneIDs.isEmpty else { return [:] }
         return Dictionary(uniqueKeysWithValues: try await requireSQL(db).raw(
@@ -174,7 +173,7 @@ enum LegacyDNSRecordStore {
         ).all(decoding: Count.self).map { ($0.zoneID, $0.count) })
     }
 
-    static func ids(zoneIDs: [UUID], on db: any Database) async throws -> [UUID] {
+    static func ids(zoneIDs: [UUID], on db: PostgresStoreContext) async throws -> [UUID] {
         struct ID: Decodable { let id: UUID }
         guard !zoneIDs.isEmpty else { return [] }
         return try await requireSQL(db).raw(
@@ -183,7 +182,7 @@ enum LegacyDNSRecordStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct ID: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM dns_records WHERE id = \(bind: id) RETURNING id"
@@ -222,8 +221,8 @@ enum LegacyDNSRecordStore {
         try rows.map { try $0.snapshot() }
     }
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "DNS records require PostgreSQL")
         }
         return sql

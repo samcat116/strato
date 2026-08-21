@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -54,7 +53,7 @@ enum MemberRoleResolver {
     static func resolve(
         _ roleID: UUID,
         scopeNode: IAMNode,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Resolved {
         guard let role = try await RoleStore.legacyRole(id: roleID, on: db) else {
             throw Abort(.badRequest, reason: "No role with id \(roleID) exists.")
@@ -65,7 +64,7 @@ enum MemberRoleResolver {
 
     /// A non-platform role is bindable only at or below its owner.
     private static func requireInScope(
-        _ role: LegacyIAMRoleRecord, scopeNode: IAMNode, on db: any Database
+        _ role: LegacyIAMRoleRecord, scopeNode: IAMNode, on db: PostgresStoreContext
     ) async throws {
         guard let ownerType = IAMRoleOwnerType(rawValue: role.ownerType) else {
             throw Abort(
@@ -107,7 +106,7 @@ struct RoleDisplayNames {
         )
     }
 
-    static func forRoleIDs(_ ids: [UUID], on db: any Database) async throws -> RoleDisplayNames {
+    static func forRoleIDs(_ ids: [UUID], on db: PostgresStoreContext) async throws -> RoleDisplayNames {
         let unique = Array(Set(ids))
         guard !unique.isEmpty else { return RoleDisplayNames(namesByID: [:]) }
         let rows = try await RoleStore.legacyRoles(ids: unique, on: db)

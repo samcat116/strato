@@ -84,7 +84,7 @@ struct HealthController: RouteCollection {
             return try await response.encodeResponse(status: .serviceUnavailable, for: req)
         }
 
-        // Database. `SELECT 1` rather than a model count: this runs on every
+        // PostgresStoreContext. `SELECT 1` rather than a model count: this runs on every
         // probe interval on every replica, and counting a table that grows with
         // the fleet turns the probe into a recurring sequential scan.
         do {

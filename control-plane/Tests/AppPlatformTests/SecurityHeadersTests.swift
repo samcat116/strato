@@ -28,14 +28,13 @@ struct SecurityHeadersTests {
     func testHeadersOnErrorResponse() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
         // An unmatched route is denied (403) by the default-deny
         // `AuthorizationMiddleware` (#482) before it can reach the router's
         // 404. The point here is unchanged: the security middleware sits
         // outside ErrorMiddleware, so even this synthesized error response
         // must carry the headers.
-        let builder = TestDataBuilder(db: app.db)
+        let builder = TestDataBuilder(db: app.testPostgres)
         let user = try await builder.createUser()
         let token = try await user.generateAPIKey(on: app)
 

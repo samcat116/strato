@@ -1,6 +1,5 @@
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import AppTestSupport
 @testable import App
@@ -21,7 +20,7 @@ final class UserControllerTests: BaseTestCase {
             displayName: username,
             isSystemAdmin: isSystemAdmin
         )
-        try await user.save(on: app.db)
+        try await user.save(on: app.testPostgres)
         let token = try await user.generateAPIKey(on: app)
         return (user, token)
     }
@@ -149,7 +148,7 @@ final class UserControllerTests: BaseTestCase {
             }
 
             // Confirm the target was not modified
-            let reloaded = try await User.find(other.user.id, on: app.db)
+            let reloaded = try await User.find(other.user.id, on: app.testPostgres)
             #expect(reloaded?.displayName == "other")
         }
     }
@@ -171,7 +170,7 @@ final class UserControllerTests: BaseTestCase {
             }
 
             // Confirm the target still exists
-            let reloaded = try await User.find(other.user.id, on: app.db)
+            let reloaded = try await User.find(other.user.id, on: app.testPostgres)
             #expect(reloaded != nil)
         }
     }
@@ -193,7 +192,7 @@ final class UserControllerTests: BaseTestCase {
                 #expect(res.status == .noContent)
             }
 
-            let reloaded = try await User.find(other.user.id, on: app.db)
+            let reloaded = try await User.find(other.user.id, on: app.testPostgres)
             #expect(reloaded == nil)
         }
     }

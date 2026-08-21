@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -25,9 +24,8 @@ final class VMAuthorizationTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "vmauthuser",
                 email: "vmauth@example.com",
@@ -36,7 +34,7 @@ final class VMAuthorizationTests {
             )
             let org = try await builder.createOrganization(name: "VM Auth Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "member")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "VM Auth Project",
@@ -68,7 +66,7 @@ final class VMAuthorizationTests {
             nodeType: .project,
             nodeID: project.id!,
             createdBy: nil,
-            on: app.db
+            on: app.testPostgres
         )
     }
 
@@ -80,7 +78,7 @@ final class VMAuthorizationTests {
             // binding reaches it.
             try await self.grant(.viewer, to: user, onProject: project, app: app)
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let otherOrg = try await builder.createOrganization(name: "Other VM Org")
             let otherProject = try await builder.createProject(
                 name: "Other VM Project", description: "elsewhere", organization: otherOrg)

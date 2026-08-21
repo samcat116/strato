@@ -1,6 +1,6 @@
+import ControlPlanePostgres
 import Foundation
 import Vapor
-import Fluent
 
 /// Builds the nested organization → OU → project → VM tree and the aggregate
 /// statistics used by the hierarchy endpoints. Extracted from `HierarchyController`
@@ -11,7 +11,7 @@ import Fluent
 /// the rows already in hand (issue #692).
 struct HierarchyTreeBuilder {
     /// Builds the complete hierarchy response for an organization.
-    static func buildCompleteHierarchy(organization: Organization, on db: Database) async throws
+    static func buildCompleteHierarchy(organization: Organization, on db: PostgresStoreContext) async throws
         -> OrganizationHierarchyResponse
     {
         try buildCompleteHierarchy(

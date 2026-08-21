@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import SPIREServerAPI
 import Testing
@@ -22,7 +21,7 @@ final class WorkloadIdentityControllerTests: BaseTestCase {
             displayName: "WI Admin",
             isSystemAdmin: true
         )
-        try await admin.save(on: app.db)
+        try await admin.save(on: app.testPostgres)
         return try await admin.generateAPIKey(on: app)
     }
 
@@ -33,7 +32,7 @@ final class WorkloadIdentityControllerTests: BaseTestCase {
             displayName: "WI User",
             isSystemAdmin: false
         )
-        try await user.save(on: app.db)
+        try await user.save(on: app.testPostgres)
         return try await user.generateAPIKey(on: app)
     }
 

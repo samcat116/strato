@@ -1,7 +1,5 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
-import SQLKit
 import Vapor
 
 /// Allocates and reads policy-set versions (issue #479).
@@ -17,9 +15,9 @@ enum PolicySetVersionService {
     /// The version currently in force. Zero when nothing has been recorded
     /// yet, which is the correct answer for a fresh database: the policy set
     /// exists, it has simply never changed.
-    static func current(on db: any Database) async throws -> Int {
+    static func current(on db: PostgresStoreContext) async throws -> Int {
         struct Row: Decodable { let version: Int }
-        guard let sql = db as? any SQLDatabase else {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Policy-set versions require a SQL database")
         }
         return try await sql.raw(
@@ -42,7 +40,7 @@ enum PolicySetVersionService {
     /// every subsequent statement, including re-reading the max, fails too.
     /// The retry therefore belongs at the transaction boundary, not here.
     @discardableResult
-    static func bump(reason: String, changedBy: UUID? = nil, on db: any Database) async throws -> Int {
+    static func bump(reason: String, changedBy: UUID? = nil, on db: PostgresStoreContext) async throws -> Int {
         let next = try await current(on: db) + 1
         try await record(version: next, reason: reason, changedBy: changedBy, on: db)
         return next
@@ -55,9 +53,9 @@ enum PolicySetVersionService {
         version: Int,
         reason: String,
         changedBy: UUID? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws {
-        guard let sql = db as? any SQLDatabase else {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Policy-set versions require a SQL database")
         }
         try await sql.raw(
@@ -68,9 +66,9 @@ enum PolicySetVersionService {
         ).run()
     }
 
-    static func reason(for version: Int, on db: any Database) async throws -> String? {
+    static func reason(for version: Int, on db: PostgresStoreContext) async throws -> String? {
         struct Row: Decodable { let reason: String }
-        guard let sql = db as? any SQLDatabase else {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Policy-set versions require a SQL database")
         }
         return try await sql.raw(
@@ -78,9 +76,9 @@ enum PolicySetVersionService {
         ).first(decoding: Row.self)?.reason
     }
 
-    static func count(reason: String, on db: any Database) async throws -> Int {
+    static func count(reason: String, on db: PostgresStoreContext) async throws -> Int {
         struct Row: Decodable { let count: Int }
-        guard let sql = db as? any SQLDatabase else {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Policy-set versions require a SQL database")
         }
         return try await sql.raw(
@@ -103,11 +101,11 @@ enum PolicySetVersionService {
     ///
     /// Only uniqueness collisions retry. Errors the work itself raises — a
     /// duplicate guardrail name, a malformed ceiling — are already translated
-    /// out of `DatabaseError` by the store, so they surface on the first
+    /// out of `PostgresConstraintError` by the store, so they surface on the first
     /// attempt rather than being retried four more times.
     static func withPolicySetChange<T: Sendable>(
-        on db: any Database,
-        _ work: @Sendable @escaping (any Database) async throws -> T
+        on db: PostgresStoreContext,
+        _ work: @Sendable @escaping (PostgresStoreContext) async throws -> T
     ) async throws -> T {
         for attempt in 1...transactionAttempts {
             do {
@@ -115,7 +113,7 @@ enum PolicySetVersionService {
                     try await work(transaction)
                 }
             } catch {
-                guard let dbError = error as? any DatabaseError, dbError.isConstraintFailure else { throw error }
+                guard let dbError = error as? any PostgresConstraintError, dbError.isConstraintFailure else { throw error }
                 guard attempt < transactionAttempts else { throw error }
             }
         }

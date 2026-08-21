@@ -1,5 +1,4 @@
-import Fluent
-import SQLKit
+import ControlPlanePostgres
 import StratoShared
 import Vapor
 
@@ -314,7 +313,7 @@ protocol AgentPlacedResource {
     /// Every agent whose desired-state sync carries this resource. Most
     /// resources have one placement; a volume derives the set from its active
     /// replica rows.
-    func placementAgentIDs(on db: any Database) async throws -> [String]
+    func placementAgentIDs(on db: PostgresStoreContext) async throws -> [String]
 }
 
 protocol PersistentResourceRecord: Sendable {
@@ -322,9 +321,9 @@ protocol PersistentResourceRecord: Sendable {
     var id: UUID? { get }
 
     func requireID() throws -> UUID
-    func persist(on db: any Database) async throws
-    func remove(on db: any Database) async throws
-    static func load(_ id: UUID?, on db: any Database) async throws -> Self?
+    func persist(on db: PostgresStoreContext) async throws
+    func remove(on db: PostgresStoreContext) async throws
+    static func load(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self?
 }
 
 protocol ConvergingResource:
@@ -356,7 +355,7 @@ protocol ConvergingResource:
     /// (`\.$convergenceDeadline`), which a protocol cannot name. Rows with no
     /// deadline are excluded by SQL's `NULL` comparison, which is the wanted
     /// behaviour: nothing is outstanding on them.
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [Self]
+    static func overdueForConvergence(at now: Date, on db: PostgresStoreContext) async throws -> [Self]
 
     /// Copies the columns the *reconciliation* loop owns — everything the
     /// observed-state applier, the scheduler's placement, the finalizer
@@ -388,7 +387,7 @@ enum ConvergenceTimeoutClaimOutcome: Equatable, Sendable {
 
 extension ConvergingResource {
     func advancingDesiredStateGeneration(
-        expectedGeneration: Int64? = nil, on db: any Database
+        expectedGeneration: Int64? = nil, on db: PostgresStoreContext
     ) async throws -> (resource: Self, outcome: DesiredStateGenerationWriter.Outcome) {
         let outcome = try await DesiredStateGenerationWriter.advance(
             schema: Self.schema,
@@ -399,8 +398,8 @@ extension ConvergingResource {
         return (replacingGeneration(generation), outcome)
     }
 
-    func lockingAndRefreshing(on db: any Database) async throws -> Self? {
-        guard let sql = db as? any SQLDatabase else {
+    func lockingAndRefreshing(on db: PostgresStoreContext) async throws -> Self? {
+        guard let sql = db as? PostgresStoreContext else {
             throw ConvergenceWriteError.unsupportedDatabase
         }
         let id = try requireID()
@@ -413,10 +412,10 @@ extension ConvergingResource {
         return adoptingReconciliationState(from: committed)
     }
 
-    func claimingConvergenceTimeout(on db: any Database) async throws
+    func claimingConvergenceTimeout(on db: PostgresStoreContext) async throws
         -> ConvergenceTimeoutClaimOutcome
     {
-        guard let sql = db as? any SQLDatabase else {
+        guard let sql = db as? PostgresStoreContext else {
             throw ConvergenceWriteError.unsupportedDatabase
         }
         let claimed = try await sql.raw(
@@ -463,11 +462,11 @@ private struct CurrentConvergenceGeneration: Decodable {
 
 extension VM: ConvergingResource {
     static var operationResourceKind: OperationResourceKind { .virtualMachine }
-    func placementAgentIDs(on db: any Database) async throws -> [String] {
+    func placementAgentIDs(on db: PostgresStoreContext) async throws -> [String] {
         hypervisorId.map { [$0] } ?? []
     }
 
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [VM] {
+    static func overdueForConvergence(at now: Date, on db: PostgresStoreContext) async throws -> [VM] {
         try await LegacyVMStore.vms(overdueAt: now, on: db)
     }
 
@@ -497,11 +496,11 @@ extension VM: ConvergingResource {
 
 extension Sandbox: ConvergingResource {
     static var operationResourceKind: OperationResourceKind { .sandbox }
-    func placementAgentIDs(on db: any Database) async throws -> [String] {
+    func placementAgentIDs(on db: PostgresStoreContext) async throws -> [String] {
         hypervisorId.map { [$0] } ?? []
     }
 
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [Sandbox] {
+    static func overdueForConvergence(at now: Date, on db: PostgresStoreContext) async throws -> [Sandbox] {
         try await LegacySandboxStore.sandboxes(overdueAt: now, on: db)
     }
 
@@ -531,14 +530,14 @@ extension Sandbox: ConvergingResource {
 
 extension Volume: ConvergingResource {
     static var operationResourceKind: OperationResourceKind { .volume }
-    func placementAgentIDs(on db: any Database) async throws -> [String] {
+    func placementAgentIDs(on db: PostgresStoreContext) async throws -> [String] {
         if desiredStatus == .absent {
             return try await VolumeService.agentIDsWithPhysicalReplicas(of: self, on: db)
         }
         return try await VolumeService.agentIDs(holding: self, on: db)
     }
 
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [Volume] {
+    static func overdueForConvergence(at now: Date, on db: PostgresStoreContext) async throws -> [Volume] {
         try await LegacyVolumeStore.volumes(overdueAt: now, on: db)
     }
 

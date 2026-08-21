@@ -1,5 +1,4 @@
-import Fluent
-import SQLKit
+import ControlPlanePostgres
 import Vapor
 
 /// A DNS zone: an arbitrarily-named, project-owned namespace that VMs resolve
@@ -40,18 +39,18 @@ enum LegacyDNSZoneStore {
     static func zones(
         ids: [UUID]? = nil,
         projectIDs: [UUID]? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [DNSZoneSnapshot] {
         if let ids, ids.isEmpty { return [] }
         if let projectIDs, projectIDs.isEmpty { return [] }
-        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM dns_zones WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT \(unsafeRaw: columns) FROM dns_zones WHERE TRUE"
         if let ids { query += " AND id = ANY(\(bind: ids))" }
         if let projectIDs { query += " AND project_id = ANY(\(bind: projectIDs))" }
         query += " ORDER BY name, id"
         return try await requireSQL(db).raw(query).all(decoding: Record.self).map(\.snapshot)
     }
 
-    static func find(id: UUID, on db: any Database) async throws -> DNSZoneSnapshot? {
+    static func find(id: UUID, on db: PostgresStoreContext) async throws -> DNSZoneSnapshot? {
         try await zones(ids: [id], on: db).first
     }
 
@@ -62,7 +61,7 @@ enum LegacyDNSZoneStore {
         description: String? = nil,
         projectID: UUID,
         createdByID: UUID? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> DNSZoneSnapshot {
         guard let row = try await requireSQL(db).raw(
             """
@@ -85,7 +84,7 @@ enum LegacyDNSZoneStore {
         id: UUID,
         name: String,
         description: String?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> DNSZoneSnapshot? {
         try await requireSQL(db).raw(
             """
@@ -98,7 +97,7 @@ enum LegacyDNSZoneStore {
         ).first(decoding: Record.self)?.snapshot
     }
 
-    static func ids(projectIDs: [UUID], on db: any Database) async throws -> [UUID] {
+    static func ids(projectIDs: [UUID], on db: PostgresStoreContext) async throws -> [UUID] {
         struct ID: Decodable { let id: UUID }
         guard !projectIDs.isEmpty else { return [] }
         return try await requireSQL(db).raw(
@@ -107,7 +106,7 @@ enum LegacyDNSZoneStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM dns_zones WHERE id = \(bind: id) RETURNING id"
@@ -136,8 +135,8 @@ enum LegacyDNSZoneStore {
         created_by_id AS "createdByID", created_at AS "createdAt", updated_at AS "updatedAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "DNS zones require PostgreSQL")
         }
         return sql

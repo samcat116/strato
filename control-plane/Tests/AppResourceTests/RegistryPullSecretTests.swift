@@ -1,6 +1,5 @@
 import Crypto
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import NIOConcurrencyHelpers
 import NIOCore
@@ -32,9 +31,8 @@ final class RegistryPullSecretTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "pullsecretuser",
                 email: "pullsecret@example.com",
@@ -43,7 +41,7 @@ final class RegistryPullSecretTests {
             )
             let org = try await builder.createOrganization(name: "Pull Secret Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Pull Secret Project",
@@ -78,12 +76,12 @@ final class RegistryPullSecretTests {
             ),
             protocolVersion: WireProtocol.currentVersion
         )
-        let orgID = try await Organization.all(on: app.db).first?.id
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: "pull-secret-agent",
             organizationScope: orgID.map { .organization($0) })
         sandbox.hypervisorId = agentUUID.uuidString
-        try await sandbox.save(on: app.db)
+        try await sandbox.save(on: app.testPostgres)
         return agentUUID.uuidString
     }
 
@@ -275,11 +273,11 @@ final class RegistryPullSecretTests {
     @Test("Editors cannot mutate registry credentials")
     func editorsCannotMutateCredentials() async throws {
         try await withPullSecretTestApp { app, _, project, _, _ in
-            let editor = try await TestDataBuilder(db: app.db).createUser(
+            let editor = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "secret-editor", email: "secret-editor@example.com")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: editor.id!, role: .editor,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
             let editorToken = try await editor.generateAPIKey(on: app)
 
             try await app.test(.POST, credentialsPath(project)) { req in
@@ -507,7 +505,7 @@ final class RegistryPullSecretTests {
             #expect(scripted.resolveCredentials == ["ghp_supersecret"])
 
             // The pin is persisted, so the next assembly never re-resolves.
-            let stored = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            let stored = try #require(await Sandbox.find(sandbox.id, on: app.testPostgres))
             #expect(stored.imageDigest == sampleDigest)
             _ = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(scripted.resolveCallCount == 1)
@@ -563,7 +561,7 @@ final class RegistryPullSecretTests {
             app.registryClient = scripted
 
             sandbox.setFixtureDesiredStatus(.absent)
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             let agentId = try await registerAgent(app: app, sandbox: sandbox)
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)

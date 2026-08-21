@@ -1,12 +1,11 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 /// Explicit folder access for callers that still own a Fluent transaction.
 /// Returned rows are immutable values; relationship loading is intentionally absent.
 enum LegacyOrganizationalUnitStore {
-    static func organizationalUnit(id: UUID?, on db: any Database) async throws -> OrganizationalUnit? {
+    static func organizationalUnit(id: UUID?, on db: PostgresStoreContext) async throws -> OrganizationalUnit? {
         guard let id else { return nil }
         let rows = try await requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM organizational_units AS ou WHERE ou.id = \(bind: id)"
@@ -20,10 +19,10 @@ enum LegacyOrganizationalUnitStore {
     static func organizationalUnits(
         ids: [UUID]? = nil,
         organizationIDs: [UUID]? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [OrganizationalUnit] {
         if ids?.isEmpty == true || organizationIDs?.isEmpty == true { return [] }
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT \(unsafeRaw: columns) FROM organizational_units AS ou WHERE TRUE"
         if let ids { query += " AND ou.id = ANY(\(bind: ids))" }
         if let organizationIDs { query += " AND ou.organization_id = ANY(\(bind: organizationIDs))" }
@@ -31,7 +30,7 @@ enum LegacyOrganizationalUnitStore {
         return try await requireSQL(db).raw(query).all(decoding: Record.self).map(\.organizationalUnit)
     }
 
-    static func descendants(ofPath path: String, on db: any Database) async throws -> [OrganizationalUnit] {
+    static func descendants(ofPath path: String, on db: PostgresStoreContext) async throws -> [OrganizationalUnit] {
         try await requireSQL(db).raw(
             """
             SELECT \(unsafeRaw: columns)
@@ -46,7 +45,7 @@ enum LegacyOrganizationalUnitStore {
         organizationIDs: [UUID],
         query term: String,
         limit: Int = 10,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [OrganizationalUnit] {
         guard !organizationIDs.isEmpty else { return [] }
         return try await requireSQL(db).raw(
@@ -62,7 +61,7 @@ enum LegacyOrganizationalUnitStore {
     }
 
     @discardableResult
-    static func upsert(_ folder: OrganizationalUnit, on db: any Database) async throws -> OrganizationalUnit {
+    static func upsert(_ folder: OrganizationalUnit, on db: PostgresStoreContext) async throws -> OrganizationalUnit {
         let id = try folder.requireID()
         guard let row = try await requireSQL(db).raw(
             """
@@ -140,8 +139,8 @@ enum LegacyOrganizationalUnitStore {
         updated_at AS "updatedAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase, sql.dialect.name == "postgresql" else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext, sql.dialect.name == "postgresql" else {
             throw Abort(.internalServerError, reason: "Folder compatibility access requires PostgreSQL")
         }
         return sql

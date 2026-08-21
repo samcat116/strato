@@ -1,4 +1,3 @@
-import Fluent
 import StratoShared
 import Testing
 import Vapor
@@ -24,9 +23,8 @@ final class GuestExecTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "execuser",
                 email: "exec@example.com",
@@ -35,7 +33,7 @@ final class GuestExecTests {
             )
             let org = try await builder.createOrganization(name: "Exec Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Exec Project",
@@ -86,17 +84,17 @@ final class GuestExecTests {
             protocolVersion: WireProtocol.currentVersion,
             sandboxCapable: true
         )
-        let orgID = try await Organization.all(on: app.db).first?.id
+        let orgID = try await Organization.all(on: app.testPostgres).first?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: agentName,
             organizationScope: orgID.map { .organization($0) })
         if var sandbox {
             sandbox.hypervisorId = agentUUID.uuidString
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
         }
         if var vm {
             vm.hypervisorId = agentUUID.uuidString
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
         }
         return agentUUID.uuidString
     }
@@ -153,7 +151,7 @@ final class GuestExecTests {
         try await withSandboxTestApp { app, _, _, sandbox, token in
             var sandbox = sandbox
             sandbox.setStatus(.running)
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!)/exec") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -173,7 +171,7 @@ final class GuestExecTests {
             // as the socket living on another replica.
             _ = try await self.registerAgent(app: app, sandbox: sandbox)
             sandbox.setStatus(.running)
-            try await sandbox.save(on: app.db)
+            try await sandbox.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!)/exec") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -187,11 +185,11 @@ final class GuestExecTests {
     @Test("POST exec is denied (403) for a viewer (sandbox:exec is operator and above)")
     func execDeniedWithoutPermission() async throws {
         try await withSandboxTestApp { app, _, project, sandbox, _ in
-            let viewer = try await TestDataBuilder(db: app.db).createUser(
+            let viewer = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "exec-viewer", email: "exec-viewer@example.com")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: viewer.id!, role: .viewer,
-                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.testPostgres)
             let viewerToken = try await viewer.generateAPIKey(on: app)
 
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!)/exec") { req in
@@ -208,7 +206,7 @@ final class GuestExecTests {
     @Test("VM exec is denied (403) without a deliberate vm:exec grant")
     func vmExecDeniedWithoutPermission() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
-            var vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "exec-vm", project: project)
 
             try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -222,8 +220,8 @@ final class GuestExecTests {
     @Test("VM exec rejects an empty command array")
     func vmExecRejectsEmptyCommand() async throws {
         try await withSandboxTestApp { app, user, project, _, token in
-            try await user.replacing(isSystemAdmin: true).save(on: app.db)
-            var vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+            try await user.replacing(isSystemAdmin: true).save(on: app.testPostgres)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "exec-vm", project: project)
 
             try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -237,8 +235,8 @@ final class GuestExecTests {
     @Test("VM exec is rejected (400) while the VM is not running")
     func vmExecRejectedWhenNotRunning() async throws {
         try await withSandboxTestApp { app, user, project, _, token in
-            try await user.replacing(isSystemAdmin: true).save(on: app.db)
-            var vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+            try await user.replacing(isSystemAdmin: true).save(on: app.testPostgres)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "exec-vm", project: project)
 
             try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -252,11 +250,11 @@ final class GuestExecTests {
     @Test("VM exec is rejected (409) for a running VM with no placement")
     func vmExecRejectedWhenUnplaced() async throws {
         try await withSandboxTestApp { app, user, project, _, token in
-            try await user.replacing(isSystemAdmin: true).save(on: app.db)
-            var vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+            try await user.replacing(isSystemAdmin: true).save(on: app.testPostgres)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "exec-vm", project: project)
             vm.guestAgentEnabled = true
             vm.setStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -270,10 +268,10 @@ final class GuestExecTests {
     @Test("VM exec is rejected (400) when the VM guest agent was not enabled")
     func vmExecRejectedWithoutGuestAgent() async throws {
         try await withSandboxTestApp { app, user, project, _, token in
-            try await user.replacing(isSystemAdmin: true).save(on: app.db)
-            var vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+            try await user.replacing(isSystemAdmin: true).save(on: app.testPostgres)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "exec-vm", project: project)
             vm.setStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -288,12 +286,12 @@ final class GuestExecTests {
     @Test("VM exec is rejected (503) when the assigned agent does not advertise its bridge")
     func vmExecUnavailableWithoutAdvertisedBridge() async throws {
         try await withSandboxTestApp { app, user, project, _, token in
-            try await user.replacing(isSystemAdmin: true).save(on: app.db)
-            var vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+            try await user.replacing(isSystemAdmin: true).save(on: app.testPostgres)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "exec-vm", project: project)
             vm.guestAgentEnabled = true
             _ = try await self.registerAgent(app: app, vm: vm)
             vm.setStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -308,12 +306,12 @@ final class GuestExecTests {
     @Test("VM exec is rejected (503) when this replica does not hold the agent socket")
     func vmExecUnavailableWithoutLocalSocket() async throws {
         try await withSandboxTestApp { app, user, project, _, token in
-            try await user.replacing(isSystemAdmin: true).save(on: app.db)
-            var vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+            try await user.replacing(isSystemAdmin: true).save(on: app.testPostgres)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "exec-vm", project: project)
             vm.guestAgentEnabled = true
             _ = try await self.registerAgent(app: app, vm: vm, supportsVMGuestExec: true)
             vm.setStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -330,7 +328,7 @@ final class GuestExecTests {
     @Test("VM command run is denied without the separate vm:runCommand grant")
     func vmRunDeniedWithoutPermission() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
-            var vm = try await TestDataBuilder(db: app.db).createVM(name: "run-vm", project: project)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "run-vm", project: project)
             try await app.test(.POST, "/api/vms/\(vm.id!)/actions/run") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(ExecBody(command: ["/usr/bin/id"]))
@@ -346,12 +344,12 @@ final class GuestExecTests {
     @Test("VM command run returns a pollable failed operation when socket delivery fails")
     func vmRunReturnsPollableOperation() async throws {
         try await withSandboxTestApp { app, user, project, _, token in
-            try await user.replacing(isSystemAdmin: true).save(on: app.db)
-            var vm = try await TestDataBuilder(db: app.db).createVM(name: "run-vm", project: project)
+            try await user.replacing(isSystemAdmin: true).save(on: app.testPostgres)
+            var vm = try await TestDataBuilder(db: app.testPostgres).createVM(name: "run-vm", project: project)
             vm.guestAgentEnabled = true
             _ = try await self.registerAgent(app: app, vm: vm, supportsVMGuestExec: true)
             vm.setStatus(.running)
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             var accepted: OperationResponse?
             try await app.test(.POST, "/api/vms/\(vm.id!)/actions/run") { req in
@@ -706,7 +704,7 @@ final class GuestExecTests {
     @Test("GET /api/sandboxes/:id/logs is denied (403) when no binding grants read")
     func logsDeniedWithoutPermission() async throws {
         try await withSandboxTestApp { app, _, _, sandbox, _ in
-            let outsider = try await TestDataBuilder(db: app.db).createUser(
+            let outsider = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "logs-outsider", email: "logs-outsider@example.com")
             let outsiderToken = try await outsider.generateAPIKey(on: app)
 

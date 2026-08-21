@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -11,7 +10,7 @@ struct VolumeSnapshotListTests {
     @Test("Project snapshot collection is scoped and paged")
     func projectCollectionIsScopedAndPaged() async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let admin = try await builder.createUser(
                 username: "snapshot-list-admin",
                 email: "snapshot-list-admin@example.com",
@@ -30,11 +29,11 @@ struct VolumeSnapshotListTests {
                     name: "\(name)-volume", description: "", projectID: project.id!,
                     environment: "development", size: 1 << 30, status: .available,
                     createdByID: admin.id!)
-                try await volume.save(on: app.db)
+                try await volume.save(on: app.testPostgres)
                 let snapshot = VolumeSnapshot(
                     name: name, description: "", volumeID: volume.id!, projectID: project.id!,
                     environment: "development", size: volume.size, createdByID: admin.id!)
-                try await snapshot.save(on: app.db)
+                try await snapshot.save(on: app.testPostgres)
             }
 
             try await createSnapshot(named: "first", in: project)
@@ -61,7 +60,7 @@ struct VolumeSnapshotListTests {
     @Test("Project id is required")
     func projectIdIsRequired() async throws {
         try await withTestApp { app in
-            let admin = try await TestDataBuilder(db: app.db).createUser(
+            let admin = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "snapshot-list-required",
                 email: "snapshot-list-required@example.com",
                 isSystemAdmin: true)
@@ -79,7 +78,7 @@ struct VolumeSnapshotListTests {
     @Test("Project snapshot collection filters volumes the credential cannot read")
     func projectCollectionFiltersUnreadableVolumes() async throws {
         try await withTestApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let admin = try await builder.createUser(
                 username: "snapshot-list-restricted",
                 email: "snapshot-list-restricted@example.com",
@@ -97,12 +96,12 @@ struct VolumeSnapshotListTests {
                 name: "hidden-volume", description: "", projectID: project.id!,
                 environment: "development", size: 1 << 30, status: .available,
                 createdByID: admin.id!)
-            try await volume.save(on: app.db)
+            try await volume.save(on: app.testPostgres)
             try await VolumeSnapshot(
                 name: "hidden-snapshot", description: "", volumeID: volume.id!,
                 projectID: project.id!, environment: "development", size: volume.size,
                 createdByID: admin.id!
-            ).save(on: app.db)
+            ).save(on: app.testPostgres)
 
             try await app.test(
                 .GET,

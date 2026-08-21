@@ -1,4 +1,3 @@
-import Fluent
 import ControlPlanePostgres
 import StratoShared
 import Testing
@@ -27,9 +26,8 @@ final class VMInstanceIdentityTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let user = try await builder.createUser(
                 username: "identityuser",
                 email: "identity@example.com",
@@ -38,7 +36,7 @@ final class VMInstanceIdentityTests {
             )
             let org = try await builder.createOrganization(name: "Identity Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            try await user.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await user.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             let project = try await builder.createProject(
                 name: "Identity Project",
@@ -94,7 +92,7 @@ final class VMInstanceIdentityTests {
         _ app: Application, project: Project, user: User, token: String, name: String,
         suffix: String
     ) async throws -> VMBody {
-        let builder = TestDataBuilder(db: app.db)
+        let builder = TestDataBuilder(db: app.testPostgres)
         let image = try await builder.createImage(project: project, uploadedBy: user)
         let network = try await builder.createNetwork(name: "identity-net-\(suffix)", project: project)
         let gb = Int64(1) << 30
@@ -114,7 +112,7 @@ final class VMInstanceIdentityTests {
     }
 
     private func registration(
-        forVM vmID: UUID, on db: any Database
+        forVM vmID: UUID, on db: PostgresStoreContext
     ) async throws -> LegacyWorkloadRegistrationRecord? {
         try await LegacyWorkloadRegistrationStore.registrations(vmIDs: [vmID], on: db).first
     }
@@ -130,7 +128,7 @@ final class VMInstanceIdentityTests {
             let vmID = try #require(created.id)
 
             let rows = try await LegacyWorkloadRegistrationStore.registrations(
-                vmIDs: [vmID], on: app.db)
+                vmIDs: [vmID], on: app.testPostgres)
             #expect(rows.count == 1)
             let row = try #require(rows.first)
 
@@ -150,7 +148,7 @@ final class VMInstanceIdentityTests {
             let bindings = try await LegacyRoleBindingStore.bindings(
                 principalType: IAMPrincipalType.workload.rawValue,
                 principalID: registrationID,
-                on: app.db).count
+                on: app.testPostgres).count
             #expect(bindings == 0)
             #expect(created.instanceIdentityStatus == .enabled)
         }
@@ -164,9 +162,9 @@ final class VMInstanceIdentityTests {
                 suffix: "surfaces")
             let vmID = try #require(created.id)
             let expected = try #require(
-                try await self.registration(forVM: vmID, on: app.db)?.spiffeID)
+                try await self.registration(forVM: vmID, on: app.testPostgres)?.spiffeID)
             let expectedPrincipalID = try #require(
-                try await self.registration(forVM: vmID, on: app.db)?.id)
+                try await self.registration(forVM: vmID, on: app.testPostgres)?.id)
 
             // The `202` a create answers with.
             #expect(created.spiffeId == expected)
@@ -211,7 +209,7 @@ final class VMInstanceIdentityTests {
     @Test("Project IAM lists its complete lightweight VM principal inventory")
     func projectVMPrincipalsAreScopedAndLightweight() async throws {
         try await withIdentityTestApp { app, user, org, project, token in
-            let otherProject = try await TestDataBuilder(db: app.db).createProject(
+            let otherProject = try await TestDataBuilder(db: app.testPostgres).createProject(
                 name: "Other Identity Project", description: "not requested", organization: org)
             let expected = try await self.createVM(
                 app, project: project, user: user, token: token, name: "requested-project-vm",
@@ -288,7 +286,7 @@ final class VMInstanceIdentityTests {
             let principalID = try #require(created.instanceIdentityPrincipalId)
             let projectID = try project.requireID()
 
-            let reader = try await TestDataBuilder(db: app.db).createUser(
+            let reader = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "directvmreader",
                 email: "directvmreader@example.com",
                 displayName: "Direct VM Reader",
@@ -302,7 +300,7 @@ final class VMInstanceIdentityTests {
                 nodeType: .virtualMachine,
                 nodeID: vmID,
                 createdBy: user.id,
-                on: app.db)
+                on: app.testPostgres)
 
             // A direct VM grant is deliberately not project membership.
             try await app.test(.GET, "/api/projects/\(projectID)/members") { req in
@@ -326,7 +324,7 @@ final class VMInstanceIdentityTests {
                 nodeType: .project,
                 nodeID: projectID,
                 createdBy: user.id,
-                on: app.db)
+                on: app.testPostgres)
 
             try await app.test(.GET, "/api/vms/\(vmID)/project-grant") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: readerToken)
@@ -347,7 +345,7 @@ final class VMInstanceIdentityTests {
     @Test("The registry shows the VM's current name, not the one it had at create")
     func registryLabelTracksRenames() async throws {
         try await withIdentityTestApp { app, user, org, project, token in
-            let admin = try await TestDataBuilder(db: app.db).createUser(
+            let admin = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "registryadmin", email: "registryadmin@example.com",
                 displayName: "Registry Admin", isSystemAdmin: true)
             let adminToken = try await admin.generateAPIKey(on: app)
@@ -357,11 +355,11 @@ final class VMInstanceIdentityTests {
                 suffix: "rename")
             let vmID = try #require(created.id)
             let spiffeID = try #require(
-                try await self.registration(forVM: vmID, on: app.db)?.spiffeID)
+                try await self.registration(forVM: vmID, on: app.testPostgres)?.spiffeID)
 
-            var vm = try #require(try await VM.find(vmID, on: app.db))
+            var vm = try #require(try await VM.find(vmID, on: app.testPostgres))
             vm.name = "after-rename"
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             struct RegistrationBody: Content {
                 let spiffeId: String
@@ -401,7 +399,7 @@ final class VMInstanceIdentityTests {
     @Test("The registry filters by kind and by whether a row is VM-owned")
     func registryFilters() async throws {
         try await withIdentityTestApp { app, user, org, project, token in
-            let admin = try await TestDataBuilder(db: app.db).createUser(
+            let admin = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "filteradmin", email: "filteradmin@example.com",
                 displayName: "Filter Admin", isSystemAdmin: true)
             let adminToken = try await admin.generateAPIKey(on: app)
@@ -418,7 +416,7 @@ final class VMInstanceIdentityTests {
                     spiffeID: "spiffe://\(PlatformTrustDomain.current)/sa/filter-bystander",
                     kind: WorkloadRegistrationKind.workload.rawValue,
                     organizationID: try org.requireID()),
-                on: app.db)
+                on: app.testPostgres)
 
             struct RegistrationBody: Content {
                 let spiffeId: String
@@ -478,7 +476,7 @@ final class VMInstanceIdentityTests {
     func squattedIdentityIsEscapedByRedrawingTheID() async throws {
         try await withIdentityTestApp { app, user, org, project, _ in
             let orgID = try org.requireID()
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let vm = try await builder.createVM(name: "squatted-vm", project: project)
             let vmID = try vm.requireID()
 
@@ -490,13 +488,13 @@ final class VMInstanceIdentityTests {
                         forVM: vmID, trustDomain: PlatformTrustDomain.current),
                     kind: WorkloadRegistrationKind.workload.rawValue,
                     organizationID: orgID),
-                on: app.db)
+                on: app.testPostgres)
 
             // The `spiffe_id` unique index is the interim guard, and this is the
             // failure the create path's retry wrapper catches.
             await #expect(throws: (any Error).self) {
                 try await GuestIdentity.register(
-                    vmID: vmID, organizationID: orgID, createdBy: user.id, on: app.db)
+                    vmID: vmID, organizationID: orgID, createdBy: user.id, on: app.testPostgres)
             }
 
             // And this is why the retry is the answer: `retryingOnConstraintFailure`
@@ -507,7 +505,7 @@ final class VMInstanceIdentityTests {
             let redrawnID = try redrawn.requireID()
             #expect(redrawnID != vmID)
             let registration = try await GuestIdentity.register(
-                vmID: redrawnID, organizationID: orgID, createdBy: user.id, on: app.db)
+                vmID: redrawnID, organizationID: orgID, createdBy: user.id, on: app.testPostgres)
             #expect(
                 registration.spiffeID
                     == GuestIdentity.spiffeID(
@@ -520,12 +518,12 @@ final class VMInstanceIdentityTests {
     @Test("Reaping a VM removes its identity and the grants that principal held")
     func reapRemovesTheIdentityAndItsBindings() async throws {
         try await withIdentityTestApp { app, user, org, project, token in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             var vm = try await builder.createVM(name: "doomed-vm", project: project)
             let vmID = try vm.requireID()
 
             let row = try await GuestIdentity.register(
-                vmID: vmID, organizationID: try org.requireID(), createdBy: user.id, on: app.db)
+                vmID: vmID, organizationID: try org.requireID(), createdBy: user.id, on: app.testPostgres)
             let registrationID = row.id
 
             // A grant the identity holds somewhere else entirely — the kind the
@@ -533,7 +531,7 @@ final class VMInstanceIdentityTests {
             try await RoleBindingService.grant(
                 principalType: .workload, principalID: registrationID, role: .viewer,
                 nodeType: .project, nodeID: try project.requireID(), createdBy: user.id,
-                on: app.db)
+                on: app.testPostgres)
 
             // A bystander workload, to prove the sweep is scoped rather than
             // a blanket delete of every workload principal.
@@ -542,28 +540,28 @@ final class VMInstanceIdentityTests {
                     spiffeID: "spiffe://\(PlatformTrustDomain.current)/sa/bystander",
                     kind: WorkloadRegistrationKind.workload.rawValue,
                     organizationID: try org.requireID()),
-                on: app.db)
+                on: app.testPostgres)
             let bystanderID = bystander.id
             try await RoleBindingService.grant(
                 principalType: .workload, principalID: bystanderID, role: .viewer,
                 nodeType: .project, nodeID: try project.requireID(), createdBy: user.id,
-                on: app.db)
+                on: app.testPostgres)
 
             vm.setFixtureDesiredStatus(.absent)
-            try await vm.save(on: app.db)
-            let reaped = try await VM.reap(vm, on: app.db, app: app)
+            try await vm.save(on: app.testPostgres)
+            let reaped = try await VM.reap(vm, on: app.testPostgres, app: app)
             #expect(reaped)
 
-            #expect(try await self.registration(forVM: vmID, on: app.db) == nil)
+            #expect(try await self.registration(forVM: vmID, on: app.testPostgres) == nil)
             #expect(
                 try await LegacyWorkloadRegistrationStore.registration(
-                    id: registrationID, on: app.db) == nil)
+                    id: registrationID, on: app.testPostgres) == nil)
 
             func bindingCount(_ principalID: UUID) async throws -> Int {
                 try await LegacyRoleBindingStore.bindings(
                     principalType: IAMPrincipalType.workload.rawValue,
                     principalID: principalID,
-                    on: app.db).count
+                    on: app.testPostgres).count
             }
             #expect(try await bindingCount(registrationID) == 0)
             #expect(try await bindingCount(bystanderID) == 1)
@@ -575,16 +573,16 @@ final class VMInstanceIdentityTests {
     @Test("Revoking a VM's registration leaves the VM running with no identity")
     func revocationLeavesTheVMWithoutAnIdentity() async throws {
         try await withIdentityTestApp { app, user, org, project, token in
-            let admin = try await TestDataBuilder(db: app.db).createUser(
+            let admin = try await TestDataBuilder(db: app.testPostgres).createUser(
                 username: "identityadmin", email: "identityadmin@example.com",
                 displayName: "Identity Admin", isSystemAdmin: true)
             let adminToken = try await admin.generateAPIKey(on: app)
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let vm = try await builder.createVM(name: "revoked-vm", project: project)
             let vmID = try vm.requireID()
             let row = try await GuestIdentity.register(
-                vmID: vmID, organizationID: try org.requireID(), createdBy: user.id, on: app.db)
+                vmID: vmID, organizationID: try org.requireID(), createdBy: user.id, on: app.testPostgres)
 
             try await app.test(.DELETE, "/api/workload-registrations/\(row.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -594,9 +592,9 @@ final class VMInstanceIdentityTests {
 
             // One-way on purpose: the VM survives, and nothing re-creates the
             // row. A self-heal would undo the only revocation lever there is.
-            #expect(try await VM.find(vmID, on: app.db) != nil)
-            #expect(try await self.registration(forVM: vmID, on: app.db) == nil)
-            #expect(try await GuestIdentity.spiffeID(forVM: vmID, on: app.db) == nil)
+            #expect(try await VM.find(vmID, on: app.testPostgres) != nil)
+            #expect(try await self.registration(forVM: vmID, on: app.testPostgres) == nil)
+            #expect(try await GuestIdentity.spiffeID(forVM: vmID, on: app.testPostgres) == nil)
 
             try await app.test(.GET, "/api/vms/\(vmID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)

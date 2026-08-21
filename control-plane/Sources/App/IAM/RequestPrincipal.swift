@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Vapor
 
 // The acting principal of a request (issue #495).
@@ -58,37 +58,25 @@ extension Request {
     /// do not — they hold nothing by membership — so their scope comes from
     /// where they were registered: a service account's project's organization,
     /// or a workload registration's organization.
-    func actingOrganizationID() async throws -> UUID? {
+    func actingOrganizationID(
+        workloads: WorkloadsPersistence,
+        serviceAccounts: ServiceAccountsPersistence,
+        projects: ProjectsPersistence
+    ) async throws -> UUID? {
         if let user = auth.get(User.self) {
             return user.currentOrganizationId
         }
         guard let workload = authenticatedWorkload else { return nil }
-        return try await WorkloadRegistry.organizationID(for: workload.resolved, on: db)
-    }
-}
-
-extension WorkloadRegistry {
-    /// The organization a machine principal belongs to, or nil when it has
-    /// none (a workload registration with no organization scope).
-    ///
-    /// Administrative scoping only — it grants nothing. It answers "which
-    /// organization's collection endpoints is this principal even talking
-    /// about", which is a routing question; whether the principal may read or
-    /// create anything there is still Cedar's answer.
-    static func organizationID(for resolved: ResolvedWorkload, on db: any Database) async throws -> UUID? {
-        switch resolved {
+        switch workload.resolved {
         case .agent:
             return nil
         case .serviceAccount(let id):
-            guard let account = try await LegacyServiceAccountStore.account(id: id, on: db),
-                let project = try await Project.find(account.projectID, on: db)
+            guard let account = try await serviceAccounts.account(id: id),
+                let project = try await projects.project(id: account.projectID)
             else { return nil }
-            return project.organizationID
+            return project.rootOrganizationID
         case .workload(let id):
-            guard let registration = try await LegacyWorkloadRegistrationStore.registration(
-                id: id, on: db)
-            else { return nil }
-            return registration.organizationID
+            return try await workloads.registration(id: id)?.organizationID
         }
     }
 }

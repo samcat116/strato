@@ -1,4 +1,3 @@
-import Fluent
 import Foundation
 import StratoShared
 import Testing
@@ -27,9 +26,8 @@ final class AdminExceptionPathTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             app.guardrailAnalyzer = PermissiveGuardrailAnalyzer()
-            try await test(app, TestDataBuilder(db: app.db))
+            try await test(app, TestDataBuilder(db: app.testPostgres))
         } catch {
             try await app.shutdownForTesting()
             throw error
@@ -40,8 +38,8 @@ final class AdminExceptionPathTests {
     /// Compile the policy set so the tier-1 policies and any guardrail rows are
     /// live for the checks under test.
     private func rebuildPolicySet(_ app: Application) async throws {
-        let version = try await PolicySetVersionService.current(on: app.db)
-        await app.cedarPolicySet.rebuild(version: version, on: app.db)
+        let version = try await PolicySetVersionService.current(on: app.testPostgres)
+        await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
     }
 
     private func makeAgent(_ app: Application, name: String, org: Organization) async throws -> Agent {
@@ -60,7 +58,7 @@ final class AdminExceptionPathTests {
         ).replacing(
             wireProtocolVersion: .some(WireProtocol.currentVersion)
         ).replacingOrganizationScope(.organization(try org.requireID()))
-        try await agent.save(on: app.db)
+        try await agent.save(on: app.testPostgres)
         return agent
     }
 
@@ -79,7 +77,7 @@ final class AdminExceptionPathTests {
             let token = try await admin.generateAPIKey(on: app)
 
             let site = Site(name: "ceilinged-dc", organizationScope: .organization(try org.requireID()))
-            try await site.save(on: app.db)
+            try await site.save(on: app.testPostgres)
 
             try await rebuildPolicySet(app)
 
@@ -102,7 +100,7 @@ final class AdminExceptionPathTests {
                 principalMatch: .any,
                 resourceMatch: .any,
                 createdBy: admin.id,
-                on: app.db
+                on: app.testPostgres
             )
             try await rebuildPolicySet(app)
 
@@ -174,7 +172,7 @@ final class AdminExceptionPathTests {
                 principalMatch: .any,
                 resourceMatch: .any,
                 createdBy: admin.id,
-                on: app.db
+                on: app.testPostgres
             )
             try await rebuildPolicySet(app)
 
@@ -199,7 +197,7 @@ final class AdminExceptionPathTests {
                 username: "art-admin", email: "art-admin@example.com", isSystemAdmin: false)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: try orgAdmin.requireID(), role: .admin,
-                nodeType: .organization, nodeID: try org.requireID(), createdBy: nil, on: app.db)
+                nodeType: .organization, nodeID: try org.requireID(), createdBy: nil, on: app.testPostgres)
             let token = try await orgAdmin.generateAPIKey(on: app)
 
             let agent = try await makeAgent(app, name: "artifact-agent", org: org)
@@ -235,7 +233,7 @@ final class AdminExceptionPathTests {
                 username: "fw-admin", email: "fw-admin@example.com", isSystemAdmin: false)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: try orgAdmin.requireID(), role: .admin,
-                nodeType: .organization, nodeID: try homeOrg.requireID(), createdBy: nil, on: app.db)
+                nodeType: .organization, nodeID: try homeOrg.requireID(), createdBy: nil, on: app.testPostgres)
             let token = try await orgAdmin.generateAPIKey(on: app)
 
             let agent = try await makeAgent(app, name: "fw-agent", org: homeOrg)
@@ -254,7 +252,7 @@ final class AdminExceptionPathTests {
                 name: "Foreign Project", description: "d", organization: foreignOrg)
             var vm = try await builder.createVM(name: "foreign-vm", project: foreignProject)
             vm.hypervisorId = try agent.requireID().uuidString
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
 
             try await app.test(.POST, path) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -281,7 +279,7 @@ final class AdminExceptionPathTests {
                 name: "Foreign Project", description: "d", organization: foreignOrg)
             var vm = try await builder.createVM(name: "foreign-vm-2", project: foreignProject)
             vm.hypervisorId = try agent.requireID().uuidString
-            try await vm.save(on: app.db)
+            try await vm.save(on: app.testPostgres)
             try await rebuildPolicySet(app)
 
             try await app.test(.POST, "/api/agents/\(try agent.requireID().uuidString)/actions/force-offline") { req in

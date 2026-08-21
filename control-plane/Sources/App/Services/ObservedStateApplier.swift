@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import StratoShared
 import Vapor
@@ -17,6 +16,7 @@ import Vapor
 /// the agent's own send order.
 struct ObservedStateApplier {
     let app: Application
+    let database: PostgresStoreContext
     let workloads: WorkloadsPersistence
 
     private struct ResourceKey: Hashable {
@@ -81,8 +81,8 @@ struct ObservedStateApplier {
     private func withLockedCurrent<R: ConvergingResource, Result: Sendable>(
         _ resource: R,
         reportedBy agentId: String,
-        on db: any Database,
-        applying body: @escaping @Sendable (R, any Database) async throws -> Result
+        on db: PostgresStoreContext,
+        applying body: @escaping @Sendable (R, PostgresStoreContext) async throws -> Result
     ) async throws -> Result? {
         try await db.transaction { tx -> Result? in
             guard let current = try await resource.lockingAndRefreshing(on: tx) else { return nil }
@@ -122,7 +122,7 @@ struct ObservedStateApplier {
     /// workloads the agent holds that no sync accounted for.
     @discardableResult
     func apply(_ report: ObservedStateReport) async throws -> UnrecognizedOutcome {
-        let db = app.db
+        let db = database
 
         // Network observations are independent of the workload manifest. A
         // host can fail to enumerate its local VM store while its site's OVN
@@ -348,7 +348,7 @@ struct ObservedStateApplier {
     }
 
     private func applyObservedLoadBalancers(
-        _ observations: [ObservedLoadBalancerState], on db: any Database
+        _ observations: [ObservedLoadBalancerState], on db: PostgresStoreContext
     ) async throws {
         for observed in observations {
             try await db.transaction { tx in
@@ -421,7 +421,7 @@ struct ObservedStateApplier {
     /// caller can nudge a sync rather than waiting a full period for it.
     private func applyUnrecognizedWorkloads(
         _ report: ObservedStateReport,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> UnrecognizedOutcome {
         let existingClaims = try await workloads.claims(agentID: report.agentId)
             .map(AgentWorkloadClaimRecord.init)
@@ -703,7 +703,7 @@ struct ObservedStateApplier {
         interfaces: [VMNetworkInterface],
         observedAddressesByInterfaceID: [UUID: [ObservedInterfaceAddressSnapshot]],
         bootVolumes: [BootVolumeDependency]?,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         var current = vm
         let vmID = try current.requireID()
@@ -977,7 +977,7 @@ struct ObservedStateApplier {
     /// deliberately outside the convergence transaction: a webhook that cannot
     /// be enqueued must not roll back the observation it describes.
     private func emitVMStatusTransition(
-        _ transition: (previous: VMStatus, current: VMStatus)?, vm: VM, on db: Database
+        _ transition: (previous: VMStatus, current: VMStatus)?, vm: VM, on db: PostgresStoreContext
     ) async {
         guard let transition else { return }
         await WebhookEvents.emitVMStateChanged(
@@ -997,7 +997,7 @@ struct ObservedStateApplier {
         guestInfo: GuestInfo,
         interfaces: [VMNetworkInterface],
         observedAddressesByInterfaceID: [UUID: [ObservedInterfaceAddressSnapshot]],
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> VM {
         var current = vm
         var vmChanged = false
@@ -1056,7 +1056,7 @@ struct ObservedStateApplier {
     /// row — which means `guestMemoryStatsAt` records when the values last
     /// *changed*, a freshness signal that survives unchanged reports.
     private func persistMemoryStats(
-        vm: VM, stats: VMMemoryStats, on db: Database
+        vm: VM, stats: VMMemoryStats, on db: PostgresStoreContext
     ) async throws -> VM {
         guard
             vm.guestMemoryTotalBytes != stats.totalBytes
@@ -1075,7 +1075,7 @@ struct ObservedStateApplier {
     /// Clears a VM's observed memory stats once the guest is definitively not
     /// running — a stopped guest's last-known usage is stale, and surfacing it
     /// as current would mislead the "committed vs used" view.
-    private func clearMemoryStats(vm: VM, on db: Database) async throws -> VM {
+    private func clearMemoryStats(vm: VM, on db: PostgresStoreContext) async throws -> VM {
         guard
             vm.guestMemoryTotalBytes != nil || vm.guestMemoryAvailableBytes != nil
                 || vm.guestMemoryBalloonActualBytes != nil
@@ -1104,7 +1104,7 @@ struct ObservedStateApplier {
     private func clearGuestInfo(
         vm: VM,
         interfaces: [VMNetworkInterface],
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> VM {
         guard vm.qgaAvailable != nil || vm.observedHostname != nil else { return vm }
         var updated = vm
@@ -1124,7 +1124,7 @@ struct ObservedStateApplier {
     private func handleReportedAbsence(
         vm: VM,
         agentId: String,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         var current = vm
         let vmID = try current.requireID()
@@ -1200,7 +1200,7 @@ struct ObservedStateApplier {
     private func applyObservedSandboxState(
         sandbox: Sandbox,
         observed: ObservedSandboxState,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         var current = sandbox
         let sandboxID = try current.requireID()
@@ -1318,7 +1318,7 @@ struct ObservedStateApplier {
     private func handleReportedSandboxAbsence(
         sandbox: Sandbox,
         agentId: String,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         var current = sandbox
         let sandboxID = try current.requireID()
@@ -1385,7 +1385,7 @@ struct ObservedStateApplier {
         volume: Volume,
         observed: ObservedVolumeState,
         agentId: String,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> Bool {
         var current = volume
         let volumeID = try current.requireID()
@@ -1622,7 +1622,7 @@ struct ObservedStateApplier {
         kind: WorkloadKind,
         from report: ObservedStateReport,
         into placements: inout [UUID: WorkloadPlacement],
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         let ids = report.unrecognized.filter { $0.kind == kind }.map(\.workloadId)
         guard !ids.isEmpty else { return }
@@ -1643,7 +1643,7 @@ struct ObservedStateApplier {
         _ type: A.Type,
         reported: [UUID: ObservedSnapshotState],
         agentId: String,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         for artifact in try await A.placed(onAgent: agentId, on: db) {
             guard let artifactID = artifact.id else { continue }
@@ -1671,7 +1671,7 @@ struct ObservedStateApplier {
     private func applyObservedSnapshotState<A: SnapshotArtifactResource>(
         artifact initialArtifact: A,
         observed: ObservedSnapshotState,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         var artifact = initialArtifact
         let artifactID = try artifact.requireID()
@@ -1792,7 +1792,7 @@ struct ObservedStateApplier {
     /// than thrown: an observed report that could not enforce a quota must
     /// still apply everything else it carried.
     private func enforceStorageQuota<A: SnapshotArtifactResource>(
-        on artifact: A, on db: Database
+        on artifact: A, on db: PostgresStoreContext
     ) async throws {
         guard let scope = artifact.storageQuotaScope, artifact.desiredStatus == .present else { return }
         do {
@@ -1835,7 +1835,7 @@ struct ObservedStateApplier {
     private func handleReportedSnapshotAbsence<A: SnapshotArtifactResource>(
         artifact initialArtifact: A,
         agentId: String,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         var artifact = initialArtifact
         let artifactID = try artifact.requireID()
@@ -1894,7 +1894,7 @@ struct ObservedStateApplier {
     private func handleReportedVolumeAbsence(
         volume: Volume,
         agentId: String,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         var current = volume
         let volumeID = try current.requireID()
@@ -1984,7 +1984,7 @@ struct ObservedStateApplier {
         agentId: String,
         observed: ObservedVolumeState,
         desiredGeneration: Int64,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws {
         let failedAtTarget =
             observed.lastError != nil && observed.failedGeneration == desiredGeneration

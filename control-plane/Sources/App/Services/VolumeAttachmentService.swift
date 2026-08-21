@@ -1,5 +1,4 @@
-import Fluent
-import SQLKit
+import ControlPlanePostgres
 import StratoShared
 import Vapor
 
@@ -34,8 +33,8 @@ enum VolumeAttachmentService {
     ///
     /// Keyed on the VM rather than the volume: what races is the *set* of names
     /// on one VM, which two different volumes contend for.
-    static func lock(vmID: UUID, on db: any Database) async throws {
-        guard let sql = db as? any SQLDatabase, sql.dialect.name == "postgresql" else { return }
+    static func lock(vmID: UUID, on db: PostgresStoreContext) async throws {
+        guard let sql = db as? PostgresStoreContext, sql.dialect.name == "postgresql" else { return }
         try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: lockKey(vmID: vmID))))").run()
     }
 
@@ -67,7 +66,7 @@ enum VolumeAttachmentService {
         deviceName requested: VolumeDeviceName?,
         bootOrder: Int?,
         readonly: Bool,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Claim {
         let vmID = try vm.requireID()
         try await lock(vmID: vmID, on: db)
@@ -122,7 +121,7 @@ enum VolumeAttachmentService {
         // overwritten here; this records where the *attachment* runs.
         do {
             try await claimed.save(on: db)
-        } catch let error as any DatabaseError where error.isConstraintFailure {
+        } catch let error as any PostgresConstraintError where error.isConstraintFailure {
             // The unique index caught what the checks above could not: a
             // concurrent attach on a replica that could not take the advisory
             // lock (a non-Postgres database, or a lock this transaction never
@@ -175,7 +174,7 @@ enum VolumeAttachmentService {
     /// so a row this skipped would fail the VM's delete, and "a dead agent must
     /// not make its VM undeletable" outranks every other consideration here.
     @discardableResult
-    static func releaseDataVolumes(fromVM vmID: UUID, on db: any Database) async throws -> [UUID] {
+    static func releaseDataVolumes(fromVM vmID: UUID, on db: PostgresStoreContext) async throws -> [UUID] {
         let attached = try await LegacyVolumeStore.volumes(
             attachment: .attachedTo(vmID), volumeType: .data, on: db)
 

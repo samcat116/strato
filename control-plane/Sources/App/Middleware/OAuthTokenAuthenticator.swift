@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Vapor
 
 /// Authenticates CLI access tokens minted by the OAuth device grant.

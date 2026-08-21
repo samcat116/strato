@@ -1,6 +1,5 @@
 import Testing
 import Vapor
-import Fluent
 import VaporTesting
 import AppTestSupport
 @testable import App
@@ -72,12 +71,12 @@ final class GroupTests: BaseTestCase {
                 email: "member@example.com",
                 displayName: "Member User"
             )
-            try await memberUser.save(on: app.db)
+            try await memberUser.save(on: app.testPostgres)
 
             _ = try await OrganizationMembershipStore.insert(
                 userID: memberUser.id!,
                 organizationID: testOrganization.id!,
-                on: app.db
+                on: app.testPostgres
             )
 
             let memberToken = try await memberUser.generateAPIKey(on: app)
@@ -141,21 +140,21 @@ final class GroupTests: BaseTestCase {
                 email: "user1@example.com",
                 displayName: "User 1"
             )
-            try await user1.save(on: app.db)
+            try await user1.save(on: app.testPostgres)
 
             let user2 = User(
                 username: "user2",
                 email: "user2@example.com",
                 displayName: "User 2"
             )
-            try await user2.save(on: app.db)
+            try await user2.save(on: app.testPostgres)
 
             // Add users to organization
             for user in [user1, user2] {
                 _ = try await OrganizationMembershipStore.insert(
                     userID: user.id!,
                     organizationID: testOrganization.id!,
-                    on: app.db
+                    on: app.testPostgres
                 )
             }
 
@@ -194,12 +193,12 @@ final class GroupTests: BaseTestCase {
                 email: "remove@example.com",
                 displayName: "Remove User"
             )
-            try await user.save(on: app.db)
+            try await user.save(on: app.testPostgres)
 
             _ = try await OrganizationMembershipStore.insert(
                 userID: user.id!,
                 organizationID: testOrganization.id!,
-                on: app.db
+                on: app.testPostgres
             )
 
             // Add user to group

@@ -1,4 +1,3 @@
-import Fluent
 import ControlPlanePostgres
 import Foundation
 import Testing
@@ -30,7 +29,6 @@ final class IAMBatchDecisionTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             app.iamDecisionLogConfig.recordDecisions = true
             try await test(app)
         } catch {
@@ -117,23 +115,23 @@ final class IAMBatchDecisionTests {
         // grants right and not just leaf ones.
         try await RoleBindingService.grant(
             principalType: .group, principalID: group.id!, role: .operator,
-            nodeType: .organizationalUnit, nodeID: ou.id!, createdBy: nil, on: app.db)
+            nodeType: .organizationalUnit, nodeID: ou.id!, createdBy: nil, on: app.testPostgres)
         try await RoleBindingService.grant(
             principalType: .user, principalID: outsider.id!, role: .viewer,
-            nodeType: .project, nodeID: folderProject.id!, createdBy: nil, on: app.db)
+            nodeType: .project, nodeID: folderProject.id!, createdBy: nil, on: app.testPostgres)
         try await RoleBindingService.grant(
             principalType: .user, principalID: member.id!, role: .editor,
-            nodeType: .virtualMachine, nodeID: vms[0].id!, createdBy: nil, on: app.db)
+            nodeType: .virtualMachine, nodeID: vms[0].id!, createdBy: nil, on: app.testPostgres)
         // A conditioned binding, which the loader skips and *counts* — the count
         // rides along on the decision into the log, so the batch has to carry it
         // per target rather than smear one batch-wide number across the page.
         try await insertConditionedRoleBinding(
             principalType: .user, principalID: member.id!, role: .admin,
             nodeType: .project, nodeID: folderProject.id!,
-            condition: #"{"mfa": true}"#, on: app.db)
+            condition: #"{"mfa": true}"#, on: app.testPostgres)
 
-        let version = try await PolicySetVersionService.current(on: app.db)
-        await app.cedarPolicySet.rebuild(version: version, on: app.db)
+        let version = try await PolicySetVersionService.current(on: app.testPostgres)
+        await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
 
         return Fixture(
             org: org, otherOrg: otherOrg, ou: ou, childOU: childOU,
@@ -150,9 +148,9 @@ final class IAMBatchDecisionTests {
             let fixture = try await buildFixture(app, prefix: "chain")
             let nodes = fixture.nodes
 
-            let batched = try await IAMResourceTree.resolve(nodes, on: app.db)
+            let batched = try await IAMResourceTree.resolve(nodes, on: app.testPostgres)
             for node in nodes {
-                let single = try await IAMResourceTree.resolve(node, on: app.db)
+                let single = try await IAMResourceTree.resolve(node, on: app.testPostgres)
                 let fromBatch = batched[node]
                 #expect(fromBatch == single, "chain for \(node.type.rawValue) diverged when batched")
             }
@@ -167,7 +165,7 @@ final class IAMBatchDecisionTests {
                 fixture.nodes.map { IAMCheckTarget(principal: principal, node: $0) }
             }
 
-            let batched = try await EntitySliceLoader.load(targets, action: "vm:read", on: app.db)
+            let batched = try await EntitySliceLoader.load(targets, action: "vm:read", on: app.testPostgres)
             // The fixture's conditioned binding has to actually reach somebody,
             // or the skipped-count comparisons below are vacuous.
             let skipsSomething = batched.values.contains { $0.skippedConditionedBindings > 0 }
@@ -175,7 +173,7 @@ final class IAMBatchDecisionTests {
 
             for target in targets {
                 let single = try await EntitySliceLoader.load(
-                    principal: target.principal, node: target.node, action: "vm:read", on: app.db)
+                    principal: target.principal, node: target.node, action: "vm:read", on: app.testPostgres)
                 let fromBatch = batched[target]
                 #expect(
                     fromBatch == single,
@@ -196,12 +194,12 @@ final class IAMBatchDecisionTests {
                     fixture.nodes.map { IAMCheckTarget(principal: principal, node: $0) }
                 }
                 let batched = try await IAMDecisionEngine.decide(
-                    targets, action: action, built: built, on: app.db)
+                    targets, action: action, built: built, using: app.iamPersistence)
 
                 for target in targets {
                     let single = try await IAMDecisionEngine.decide(
                         principal: target.principal, action: action, node: target.node,
-                        built: built, on: app.db)
+                        built: built, using: app.iamPersistence)
                     let fromBatch = batched[target]
                     let agrees = fromBatch?.verdict.allowed == single.verdict.allowed
                     #expect(
@@ -246,10 +244,10 @@ final class IAMBatchDecisionTests {
 
             func queriesToScope(_ nodes: [IAMNode]) async throws -> Int {
                 let targets = nodes.map { IAMCheckTarget(principal: .user(user.id!), node: $0) }
-                app.fluent.history.start()
-                defer { app.fluent.history.stop() }
-                _ = try await EntitySliceLoader.load(targets, action: "vm:read", on: app.db)
-                return app.fluent.history.queries.count
+                app.testPostgres.history.start()
+                defer { app.testPostgres.history.stop() }
+                _ = try await EntitySliceLoader.load(targets, action: "vm:read", on: app.testPostgres)
+                return app.testPostgres.history.count
             }
 
             let one = try await queriesToScope(Array(nodes.prefix(1)))
@@ -269,12 +267,12 @@ final class IAMBatchDecisionTests {
             let node = IAMNode(type: .virtualMachine, id: fixture.vms[0].id!)
             let principal = IAMPrincipal.user(fixture.member.id!)
 
-            app.fluent.history.start()
-            defer { app.fluent.history.stop() }
+            app.testPostgres.history.start()
+            defer { app.testPostgres.history.stop() }
             let slices = try await EntitySliceLoader.load(
                 Array(repeating: IAMCheckTarget(principal: principal, node: node), count: 50),
-                action: "vm:read", on: app.db)
-            let queries = app.fluent.history.queries.count
+                action: "vm:read", on: app.testPostgres)
+            let queries = app.testPostgres.history.count
 
             #expect(slices.count == 1)
             // Deduplication happens before any read: fifty identical questions
@@ -296,7 +294,7 @@ final class IAMBatchDecisionTests {
 
             let first = try await IAMAuthorizer.authorize(
                 principal: .user(fixture.member.id!), action: "vm:read", nodes: nodes,
-                context: context, state: state, cache: cache, app: app, db: app.db)
+                context: context, state: state, cache: cache, app: app, db: app.testPostgres)
             #expect(first.count == nodes.count)
             #expect(state.decisionEvaluated.withLockedValue { $0 })
 
@@ -304,7 +302,7 @@ final class IAMBatchDecisionTests {
             // memoized, so nothing is re-evaluated and nothing is re-recorded.
             let second = try await IAMAuthorizer.authorize(
                 principal: .user(fixture.member.id!), action: "vm:read", nodes: nodes,
-                context: context, state: state, cache: cache, app: app, db: app.db)
+                context: context, state: state, cache: cache, app: app, db: app.testPostgres)
             let sameVerdicts = second.mapValues(\.allowed) == first.mapValues(\.allowed)
             #expect(sameVerdicts)
 

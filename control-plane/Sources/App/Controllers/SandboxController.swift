@@ -1,4 +1,4 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
 import Vapor
 import StratoShared
@@ -9,6 +9,20 @@ import StratoShared
 /// but its own resource: sandboxes have no volumes, consoles, or hypervisor
 /// choice, and reference images by OCI ref rather than the `Image` model.
 struct SandboxController: RouteCollection {
+    let workloads: WorkloadsPersistence
+    let hierarchy: HierarchyPersistence
+    let database: PostgresStoreContext
+
+    init(
+        workloads: WorkloadsPersistence,
+        hierarchy: HierarchyPersistence,
+        database: PostgresStoreContext
+    ) {
+        self.workloads = workloads
+        self.hierarchy = hierarchy
+        self.database = database
+    }
+
     func boot(routes: any RoutesBuilder) throws {
         let sandboxes = routes.grouped("api", "sandboxes")
         sandboxes.get(use: index)
@@ -52,9 +66,12 @@ struct SandboxController: RouteCollection {
     /// and answer a restore with the sandbox's own accepted-mutation shape
     /// (STR-151).
     static func acceptedResponse(
-        for sandbox: Sandbox, _ accepted: ResourceMutation.Accepted, on req: Request
+        for sandbox: Sandbox, _ accepted: ResourceMutation.Accepted, on req: Request,
+        database: PostgresStoreContext
     ) async throws -> Response {
-        return try AcceptedMutation(await detailResponse(for: sandbox, on: req), accepted).acceptedResponse()
+        return try AcceptedMutation(
+            await detailResponse(for: sandbox, on: req, database: database), accepted
+        ).acceptedResponse()
     }
 
     // `beginOperation` and `completeOperation` — the sandbox-flavored front of
@@ -83,15 +100,17 @@ struct SandboxController: RouteCollection {
 
         // Scoped through the sandbox's project, as in VMController.index.
         var projectIDs: [UUID]?
-        if let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req) {
-            let scopedProjectIDs = try await orgFilter.projectIDs(on: req.db)
+        if let orgFilter = try await OrganizationAccessService.organizationListFilter(
+            on: req, using: hierarchy)
+        {
+            let scopedProjectIDs = try await orgFilter.projectIDs(on: database)
             if scopedProjectIDs.isEmpty { return [] }
             projectIDs = scopedProjectIDs
         }
 
         // One batched decision for the whole page, as in VMController.index.
         let allSandboxes = try await LegacySandboxNetworkInterfaceStore.loadingWithAddresses(
-            LegacySandboxStore.sandboxes(projectIDs: projectIDs, on: req.db), on: req.db
+            LegacySandboxStore.sandboxes(projectIDs: projectIDs, on: database), on: database
         ).sorted {
             let lhsDate = $0.createdAt ?? .distantPast
             let rhsDate = $1.createdAt ?? .distantPast
@@ -101,7 +120,7 @@ struct SandboxController: RouteCollection {
         let securityGroups = try await LegacyInterfaceSecurityGroupStore.securityGroupIDsByInterface(
             kind: .sandbox,
             interfaceIDs: allSandboxes.flatMap { $0.networkInterfaces.compactMap(\.id) },
-            on: req.db)
+            on: database)
         let nodes = allSandboxes.compactMap { $0.id.map { IAMNode(type: .sandbox, id: $0) } }
         let readable = try await req.canFilter("sandbox:read", on: nodes)
 
@@ -114,7 +133,7 @@ struct SandboxController: RouteCollection {
         let enforcedBySandbox = try await SecurityGroupService.enforcementBySandbox(
             visible,
             offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
-            on: req.db)
+            on: database)
         return visible.map { sandbox in
             SandboxDetailResponse(
                 from: sandbox,
@@ -130,7 +149,7 @@ struct SandboxController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid sandbox ID")
         }
 
-        return try await req.authorizedSandbox(sandboxID, action: action)
+        return try await req.authorizedSandbox(sandboxID, action: action, on: database)
     }
 
     /// Loads the NIC and everything the response reports about it: its
@@ -140,7 +159,7 @@ struct SandboxController: RouteCollection {
     /// response calls it.
     private static func loadNICDetail(
         _ sandbox: Sandbox,
-        on db: Database
+        on db: PostgresStoreContext
     ) async throws -> (sandbox: Sandbox, securityGroups: [UUID: [UUID]]) {
         let loaded = try await LegacySandboxNetworkInterfaceStore.loadingWithAddresses(
             [sandbox], on: db).first ?? sandbox
@@ -155,23 +174,25 @@ struct SandboxController: RouteCollection {
     /// enforcement verdict resolved. Single-sandbox only — the list path uses
     /// `enforcementBySandbox`, which memoizes the host and site lookups this
     /// makes per call.
-    private static func detailResponse(for sandbox: Sandbox, on req: Request) async throws
+    private static func detailResponse(
+        for sandbox: Sandbox, on req: Request, database: PostgresStoreContext
+    ) async throws
         -> SandboxDetailResponse
     {
-        let detail = try await loadNICDetail(sandbox, on: req.db)
+        let detail = try await loadNICDetail(sandbox, on: database)
         return SandboxDetailResponse(
             from: detail.sandbox,
             securityGroupIDsByInterfaceID: detail.securityGroups,
             securityGroupsEnforced: try await SecurityGroupService.sandboxEnforcement(
                 for: detail.sandbox,
                 offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
-                on: req.db))
+                on: database))
     }
 
     func show(req: Request) async throws -> SandboxDetailResponse {
         _ = try req.requireActingPrincipal()
         let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:read")
-        return try await Self.detailResponse(for: sandbox, on: req)
+        return try await Self.detailResponse(for: sandbox, on: req, database: database)
     }
 
     func status(req: Request) async throws -> SandboxDetailResponse {
@@ -181,7 +202,7 @@ struct SandboxController: RouteCollection {
         // The database row *is* the observed state: the owning agent's
         // periodic observed-state reports keep it fresh, so no agent
         // round-trip happens here (replica-independent, like VMs).
-        return try await Self.detailResponse(for: sandbox, on: req)
+        return try await Self.detailResponse(for: sandbox, on: req, database: database)
     }
 
     func listOperations(req: Request) async throws -> [OperationResponse] {
@@ -191,7 +212,7 @@ struct SandboxController: RouteCollection {
         let limit = try req.intQuery("limit", default: 20, in: 1...100)
 
         return try await OperationFacade.history(
-            resourceKind: .sandbox, resourceID: sandboxID, limit: limit, on: req.db)
+            resourceKind: .sandbox, resourceID: sandboxID, limit: limit, on: database)
     }
 
     // MARK: - Create
@@ -321,7 +342,7 @@ struct SandboxController: RouteCollection {
             guard canReadSnapshot else {
                 throw Abort(.forbidden, reason: "You don't have permission to read this snapshot")
             }
-            guard let snapshot = try await SandboxSnapshot.find(snapshotID, on: req.db) else {
+            guard let snapshot = try await SandboxSnapshot.find(snapshotID, on: database) else {
                 throw Abort(.notFound, reason: "Restore snapshot not found")
             }
             guard snapshot.isReady else {
@@ -329,7 +350,7 @@ struct SandboxController: RouteCollection {
                     .conflict,
                     reason: "Snapshot cannot be forked in status '\(snapshot.status.rawValue)'")
             }
-            guard let source = try await Sandbox.find(snapshot.sandboxID, on: req.db) else {
+            guard let source = try await Sandbox.find(snapshot.sandboxID, on: database) else {
                 throw Abort(.conflict, reason: "Snapshot source sandbox no longer exists")
             }
             // The fork must have at least one place to land: the snapshot's
@@ -339,7 +360,7 @@ struct SandboxController: RouteCollection {
             // forks that could never place anywhere.
             let pinnedAgent: Agent?
             if let pinnedAgentID = snapshot.agentId, let pinnedAgentUUID = UUID(uuidString: pinnedAgentID) {
-                pinnedAgent = try await Agent.find(pinnedAgentUUID, on: req.db)
+                pinnedAgent = try await Agent.find(pinnedAgentUUID, on: database)
             } else {
                 pinnedAgent = nil
             }
@@ -384,7 +405,7 @@ struct SandboxController: RouteCollection {
             // only option when the fork lands in a different project, since
             // networks are project-scoped.
             restoreSourceNetworkID = try await LegacySandboxNetworkInterfaceStore.interfaces(
-                sandboxID: try source.requireID(), on: req.db)
+                sandboxID: try source.requireID(), on: database)
                 .first?.logicalNetworkID
             if restoreSourceNetworkID == nil,
                 createRequest.networkId != nil || createRequest.networkName != nil
@@ -425,7 +446,8 @@ struct SandboxController: RouteCollection {
             requestedEnvironment: createRequest.environment,
             user: user,
             action: "sandbox:create",
-            resourceKind: "sandboxes"
+            resourceKind: "sandboxes",
+            on: database
         )
         let projectId = try project.requireID()
 
@@ -453,7 +475,7 @@ struct SandboxController: RouteCollection {
         // mistake worth reporting rather than silently dropping: there would
         // be no NIC for them to land on.
         let requestedSecurityGroupIds = try await SecurityGroupService.resolveRequestedGroupIDs(
-            createRequest.securityGroupIds, projectID: projectId, on: req.db)
+            createRequest.securityGroupIds, projectID: projectId, on: database)
         if !requestedSecurityGroupIds.isEmpty,
             createRequest.networkId == nil, createRequest.networkName == nil,
             inheritedNetworkID == nil
@@ -567,7 +589,7 @@ struct SandboxController: RouteCollection {
         let accepted: ResourceMutation.Accepted
         do {
             (created, accepted) = try await VMController.retryingOnConstraintFailure {
-                return try await req.db.transaction {
+                return try await database.transaction {
                     db -> (Sandbox, ResourceMutation.Accepted) in
                     if let restoreSnapshotID {
                         try await Self.requireSnapshotAvailableForFork(
@@ -658,7 +680,7 @@ struct SandboxController: RouteCollection {
                 "image": .string(imageRef),
             ])
 
-        return try await Self.acceptedResponse(for: created, accepted, on: req)
+        return try await Self.acceptedResponse(for: created, accepted, on: req, database: database)
     }
 
     /// Allocates and persists the sandbox's single NIC (issue #416), reusing the
@@ -687,7 +709,7 @@ struct SandboxController: RouteCollection {
     /// network-less sandbox has nothing to attach groups to.
     private static func attachNIC(
         to sandboxID: UUID, projectID: UUID, requestedNetworkID: UUID?, requestedNetworkName: String?,
-        securityGroupIDs: [UUID], on db: Database
+        securityGroupIDs: [UUID], on db: PostgresStoreContext
     ) async throws {
         guard requestedNetworkID != nil || requestedNetworkName != nil else { return }
 
@@ -777,8 +799,8 @@ struct SandboxController: RouteCollection {
             sandbox.ttlSeconds = ttl
         }
 
-        let updated = try await sandbox.persisted(on: req.db)
-        return try await Self.detailResponse(for: updated, on: req)
+        let updated = try await sandbox.persisted(on: database)
+        return try await Self.detailResponse(for: updated, on: req, database: database)
     }
 
     // MARK: - Lifecycle
@@ -795,7 +817,7 @@ struct SandboxController: RouteCollection {
         let userID = try user.requireID()
         let mutation = try await req.resourceMutation.acceptValue(
             .boot, on: sandbox, actor: .user(userID), dispatch: .stateSync,
-            on: req.db, app: req.application
+            on: database, app: req.application
         ) { @Sendable current, _ in
             var updated = current
             updated.setDesiredStatus(.running)
@@ -803,7 +825,7 @@ struct SandboxController: RouteCollection {
         }
 
         return try await Self.acceptedResponse(
-            for: mutation.resource, mutation.accepted, on: req)
+            for: mutation.resource, mutation.accepted, on: req, database: database)
     }
 
     func stop(req: Request) async throws -> Response {
@@ -818,7 +840,7 @@ struct SandboxController: RouteCollection {
         let userID = try user.requireID()
         let mutation = try await req.resourceMutation.acceptValue(
             .shutdown, on: sandbox, actor: .user(userID), dispatch: .stateSync,
-            on: req.db, app: req.application
+            on: database, app: req.application
         ) { @Sendable current, _ in
             var updated = current
             updated.setDesiredStatus(.stopped)
@@ -826,7 +848,7 @@ struct SandboxController: RouteCollection {
         }
 
         return try await Self.acceptedResponse(
-            for: mutation.resource, mutation.accepted, on: req)
+            for: mutation.resource, mutation.accepted, on: req, database: database)
     }
 
     func restart(req: Request) async throws -> Response {
@@ -851,7 +873,7 @@ struct SandboxController: RouteCollection {
         let userID = try user.requireID()
         let mutation = try await req.resourceMutation.acceptValue(
             .reboot, on: sandbox, actor: .user(userID), dispatch: .stateSync,
-            on: req.db, app: req.application
+            on: database, app: req.application
         ) { @Sendable current, _ in
             var updated = current
             updated.setDesiredStatus(.running)
@@ -859,7 +881,7 @@ struct SandboxController: RouteCollection {
         }
 
         return try await Self.acceptedResponse(
-            for: mutation.resource, mutation.accepted, on: req)
+            for: mutation.resource, mutation.accepted, on: req, database: database)
     }
 
     // MARK: - Exec (issue #423)
@@ -893,7 +915,7 @@ struct SandboxController: RouteCollection {
             throw Abort(.conflict, reason: "Sandbox is not placed on any agent")
         }
 
-        guard let agent = try await Agent.find(agentId, on: req.db) else {
+        guard let agent = try await Agent.find(agentId, on: database) else {
             throw Abort(.internalServerError, reason: "Agent not found for sandbox")
         }
 
@@ -963,7 +985,7 @@ struct SandboxController: RouteCollection {
 
         let mutation = try await req.resourceMutation.acceptValue(
             .delete, on: sandbox, actor: .user(userID), dispatch: strategy,
-            on: req.db, app: app
+            on: database, app: app
         ) { @Sendable current, db in
             try await Self.requireSnapshotLineageDeletable(for: sandboxID, on: db)
             // Stamp before the mark — see the VM delete path for why.
@@ -972,7 +994,7 @@ struct SandboxController: RouteCollection {
             return updated
         }
         return try await Self.acceptedResponse(
-            for: mutation.resource, mutation.accepted, on: req)
+            for: mutation.resource, mutation.accepted, on: req, database: database)
     }
 
     /// The direct-removal work for a sandbox whose agent is gone (never placed,
@@ -992,7 +1014,7 @@ struct SandboxController: RouteCollection {
     /// exactly like a user-initiated one.
     @discardableResult
     static func performDirectDeletion(
-        sandbox: Sandbox, on db: any Database, app: Application
+        sandbox: Sandbox, on db: PostgresStoreContext, app: Application
     ) async throws -> Bool {
         let sandboxID = try sandbox.requireID()
         guard let current = try await Sandbox.find(sandboxID, on: db) else { return true }

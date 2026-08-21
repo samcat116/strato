@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Vapor
 import StratoShared
 
@@ -210,27 +209,27 @@ struct Sandbox: Sendable {
         return id
     }
 
-    func persisted(on db: any Database) async throws -> Self {
+    func persisted(on db: PostgresStoreContext) async throws -> Self {
         try await LegacySandboxStore.upsert(self, on: db)
     }
 
-    func persist(on db: any Database) async throws { _ = try await persisted(on: db) }
-    func save(on db: any Database) async throws { try await persist(on: db) }
-    func delete(on db: any Database) async throws {
+    func persist(on db: PostgresStoreContext) async throws { _ = try await persisted(on: db) }
+    func save(on db: PostgresStoreContext) async throws { try await persist(on: db) }
+    func delete(on db: PostgresStoreContext) async throws {
         guard let id else { return }
         _ = try await LegacySandboxStore.delete(id: id, on: db)
     }
-    func remove(on db: any Database) async throws { try await delete(on: db) }
+    func remove(on db: PostgresStoreContext) async throws { try await delete(on: db) }
 
-    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+    static func find(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await LegacySandboxStore.sandbox(id: id, on: db)
     }
 
-    static func load(_ id: UUID?, on db: any Database) async throws -> Self? {
+    static func load(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await find(id, on: db)
     }
 
-    static func all(on db: any Database) async throws -> [Self] {
+    static func all(on db: PostgresStoreContext) async throws -> [Self] {
         try await LegacySandboxStore.sandboxes(on: db)
     }
 

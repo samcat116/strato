@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -21,7 +20,6 @@ final class ListCountBatchingTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -48,10 +46,10 @@ final class ListCountBatchingTests {
         for (name, value) in parameters {
             req.parameters.set(name, to: value)
         }
-        req.fluent.history.start()
+        req.application.testPostgres.history.start()
         try await work(req)
-        req.fluent.history.stop()
-        return req.fluent.history.queries.count
+        req.application.testPostgres.history.stop()
+        return req.application.testPostgres.history.count
     }
 
     // MARK: - Projects
@@ -76,6 +74,7 @@ final class ListCountBatchingTests {
                 try await measure(on: app, as: user, path: "/api/projects") { req in
                     try await OpenAPIRequestContext.$current.withValue(req) {
                         let output = try await ProjectsAPIService(
+                            database: app.testPostgres,
                             projects: app.projectsPersistence,
                             quotas: app.resourceQuotasPersistence,
                             iam: app.iamPersistence,
@@ -132,11 +131,11 @@ final class ListCountBatchingTests {
                     subnet: "10.\(index).0.0/24", gateway: "10.\(index).0.1",
                     externalAccess: false)
                 for nic in 0..<nics {
-                    let vm = try await builder.createVM(name: "nic-holder-\(index)-\(nic)", project: project)
+                    var vm = try await builder.createVM(name: "nic-holder-\(index)-\(nic)", project: project)
                     try await VMNetworkInterface(
                         vmID: vm.id!, logicalNetworkID: try network.requireID(),
                         macAddress: VMNetworkInterface.generateMACAddress()
-                    ).save(on: app.db)
+                    ).save(on: app.testPostgres)
                 }
             }
             try await addNetwork(0, nics: 2)
@@ -148,7 +147,8 @@ final class ListCountBatchingTests {
                         projects: app.projectsPersistence,
                         networks: app.networksPersistence,
                         sites: app.sitesPersistence,
-                        hierarchy: app.hierarchyPersistence
+                        hierarchy: app.hierarchyPersistence,
+                        database: app.testPostgres
                     ).visibleNetworks(req: req)
                         .filter { $0.name.hasPrefix("net-") }
                     #expect(networks.count == expected)
@@ -192,7 +192,7 @@ final class ListCountBatchingTests {
                 for allocation in 0..<allocations {
                     try await LegacyFloatingIPStore.insert(
                         poolID: pool.id, address: "203.0.\(index).\(allocation + 2)",
-                        projectID: project.id!, on: app.db)
+                        projectID: project.id!, on: app.testPostgres)
                 }
             }
             try await addPool(0, allocations: 2)
@@ -203,7 +203,8 @@ final class ListCountBatchingTests {
                         iam: app.iamPersistence,
                         projects: app.projectsPersistence,
                         pools: app.floatingIPPoolsPersistence,
-                        sites: app.sitesPersistence
+                        sites: app.sitesPersistence,
+                        database: app.testPostgres
                     ).visiblePools(req: req)
                     #expect(pools.count == expected)
                     #expect(pools.first(where: { $0.name == "pool-000" })?.allocatedCount == 2)
@@ -393,7 +394,8 @@ final class ListCountBatchingTests {
                 try await measure(on: app, as: user, path: "/api/organizations") { req in
                     let organizations = try await OrganizationController(
                         hierarchy: app.hierarchyPersistence,
-                        iam: app.iamPersistence
+                        iam: app.iamPersistence,
+                        database: app.testPostgres
                     ).index(req: req)
                     #expect(organizations.count == expected)
                     #expect(

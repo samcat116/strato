@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -22,9 +21,8 @@ final class APIKeyOwnershipTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let alice = try await builder.createUser(
                 username: "keyowner", email: "keyowner@example.com", displayName: "Key Owner")
             let aliceToken = try await alice.generateAPIKey(on: app)

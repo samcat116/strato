@@ -1,4 +1,3 @@
-import Fluent
 import ControlPlanePostgres
 import Foundation
 import Testing
@@ -30,7 +29,6 @@ final class RestrictedCredentialListTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             app.iamDecisionLogConfig.recordDecisions = true
             try await test(app)
         } catch {
@@ -65,7 +63,7 @@ final class RestrictedCredentialListTests {
     }
 
     private func fixture(_ app: Application) async throws -> Fixture {
-        let builder = TestDataBuilder(db: app.db)
+        let builder = TestDataBuilder(db: app.testPostgres)
         let org = try await builder.createOrganization(name: "Scoped Org")
         let otherOrg = try await builder.createOrganization(name: "Foreign Org")
         let projectA = try await builder.createProject(
@@ -88,10 +86,10 @@ final class RestrictedCredentialListTests {
         // about the *credential* and never about a missing binding.
         try await RoleBindingService.grant(
             principalType: .user, principalID: try user.requireID(), role: .editor,
-            nodeType: .organization, nodeID: try org.requireID(), createdBy: nil, on: app.db)
+            nodeType: .organization, nodeID: try org.requireID(), createdBy: nil, on: app.testPostgres)
         // `actingOrganizationID()` reads this, and the collection gate 403s
         // without it — membership alone does not set it.
-        try await user.replacingCurrentOrganization(try org.requireID()).save(on: app.db)
+        try await user.replacingCurrentOrganization(try org.requireID()).save(on: app.testPostgres)
 
         return Fixture(
             org: org,
@@ -241,13 +239,13 @@ final class RestrictedCredentialListTests {
     func nonMemberIsStillForbidden() async throws {
         try await withApp { app in
             let f = try await fixture(app)
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let outsider = try await builder.createUser(
                 username: "outsider", email: "outsider@example.com")
             // Pointed at the organization but holding nothing in it, so the gate
             // is reached and answered rather than short-circuited by "no current
             // organization set".
-            try await outsider.replacingCurrentOrganization(try f.org.requireID()).save(on: app.db)
+            try await outsider.replacingCurrentOrganization(try f.org.requireID()).save(on: app.testPostgres)
             let key = try await outsider.generateAPIKey(on: app, name: "outsider")
 
             try await app.test(.GET, "/api/vms") { req in

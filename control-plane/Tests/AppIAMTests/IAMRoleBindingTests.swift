@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -18,7 +17,6 @@ final class IAMRoleBindingTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -28,7 +26,7 @@ final class IAMRoleBindingTests {
     }
 
     private func bindings(
-        on db: Database, nodeType: IAMNodeType, nodeID: UUID
+        on db: PostgresStoreContext, nodeType: IAMNodeType, nodeID: UUID
     ) async throws -> [LegacyRoleBindingRecord] {
         try await LegacyRoleBindingStore.bindings(
             nodeType: nodeType.rawValue, nodeID: nodeID, on: db)
@@ -61,7 +59,7 @@ final class IAMRoleBindingTests {
 
             // Every managed row matches its seeded descriptor exactly:
             // fixed id, name, expanded action set, canonical Cedar text.
-            let managed = try await RoleStore.legacyRoles(on: app.db).filter(\.managed)
+            let managed = try await RoleStore.legacyRoles(on: app.testPostgres).filter(\.managed)
             #expect(managed.count == IAMRole.allCases.count)
             for desired in RoleDescriptor.seededDefaults() {
                 let row = managed.first { $0.id == desired.id }
@@ -86,11 +84,11 @@ final class IAMRoleBindingTests {
                 cedarText: "// user-authored",
                 actions: ["vm:read"],
                 managed: false,
-                createdBy: nil), on: app.db)
+                createdBy: nil), on: app.testPostgres)
 
             try await app.policySetVersion.synchronizeRoleRegistry(logger: app.logger)
 
-            let survived = try await RoleStore.legacyRole(id: userRole.id, on: app.db)
+            let survived = try await RoleStore.legacyRole(id: userRole.id, on: app.testPostgres)
             #expect(survived?.cedarText == "// user-authored")
             #expect(survived?.actions == ["vm:read"])
         }
@@ -106,47 +104,47 @@ final class IAMRoleBindingTests {
 
             try await RoleBindingService.grant(
                 principalType: .user, principalID: principal, role: .editor,
-                nodeType: .project, nodeID: node, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: node, createdBy: nil, on: app.testPostgres)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: principal, role: .editor,
-                nodeType: .project, nodeID: node, createdBy: nil, on: app.db)
+                nodeType: .project, nodeID: node, createdBy: nil, on: app.testPostgres)
 
-            var rows = try await bindings(on: app.db, nodeType: .project, nodeID: node)
+            var rows = try await bindings(on: app.testPostgres, nodeType: .project, nodeID: node)
             #expect(rows.count == 1)
 
             // Re-granting with a TTL refreshes the existing row.
             let expiry = Date().addingTimeInterval(-60)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: principal, role: .editor,
-                nodeType: .project, nodeID: node, createdBy: nil, expiresAt: expiry, on: app.db)
-            rows = try await bindings(on: app.db, nodeType: .project, nodeID: node)
+                nodeType: .project, nodeID: node, createdBy: nil, expiresAt: expiry, on: app.testPostgres)
+            rows = try await bindings(on: app.testPostgres, nodeType: .project, nodeID: node)
             #expect(rows.count == 1)
             #expect(rows.first?.expiresAt != nil)
 
             // The expired binding is invisible to every read path.
             let active = try await RoleBindingService.activeBindings(
-                nodeType: .project, nodeID: node, on: app.db)
+                nodeType: .project, nodeID: node, on: app.testPostgres)
             #expect(active.isEmpty)
 
             // An unexpired binding for a second role is visible.
             try await RoleBindingService.grant(
                 principalType: .user, principalID: principal, role: .viewer,
                 nodeType: .project, nodeID: node, createdBy: nil,
-                expiresAt: Date().addingTimeInterval(3600), on: app.db)
+                expiresAt: Date().addingTimeInterval(3600), on: app.testPostgres)
             let activeNow = try await RoleBindingService.activeBindings(
-                principalType: .user, principalID: principal, on: app.db)
+                principalType: .user, principalID: principal, on: app.testPostgres)
             #expect(activeNow.count == 1)
             #expect(activeNow.first?.roleID == IAMRole.viewer.seededID)
 
             // Role-scoped revoke removes only that role; revokeAll clears the node.
             try await RoleBindingService.revoke(
                 principalType: .user, principalID: principal, role: .viewer,
-                nodeType: .project, nodeID: node, on: app.db)
-            rows = try await bindings(on: app.db, nodeType: .project, nodeID: node)
+                nodeType: .project, nodeID: node, on: app.testPostgres)
+            rows = try await bindings(on: app.testPostgres, nodeType: .project, nodeID: node)
             #expect(rows.map(\.roleID) == [IAMRole.editor.seededID])
 
-            try await RoleBindingService.revokeAll(nodeType: .project, nodeID: node, on: app.db)
-            rows = try await bindings(on: app.db, nodeType: .project, nodeID: node)
+            try await RoleBindingService.revokeAll(nodeType: .project, nodeID: node, on: app.testPostgres)
+            rows = try await bindings(on: app.testPostgres, nodeType: .project, nodeID: node)
             #expect(rows.isEmpty)
         }
     }
@@ -156,7 +154,7 @@ final class IAMRoleBindingTests {
     @Test("A conditioned binding is refused at write time, not silently accepted")
     func conditionedBindingRefusedAtWrite() async throws {
         try await withApp { app in
-            let refused = try await conditionedRoleBindingsAreRefused(on: app.db)
+            let refused = try await conditionedRoleBindingsAreRefused(on: app.testPostgres)
             #expect(refused)
 
             // Conditions are not compiled, so the evaluator skips a conditioned
@@ -172,10 +170,10 @@ final class IAMRoleBindingTests {
                         nodeType: IAMNodeType.project.rawValue,
                         nodeID: UUID(),
                         condition: #"{"mfa": true}"#),
-                    on: app.db)
+                    on: app.testPostgres)
             }
 
-            let rows = try await LegacyRoleBindingStore.bindings(on: app.db)
+            let rows = try await LegacyRoleBindingStore.bindings(on: app.testPostgres)
             #expect(rows.isEmpty)
         }
     }
@@ -200,7 +198,7 @@ final class IAMRoleBindingTests {
             }
 
             let createdOrgID = try #require(orgID)
-            let orgBindings = try await bindings(on: app.db, nodeType: .organization, nodeID: createdOrgID)
+            let orgBindings = try await bindings(on: app.testPostgres, nodeType: .organization, nodeID: createdOrgID)
             #expect(orgBindings.count == 1)
             #expect(orgBindings.first?.principalID == creator.id)
             #expect(orgBindings.first?.roleID == IAMRole.admin.seededID)
@@ -208,10 +206,10 @@ final class IAMRoleBindingTests {
 
             // The auto-created default project carries a creator binding.
             let defaultProject = try await LegacyProjectStore.projects(
-                organizationIDs: [createdOrgID], on: app.db
+                organizationIDs: [createdOrgID], on: app.testPostgres
             ).first
             let projectID = try #require(defaultProject?.id)
-            let projectBindings = try await bindings(on: app.db, nodeType: .project, nodeID: projectID)
+            let projectBindings = try await bindings(on: app.testPostgres, nodeType: .project, nodeID: projectID)
             #expect(projectBindings.count == 1)
             #expect(projectBindings.first?.principalID == creator.id)
             #expect(projectBindings.first?.roleID == IAMRole.admin.seededID)
@@ -220,7 +218,7 @@ final class IAMRoleBindingTests {
             // away (enrollment requires one).
             let sites = try await LegacySiteStore.sites(
                 organizationID: createdOrgID,
-                on: app.db)
+                on: app.testPostgres)
             #expect(sites.count == 1)
             #expect(sites.first?.name == Site.defaultName(forOrganizationNamed: "IAM Org"))
             #expect(sites.first?.organizationalUnitID == nil)
@@ -230,11 +228,11 @@ final class IAMRoleBindingTests {
     @Test("Project member grant/update/revoke keeps bindings in lockstep")
     func projectMemberBindingLifecycle() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "PMB Org")
             let actor = try await builder.createUser(username: "pmbactor", email: "pmbactor@example.com")
             try await builder.addUserToOrganization(user: actor, organization: org, role: "admin")
-            try await actor.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await actor.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
             let target = try await builder.createUser(username: "pmbtarget", email: "pmbtarget@example.com")
             let project = try await builder.createProject(name: "PMB Project", description: "d", organization: org)
             let token = try await actor.generateAPIKey(on: app)
@@ -248,7 +246,7 @@ final class IAMRoleBindingTests {
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
-            var rows = try await bindings(on: app.db, nodeType: .project, nodeID: project.id!)
+            var rows = try await bindings(on: app.testPostgres, nodeType: .project, nodeID: project.id!)
             #expect(rows.count == 1)
             #expect(rows.first?.roleID == IAMRole.editor.seededID)
             #expect(rows.first?.principalID == target.id)
@@ -262,7 +260,7 @@ final class IAMRoleBindingTests {
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
-            rows = try await bindings(on: app.db, nodeType: .project, nodeID: project.id!)
+            rows = try await bindings(on: app.testPostgres, nodeType: .project, nodeID: project.id!)
             #expect(rows.count == 1)
             #expect(rows.first?.roleID == IAMRole.admin.seededID)
 
@@ -272,7 +270,7 @@ final class IAMRoleBindingTests {
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            rows = try await bindings(on: app.db, nodeType: .project, nodeID: project.id!)
+            rows = try await bindings(on: app.testPostgres, nodeType: .project, nodeID: project.id!)
             #expect(rows.isEmpty)
         }
     }
@@ -284,7 +282,7 @@ final class IAMRoleBindingTests {
             let org = try await builder.createOrganization(name: "GGB Org")
             let actor = try await builder.createUser(username: "ggbactor", email: "ggbactor@example.com")
             try await builder.addUserToOrganization(user: actor, organization: org, role: "admin")
-            try await actor.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await actor.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
             let project = try await builder.createProject(name: "GGB Project", description: "d", organization: org)
             let group = try await builder.createGroup(
                 name: "GGB Group", description: "d", organization: org)
@@ -298,7 +296,7 @@ final class IAMRoleBindingTests {
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
-            var rows = try await bindings(on: app.db, nodeType: .project, nodeID: project.id!)
+            var rows = try await bindings(on: app.testPostgres, nodeType: .project, nodeID: project.id!)
             #expect(rows.count == 1)
             #expect(rows.first?.principalType == IAMPrincipalType.group.rawValue)
             #expect(rows.first?.principalID == group.id)
@@ -309,7 +307,7 @@ final class IAMRoleBindingTests {
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
-            rows = try await bindings(on: app.db, nodeType: .project, nodeID: project.id!)
+            rows = try await bindings(on: app.testPostgres, nodeType: .project, nodeID: project.id!)
             #expect(rows.isEmpty)
         }
     }
@@ -317,11 +315,11 @@ final class IAMRoleBindingTests {
     @Test("Project create writes an explicit creator-admin binding")
     func projectCreateWritesCreatorBinding() async throws {
         try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
+            let builder = TestDataBuilder(db: app.testPostgres)
             let org = try await builder.createOrganization(name: "PCB Org")
             let creator = try await builder.createUser(username: "pcbcreator", email: "pcbcreator@example.com")
             try await builder.addUserToOrganization(user: creator, organization: org, role: "member")
-            try await creator.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await creator.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
             let token = try await creator.generateAPIKey(on: app)
 
             var projectID: UUID?
@@ -340,7 +338,7 @@ final class IAMRoleBindingTests {
             }
 
             let createdID = try #require(projectID)
-            let rows = try await bindings(on: app.db, nodeType: .project, nodeID: createdID)
+            let rows = try await bindings(on: app.testPostgres, nodeType: .project, nodeID: createdID)
             #expect(rows.count == 1)
             #expect(rows.first?.principalID == creator.id)
             #expect(rows.first?.roleID == IAMRole.admin.seededID)

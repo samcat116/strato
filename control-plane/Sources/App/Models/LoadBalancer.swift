@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 enum LoadBalancerProtocol: String, Codable, CaseIterable, Sendable {
@@ -69,12 +68,12 @@ enum LegacyLoadBalancerStore {
         ids: [UUID]? = nil,
         projectIDs: [UUID]? = nil,
         networkIDs: [UUID]? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [LoadBalancerSnapshot] {
         if let ids, ids.isEmpty { return [] }
         if let projectIDs, projectIDs.isEmpty { return [] }
         if let networkIDs, networkIDs.isEmpty { return [] }
-        var query: SQLQueryString = """
+        var query: PostgresSQLQuery = """
             SELECT \(unsafeRaw: columns)
             FROM load_balancers AS lb
             LEFT JOIN logical_networks AS network ON network.id = lb.logical_network_id
@@ -87,11 +86,11 @@ enum LegacyLoadBalancerStore {
         return try await snapshots(from: requireSQL(db).raw(query).all(decoding: Record.self))
     }
 
-    static func find(id: UUID, on db: any Database) async throws -> LoadBalancerSnapshot? {
+    static func find(id: UUID, on db: PostgresStoreContext) async throws -> LoadBalancerSnapshot? {
         try await rows(ids: [id], on: db).first
     }
 
-    static func locked(id: UUID, on db: any Database) async throws -> LoadBalancerSnapshot? {
+    static func locked(id: UUID, on db: PostgresStoreContext) async throws -> LoadBalancerSnapshot? {
         guard let row = try await requireSQL(db).raw(
             """
             SELECT \(unsafeRaw: columns)
@@ -114,7 +113,7 @@ enum LegacyLoadBalancerStore {
         protocolName: LoadBalancerProtocol,
         healthCheck: LoadBalancerHealthCheckConfig = .disabled,
         createdByID: UUID? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LoadBalancerSnapshot {
         guard let row = try await requireSQL(db).raw(
             """
@@ -148,7 +147,7 @@ enum LegacyLoadBalancerStore {
         name: String,
         protocolName: LoadBalancerProtocol,
         healthCheck: LoadBalancerHealthCheckConfig,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> LoadBalancerSnapshot? {
         guard let row = try await requireSQL(db).raw(
             """
@@ -169,7 +168,7 @@ enum LegacyLoadBalancerStore {
     }
 
     @discardableResult
-    static func markPending(id: UUID, on db: any Database) async throws -> UUID? {
+    static func markPending(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Updated: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             """
@@ -188,7 +187,7 @@ enum LegacyLoadBalancerStore {
         observedGeneration: Int64,
         observedState: LoadBalancerObservedState,
         lastError: String?,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> UUID? {
         struct Updated: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
@@ -203,14 +202,14 @@ enum LegacyLoadBalancerStore {
         ).first(decoding: Updated.self)?.id
     }
 
-    static func usedIPv4Addresses(networkID: UUID, on db: any Database) async throws -> [String] {
+    static func usedIPv4Addresses(networkID: UUID, on db: PostgresStoreContext) async throws -> [String] {
         struct Address: Decodable { let vip: String }
         return try await requireSQL(db).raw(
             "SELECT vip FROM load_balancers WHERE logical_network_id = \(bind: networkID)"
         ).all(decoding: Address.self).map(\.vip)
     }
 
-    static func ids(projectIDs: [UUID], on db: any Database) async throws -> [UUID] {
+    static func ids(projectIDs: [UUID], on db: PostgresStoreContext) async throws -> [UUID] {
         struct ID: Decodable { let id: UUID }
         guard !projectIDs.isEmpty else { return [] }
         return try await requireSQL(db).raw(
@@ -219,7 +218,7 @@ enum LegacyLoadBalancerStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM load_balancers WHERE id = \(bind: id) RETURNING id"
@@ -304,8 +303,8 @@ enum LegacyLoadBalancerStore {
         created_by_id AS "createdByID", created_at AS "createdAt", updated_at AS "updatedAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw Abort(.internalServerError, reason: "Load balancers require PostgreSQL")
         }
         return sql

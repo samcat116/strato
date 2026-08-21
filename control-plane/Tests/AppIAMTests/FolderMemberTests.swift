@@ -1,4 +1,3 @@
-import Fluent
 import Testing
 import Vapor
 import VaporTesting
@@ -70,7 +69,7 @@ struct FolderMemberTests {
             let actor = try await builder.createUser(
                 username: "fmactor", email: "fmactor@example.com", displayName: "FM Actor")
             try await builder.addUserToOrganization(user: actor, organization: org, role: "admin")
-            try await actor.replacingCurrentOrganization(org.id).save(on: app.db)
+            try await actor.replacingCurrentOrganization(org.id).save(on: app.testPostgres)
 
             // A colleague in the same org: the ordinary grant target, and not
             // external, so the cross-org markers stay meaningful.
@@ -113,7 +112,7 @@ struct FolderMemberTests {
 
     /// The role ids bound to `principal` on the engineering folder.
     private func folderRoles(
-        _ fixture: Fixture, principalType: IAMPrincipalType, principalID: UUID, on db: any Database
+        _ fixture: Fixture, principalType: IAMPrincipalType, principalID: UUID, on db: PostgresStoreContext
     ) async throws -> [UUID] {
         try await LegacyRoleBindingStore.bindings(
             principalType: principalType.rawValue,
@@ -140,7 +139,7 @@ struct FolderMemberTests {
             }
 
             let roles = try await folderRoles(
-                fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.db)
+                fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.testPostgres)
             #expect(roles == [IAMRole.admin.seededID])
         }
     }
@@ -184,7 +183,7 @@ struct FolderMemberTests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: try fixture.target.requireID(), role: .viewer,
                 nodeType: .organizationalUnit, nodeID: try fixture.engineering.requireID(),
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
 
             try await app.test(.POST, path) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
@@ -204,7 +203,7 @@ struct FolderMemberTests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: targetID, role: .viewer,
                 nodeType: .organizationalUnit, nodeID: try fixture.engineering.requireID(),
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
 
             let path = try membersPath(fixture)
             try await app.test(.PATCH, "\(path)/\(targetID)") { req in
@@ -217,7 +216,7 @@ struct FolderMemberTests {
             }
 
             let roles = try await folderRoles(
-                fixture, principalType: .user, principalID: targetID, on: app.db)
+                fixture, principalType: .user, principalID: targetID, on: app.testPostgres)
             #expect(roles == [IAMRole.admin.seededID])
         }
     }
@@ -244,7 +243,7 @@ struct FolderMemberTests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: targetID, role: .editor,
                 nodeType: .organizationalUnit, nodeID: try fixture.engineering.requireID(),
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
 
             let path = try membersPath(fixture)
             try await app.test(.DELETE, "\(path)/\(targetID)") { req in
@@ -254,7 +253,7 @@ struct FolderMemberTests {
             }
 
             let roles = try await folderRoles(
-                fixture, principalType: .user, principalID: targetID, on: app.db)
+                fixture, principalType: .user, principalID: targetID, on: app.testPostgres)
             #expect(roles.isEmpty)
         }
     }
@@ -275,7 +274,7 @@ struct FolderMemberTests {
             }
 
             let granted = try await folderRoles(
-                fixture, principalType: .group, principalID: groupID, on: app.db)
+                fixture, principalType: .group, principalID: groupID, on: app.testPostgres)
             #expect(granted == [IAMRole.editor.seededID])
 
             try await app.test(.DELETE, "\(path)/\(groupID)") { req in
@@ -285,7 +284,7 @@ struct FolderMemberTests {
             }
 
             let revoked = try await folderRoles(
-                fixture, principalType: .group, principalID: groupID, on: app.db)
+                fixture, principalType: .group, principalID: groupID, on: app.testPostgres)
             #expect(revoked.isEmpty)
         }
     }
@@ -306,13 +305,13 @@ struct FolderMemberTests {
 
             try await RoleBindingService.grant(
                 principalType: .user, principalID: targetID, role: .admin,
-                nodeType: .organizationalUnit, nodeID: folderID, createdBy: nil, on: app.db)
+                nodeType: .organizationalUnit, nodeID: folderID, createdBy: nil, on: app.testPostgres)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: outsiderID, role: .viewer,
-                nodeType: .organizationalUnit, nodeID: folderID, createdBy: nil, on: app.db)
+                nodeType: .organizationalUnit, nodeID: folderID, createdBy: nil, on: app.testPostgres)
             try await RoleBindingService.grant(
                 principalType: .group, principalID: groupID, role: .viewer,
-                nodeType: .organizationalUnit, nodeID: folderID, createdBy: nil, on: app.db)
+                nodeType: .organizationalUnit, nodeID: folderID, createdBy: nil, on: app.testPostgres)
 
             try await app.test(.GET, try membersPath(fixture)) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
@@ -348,7 +347,7 @@ struct FolderMemberTests {
             try await RoleBindingService.grant(
                 principalType: .user, principalID: try editor.requireID(), role: .editor,
                 nodeType: .organizationalUnit, nodeID: try fixture.engineering.requireID(),
-                createdBy: nil, on: app.db)
+                createdBy: nil, on: app.testPostgres)
             let editorToken = try await editor.generateAPIKey(on: app)
 
             try await app.test(.POST, try membersPath(fixture)) { req in
@@ -397,10 +396,10 @@ struct FolderMemberTests {
             principalMatch: .any,
             resourceMatch: .any,
             createdBy: nil,
-            on: app.db
+            on: app.testPostgres
         )
-        let version = try await PolicySetVersionService.current(on: app.db)
-        await app.cedarPolicySet.rebuild(version: version, on: app.db)
+        let version = try await PolicySetVersionService.current(on: app.testPostgres)
+        await app.cedarPolicySet.rebuild(version: version, on: app.testPostgres)
     }
 
     @Test("Granting an external user without iam:grantExternal is refused")
@@ -421,7 +420,7 @@ struct FolderMemberTests {
             }
 
             let roles = try await folderRoles(
-                fixture, principalType: .user, principalID: try outsider.requireID(), on: app.db)
+                fixture, principalType: .user, principalID: try outsider.requireID(), on: app.testPostgres)
             #expect(roles.isEmpty)
 
             // The ceiling is specific to cross-org grants, so an internal grant
@@ -458,7 +457,7 @@ struct FolderMemberTests {
             }
 
             let roles = try await folderRoles(
-                fixture, principalType: .group, principalID: groupID, on: app.db)
+                fixture, principalType: .group, principalID: groupID, on: app.testPostgres)
             #expect(roles.isEmpty)
         }
     }
@@ -476,7 +475,7 @@ struct FolderMemberTests {
                 principalMatch: .any,
                 resourceMatch: .any,
                 createdBy: nil,
-                on: app.db
+                on: app.testPostgres
             )
 
             // `editor` carries vm:create/update/delete, which the ceiling
@@ -497,7 +496,7 @@ struct FolderMemberTests {
             }
 
             let roles = try await folderRoles(
-                fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.db)
+                fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.testPostgres)
             #expect(roles.count == 1)
         }
     }
@@ -539,7 +538,7 @@ struct FolderMemberTests {
             #expect(statuses.filter { $0 == .conflict }.count == roles.count - 1)
 
             let bound = try await folderRoles(
-                fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.db)
+                fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.testPostgres)
             #expect(bound.count == 1)
         }
     }
@@ -574,7 +573,7 @@ struct FolderMemberTests {
                 cedarText: RoleDescriptor.canonicalPermitText(id: roleID, actions: ["vm:read"]),
                 actions: ["vm:read"],
                 managed: false,
-                createdBy: nil), on: app.db)
+                createdBy: nil), on: app.testPostgres)
 
             try await app.test(.POST, try membersPath(fixture)) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
@@ -587,7 +586,7 @@ struct FolderMemberTests {
             }
 
             let roles = try await folderRoles(
-                fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.db)
+                fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.testPostgres)
             #expect(roles.isEmpty)
         }
     }
@@ -605,7 +604,7 @@ struct FolderMemberTests {
                 cedarText: RoleDescriptor.canonicalPermitText(id: roleID, actions: ["vm:read", "vm:restart"]),
                 actions: ["vm:read", "vm:restart"],
                 managed: false,
-                createdBy: nil), on: app.db)
+                createdBy: nil), on: app.testPostgres)
 
             try await app.test(.POST, try membersPath(fixture)) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
@@ -617,7 +616,7 @@ struct FolderMemberTests {
             }
 
             let roles = try await folderRoles(
-                fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.db)
+                fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.testPostgres)
             #expect(roles == [roleID])
         }
     }
@@ -632,7 +631,7 @@ struct FolderMemberTests {
             let emptyID = try empty.requireID()
             try await RoleBindingService.grant(
                 principalType: .user, principalID: try fixture.target.requireID(), role: .admin,
-                nodeType: .organizationalUnit, nodeID: emptyID, createdBy: nil, on: app.db)
+                nodeType: .organizationalUnit, nodeID: emptyID, createdBy: nil, on: app.testPostgres)
 
             try await app.test(
                 .DELETE, "/api/organizations/\(try fixture.org.requireID())/ous/\(emptyID)"
@@ -645,7 +644,7 @@ struct FolderMemberTests {
             let remaining = try await LegacyRoleBindingStore.bindings(
                 nodeType: IAMNodeType.organizationalUnit.rawValue,
                 nodeID: emptyID,
-                on: app.db).count
+                on: app.testPostgres).count
             #expect(remaining == 0)
         }
     }

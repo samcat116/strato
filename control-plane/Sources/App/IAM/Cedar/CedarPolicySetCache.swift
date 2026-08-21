@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -174,16 +173,16 @@ actor CedarPolicySetCache {
     /// version *before* listeners run, so after a failed rebuild no further
     /// version *change* is coming — the level-triggered refresh hook keeps
     /// calling here until the build lands.
-    func reconcile(version: Int, on db: any Database) async {
+    func reconcile(version: Int) async {
         guard current?.version != version else { return }
-        await rebuild(version: version, on: db)
+        await rebuild(version: version)
     }
 
     /// Rebuild for `version`. On failure the previous set stays: a stale
     /// policy set converges on the next nudge or periodic re-read (via
     /// `reconcile`), whereas an empty one would deny everything (or, with
     /// guardrails missing, allow what a ceiling forbids).
-    func rebuild(version: Int, on db: any Database) async {
+    func rebuild(version: Int) async {
         do {
             // Every role definition — seeded and user-created. Sorted by id so
             // two replicas building the same version produce identical text.
@@ -268,7 +267,7 @@ actor CedarPolicySetCache {
             // stored, shown, and enforced is one string. A row whose text
             // predates the migration (null) falls back to matcher generation.
             let compiledGuardrails = try await buildGuardrailPolicies(
-                guardrails, schemaText: schemaText, on: db)
+                guardrails, schemaText: schemaText)
 
             for skipped in compiledGuardrails.skipped {
                 // A skipped guardrail is a ceiling not being enforced by the
@@ -327,6 +326,18 @@ actor CedarPolicySetCache {
         }
     }
 
+#if DEBUG
+    /// Compatibility for integration tests that still carry their scoped SQL context.
+    package func reconcile(version: Int, on _: PostgresStoreContext) async {
+        await reconcile(version: version)
+    }
+
+    /// Compatibility for integration tests that still carry their scoped SQL context.
+    package func rebuild(version: Int, on _: PostgresStoreContext) async {
+        await rebuild(version: version)
+    }
+#endif
+
     /// Turn enabled guardrail rows into compiled `forbid` sources (#610).
     ///
     /// The stored `cedar_text` is compiled verbatim — the assembler already ran
@@ -342,7 +353,7 @@ actor CedarPolicySetCache {
     /// fail-open) instead of failing the whole-set compile and pinning every
     /// replica to its previous build.
     private func buildGuardrailPolicies(
-        _ guardrails: [IAMGuardrailSnapshot], schemaText: String, on db: any Database
+        _ guardrails: [IAMGuardrailSnapshot], schemaText: String
     ) async throws -> GuardrailRendering.RenderedForbids {
         var sources: [CedarPolicySource] = []
         var namesByID: [UUID: String] = [:]
@@ -361,7 +372,7 @@ actor CedarPolicySetCache {
 
         // Fallback generation for null-text rows.
         if !needGeneration.isEmpty {
-            let generated = try await GuardrailRendering.forbids(for: needGeneration, on: db)
+            let generated = try await GuardrailRendering.forbids(for: needGeneration, using: iam)
             sources += generated.policies
             skipped += generated.skipped
         }
@@ -419,7 +430,7 @@ extension Application {
     /// one.
     func startCedarPolicySetCache() async {
         await policySetVersion.onEveryRefresh { [self] version in
-            await cedarPolicySet.reconcile(version: version, on: db)
+            await cedarPolicySet.reconcile(version: version)
         }
     }
 }

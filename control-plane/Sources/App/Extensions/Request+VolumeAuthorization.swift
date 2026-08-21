@@ -1,5 +1,5 @@
+import ControlPlanePostgres
 import Vapor
-import Fluent
 
 extension Request {
     /// Fetch a volume and enforce a canonical action on it in one call, through the
@@ -13,8 +13,10 @@ extension Request {
     ///
     /// - Throws: `.unauthorized` if unauthenticated, `.notFound` if the volume
     ///   does not exist, `.forbidden` if the user lacks `action` on it.
-    func authorizedVolume(_ volumeID: UUID, action: String) async throws -> Volume {
-        guard let volume = try await Volume.find(volumeID, on: db) else {
+    func authorizedVolume(
+        _ volumeID: UUID, action: String, on database: PostgresStoreContext
+    ) async throws -> Volume {
+        guard let volume = try await Volume.find(volumeID, on: database) else {
             throw Abort(.notFound)
         }
 

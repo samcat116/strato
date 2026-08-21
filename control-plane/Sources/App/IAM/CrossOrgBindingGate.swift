@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -30,7 +29,7 @@ enum CrossOrgBindingGate {
     /// (a global network, or a dangling parent edge) — with no org there is
     /// nothing for a principal to be external *to*, so the gate does not
     /// apply.
-    static func rootOrganizationID(of node: IAMNode, on db: any Database) async throws -> UUID? {
+    static func rootOrganizationID(of node: IAMNode, on db: PostgresStoreContext) async throws -> UUID? {
         let chain = try await IAMResourceTree.ancestors(of: node, on: db)
         guard let root = chain.last, root.type == .organization else { return nil }
         return root.id
@@ -41,7 +40,7 @@ enum CrossOrgBindingGate {
     /// principal id counts as external — granting to a principal we cannot
     /// place must not slip past the gate.
     static func isExternal(
-        principalType: IAMPrincipalType, principalID: UUID, organizationID: UUID, on db: any Database
+        principalType: IAMPrincipalType, principalID: UUID, organizationID: UUID, on db: PostgresStoreContext
     ) async throws -> Bool {
         switch principalType {
         case .user:
@@ -78,7 +77,7 @@ enum CrossOrgBindingGate {
     /// boundary — the question both the write-time gate and the loud-revoke
     /// paths start from.
     static func isCrossOrg(
-        principalType: IAMPrincipalType, principalID: UUID, node: IAMNode, on db: any Database
+        principalType: IAMPrincipalType, principalID: UUID, node: IAMNode, on db: PostgresStoreContext
     ) async throws -> Bool {
         guard let organizationID = try await rootOrganizationID(of: node, on: db) else { return false }
         return try await isExternal(
@@ -110,23 +109,6 @@ enum CrossOrgBindingGate {
     /// make the successful write loud with `recordCrossOrgEvent` after its
     /// transaction commits. Call before opening that transaction.
     static func requireGrantPermitted(
-        principalType: IAMPrincipalType, principalID: UUID, node: IAMNode, req: Request
-    ) async throws -> Bool {
-        guard
-            try await isCrossOrg(
-                principalType: principalType, principalID: principalID, node: node, on: req.db)
-        else { return false }
-        guard try await req.can("iam:grantExternal", on: node) else {
-            throw Abort(
-                .forbidden,
-                reason:
-                    "The principal is outside this resource's organization; granting it a role requires the iam:grantExternal permission on the resource"
-            )
-        }
-        return true
-    }
-
-    static func requireGrantPermitted(
         principalType: IAMPrincipalType,
         principalID: UUID,
         node: IAMNode,
@@ -154,39 +136,6 @@ enum CrossOrgBindingGate {
     /// Record the distinct audit event that makes a cross-org grant (or the
     /// revoke that ends one) visible in the trail. Call after the binding
     /// write commits; audit backends never fail the request.
-    static func recordCrossOrgEvent(
-        _ type: AuditEventType,
-        principalType: IAMPrincipalType,
-        principalID: UUID,
-        role: String?,
-        node: IAMNode,
-        req: Request
-    ) async {
-        let actor = req.auth.get(User.self)
-        var metadata: [String: String] = [
-            "principalType": principalType.rawValue,
-            "principalId": principalID.uuidString,
-        ]
-        if let role {
-            metadata["role"] = role
-        }
-        await req.audit.record(
-            AuditRecord(
-                eventType: type.rawValue,
-                userID: actor?.id,
-                username: actor?.username,
-                apiKeyID: req.apiKey?.id,
-                organizationID: try? await rootOrganizationID(of: node, on: req.db),
-                method: req.method.rawValue,
-                path: req.url.path,
-                resourceType: node.type.rawValue,
-                resourceID: node.id.uuidString,
-                action: type == .crossOrgGrant ? "iam:grantExternal" : nil,
-                sourceIP: req.auditClientIP,
-                metadata: metadata
-            ))
-    }
-
     static func recordCrossOrgEvent(
         _ type: AuditEventType,
         principalType: IAMPrincipalType,

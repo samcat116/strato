@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import Vapor
 
@@ -51,13 +50,16 @@ struct UserDirectoryVisibility: Sendable {
         // policy rather than a binding, so a bindings-derived candidate set
         // would be just their own record and would hide the directory the
         // evaluator allows.
-        let facts = try await IAMUserFacts.load(userID: userID, cache: req.iamCache, on: req.db)
+        let facts = try await IAMUserFacts.load(
+            userID: userID,
+            cache: req.iamCache,
+            using: iam)
         guard !facts.isSystemAdmin else { return UserDirectoryVisibility(candidateUserIDs: nil) }
 
         // `platform-user-self`: the caller's own record, always a candidate.
         var candidates: Set<UUID> = [userID]
         candidates.formUnion(
-            try await boundRecords(userID: userID, groupIDs: facts.groupIDs, on: req.db))
+            try await boundRecords(userID: userID, groupIDs: facts.groupIDs, using: iam))
         guard let authored = try await authoredPermitRecords(on: req, using: iam) else {
             // An authored permit whose reach cannot be bounded. Widening to "no
             // narrowing" is the only safe answer; every record it puts in front
@@ -78,20 +80,20 @@ struct UserDirectoryVisibility: Sendable {
     /// split exists to avoid. A binding whose role does not grant `user:read`
     /// costs one candidate that the evaluator then denies.
     private static func boundRecords(
-        userID: UUID, groupIDs: [UUID], on db: any Database
+        userID: UUID,
+        groupIDs: [UUID],
+        using iam: IAMPersistence
     ) async throws -> Set<UUID> {
         var principals: [(IAMPrincipalType, UUID)] = [(.user, userID)]
         principals += groupIDs.map { (IAMPrincipalType.group, $0) }
 
-        let bindings = try await LegacyRoleBindingStore.bindings(
-            nodeType: IAMNodeType.user.rawValue,
-            subjects: principals.map {
+        let bindings = try await iam.activeBindings(
+            forSubjects: principals.map {
                 IAMOwnerReference(type: $0.0.rawValue, id: $0.1)
             },
-            activeAt: Date(),
-            on: db)
+            at: Date())
 
-        return Set(bindings.map(\.nodeID))
+        return Set(bindings.lazy.filter { $0.nodeType == IAMNodeType.user.rawValue }.map(\.nodeID))
     }
 
     /// The user records authored permit policies (issue #606) could grant

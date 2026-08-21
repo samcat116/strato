@@ -1,6 +1,5 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 
 /// A zone↔network attachment: "VMs on this network can resolve this zone."
 ///
@@ -33,10 +32,10 @@ enum DNSZoneNetworkStore {
     static func attachments(
         zoneIDs: [UUID]? = nil,
         networkIDs: [UUID]? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [DNSZoneNetworkRecord] {
         let sql = try requireSQL(db)
-        var query: SQLQueryString =
+        var query: PostgresSQLQuery =
             "SELECT \(unsafeRaw: columns) FROM dns_zone_networks WHERE TRUE"
         if let zoneIDs {
             guard !zoneIDs.isEmpty else { return [] }
@@ -53,11 +52,11 @@ enum DNSZoneNetworkStore {
     static func count(
         zoneID: UUID? = nil,
         networkID: UUID? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> Int {
         struct CountRow: Decodable { let count: Int }
         let sql = try requireSQL(db)
-        var query: SQLQueryString = "SELECT count(*)::bigint AS count FROM dns_zone_networks WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT count(*)::bigint AS count FROM dns_zone_networks WHERE TRUE"
         if let zoneID { query += " AND zone_id = \(bind: zoneID)" }
         if let networkID { query += " AND logical_network_id = \(bind: networkID)" }
         return try await sql.raw(query).first(decoding: CountRow.self)?.count ?? 0
@@ -66,7 +65,7 @@ enum DNSZoneNetworkStore {
     /// Idempotently attach one zone to one network. The database timestamp and
     /// application UUID retain the former Fluent model's representation.
     @discardableResult
-    static func attach(zoneID: UUID, networkID: UUID, on db: any Database) async throws -> Bool {
+    static func attach(zoneID: UUID, networkID: UUID, on db: PostgresStoreContext) async throws -> Bool {
         struct IdentifierRow: Decodable { let id: UUID }
         let sql = try requireSQL(db)
         let inserted = try await sql.raw(
@@ -81,7 +80,7 @@ enum DNSZoneNetworkStore {
     }
 
     @discardableResult
-    static func detach(zoneID: UUID, networkID: UUID, on db: any Database) async throws -> Bool {
+    static func detach(zoneID: UUID, networkID: UUID, on db: PostgresStoreContext) async throws -> Bool {
         struct IdentifierRow: Decodable { let id: UUID }
         let sql = try requireSQL(db)
         return try await sql.raw(
@@ -93,7 +92,7 @@ enum DNSZoneNetworkStore {
         ).first(decoding: IdentifierRow.self) != nil
     }
 
-    static func counts(networkIDs: [UUID], on db: any Database) async throws -> [UUID: Int] {
+    static func counts(networkIDs: [UUID], on db: PostgresStoreContext) async throws -> [UUID: Int] {
         struct CountRow: Decodable {
             let logicalNetworkID: UUID
             let count: Int
@@ -111,8 +110,8 @@ enum DNSZoneNetworkStore {
         return Dictionary(uniqueKeysWithValues: rows.map { ($0.logicalNetworkID, $0.count) })
     }
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext else {
             throw DNSZoneNetworkStoreError.requiresSQLDatabase
         }
         return sql

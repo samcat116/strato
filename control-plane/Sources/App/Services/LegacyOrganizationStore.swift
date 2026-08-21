@@ -1,11 +1,10 @@
-import Fluent
+import ControlPlanePostgres
 import Foundation
-import SQLKit
 import Vapor
 
 /// Explicit organization access for callers that still own a Fluent transaction.
 enum LegacyOrganizationStore {
-    static func organization(id: UUID?, on db: any Database) async throws -> Organization? {
+    static func organization(id: UUID?, on db: PostgresStoreContext) async throws -> Organization? {
         guard let id else { return nil }
         let rows = try await requireSQL(db).raw(
             "SELECT \(unsafeRaw: columns) FROM organizations AS o WHERE o.id = \(bind: id)"
@@ -19,16 +18,16 @@ enum LegacyOrganizationStore {
     static func organizations(
         name: String? = nil,
         caseInsensitiveName: String? = nil,
-        on db: any Database
+        on db: PostgresStoreContext
     ) async throws -> [Organization] {
-        var query: SQLQueryString = "SELECT \(unsafeRaw: columns) FROM organizations AS o WHERE TRUE"
+        var query: PostgresSQLQuery = "SELECT \(unsafeRaw: columns) FROM organizations AS o WHERE TRUE"
         if let name { query += " AND o.name = \(bind: name)" }
         if let caseInsensitiveName { query += " AND lower(o.name) = lower(\(bind: caseInsensitiveName))" }
         query += " ORDER BY o.created_at, o.id"
         return try await requireSQL(db).raw(query).all(decoding: Record.self).map(\.organization)
     }
 
-    static func count(on db: any Database) async throws -> Int {
+    static func count(on db: PostgresStoreContext) async throws -> Int {
         struct Count: Decodable { let count: Int }
         return try await requireSQL(db).raw(
             "SELECT count(*)::bigint AS count FROM organizations"
@@ -36,7 +35,7 @@ enum LegacyOrganizationStore {
     }
 
     @discardableResult
-    static func upsert(_ organization: Organization, on db: any Database) async throws -> Organization {
+    static func upsert(_ organization: Organization, on db: PostgresStoreContext) async throws -> Organization {
         let id = try organization.requireID()
         guard let row = try await requireSQL(db).raw(
             """
@@ -58,7 +57,7 @@ enum LegacyOrganizationStore {
     }
 
     @discardableResult
-    static func delete(id: UUID, on db: any Database) async throws -> UUID? {
+    static func delete(id: UUID, on db: PostgresStoreContext) async throws -> UUID? {
         struct Deleted: Decodable { let id: UUID }
         return try await requireSQL(db).raw(
             "DELETE FROM organizations WHERE id = \(bind: id) RETURNING id"
@@ -98,8 +97,8 @@ enum LegacyOrganizationStore {
         updated_at AS "updatedAt"
         """
 
-    private static func requireSQL(_ db: any Database) throws -> any SQLDatabase {
-        guard let sql = db as? any SQLDatabase, sql.dialect.name == "postgresql" else {
+    private static func requireSQL(_ db: PostgresStoreContext) throws -> PostgresStoreContext {
+        guard let sql = db as? PostgresStoreContext, sql.dialect.name == "postgresql" else {
             throw Abort(.internalServerError, reason: "Organization compatibility access requires PostgreSQL")
         }
         return sql

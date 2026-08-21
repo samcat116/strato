@@ -1,5 +1,4 @@
 import ControlPlanePostgres
-import Fluent
 import Foundation
 import StratoShared
 import Vapor
@@ -319,28 +318,28 @@ struct Agent: Content, Sendable {
     }
 
     @discardableResult
-    func persisted(on db: any Database) async throws -> Self {
+    func persisted(on db: PostgresStoreContext) async throws -> Self {
         try await LegacyAgentStore.upsert(self, on: db)
     }
 
-    func save(on db: any Database) async throws {
+    func save(on db: PostgresStoreContext) async throws {
         _ = try await persisted(on: db)
     }
 
-    func delete(on db: any Database) async throws {
+    func delete(on db: PostgresStoreContext) async throws {
         guard let id else { return }
         _ = try await LegacyAgentStore.delete(id: id, on: db)
     }
 
-    static func find(_ id: UUID?, on db: any Database) async throws -> Self? {
+    static func find(_ id: UUID?, on db: PostgresStoreContext) async throws -> Self? {
         try await LegacyAgentStore.agent(id: id, on: db)
     }
 
-    static func all(on db: any Database) async throws -> [Self] {
+    static func all(on db: PostgresStoreContext) async throws -> [Self] {
         try await LegacyAgentStore.agents(on: db)
     }
 
-    static func count(on db: any Database) async throws -> Int {
+    static func count(on db: PostgresStoreContext) async throws -> Int {
         try await LegacyAgentStore.count(on: db)
     }
 
@@ -695,7 +694,7 @@ extension Agent {
 
     /// The root organization the agent is dedicated to (OU scope resolves to
     /// its owning org). Placement compares this against the VM project's root.
-    func rootOrganizationID(on db: Database) async throws -> UUID? {
+    func rootOrganizationID(on db: PostgresStoreContext) async throws -> UUID? {
         try await organizationScope?.rootOrganizationID(on: db)
     }
 
@@ -712,7 +711,7 @@ extension Agent {
     ///
     /// Projects are resolved once each rather than once per workload: a busy
     /// agent hosts many VMs from few projects.
-    func hostsForeignWorkloads(on db: Database) async throws -> Bool {
+    func hostsForeignWorkloads(on db: PostgresStoreContext) async throws -> Bool {
         let agentOrg = try await rootOrganizationID(on: db)
         let agentIDString = try requireID().uuidString
 
