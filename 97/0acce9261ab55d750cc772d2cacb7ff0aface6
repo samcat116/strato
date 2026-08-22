@@ -21,6 +21,8 @@ control-plane/Tests/AppResourceTests/VMResizeTests.swift
   s_16ac4040d846a2::t_34ca8201c239c3 20
 control-plane/Tests/AppResourceTests/VolumeAgentSelectionTests.swift
   s_16ac4040d846a2::t_34ca8201c239c3 21
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_16ac4040d846a2::t_89ca75bac6c382 125-128
 ---
 {
   "schema_version": "authorship/3.0.0",
