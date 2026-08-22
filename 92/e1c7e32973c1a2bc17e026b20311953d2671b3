@@ -1,0 +1,62 @@
+control-plane/Sources/App/Services/ResourceFinalizerService.swift
+  s_04b5ae2486fc4c::t_646f2421763ec2 148,151-153,155-165
+control-plane/Tests/AppPlatformTests/DesiredStateAssemblerTests.swift
+  s_04b5ae2486fc4c::t_417556ffb2434b 399-404,442-447
+  s_04b5ae2486fc4c::t_600dd5cda3c578 2,33-34,77,83-93
+  s_04b5ae2486fc4c::t_fc06d680c2b1a1 128-155,336-398,405-441,448-459
+  s_04b5ae2486fc4c::t_6fb0f25bfbe6b6 460
+control-plane/Sources/App/Migrations/AddDesiredStateAssemblyFailureToVM.swift
+  s_04b5ae2486fc4c::t_95456a4e63b350 1-33
+docs/deployment/observability.md
+  s_04b5ae2486fc4c::t_e51442f5ad2777 163
+control-plane/Tests/AppResourceTests/DesiredStatePollTests.swift
+  s_04b5ae2486fc4c::t_5e9b21fc7ea832 177-178
+  s_04b5ae2486fc4c::t_f68cbb1ebeea5d 172-176,179-181,186-198
+  s_04b5ae2486fc4c::t_35399ef80c35e8 182-185
+control-plane/Sources/App/Models/vm.swift
+  s_04b5ae2486fc4c::t_95456a4e63b350 96-108
+control-plane/Sources/App/Controllers/VMController.swift
+  s_04b5ae2486fc4c::t_646f2421763ec2 2019
+control-plane/Tests/AppPlatformTests/ResourceFinalizerTests.swift
+  s_04b5ae2486fc4c::t_ab8940f1476a47 177-209
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_04b5ae2486fc4c::t_3827ac6ee1b802 221-241
+control-plane/Sources/App/Models/ResourceConditions.swift
+  s_04b5ae2486fc4c::t_a0964fa536be72 82-84
+  s_04b5ae2486fc4c::t_95456a4e63b350 207-218,246,252-255,474-476
+  s_04b5ae2486fc4c::t_da9e386f84cc00 247
+control-plane/Sources/App/Migrations/CurrentSchema.sql
+  s_04b5ae2486fc4c::t_95456a4e63b350 1317-1319
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_04b5ae2486fc4c::t_3827ac6ee1b802 10-45,198-202,242-255,327,332,335-336,340
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_04b5ae2486fc4c::t_cb8b5ed89b1476 3-4,17-20,23-28,172-193,517-539,548-611
+  s_04b5ae2486fc4c::t_8d76abb298016b 542-545
+  s_04b5ae2486fc4c::t_e51442f5ad2777 897-904
+  s_04b5ae2486fc4c::t_a0964fa536be72 540-541,546-547
+  s_04b5ae2486fc4c::t_88da57c23d8768 612
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "92e1c7e32973c1a2bc17e026b20311953d2671b3",
+  "prompts": {},
+  "sessions": {
+    "s_04b5ae2486fc4c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a02696-afa0-7a50-8956-fc5190f4295a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e96ba4ae06c4bf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01c11-f4dd-70d3-b494-f3a755bc4814",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
