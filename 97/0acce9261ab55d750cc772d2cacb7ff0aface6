@@ -1,0 +1,48 @@
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_16ac4040d846a2::t_34ca8201c239c3 105,114
+control-plane/Sources/App/Services/SiteNetworkAuthority.swift
+  s_16ac4040d846a2::t_284bffbf707e40 333-337
+control-plane/Tests/AppResourceTests/VMSnapshotTests.swift
+  s_16ac4040d846a2::t_34ca8201c239c3 64,89
+control-plane/Tests/AppResourceTests/SandboxSnapshotTests.swift
+  s_16ac4040d846a2::t_34ca8201c239c3 65,90
+control-plane/Tests/AppPlatformTests/RemoveAgentWireProtocolVersionTests.swift
+  s_16ac4040d846a2::t_c791c40abe755d 1-5,7-11,31-48,50-56,58-80
+  s_16ac4040d846a2::t_f77c9b1711ca7e 49,57
+  s_16ac4040d846a2::t_ffdcb4a4a1b11e 6
+  s_16ac4040d846a2::t_c2c40a84a52553 12-30
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_16ac4040d846a2::t_17b2d5e95c317b 12
+  s_16ac4040d846a2::t_2d590868982243 33
+control-plane/Sources/App/Migrations/RemoveAgentWireProtocolVersion.swift
+  s_16ac4040d846a2::t_f77c9b1711ca7e 2,8-13,20-25
+  s_16ac4040d846a2::t_284bffbf707e40 1,3-7,14-19,26-30
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  s_16ac4040d846a2::t_34ca8201c239c3 20
+control-plane/Tests/AppResourceTests/VolumeAgentSelectionTests.swift
+  s_16ac4040d846a2::t_34ca8201c239c3 21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "970acce9261ab55d750cc772d2cacb7ff0aface6",
+  "prompts": {},
+  "sessions": {
+    "s_16ac4040d846a2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a02697-9725-7601-a595-a54bc7786ab7",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e96ba4ae06c4bf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01c11-f4dd-70d3-b494-f3a755bc4814",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
