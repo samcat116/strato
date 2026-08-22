@@ -122,5 +122,9 @@ extension Application {
         // identity/network value server-side when it is redeemed. Existing rows
         // stay on their issued bootstrap commands; no secret can be backfilled.
         migrations.add(AddAgentEnrollmentBootstrapTokens())
+
+        // STR-277: exact wire-version registration makes the persisted version
+        // redundant; remove the dead column from preserved databases.
+        migrations.add(RemoveAgentWireProtocolVersion())
     }
 }

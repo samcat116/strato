@@ -102,9 +102,7 @@ final class VMOperationTests {
 
     /// Registers an agent and places `vm` on it, converged and running.
     @discardableResult
-    private func placeOnAgent(
-        app: Application, vm: VM, wireProtocolVersion: Int = WireProtocol.currentVersion
-    ) async throws -> String {
+    private func placeOnAgent(app: Application, vm: VM) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: "reboot-agent",
             hostname: "test-host",
@@ -113,7 +111,7 @@ final class VMOperationTests {
                 totalCPU: 16, availableCPU: 16,
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40),
-            protocolVersion: wireProtocolVersion)
+            protocolVersion: WireProtocol.currentVersion)
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
         let agentUUID = try await app.agentService.registerAgent(
             message, agentName: "reboot-agent", organizationScope: orgID.map { .organization($0) })

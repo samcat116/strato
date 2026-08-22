@@ -74,7 +74,6 @@ final class AgentAutoUpdateTests {
         version: String = "1.0.0",
         autoUpdate: Bool = true,
         online: Bool = true,
-        wireProtocolVersion: Int = WireProtocol.currentVersion,
         operatingSystem: String? = "linux"
     ) async throws -> Agent {
         let agent = Agent(
@@ -90,7 +89,6 @@ final class AgentAutoUpdateTests {
             architecture: .x86_64,
             lastHeartbeat: online ? Date() : Date(timeIntervalSinceNow: -3600)
         )
-        agent.wireProtocolVersion = wireProtocolVersion
         agent.operatingSystem = operatingSystem
         agent.autoUpdate = autoUpdate
         agent.organizationScope = .organization(try org.requireID())
