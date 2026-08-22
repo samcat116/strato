@@ -1,0 +1,25 @@
+agent/Sources/StratoAgentCore/ImageCacheService.swift
+  s_62da691d76daf9::t_90857bb3cf940f 394
+agent/Sources/StratoAgentCore/RetryClassification.swift
+  s_62da691d76daf9::t_90857bb3cf940f 1-5
+agent/Sources/StratoAgentCore/OCI/OCIRegistryClient.swift
+  s_62da691d76daf9::t_90857bb3cf940f 454
+agent/Tests/StratoAgentTests/RetryClassificationTests.swift
+  s_62da691d76daf9::t_90857bb3cf940f 1-22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "2ff4cdec63f771ceb301aae64aa96fe7d3dde0e3",
+  "prompts": {},
+  "sessions": {
+    "s_62da691d76daf9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a02696-d837-7e41-a51d-fc37acab3e9b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
