@@ -35,6 +35,8 @@ control-plane/Sources/App/Services/DesiredStateAssembler.swift
   s_04b5ae2486fc4c::t_e51442f5ad2777 897-904
   s_04b5ae2486fc4c::t_a0964fa536be72 540-541,546-547
   s_04b5ae2486fc4c::t_88da57c23d8768 612
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_04b5ae2486fc4c::t_c555388b732fd3 121-125
 ---
 {
   "schema_version": "authorship/3.0.0",
