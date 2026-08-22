@@ -400,11 +400,6 @@ actor AgentService {
             }
         }
 
-        // Persisted so sync assembly (which may run on any replica, from
-        // Postgres alone) can key version-dependent shapes on what this agent
-        // actually speaks — see `networkAssemblyScope`.
-        agent.wireProtocolVersion = protocolVersion
-
         if let siteID, agent.$site.id != siteID {
             // A token-driven site change must honor the same invariants as the
             // sites API's assign/remove endpoints, or the token becomes a
