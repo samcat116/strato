@@ -174,6 +174,39 @@ final class ResourceFinalizerTests {
 
     // MARK: - Clearing and reaping
 
+    @Test("Offline VM abandonment reaps the boot volume and VM as one operation")
+    func offlineAbandonmentResolvesBothRows() async throws {
+        try await withFinalizerApp { app, user, project, vm, _ in
+            let vmID = try vm.requireID()
+            vm.hypervisorId = UUID().uuidString
+            vm.finalizers = [
+                ResourceFinalizer.agentAbsent.rawValue,
+                ResourceFinalizer.bootVolumeAbsent.rawValue,
+            ]
+            vm.setFixtureDesiredStatus(.absent)
+            try await vm.save(on: app.db)
+
+            let boot = Volume(
+                name: "offline-boot", description: "", projectID: try project.requireID(),
+                environment: vm.environment, size: vm.disk, format: .qcow2,
+                volumeType: .boot, status: .attached, createdByID: try user.requireID())
+            boot.$vm.id = vmID
+            boot.deviceName = VolumeDeviceName.disk(0).rawValue
+            boot.bootOrder = 0
+            boot.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
+            boot.setDesiredStatus(.absent)
+            try await boot.save(on: app.db)
+            let bootID = try boot.requireID()
+
+            let outcome = try await ResourceFinalizerService.abandonOfflineVM(
+                vmID: vmID, on: app.db, app: app)
+
+            #expect(outcome == .reaped)
+            #expect(try await VM.find(vmID, on: app.db) == nil)
+            #expect(try await Volume.find(bootID, on: app.db) == nil)
+        }
+    }
+
     @Test("An outstanding finalizer holds the row after the agent confirms absence")
     func outstandingFinalizerHoldsTheRow() async throws {
         try await withFinalizerApp { app, _, _, vm, _ in

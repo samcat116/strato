@@ -118,6 +118,11 @@ extension Application {
         // eligibility intent. Missing disks remain rows until their agent is removed.
         migrations.add(CreateStorageDevices())
 
+        // STR-287: keep a per-VM assembly failure visible even though the agent's
+        // heartbeat still reports convergence for its last successfully received
+        // sync and owns the ordinary convergence-error columns.
+        migrations.add(AddDesiredStateAssemblyFailureToVM())
+
         // Agent enrollment now hands the host one opaque bearer and derives every
         // identity/network value server-side when it is redeemed. Existing rows
         // stay on their issued bootstrap commands; no secret can be backfilled.
