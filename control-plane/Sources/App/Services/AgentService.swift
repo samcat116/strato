@@ -485,9 +485,11 @@ actor AgentService {
         await SiteNetworkAuthority.designateIfUnset(
             agent: agent, siteID: persistedSiteID, on: db, logger: app.logger)
 
-        // Record that the node completed its first registration. Informational
-        // only — an enrollment is not consumed by being redeemed — so a failure
-        // here must not fail a registration that has already persisted.
+        // Record that the node completed its first registration. Bootstrap
+        // redemption already erased the token hash atomically before minting
+        // the node credential, so this informational save cannot reopen the
+        // credential even if it fails. The enrollment row remains as the
+        // durable scope record.
         if let enrollment = newAgentEnrollment, !enrollment.isUsed {
             enrollment.markAsUsed()
             do {

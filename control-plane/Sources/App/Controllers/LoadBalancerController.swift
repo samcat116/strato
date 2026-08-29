@@ -169,16 +169,8 @@ struct LoadBalancerController: RouteCollection {
             // this network's authoritative desired state. Advance the network
             // ordering key in the same transaction so an older payload cannot
             // recreate either OVN row after this deletion commits.
-            switch try await DesiredStateGenerationWriter.advance(
-                schema: LogicalNetwork.schema, id: networkID, on: db)
-            {
-            case .applied:
-                break
-            case .missing:
-                throw Abort(.notFound, reason: "Network no longer exists")
-            case .superseded:
-                throw Abort(.internalServerError, reason: "Network generation did not advance")
-            }
+            try await DesiredStateGenerationWriter.advanceOrThrow(
+                schema: LogicalNetwork.schema, id: networkID, resource: "Network", on: db)
             try await RoleBindingService.revokeAll(nodeType: .loadBalancer, nodeID: id, on: db)
             try await QuotaEnforcementService.release(for: loadBalancer, on: db)
         }
@@ -452,15 +444,7 @@ struct LoadBalancerController: RouteCollection {
     }
 
     private static func bumpGeneration(of id: UUID, on db: Database) async throws {
-        switch try await DesiredStateGenerationWriter.advance(
-            schema: LoadBalancer.schema, id: id, on: db)
-        {
-        case .applied:
-            return
-        case .missing:
-            throw Abort(.notFound, reason: "Load balancer no longer exists")
-        case .superseded:
-            throw Abort(.internalServerError, reason: "Load balancer generation did not advance")
-        }
+        try await DesiredStateGenerationWriter.advanceOrThrow(
+            schema: LoadBalancer.schema, id: id, resource: "Load balancer", on: db)
     }
 }

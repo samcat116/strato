@@ -108,4 +108,7 @@ func routes(_ app: Application) throws {
     // hand-written controller can never shadow a generated route unnoticed —
     // the drift suite asserts each generated route is registered exactly once.
     try registerGeneratedAPIHandlers(on: app)
+
+    // The frontend is served by the separate Next.js container; ingress owns
+    // user-facing page routing.
 }

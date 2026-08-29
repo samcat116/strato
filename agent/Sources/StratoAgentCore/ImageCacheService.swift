@@ -391,16 +391,12 @@ public actor ImageCacheService {
         }
         guard httpResponse.statusCode == 200 else {
             try? FileManager.default.removeItem(at: tempURL)
-            if isRetryableStatus(httpResponse.statusCode) {
+            if RetryClassification.isRetryableStatus(httpResponse.statusCode) {
                 throw TransientDownloadFailure(reason: "HTTP \(httpResponse.statusCode)")
             }
             throw ImageCacheError.downloadFailed("HTTP \(httpResponse.statusCode)")
         }
         return tempURL
-    }
-
-    private static func isRetryableStatus(_ status: Int) -> Bool {
-        status >= 500 || status == 408 || status == 429
     }
 
     /// Computes SHA256 checksum of a file
