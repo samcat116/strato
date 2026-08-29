@@ -2,8 +2,8 @@ import Foundation
 
 /// Failures across the OCI pull → unpack → rootfs-build pipeline, classified
 /// for the reconciler the same way `ImageCacheError` is: transient failures
-/// are worth the per-generation retry budget, permanent ones are reported
-/// once with their remediation.
+/// are worth backoff, blocked host states are re-driven every sync, and
+/// permanent request failures are reported once.
 public enum OCIError: Error, LocalizedError, ClassifiableError {
     /// The image reference string does not parse.
     case invalidReference(String)
@@ -83,13 +83,14 @@ public enum OCIError: Error, LocalizedError, ClassifiableError {
     public var failureClassification: FailureClassification {
         switch self {
         case .invalidReference, .insecureTokenRealm, .noMatchingPlatform, .unsupportedMediaType,
-            .manifestUnavailable, .blobUnavailable, .layerUnpackFailed, .insufficientDiskSpace,
-            .hostMisconfiguration:
+            .manifestUnavailable, .blobUnavailable, .layerUnpackFailed, .hostMisconfiguration:
             // Nothing on this host will change these: the reference, the
             // registry's content for a pinned digest, and missing host
             // prerequisites are all stable until an operator (or a spec
             // change) intervenes.
             return .permanent
+        case .insufficientDiskSpace:
+            return .blocked
         case .credentialExpired, .authenticationFailed, .transferFailed, .malformedResponse,
             .tooManyRedirects, .digestMismatch:
             // Credentials are re-minted at every sync assembly and network

@@ -3066,11 +3066,12 @@ extension NetworkError: ClassifiableError {
         case .platformNotSupported, .invalidConfiguration:
             return .permanent
         case .tapError(let message):
-            // A privilege problem can only be fixed by an operator; a plain
-            // command failure might be a transient device/OVS hiccup.
+            // A privilege repair does not mint a new workload generation, so
+            // retain the reported reason and re-drive after the operator acts.
+            // A plain command failure might be a transient device/OVS hiccup.
             let isPrivilegeProblem =
                 message.contains("Operation not permitted") || message.contains("Permission denied")
-            return isPrivilegeProblem ? .permanent : .transient
+            return isPrivilegeProblem ? .blocked : .transient
         case .notConnected, .networkNotFound, .bridgeNotFound, .ovnError, .ovsError:
             // OVN/OVS may come back (the agent reconnects in the background),
             // so these stay retryable.

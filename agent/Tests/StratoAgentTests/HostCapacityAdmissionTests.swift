@@ -198,13 +198,13 @@ struct HostCapacityAdmissionTests {
                 == HostReservation(cpus: 3, memoryBytes: 768 * 1024 * 1024))
     }
 
-    @Test("capacity refusals are permanent and actionable")
+    @Test("capacity refusals are blocked and actionable")
     func refusalClassification() {
         let error = HostCapacityAdmissionError(
             agentName: "hv-03", resource: .memory,
             available: HostReservation(memoryBytes: 12 * gib),
             required: HostReservation(memoryBytes: 64 * gib))
-        #expect(error.failureClassification == .permanent)
+        #expect(error.failureClassification == .blocked)
         #expect(error.localizedDescription.contains("agent `hv-03`"))
         #expect(error.localizedDescription.contains("12 GiB"))
         #expect(error.localizedDescription.contains("64 GiB"))

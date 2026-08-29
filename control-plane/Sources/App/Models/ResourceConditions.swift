@@ -73,8 +73,12 @@ struct ResourceConditions: Content, Equatable {
     /// offline, reports no phase either.
     let phase: String?
     /// The last convergence attempt that failed, or nil if the most recent
-    /// attempt succeeded. Present alongside a newer `targetGeneration` while a
-    /// retry is in flight: the failure stands until something converges.
+    /// attempt succeeded. "Failed" means the agent refused or could not apply
+    /// that attempt; it does not necessarily mean the agent gave up. A blocked
+    /// failure at `targetGeneration` remains degraded while every sync retries
+    /// it, and success later clears the condition without a generation bump.
+    /// The condition can also stand alongside a newer `targetGeneration` while
+    /// that newer mutation is in flight.
     let degraded: Degraded?
 
     /// Why a resource is not converging, and since when.

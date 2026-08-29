@@ -124,9 +124,12 @@ public enum StorageBackendError: Error, LocalizedError, Sendable {
     case volumeNotFound(String)
     case imageSourceUnavailable
     case unsupportedFormat(String)
-    /// The host itself is the problem (qemu-img missing, permission denied,
-    /// disk full): retrying cannot succeed until an operator fixes it, so the
-    /// message must carry the remediation.
+    /// The storage filesystem cannot currently satisfy the write. Kept
+    /// separate from host misconfiguration so freeing space always re-drives
+    /// the blocked convergence at the same generation.
+    case insufficientDiskSpace(String)
+    /// A stable host prerequisite is missing or unusable (for example,
+    /// qemu-img is missing or the storage path is not writable).
     case hostMisconfiguration(String)
 
     public var errorDescription: String? {
@@ -149,6 +152,8 @@ public enum StorageBackendError: Error, LocalizedError, Sendable {
             return "Image source not available: cannot materialize a disk from an image"
         case .unsupportedFormat(let format):
             return "Unsupported disk format: \(format)"
+        case .insufficientDiskSpace(let reason):
+            return "Insufficient disk space: \(reason)"
         case .hostMisconfiguration(let reason):
             return "Host misconfiguration: \(reason)"
         }

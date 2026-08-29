@@ -210,7 +210,7 @@ public actor FileSystemStorageBackend: StorageBackend {
             let free = HostPreflight.freeDiskSpace(atPath: destinationDirectory),
             free < sourceSize
         {
-            throw StorageBackendError.hostMisconfiguration(
+            throw StorageBackendError.insufficientDiskSpace(
                 "not enough free disk space to materialize \(path): "
                     + "need \(HostPreflight.byteString(sourceSize)), "
                     + "have \(HostPreflight.byteString(free)). Free up space on the filesystem backing "
@@ -715,15 +715,14 @@ public actor FileSystemStorageBackend: StorageBackend {
         }
     }
 
-    /// Classifies a non-zero qemu-img exit: host-level causes (disk full,
-    /// permissions) become permanent `hostMisconfiguration` errors with a
-    /// remediation, everything else keeps its operation-specific error so
-    /// existing handling is unchanged.
+    /// Classifies a non-zero qemu-img exit. ENOSPC is a blocked host state;
+    /// permission failures are stable host misconfiguration; everything else
+    /// keeps its operation-specific classification.
     private func qemuImgFailure(
         output: String, context: String, fallback: (String) -> StorageBackendError
     ) -> StorageBackendError {
         if output.contains("No space left on device") {
-            return .hostMisconfiguration(
+            return .insufficientDiskSpace(
                 "\(context) failed: no space left on device (storage path: \(volumeStoragePath)). "
                     + "Free up disk space or expand the volume storage filesystem. qemu-img output: \(output)")
         }

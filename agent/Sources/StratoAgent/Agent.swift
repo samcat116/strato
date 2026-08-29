@@ -4337,15 +4337,10 @@ extension Agent: ReconcileActuator {
         let desiredReservation = VMHostReservation.forSpec(
             desired.spec, hypervisorType: desired.hypervisorType, architecture: .current)
         let growth = HostReservation.positiveDelta(from: currentReservation, to: desiredReservation)
-        let claim: HostCapacityClaim?
-        do {
-            try capacityAdmissionLedger.validateExistingReservation(
-                snapshot: raw, agentName: initialAgentID)
-            claim = try capacityAdmissionLedger.claim(
-                growth, snapshot: raw, agentName: initialAgentID)
-        } catch let refusal as HostCapacityAdmissionError {
-            throw DependencyPendingError(refusal.localizedDescription)
-        }
+        try capacityAdmissionLedger.validateExistingReservation(
+            snapshot: raw, agentName: initialAgentID)
+        let claim = try capacityAdmissionLedger.claim(
+            growth, snapshot: raw, agentName: initialAgentID)
 
         if !item.steps.contains(.create), !item.steps.contains(.restore), let spec = item.desired?.spec {
             do {
@@ -5207,13 +5202,9 @@ extension Agent: ReconcileActuator {
             claim = bootClaim
         } else {
             let raw = await rawHostCapacitySnapshot()
-            do {
-                claim = try capacityAdmissionLedger.claim(
-                    .positiveDelta(from: currentReservation, to: desiredReservation),
-                    snapshot: raw, agentName: initialAgentID)
-            } catch let refusal as HostCapacityAdmissionError {
-                throw DependencyPendingError(refusal.localizedDescription)
-            }
+            claim = try capacityAdmissionLedger.claim(
+                .positiveDelta(from: currentReservation, to: desiredReservation),
+                snapshot: raw, agentName: initialAgentID)
         }
         defer { capacityAdmissionLedger.release(claim) }
         let service = try reconcileService(for: item.id)
@@ -5656,15 +5647,10 @@ extension Agent: ReconcileActuator {
         let growth = HostReservation.positiveDelta(
             from: SandboxHostReservation.forSpec(currentSpec),
             to: SandboxHostReservation.forSpec(desired.spec))
-        let claim: HostCapacityClaim?
-        do {
-            try capacityAdmissionLedger.validateExistingReservation(
-                snapshot: raw, agentName: initialAgentID)
-            claim = try capacityAdmissionLedger.claim(
-                growth, snapshot: raw, agentName: initialAgentID)
-        } catch let refusal as HostCapacityAdmissionError {
-            throw DependencyPendingError(refusal.localizedDescription)
-        }
+        try capacityAdmissionLedger.validateExistingReservation(
+            snapshot: raw, agentName: initialAgentID)
+        let claim = try capacityAdmissionLedger.claim(
+            growth, snapshot: raw, agentName: initialAgentID)
         defer { capacityAdmissionLedger.release(claim) }
 
         try await runtime.bootSandbox(sandboxId: item.id)

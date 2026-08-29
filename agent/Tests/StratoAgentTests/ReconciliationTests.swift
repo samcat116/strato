@@ -921,6 +921,61 @@ struct ReconciliationTests {
         #expect(generation == 1)
     }
 
+    @Test("A capacity-blocked create reports its remedy and recovers at the same generation")
+    func capacityBlockedCreateRecoversAtSameGeneration() async {
+        let vmId = UUID()
+        let actuator = MockActuator()
+        await actuator.setFailure(
+            HostCapacityAdmissionError(
+                agentName: "n3",
+                resource: .cpu,
+                available: HostReservation(cpus: 2),
+                required: HostReservation(cpus: 8)))
+        let reconciler = makeReconciler(actuator)
+        let message = Self.sync([Self.desired(vmId, status: .running, generation: 1)])
+
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(1)
+
+        let blockedError = await reconciler.lastError(for: vmId.uuidString)
+        #expect(blockedError?.contains("agent `n3`") == true)
+        #expect(blockedError?.contains("2 vCPUs available") == true)
+        #expect(blockedError?.contains("requires 8 additional vCPUs") == true)
+
+        await actuator.setFailure(nil)
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(2)
+
+        #expect(await actuator.performed.map(\.step) == [.create, .boot])
+        #expect(await reconciler.lastError(for: vmId.uuidString) == nil)
+        #expect(await reconciler.observedGeneration(for: vmId.uuidString) == 1)
+    }
+
+    @Test("An ENOSPC-blocked create recovers at the same generation after space is freed")
+    func diskSpaceBlockedCreateRecoversAtSameGeneration() async {
+        let vmId = UUID()
+        let actuator = MockActuator()
+        await actuator.setFailure(
+            StorageBackendError.insufficientDiskSpace(
+                "no space left on device; free space on the volume filesystem"))
+        let reconciler = makeReconciler(actuator)
+        let message = Self.sync([Self.desired(vmId, status: .running, generation: 1)])
+
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(1)
+        #expect(
+            await reconciler.lastError(for: vmId.uuidString)?
+                .contains("free space on the volume filesystem") == true)
+
+        await actuator.setFailure(nil)
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(2)
+
+        #expect(await actuator.performed.map(\.step) == [.create, .boot])
+        #expect(await reconciler.lastError(for: vmId.uuidString) == nil)
+        #expect(await reconciler.observedGeneration(for: vmId.uuidString) == 1)
+    }
+
     @Test("Tombstoned deletes are exempt from transient backoff")
     func tombstonedDeleteRetriesEverySync() async {
         struct Boom: Error {}

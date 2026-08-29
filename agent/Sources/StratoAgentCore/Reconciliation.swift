@@ -1724,7 +1724,7 @@ public actor Reconciler {
     private static func failureLogMessage(_ classification: FailureClassification) -> Logger.Message {
         switch classification {
         case .permanent:
-            return "Workload convergence failed permanently; not retrying this generation (operator action required)"
+            return "Workload convergence failed permanently; request cannot succeed on this agent"
         case .blocked:
             return "Workload convergence is blocked; retrying every sync until the block clears"
         case .transient, .waitingOnDependency:

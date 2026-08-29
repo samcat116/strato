@@ -104,9 +104,8 @@ public struct HostCapacityClaim: Sendable, Hashable {
     public let reservation: HostReservation
 }
 
-/// A capacity refusal is permanent for create. Boot and resize wrap the same
-/// actionable text in `DependencyPendingError`, because another workload can
-/// release the dependency without changing the desired generation.
+/// A capacity refusal is reported and re-driven at the same generation: a
+/// neighbouring workload can release the missing capacity independently.
 public struct HostCapacityAdmissionError: ClassifiableError, LocalizedError, Equatable {
     public enum Resource: Sendable, Equatable { case inventory, cpu, memory }
 
@@ -115,7 +114,7 @@ public struct HostCapacityAdmissionError: ClassifiableError, LocalizedError, Equ
     public let available: HostReservation
     public let required: HostReservation
 
-    public var failureClassification: FailureClassification { .permanent }
+    public var failureClassification: FailureClassification { .blocked }
 
     public var errorDescription: String? {
         switch resource {

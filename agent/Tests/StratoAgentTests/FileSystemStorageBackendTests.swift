@@ -244,7 +244,7 @@ struct FileSystemStorageBackendTests {
         }
     }
 
-    @Test func qemuImgDiskFullIsClassifiedAsPermanentHostProblem() async throws {
+    @Test func qemuImgDiskFullIsClassifiedAsBlockedSpaceExhaustion() async throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }
         let recorder = SubprocessRecorder()
@@ -259,7 +259,11 @@ struct FileSystemStorageBackendTests {
             _ = try await backend.createVolume(volumeId: "vol-1", sizeBytes: 42, format: .qcow2)
             Issue.record("expected createVolume to throw")
         } catch let error as StorageBackendError {
-            #expect(error.failureClassification == .permanent)
+            #expect(error.failureClassification == .blocked)
+            guard case .insufficientDiskSpace = error else {
+                Issue.record("expected insufficientDiskSpace, got \(error)")
+                return
+            }
             let description = error.localizedDescription
             #expect(description.contains("no space left on device"))
         }
