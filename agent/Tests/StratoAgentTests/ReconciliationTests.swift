@@ -873,6 +873,7 @@ struct ReconciliationTests {
         #expect(reports == 1)
         let lastError = await reconciler.lastError(for: vmId.uuidString)
         #expect(lastError?.contains("qemu-img missing") == true)
+        #expect(await reconciler.failureClassification(for: vmId.uuidString) == .permanent)
         #expect(await reconciler.retryCapSuppressions == 1)
 
         // A new generation (operator retry after fixing the host) re-arms
@@ -941,6 +942,7 @@ struct ReconciliationTests {
         #expect(blockedError?.contains("agent `n3`") == true)
         #expect(blockedError?.contains("2 vCPUs available") == true)
         #expect(blockedError?.contains("requires 8 additional vCPUs") == true)
+        #expect(await reconciler.failureClassification(for: vmId.uuidString) == .blocked)
 
         await actuator.setFailure(nil)
         await reconciler.apply(message)
@@ -966,6 +968,7 @@ struct ReconciliationTests {
         #expect(
             await reconciler.lastError(for: vmId.uuidString)?
                 .contains("free space on the volume filesystem") == true)
+        #expect(await reconciler.failureClassification(for: vmId.uuidString) == .blocked)
 
         await actuator.setFailure(nil)
         await reconciler.apply(message)

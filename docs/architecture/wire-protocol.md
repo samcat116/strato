@@ -298,7 +298,7 @@ the field plans nothing — withdrawing an exported copy is the control plane's
 own object-store bookkeeping, not a teardown the agent can perform.
 
 `ObservedSnapshotState` reports presence, whether this host has finished
-exporting, the usual convergence quartet, and `ObservedSnapshotFacts` — the
+exporting, the usual convergence metadata, and `ObservedSnapshotFacts` — the
 footprint, hypervisor version, device nodes, fork layout and CPU template that
 used to ride the RPC replies. Moving them here is not relocation: a reply is
 delivered once, so both old paths had to treat a dropped socket as a protocol
@@ -337,7 +337,11 @@ reordered syncs can never roll a resource backward. The observed side reports
 progress string, and on failure a `lastError` paired with `failedGeneration` —
 the control plane marks a resource degraded only when `failedGeneration` matches
 the current generation, which prevents attributing a stale error to a newer
-change.
+change. `failureClassification` carries the agent's retry category. A
+`.blocked` report retains desired state and its convergence deadline while
+surfacing the remedy; a later success can therefore settle the same generation.
+The field is optional so reports from older agents retain the historical
+terminal-failure behavior.
 
 ### One transport: the long-poll (STR-146)
 

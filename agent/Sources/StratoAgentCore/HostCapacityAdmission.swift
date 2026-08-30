@@ -113,10 +113,35 @@ public struct HostCapacityAdmissionError: ClassifiableError, LocalizedError, Equ
     public let resource: Resource
     public let available: HostReservation
     public let required: HostReservation
+    public let failureClassification: FailureClassification
 
-    public var failureClassification: FailureClassification { .blocked }
+    public init(
+        agentName: String,
+        resource: Resource,
+        available: HostReservation,
+        required: HostReservation,
+        failureClassification: FailureClassification = .blocked
+    ) {
+        self.agentName = agentName
+        self.resource = resource
+        self.available = available
+        self.required = required
+        self.failureClassification = failureClassification
+    }
 
     public var errorDescription: String? {
+        if failureClassification == .permanent {
+            switch resource {
+            case .inventory:
+                break
+            case .cpu:
+                return
+                    "agent `\(agentName)` has \(available.cpus) total vCPUs; this workload requires \(required.cpus) vCPUs"
+            case .memory:
+                return
+                    "agent `\(agentName)` has \(Self.byteString(available.memoryBytes)) total memory; this workload requires \(Self.byteString(required.memoryBytes))"
+            }
+        }
         switch resource {
         case .inventory:
             return "agent `\(agentName)` cannot verify its workload inventory; capacity admission is unavailable"
@@ -153,6 +178,7 @@ public struct HostCapacityAdmissionLedger: Sendable {
 
     public mutating func claim(
         _ requested: HostReservation,
+        currentWorkloadReservation: HostReservation,
         snapshot: HostCapacitySnapshot,
         agentName: String
     ) throws -> HostCapacityClaim? {
@@ -160,6 +186,22 @@ public struct HostCapacityAdmissionLedger: Sendable {
         guard snapshot.inventoryKnown else {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .inventory, available: HostReservation(), required: requested)
+        }
+
+        // Capacity released by neighbours can never make this workload fit if
+        // its own realized reservation plus the requested growth exceeds the
+        // physical host. Keep that request terminal instead of retrying it on
+        // every level-triggered sync forever.
+        let irreducible = currentWorkloadReservation.addingSaturating(requested)
+        if irreducible.cpus > snapshot.total.cpus {
+            throw HostCapacityAdmissionError(
+                agentName: agentName, resource: .cpu, available: snapshot.total,
+                required: irreducible, failureClassification: .permanent)
+        }
+        if irreducible.memoryBytes > snapshot.total.memoryBytes {
+            throw HostCapacityAdmissionError(
+                agentName: agentName, resource: .memory, available: snapshot.total,
+                required: irreducible, failureClassification: .permanent)
         }
 
         let committedAndProvisional = snapshot.reserved.addingSaturating(provisionalReservation)
@@ -184,12 +226,24 @@ public struct HostCapacityAdmissionLedger: Sendable {
     /// Boot consumes an already-reserved footprint, but it must not start a
     /// process on a host whose raw committed inventory is already impossible.
     public func validateExistingReservation(
-        snapshot: HostCapacitySnapshot, agentName: String
+        _ currentWorkloadReservation: HostReservation,
+        snapshot: HostCapacitySnapshot,
+        agentName: String
     ) throws {
         guard snapshot.inventoryKnown else {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .inventory, available: HostReservation(),
                 required: HostReservation())
+        }
+        if currentWorkloadReservation.cpus > snapshot.total.cpus {
+            throw HostCapacityAdmissionError(
+                agentName: agentName, resource: .cpu, available: snapshot.total,
+                required: currentWorkloadReservation, failureClassification: .permanent)
+        }
+        if currentWorkloadReservation.memoryBytes > snapshot.total.memoryBytes {
+            throw HostCapacityAdmissionError(
+                agentName: agentName, resource: .memory, available: snapshot.total,
+                required: currentWorkloadReservation, failureClassification: .permanent)
         }
         let used = snapshot.reserved.addingSaturating(provisionalReservation)
         if used.cpus > snapshot.total.cpus {

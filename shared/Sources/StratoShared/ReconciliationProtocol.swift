@@ -1146,6 +1146,18 @@ public struct DesiredDNSZone: Codable, Sendable, Equatable {
 
 // MARK: - Observed VM State
 
+/// How the agent will treat a reported convergence failure on later syncs.
+///
+/// Optional on observed resource entries for wire compatibility: an older
+/// agent does not send it, and the control plane must keep its historical
+/// terminal-failure behavior in that case. `waitingOnDependency` never reaches
+/// an observed error at all, so it has no wire case.
+public enum ObservedFailureClassification: String, Codable, Sendable {
+    case transient
+    case permanent
+    case blocked
+}
+
 /// One VM's state as actually observed on an agent.
 public struct ObservedVMState: Codable, Sendable {
     public let vmId: UUID
@@ -1171,6 +1183,10 @@ public struct ObservedVMState: Codable, Sendable {
     /// generation's work item runs) would fail a brand-new operation before
     /// the agent ever attempted it.
     public let failedGeneration: Int64?
+    /// The agent-side retry category for this failure. Only `.blocked` tells
+    /// the control plane to retain the desired state while surfacing the error;
+    /// nil is the legacy terminal behavior for reports from older agents.
+    public let failureClassification: ObservedFailureClassification?
     /// What the QEMU guest agent reported about this VM's guest OS, if the
     /// agent has a recent successful probe (issue #563). Nil for VMs without
     /// qga, still booting, hung, or on agents/hypervisors that don't probe it —
@@ -1197,6 +1213,7 @@ public struct ObservedVMState: Codable, Sendable {
         convergencePhase: String? = nil,
         lastError: String? = nil,
         failedGeneration: Int64? = nil,
+        failureClassification: ObservedFailureClassification? = nil,
         guestInfo: GuestInfo? = nil,
         memoryStats: VMMemoryStats? = nil,
         appliedNetworkInterfaceIds: [UUID]? = nil
@@ -1207,6 +1224,7 @@ public struct ObservedVMState: Codable, Sendable {
         self.convergencePhase = convergencePhase
         self.lastError = lastError
         self.failedGeneration = failedGeneration
+        self.failureClassification = failureClassification
         self.guestInfo = guestInfo
         self.memoryStats = memoryStats
         self.appliedNetworkInterfaceIds = appliedNetworkInterfaceIds
@@ -1231,6 +1249,9 @@ public struct ObservedSandboxState: Codable, Sendable {
     /// The generation whose convergence produced `lastError` (see
     /// `ObservedVMState.failedGeneration` for why the control plane needs it).
     public let failedGeneration: Int64?
+    /// Retry semantics for `lastError`; see
+    /// `ObservedVMState.failureClassification`.
+    public let failureClassification: ObservedFailureClassification?
     /// Exit code of the workload once it has ended (`status == .exited`), as
     /// reported by the guest agent over vsock. Nil while running, when the
     /// sandbox was stopped by request rather than by the workload ending, or
@@ -1244,6 +1265,7 @@ public struct ObservedSandboxState: Codable, Sendable {
         convergencePhase: String? = nil,
         lastError: String? = nil,
         failedGeneration: Int64? = nil,
+        failureClassification: ObservedFailureClassification? = nil,
         exitCode: Int? = nil
     ) {
         self.sandboxId = sandboxId
@@ -1252,6 +1274,7 @@ public struct ObservedSandboxState: Codable, Sendable {
         self.convergencePhase = convergencePhase
         self.lastError = lastError
         self.failedGeneration = failedGeneration
+        self.failureClassification = failureClassification
         self.exitCode = exitCode
     }
 }
@@ -1259,7 +1282,7 @@ public struct ObservedSandboxState: Codable, Sendable {
 // MARK: - Observed Volume State
 
 /// One volume's state as actually observed on an agent (ADR 0001 stage 5,
-/// STR-148). Field semantics for the convergence quartet match
+/// STR-148). Field semantics for the convergence metadata match
 /// `ObservedVMState` — see the doc comments there.
 ///
 /// `sizeBytes` was deliberately absent until STR-199, on the grounds that
@@ -1319,6 +1342,9 @@ public struct ObservedVolumeState: Codable, Sendable {
     /// The generation whose convergence produced `lastError` (see
     /// `ObservedVMState.failedGeneration` for why the control plane needs it).
     public let failedGeneration: Int64?
+    /// Retry semantics for `lastError`; see
+    /// `ObservedVMState.failureClassification`.
+    public let failureClassification: ObservedFailureClassification?
     /// The I/O ceilings this agent has actually applied (STR-19) — an *echo*,
     /// not a derivation, and the only thing that distinguishes "capped" from
     /// "ignored".
@@ -1345,6 +1371,7 @@ public struct ObservedVolumeState: Codable, Sendable {
         convergencePhase: String? = nil,
         lastError: String? = nil,
         failedGeneration: Int64? = nil,
+        failureClassification: ObservedFailureClassification? = nil,
         ioLimits: VolumeIOLimits? = nil
     ) {
         self.volumeId = volumeId
@@ -1356,6 +1383,7 @@ public struct ObservedVolumeState: Codable, Sendable {
         self.convergencePhase = convergencePhase
         self.lastError = lastError
         self.failedGeneration = failedGeneration
+        self.failureClassification = failureClassification
         self.ioLimits = ioLimits
     }
 }

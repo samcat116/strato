@@ -1052,6 +1052,26 @@ public actor Reconciler {
         failures[WorkloadRef(kind: kind, id: id)]?.generation
     }
 
+    /// The retry contract accompanying the reported failure. A dependency wait
+    /// is never stored as a failure and therefore never reaches this accessor.
+    public func failureClassification(
+        for id: String, kind: WorkloadKind = .vm
+    ) -> ObservedFailureClassification? {
+        guard let classification = failures[WorkloadRef(kind: kind, id: id)]?.classification else {
+            return nil
+        }
+        switch classification {
+        case .transient:
+            return .transient
+        case .permanent:
+            return .permanent
+        case .blocked:
+            return .blocked
+        case .waitingOnDependency:
+            return nil
+        }
+    }
+
     /// Workloads this host holds that the control plane has not accounted for
     /// (STR-98), for the observed-state report. The agent keeps running them
     /// meanwhile; only a tombstone in a later sync removes one.
@@ -1081,10 +1101,13 @@ public actor Reconciler {
     /// the workload has no runtime presence at all (e.g. a create that never
     /// got off the ground) — otherwise the control plane could never learn
     /// why and would wait out the operation's full completion budget.
-    public func failedConvergences(kind: WorkloadKind) -> [String: (generation: Int64, error: String)] {
-        var result: [String: (generation: Int64, error: String)] = [:]
+    public func failedConvergences(
+        kind: WorkloadKind
+    ) -> [String: (generation: Int64, error: String, classification: ObservedFailureClassification)] {
+        var result: [String: (generation: Int64, error: String, classification: ObservedFailureClassification)] = [:]
         for (ref, failure) in failures where ref.kind == kind {
-            result[ref.id] = (failure.generation, failure.lastError)
+            guard let classification = failureClassification(for: ref.id, kind: ref.kind) else { continue }
+            result[ref.id] = (failure.generation, failure.lastError, classification)
         }
         return result
     }

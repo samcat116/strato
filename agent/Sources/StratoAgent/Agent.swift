@@ -4338,9 +4338,10 @@ extension Agent: ReconcileActuator {
             desired.spec, hypervisorType: desired.hypervisorType, architecture: .current)
         let growth = HostReservation.positiveDelta(from: currentReservation, to: desiredReservation)
         try capacityAdmissionLedger.validateExistingReservation(
-            snapshot: raw, agentName: initialAgentID)
+            currentReservation, snapshot: raw, agentName: initialAgentID)
         let claim = try capacityAdmissionLedger.claim(
-            growth, snapshot: raw, agentName: initialAgentID)
+            growth, currentWorkloadReservation: currentReservation,
+            snapshot: raw, agentName: initialAgentID)
 
         if !item.steps.contains(.create), !item.steps.contains(.restore), let spec = item.desired?.spec {
             do {
@@ -5082,6 +5083,7 @@ extension Agent: ReconcileActuator {
         let raw = await rawHostCapacitySnapshot()
         let claim = try capacityAdmissionLedger.claim(
             .positiveDelta(from: currentReservation, to: desiredReservation),
+            currentWorkloadReservation: currentReservation,
             snapshot: raw, agentName: initialAgentID)
         defer { capacityAdmissionLedger.release(claim) }
 
@@ -5204,6 +5206,7 @@ extension Agent: ReconcileActuator {
             let raw = await rawHostCapacitySnapshot()
             claim = try capacityAdmissionLedger.claim(
                 .positiveDelta(from: currentReservation, to: desiredReservation),
+                currentWorkloadReservation: currentReservation,
                 snapshot: raw, agentName: initialAgentID)
         }
         defer { capacityAdmissionLedger.release(claim) }
@@ -5595,6 +5598,7 @@ extension Agent: ReconcileActuator {
         let raw = await rawHostCapacitySnapshot()
         let claim = try capacityAdmissionLedger.claim(
             .positiveDelta(from: currentReservation, to: desiredReservation),
+            currentWorkloadReservation: currentReservation,
             snapshot: raw, agentName: initialAgentID)
         defer { capacityAdmissionLedger.release(claim) }
 
@@ -5648,9 +5652,11 @@ extension Agent: ReconcileActuator {
             from: SandboxHostReservation.forSpec(currentSpec),
             to: SandboxHostReservation.forSpec(desired.spec))
         try capacityAdmissionLedger.validateExistingReservation(
+            SandboxHostReservation.forSpec(currentSpec),
             snapshot: raw, agentName: initialAgentID)
         let claim = try capacityAdmissionLedger.claim(
-            growth, snapshot: raw, agentName: initialAgentID)
+            growth, currentWorkloadReservation: SandboxHostReservation.forSpec(currentSpec),
+            snapshot: raw, agentName: initialAgentID)
         defer { capacityAdmissionLedger.release(claim) }
 
         try await runtime.bootSandbox(sandboxId: item.id)
@@ -5726,6 +5732,7 @@ extension Agent: ReconcileActuator {
                     convergencePhase: await reconciler.convergencePhase(for: vmId),
                     lastError: await reconciler.lastError(for: vmId),
                     failedGeneration: await reconciler.failedGeneration(for: vmId),
+                    failureClassification: await reconciler.failureClassification(for: vmId),
                     // Last-known guest-agent view (issue #563) and balloon
                     // memory stats (issue #567); nil until the slow poll first
                     // sees a responsive qga / reporting balloon on this VM.
@@ -5752,6 +5759,7 @@ extension Agent: ReconcileActuator {
                     convergencePhase: await reconciler.convergencePhase(for: vmId),
                     lastError: await reconciler.lastError(for: vmId),
                     failedGeneration: await reconciler.failedGeneration(for: vmId),
+                    failureClassification: await reconciler.failureClassification(for: vmId),
                     appliedNetworkInterfaceIds: AppliedNetworkInterfaceInventory.ids(
                         in: entry.spec.networks)
                 ))
@@ -5775,7 +5783,8 @@ extension Agent: ReconcileActuator {
                     observedGeneration: await reconciler.observedGeneration(for: vmId),
                     convergencePhase: await reconciler.convergencePhase(for: vmId),
                     lastError: await reconciler.lastError(for: vmId),
-                    failedGeneration: await reconciler.failedGeneration(for: vmId)
+                    failedGeneration: await reconciler.failedGeneration(for: vmId),
+                    failureClassification: await reconciler.failureClassification(for: vmId)
                 ))
             reported.insert(vmId)
         }
@@ -5792,7 +5801,8 @@ extension Agent: ReconcileActuator {
                     observedGeneration: await reconciler.observedGeneration(for: vmId),
                     convergencePhase: await reconciler.convergencePhase(for: vmId) ?? "converging",
                     lastError: await reconciler.lastError(for: vmId),
-                    failedGeneration: await reconciler.failedGeneration(for: vmId)
+                    failedGeneration: await reconciler.failedGeneration(for: vmId),
+                    failureClassification: await reconciler.failureClassification(for: vmId)
                 ))
             reported.insert(vmId)
         }
@@ -5810,7 +5820,8 @@ extension Agent: ReconcileActuator {
                     observedGeneration: await reconciler.observedGeneration(for: vmId),
                     convergencePhase: nil,
                     lastError: failure.error,
-                    failedGeneration: failure.generation
+                    failedGeneration: failure.generation,
+                    failureClassification: failure.classification
                 ))
         }
 
@@ -5934,6 +5945,8 @@ extension Agent: ReconcileActuator {
                     convergencePhase: await reconciler.convergencePhase(for: sandboxId, kind: .sandbox),
                     lastError: await reconciler.lastError(for: sandboxId, kind: .sandbox),
                     failedGeneration: await reconciler.failedGeneration(for: sandboxId, kind: .sandbox),
+                    failureClassification: await reconciler.failureClassification(
+                        for: sandboxId, kind: .sandbox),
                     exitCode: exitCode
                 ))
             reported.insert(sandboxId)
@@ -5951,7 +5964,9 @@ extension Agent: ReconcileActuator {
                     observedGeneration: await reconciler.observedGeneration(for: sandboxId, kind: .sandbox),
                     convergencePhase: await reconciler.convergencePhase(for: sandboxId, kind: .sandbox),
                     lastError: await reconciler.lastError(for: sandboxId, kind: .sandbox),
-                    failedGeneration: await reconciler.failedGeneration(for: sandboxId, kind: .sandbox)
+                    failedGeneration: await reconciler.failedGeneration(for: sandboxId, kind: .sandbox),
+                    failureClassification: await reconciler.failureClassification(
+                        for: sandboxId, kind: .sandbox)
                 ))
             reported.insert(sandboxId)
         }
@@ -5969,7 +5984,9 @@ extension Agent: ReconcileActuator {
                     observedGeneration: await reconciler.observedGeneration(for: sandboxId, kind: .sandbox),
                     convergencePhase: await reconciler.convergencePhase(for: sandboxId, kind: .sandbox),
                     lastError: await reconciler.lastError(for: sandboxId, kind: .sandbox),
-                    failedGeneration: await reconciler.failedGeneration(for: sandboxId, kind: .sandbox)
+                    failedGeneration: await reconciler.failedGeneration(for: sandboxId, kind: .sandbox),
+                    failureClassification: await reconciler.failureClassification(
+                        for: sandboxId, kind: .sandbox)
                 ))
             reported.insert(sandboxId)
         }
@@ -5986,7 +6003,9 @@ extension Agent: ReconcileActuator {
                     convergencePhase: await reconciler.convergencePhase(for: sandboxId, kind: .sandbox)
                         ?? "converging",
                     lastError: await reconciler.lastError(for: sandboxId, kind: .sandbox),
-                    failedGeneration: await reconciler.failedGeneration(for: sandboxId, kind: .sandbox)
+                    failedGeneration: await reconciler.failedGeneration(for: sandboxId, kind: .sandbox),
+                    failureClassification: await reconciler.failureClassification(
+                        for: sandboxId, kind: .sandbox)
                 ))
             reported.insert(sandboxId)
         }
@@ -6004,7 +6023,8 @@ extension Agent: ReconcileActuator {
                     observedGeneration: await reconciler.observedGeneration(for: sandboxId, kind: .sandbox),
                     convergencePhase: nil,
                     lastError: failure.error,
-                    failedGeneration: failure.generation
+                    failedGeneration: failure.generation,
+                    failureClassification: failure.classification
                 ))
         }
 
@@ -6044,7 +6064,9 @@ extension Agent: ReconcileActuator {
                     observedGeneration: await reconciler.observedGeneration(for: snapshotId, kind: kind),
                     convergencePhase: await reconciler.convergencePhase(for: snapshotId, kind: kind),
                     lastError: await reconciler.lastError(for: snapshotId, kind: kind),
-                    failedGeneration: await reconciler.failedGeneration(for: snapshotId, kind: kind)
+                    failedGeneration: await reconciler.failedGeneration(for: snapshotId, kind: kind),
+                    failureClassification: await reconciler.failureClassification(
+                        for: snapshotId, kind: kind)
                 ))
             reported.insert(snapshotId)
         }
@@ -6072,7 +6094,9 @@ extension Agent: ReconcileActuator {
                         convergencePhase: await reconciler.convergencePhase(for: snapshotId, kind: kind)
                             ?? "converging",
                         lastError: await reconciler.lastError(for: snapshotId, kind: kind),
-                        failedGeneration: await reconciler.failedGeneration(for: snapshotId, kind: kind)
+                        failedGeneration: await reconciler.failedGeneration(for: snapshotId, kind: kind),
+                        failureClassification: await reconciler.failureClassification(
+                            for: snapshotId, kind: kind)
                     ))
                 reported.insert(snapshotId)
             }
@@ -6089,7 +6113,8 @@ extension Agent: ReconcileActuator {
                         observedGeneration: await reconciler.observedGeneration(for: snapshotId, kind: kind),
                         convergencePhase: nil,
                         lastError: failure.error,
-                        failedGeneration: failure.generation
+                        failedGeneration: failure.generation,
+                        failureClassification: failure.classification
                     ))
                 reported.insert(snapshotId)
             }
@@ -6134,7 +6159,9 @@ extension Agent: ReconcileActuator {
                     observedGeneration: await reconciler.observedGeneration(for: volumeId, kind: .volume),
                     convergencePhase: await reconciler.convergencePhase(for: volumeId, kind: .volume),
                     lastError: await reconciler.lastError(for: volumeId, kind: .volume),
-                    failedGeneration: await reconciler.failedGeneration(for: volumeId, kind: .volume)
+                    failedGeneration: await reconciler.failedGeneration(for: volumeId, kind: .volume),
+                    failureClassification: await reconciler.failureClassification(
+                        for: volumeId, kind: .volume)
                 ))
             reported.insert(volumeId)
         }
@@ -6149,7 +6176,9 @@ extension Agent: ReconcileActuator {
                     convergencePhase: await reconciler.convergencePhase(for: volumeId, kind: .volume)
                         ?? "converging",
                     lastError: await reconciler.lastError(for: volumeId, kind: .volume),
-                    failedGeneration: await reconciler.failedGeneration(for: volumeId, kind: .volume)
+                    failedGeneration: await reconciler.failedGeneration(for: volumeId, kind: .volume),
+                    failureClassification: await reconciler.failureClassification(
+                        for: volumeId, kind: .volume)
                 ))
             reported.insert(volumeId)
         }
@@ -6164,7 +6193,8 @@ extension Agent: ReconcileActuator {
                     observedGeneration: await reconciler.observedGeneration(for: volumeId, kind: .volume),
                     convergencePhase: nil,
                     lastError: failure.error,
-                    failedGeneration: failure.generation
+                    failedGeneration: failure.generation,
+                    failureClassification: failure.classification
                 ))
         }
 
