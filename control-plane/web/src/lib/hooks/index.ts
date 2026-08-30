@@ -151,7 +151,7 @@ export {
   quotaErrorMessage,
 } from "./use-quotas";
 export type { QuotaCreateTarget } from "./use-quotas";
-export { useHierarchy, useHierarchySearch } from "./use-hierarchy";
+export { useHierarchy } from "./use-hierarchy";
 export { usePermissions } from "./use-permissions";
 export { useCurrentOrgAccess } from "./use-current-org-access";
 export {

@@ -332,19 +332,10 @@ struct SecurityGroupController: RouteCollection {
 
         let target = try await resolveTargetNIC(req: req, request: request, group: group)
 
-        // Rolling-upgrade gate (the floating-IP rule): a pre-v20 realizing
-        // agent decodes the sync but ignores both security-group fields, so
-        // the API would report filtering that nothing enforces. Unplaced VMs
-        // pass — the default group must be attachable before scheduling, and
-        // assembly omits the fields for old agents either way (documented
-        // mixed-fleet semantics).
-        //
-        // A sandbox is gated on both halves (STR-103): its host must speak v20
-        // *and* advertise sandbox networking, because only then is the NIC on
-        // the wire with a port to join a port group. Enforcing the version half
-        // alone — which is all that existed before the capability did — would
-        // have refused attaches that were still inert while passing a v20 agent
-        // that cannot realize a sandbox NIC at all.
+        // Refuse a placed workload when its current realizer cannot enforce the
+        // group. Unplaced workloads pass so their default group can be attached
+        // before scheduling. A placed sandbox also needs sandbox networking;
+        // without a realized NIC there is no port to join a port group.
         switch target.workload {
         case .vm(let vm):
             try await Self.assertRealizersSupportSecurityGroups(
@@ -449,8 +440,7 @@ struct SecurityGroupController: RouteCollection {
 
     // MARK: - Helpers
 
-    /// A resolved attach/detach target: the NIC, and the workload that owns it
-    /// so callers that only apply to VMs (the rolling-upgrade gate) can say so.
+    /// A resolved attach/detach target: the NIC and the workload that owns it.
     /// The two workloads keep separate join tables, so membership reads and
     /// writes live here rather than being duplicated into both handlers.
     struct NICTarget {
@@ -582,12 +572,10 @@ struct SecurityGroupController: RouteCollection {
         return NICTarget(workload: .sandbox(sandbox), interfaceID: try first.requireID())
     }
 
-    /// Refuses a placed VM whose security groups would not actually be
-    /// enforced: a realizing agent that predates security groups, or a site
-    /// whose ACLs nothing would author at all (issue #833). Both come from
-    /// `SecurityGroupService.realization`, so this gate and the API's
-    /// `securityGroupsEnforced` indicator can never disagree. An unplaced VM
-    /// passes — see the call site.
+    /// Refuses a placed VM when its site's ACLs would be authored nowhere
+    /// (issue #833). The answer comes from `SecurityGroupService.realization`,
+    /// keeping this gate aligned with the API's `securityGroupsEnforced`
+    /// indicator. An unplaced VM passes; see the call site.
     static func assertRealizersSupportSecurityGroups(
         for vm: VM,
         offlineGrace: TimeInterval = SiteNetworkAuthority.controllerOfflineGrace,

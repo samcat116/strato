@@ -21,17 +21,7 @@ enum DatabaseTLSMode: String, Sendable {
     /// Require TLS; fail the connection if the server won't negotiate it.
     case require
 
-    /// Resolve the configured mode, defaulting by environment.
-    ///
-    /// Throws ``DatabaseTLSConfigurationError/invalidMode`` on an unrecognized
-    /// `DATABASE_TLS` value rather than silently downgrading to plaintext.
-    static func fromConfiguration(_ configuration: ControlPlaneConfiguration) throws -> DatabaseTLSMode {
-        try resolve(configuration.string(.databaseTLS), for: .production)
-    }
-
     /// Resolve a raw `DATABASE_TLS` value, defaulting by environment when nil.
-    /// Split out from ``fromConfiguration(_:)`` so tests can exercise the mode
-    /// mapping directly.
     static func resolve(_ raw: String?, for environment: Environment) throws -> DatabaseTLSMode {
         guard let raw else {
             // Encrypt by default; only local development opts into plaintext.
@@ -66,7 +56,7 @@ enum DatabaseTLSConfigurationError: Error, CustomStringConvertible {
 func makeDatabaseTLS(configuration: ControlPlaneConfiguration, logger: Logger) throws
     -> PostgresConnection.Configuration.TLS
 {
-    let mode = try DatabaseTLSMode.fromConfiguration(configuration)
+    let mode = configuration.databaseTLSMode
     switch mode {
     case .disable:
         logger.warning("Database TLS is disabled; connection credentials and data are sent in plain text")

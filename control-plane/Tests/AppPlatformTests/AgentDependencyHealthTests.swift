@@ -136,7 +136,8 @@ struct AgentDependencyHealthTests {
                 totalDisk: agent.totalDisk, availableDisk: agent.availableDisk,
                 status: agent.status, runningVMCount: 0,
                 supportedHypervisors: agent.supportedHypervisors,
-                supportsInterVMNetworking: agent.supportsInterVMNetworking)
+                supportsInterVMNetworking: agent.supportsInterVMNetworking,
+                siteID: agent.$site.id)
 
             try #require(
                 candidate.supportedHypervisors.contains(.qemu),
@@ -186,7 +187,7 @@ struct AgentDependencyHealthTests {
         receivedAt: Date = Date()
     ) -> Agent {
         Agent(
-            name: "node-1", hostname: "node-1", version: "test", status: .online,
+            name: "node-1", hostname: "node-1", version: "test", siteID: UUID(), status: .online,
             resources: AgentResources(
                 totalCPU: 8, availableCPU: 8,
                 totalMemory: 16_000, availableMemory: 16_000,

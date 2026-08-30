@@ -88,7 +88,7 @@ enum SchemaMigrator {
 
         static func fromConfiguration(_ configuration: ControlPlaneConfiguration) -> Options {
             Options(
-                runMigrations: configuration.bool(.runMigrations)!,
+                runMigrations: configuration.bool(.runMigrations),
                 lockTimeout: configuration.double(.migrationLockTimeoutSeconds),
                 lockPoll: configuration.double(.migrationLockPollSeconds)
             )

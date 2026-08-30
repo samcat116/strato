@@ -59,7 +59,7 @@ struct MessageOrderingTests {
         // Earlier items sleep longer than later ones: a non-FIFO executor would surface
         // them out of order. A per-key serial lane must still record 0,1,2,...
         for index in 0..<count {
-            await queue.enqueue(key: "vm-A") {
+            await queue.enqueue(keys: ["vm-A"]) {
                 let backwards = UInt64(count - index) * 1_000_000  // ms, descending
                 try? await Task.sleep(nanoseconds: backwards)
                 await recorder.append(index)
@@ -78,11 +78,11 @@ struct MessageOrderingTests {
 
         // Key A blocks until key B releases it. If the two keys shared a single serial lane,
         // A (enqueued first) would deadlock waiting for B, which could never start.
-        await queue.enqueue(key: "vm-A") {
+        await queue.enqueue(keys: ["vm-A"]) {
             await signal.wait()
             await recorder.append(1)
         }
-        await queue.enqueue(key: "vm-B") {
+        await queue.enqueue(keys: ["vm-B"]) {
             await signal.fire()
             await recorder.append(2)
         }
@@ -99,11 +99,11 @@ struct MessageOrderingTests {
         let count = 15
 
         for index in 0..<count {
-            await queue.enqueue(key: "vm-A") {
+            await queue.enqueue(keys: ["vm-A"]) {
                 try? await Task.sleep(nanoseconds: UInt64(count - index) * 500_000)
                 await recorderA.append(index)
             }
-            await queue.enqueue(key: "vm-B") {
+            await queue.enqueue(keys: ["vm-B"]) {
                 try? await Task.sleep(nanoseconds: UInt64(index) * 500_000)
                 await recorderB.append(index)
             }
@@ -117,45 +117,11 @@ struct MessageOrderingTests {
 
     // MARK: - serializationKey routing
 
-    // `vmLog` stands in for the default arm now that no control-plane → agent
-    // frame names a VM: reboot and restore became nonces on the desired entry
-    // at wire v34 (STR-151). The routing rule it exercises is unchanged, and it
-    // still guards every future frame that carries a `vmId`.
-    @Test("VM id lane is case-insensitive to UUID formatting")
-    func vmIdNormalizedAcrossCasing() {
-        let vmId = UUID()
-        let upper = MessageEnvelope.serializationKeys(
-            type: .vmLog, payload: payload(["vmId": vmId.uuidString])
-        )
-        let lower = MessageEnvelope.serializationKeys(
-            type: .vmLog, payload: payload(["vmId": vmId.uuidString.lowercased()])
-        )
-        #expect(upper == lower)
+    @Test("Desired-state syncs route without decoding their payload")
+    func desiredStateUsesReconcileLane() {
+        let keys = MessageEnvelope.serializationKeys(type: .desiredState, payload: Data())
+        #expect(keys == [MessageEnvelope.reconcileLane])
     }
-
-    @Test("Different VMs get different lanes")
-    func differentVMsGetDifferentLanes() {
-        let a = MessageEnvelope.serializationKeys(
-            type: .vmLog, payload: payload(["vmId": UUID().uuidString])
-        )
-        let b = MessageEnvelope.serializationKeys(
-            type: .vmLog, payload: payload(["vmId": UUID().uuidString])
-        )
-        #expect(a != b)
-    }
-
-    // The volume-frame lanes are gone with the last volume frame (wire v33).
-    // Create/delete/attach/detach/resize/clone became desired state at v31
-    // (STR-148), `volume_info` was deleted at v32 (STR-149), and both snapshot
-    // verbs became desired artifacts at v33 (STR-150) — so no inbound message
-    // names a volume, and there is no routing to pin. The reconciler's own
-    // `volume/<id>` lanes are still there and are covered by
-    // `VolumeReconciliationTests` / `SnapshotReconciliationTests`, which test
-    // `ReconcileWorkItem.laneKeys` directly rather than through the wire.
-
-    // The network-frame lanes are gone with the imperative network path itself
-    // (issue #765): topology is level-triggered from the desired-state sync,
-    // which rides `reconcileLane`.
 
     @Test("Guest exec frames for one session share a per-session lane")
     func guestExecFramesShareSessionLane() {
@@ -226,7 +192,7 @@ struct MessageOrderingTests {
 
         // Prior work on lane A, then a clone spanning {A, B}, then work on lane B. FIFO on
         // each shared lane must yield: A-op (0) before clone (1), and clone (1) before B-op (2).
-        await queue.enqueue(key: "vol-A") {
+        await queue.enqueue(keys: ["vol-A"]) {
             try? await Task.sleep(nanoseconds: 20_000_000)
             await recorder.append(0)
         }
@@ -234,7 +200,7 @@ struct MessageOrderingTests {
             try? await Task.sleep(nanoseconds: 20_000_000)
             await recorder.append(1)
         }
-        await queue.enqueue(key: "vol-B") {
+        await queue.enqueue(keys: ["vol-B"]) {
             await recorder.append(2)
         }
 

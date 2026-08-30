@@ -2,40 +2,28 @@ import Foundation
 
 /// Errors that can occur when interacting with Firecracker
 public enum FirecrackerError: Error, Sendable {
-    /// The Firecracker socket is not connected
     case notConnected
 
-    /// The VM was not found
     case vmNotFound(String)
 
-    /// The VM is already running
     case vmAlreadyRunning(String)
 
-    /// HTTP request failed
     case httpError(statusCode: Int, message: String)
 
-    /// Failed to connect to the Firecracker socket
     case connectionFailed(String)
 
-    /// Socket path is invalid or inaccessible
     case invalidSocketPath(String)
 
-    /// Timeout waiting for operation
     case timeout(String)
 
-    /// Failed to serialize request body
     case serializationError(String)
 
-    /// Failed to deserialize response body
     case deserializationError(String)
 
-    /// Firecracker binary not found
     case binaryNotFound(String)
 
-    /// Failed to spawn Firecracker process
     case processSpawnFailed(String)
 
-    /// VM is in an invalid state for the requested operation
     case invalidState(current: String, expected: String)
 
 }

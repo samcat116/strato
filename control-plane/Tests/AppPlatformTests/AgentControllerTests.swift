@@ -92,8 +92,8 @@ struct AgentControllerTests {
         organization: Organization,
         on db: Database
     ) async throws -> Agent {
-        let agent = Agent(
-            name: name,
+        try await TestDataBuilder(db: db).createAgent(
+            named: name,
             hostname: "\(name).example",
             version: "1.0.0",
             status: status,
@@ -104,9 +104,7 @@ struct AgentControllerTests {
                 availableMemory: 16_000_000_000,
                 totalDisk: 100_000_000_000,
                 availableDisk: 100_000_000_000),
-            lastHeartbeat: lastHeartbeat)
-        agent.organizationScope = .organization(try organization.requireID())
-        try await agent.save(on: db)
-        return agent
+            lastHeartbeat: lastHeartbeat,
+            organizationScope: .organization(try organization.requireID()))
     }
 }

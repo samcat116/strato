@@ -2,15 +2,8 @@ import Foundation
 import StratoShared
 import Vapor
 
-/// The one local operation the bridge hands back to its owner: turning a
-/// broadcast doorbell into whatever this replica can locally do about it.
-/// Production's delegate is `AgentService`; tests can substitute a fake. Kept
-/// to exactly this method so the seam stays narrow — everything else the bridge
-/// needs it reaches through `CoordinationService` and `Application` directly.
-///
-/// It deliberately does not restore the old `runLocalExchange` seam removed in
-/// STR-152. Captured commands only need the narrower delivery acknowledgement;
-/// their eventual result follows the ordinary guest-exec stream.
+/// Local socket operations the bridge delegates to its owner. Production uses
+/// `AgentService`; tests can substitute a fake.
 protocol ReplicaBridgeDelegate: AnyObject, Sendable {
     /// Queue one already-encoded agent message on a socket held by this
     /// process. Recorded VM commands use delivery acknowledgement only; their
@@ -32,15 +25,14 @@ protocol ReplicaBridgeDelegate: AnyObject, Sendable {
 /// or targeted delivery. The replica holding the parked poll acts; every other
 /// replica drops it.
 ///
-/// Captured VM commands add a deliberately narrow second half: the accepting
-/// replica resolves `agent:{key}:replica`, publishes an encoded stream envelope
-/// to `replica:{id}:rpc`, and waits only for delivery acknowledgement. It does
-/// not recreate the correlated agent exchange removed in STR-152; command
-/// completion remains durable database state populated by later stream frames.
+/// Captured VM commands add a narrow second half: the accepting replica resolves
+/// `agent:{key}:replica`, publishes an encoded stream envelope to
+/// `replica:{id}:rpc`, and waits only for delivery acknowledgement. Completion
+/// remains durable database state populated by later stream frames.
 ///
 /// It composes `CoordinationService` (the pub/sub channel, itself backed by the
-/// Valkey / in-memory `CoordinationStore` adapters) and delegates the one
-/// operation that requires local state back to its owner through
+/// Valkey / in-memory `CoordinationStore` adapters) and delegates operations
+/// that require local agent state back to its owner through
 /// `ReplicaBridgeDelegate`.
 ///
 /// Doorbells remain a latency optimization. Agent-stream delivery is different:

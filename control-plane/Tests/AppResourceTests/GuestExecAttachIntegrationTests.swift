@@ -275,7 +275,7 @@ enum ExecTestOutputMode: String, CaseIterable, Sendable {
 // MARK: - Running-server harness (mirrors AgentWebSocketIntegrationTests)
 
 private func withRunningExecApp(_ test: (Application, Int) async throws -> Void) async throws {
-    try await withApp { app in
+    try await withTestApp { app in
         try await app.server.start(address: .hostname("127.0.0.1", port: 0))
         do {
             guard let port = app.http.server.shared.localAddress?.port else {

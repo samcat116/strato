@@ -181,8 +181,8 @@ public struct SPIREServiceConfig: Sendable {
     /// Load configuration from the validated startup snapshot.
     static func fromConfiguration(_ configuration: ControlPlaneConfiguration) -> SPIREServiceConfig {
         return SPIREServiceConfig(
-            enabled: configuration.bool(.spireEnabled)!,
-            trustDomain: configuration.string(.spireTrustDomain)!,
+            enabled: configuration.bool(.spireEnabled),
+            trustDomain: configuration.requiredString(.spireTrustDomain),
             bundleEndpointURL: configuration.string(.spireBundleEndpointURL),
             trustBundlePath: configuration.string(.spireTrustBundlePath),
             bundleRefreshInterval: configuration.double(.spireBundleRefreshInterval)

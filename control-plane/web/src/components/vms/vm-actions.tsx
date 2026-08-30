@@ -77,6 +77,7 @@ const kindToAction: Record<OperationKind, VMAction | null> = {
   attach: null,
   detach: null,
   throttle: null,
+  run: null,
 };
 
 export function VMActions({ vm, onActionComplete, allowedActions }: VMActionsProps) {

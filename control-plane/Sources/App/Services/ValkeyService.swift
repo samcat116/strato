@@ -71,16 +71,16 @@ struct ValkeyStoreConfiguration: Sendable, Equatable {
         guard let host = configuration.string(.valkeyHost), !host.isEmpty else { return nil }
         let coordination = ValkeyConfiguration(
             hostname: host,
-            port: configuration.int(.valkeyPort)!,
+            port: configuration.int(.valkeyPort),
             password: configuration.string(.valkeyPassword),
-            database: configuration.int(.valkeyDatabase)!)
+            database: configuration.int(.valkeyDatabase))
 
         if let sessionHost = configuration.string(.sessionValkeyHost), !sessionHost.isEmpty {
             let session = ValkeyConfiguration(
                 hostname: sessionHost,
-                port: configuration.int(.sessionValkeyPort)!,
+                port: configuration.int(.sessionValkeyPort),
                 password: configuration.string(.sessionValkeyPassword),
-                database: configuration.int(.sessionValkeyDatabase)!)
+                database: configuration.int(.sessionValkeyDatabase))
             return ValkeyStoreConfiguration(
                 coordination: coordination, session: session, warnings: [])
         }

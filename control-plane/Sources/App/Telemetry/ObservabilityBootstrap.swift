@@ -30,9 +30,9 @@ extension Application {
         // backends, and `LoggingSystem` keeps the handler the test harness set.
         guard environment != .testing else { return }
 
-        let metricsEnabled = controlPlaneConfiguration.bool(.otelMetricsEnabled)!
-        let logsEnabled = controlPlaneConfiguration.bool(.otelLogsEnabled)!
-        let tracesEnabled = controlPlaneConfiguration.bool(.otelTracesEnabled)!
+        let metricsEnabled = controlPlaneConfiguration.bool(.otelMetricsEnabled)
+        let logsEnabled = controlPlaneConfiguration.bool(.otelLogsEnabled)
+        let tracesEnabled = controlPlaneConfiguration.bool(.otelTracesEnabled)
 
         // Only bootstrap OpenTelemetry if at least one feature is enabled
         guard metricsEnabled || logsEnabled || tracesEnabled else {
@@ -41,7 +41,7 @@ extension Application {
         }
 
         var otelConfig = OTel.Configuration.default
-        otelConfig.serviceName = controlPlaneConfiguration.string(.otelServiceName)!
+        otelConfig.serviceName = controlPlaneConfiguration.requiredString(.otelServiceName)
 
         // Widen the RED duration histogram past 10s. The OTel default top bucket
         // is 10_000ms, so `histogram_quantile` clamps to 10 whenever the quantile

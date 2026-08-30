@@ -83,7 +83,6 @@ final class OIDCIdentityMappingTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "IdP Org")

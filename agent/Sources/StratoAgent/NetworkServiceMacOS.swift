@@ -55,7 +55,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
             vmId: vmId,
             networkName: config.networkName,
             portName: "user-\(vmId)-\(nicIndex)",
-            portUUID: nil,  // Not applicable for user-mode networking
+            portUUID: nil,
             attachment: .userMode,
             macAddress: macAddress,
             ipAddress: nil
@@ -109,7 +109,6 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
     }
 
     private func generateMACAddress() -> String {
-        // Generate a unique MAC address with collision detection
         // Use QEMU's OUI (52:54:00) for better compatibility
         var macAddress: String
         var attempts = 0

@@ -57,13 +57,6 @@ struct SandboxController: RouteCollection {
         return try AcceptedMutation(await detailResponse(for: sandbox, on: req), accepted).acceptedResponse()
     }
 
-    // `beginOperation` and `completeOperation` — the sandbox-flavored front of
-    // `ResourceOperation.begin` and its verdict half — went with the last
-    // mutation that needed them. Snapshot capture, delete and export became
-    // desired artifacts at wire v33 (STR-150) and restore became an edge-nonce
-    // at v34 (STR-151), so every sandbox mutation now goes through
-    // `ResourceMutation.accept` and answers from the sandbox's own `conditions`.
-
     // MARK: - Reads
 
     /// GET /api/sandboxes
@@ -198,9 +191,8 @@ struct SandboxController: RouteCollection {
             /// Ready sandbox snapshot to restore into a new identity (issue
             /// #427). Mutually exclusive with image/machine/process fields.
             let restoreFrom: UUID?
-            /// Required: there is no default project (issue #1059). Optional here so
-            /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
-            /// rather than a `Codable` decode failure that names neither.
+            /// Required by project resolution; optional at decode time so the API can
+            /// return a useful error.
             let projectId: UUID?
             let environment: String?
             let cpus: Int?
@@ -658,7 +650,7 @@ struct SandboxController: RouteCollection {
             .create, resourceType: Sandbox.self, resourceID: sandboxID,
             targetGeneration: accepted.targetGeneration, agentIDs: [],
             strategy: .placement { @Sendable [app = req.application] db in
-                try await app.agentService.createSandbox(sandbox: sandbox, db: db)
+                try await app.workloadPlacement.createSandbox(sandbox: sandbox, db: db)
             }, app: req.application)
 
         req.logger.info(

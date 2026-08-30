@@ -30,7 +30,6 @@ final class VMResizeTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -56,21 +55,18 @@ final class VMResizeTests {
                 organization: org
             )
 
-            let agent = Agent(
-                name: "hv-resize-\(UUID().uuidString.prefix(8))",
+            let agent = try await builder.createAgent(
+                named: "hv-resize-\(UUID().uuidString.prefix(8))",
                 hostname: "hv.example",
-                version: "1.0.0",
-                status: .online,
                 resources: AgentResources(
                     totalCPU: 32, availableCPU: agentAvailableCPU,
                     totalMemory: 64_000_000_000, availableMemory: agentAvailableMemory,
                     totalDisk: 500_000_000_000, availableDisk: 500_000_000_000
                 ),
                 architecture: agentArchitecture,
-                lastHeartbeat: Date()
-            )
-            agent.$site.id = try await builder.placementSite(for: project).requireID()
-            try await agent.save(on: app.db)
+                lastHeartbeat: Date(),
+                siteID: try await builder.placementSite(for: project).requireID(),
+                organizationScope: .organization(try org.requireID()))
 
             let vm = try await builder.createVM(name: "resize-vm", project: project)
             vm.maxCpu = 8

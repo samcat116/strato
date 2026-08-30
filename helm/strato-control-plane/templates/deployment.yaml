@@ -47,7 +47,7 @@ spec:
             - sh
             - -c
             - |
-              until nc -w 1 -z {{ include "strato-control-plane.databaseWaitHost" . }} {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done
+              until nc -w 1 -z {{ include "strato-control-plane.databaseWaitHost" . }} {{ include "strato-control-plane.databasePort" . }}; do echo waiting for database; sleep 2; done
         {{- end }}
         {{- if or .Values.valkey.enabled .Values.externalValkey.host }}
         - name: wait-for-valkey
@@ -166,11 +166,11 @@ spec:
             - name: DATABASE_HOST
               value: "{{ include "strato-control-plane.databaseHost" . }}"
             - name: DATABASE_PORT
-              value: "{{ .Values.strato.database.port }}"
+              value: "{{ include "strato-control-plane.databasePort" . }}"
             - name: DATABASE_NAME
-              value: "{{ .Values.strato.database.name }}"
+              value: "{{ include "strato-control-plane.databaseName" . }}"
             - name: DATABASE_USERNAME
-              value: "{{ .Values.strato.database.username }}"
+              value: "{{ include "strato-control-plane.databaseUsername" . }}"
             - name: DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:

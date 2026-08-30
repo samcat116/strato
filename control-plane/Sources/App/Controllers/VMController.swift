@@ -559,9 +559,8 @@ struct VMController: RouteCollection {
             let hostname: String?
             let description: String?
             let imageId: UUID?
-            /// Required: there is no default project (issue #1059). Optional here so
-            /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
-            /// rather than a `Codable` decode failure that names neither.
+            /// Required by project resolution; optional at decode time so the API can
+            /// return a useful error.
             let projectId: UUID?
             let environment: String?
             let cpu: Int?
@@ -1252,7 +1251,7 @@ struct VMController: RouteCollection {
             .create, resourceType: VM.self, resourceID: vmID,
             targetGeneration: accepted.targetGeneration, agentIDs: [],
             strategy: .placement { @Sendable [app = req.application] db in
-                try await app.agentService.createVM(vm: vm, db: db, image: image)
+                try await app.workloadPlacement.createVM(vm: vm, db: db, image: image)
             }, app: req.application)
 
         req.logger.info(

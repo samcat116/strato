@@ -153,7 +153,6 @@ struct LastUsedTrackingTests {
     func testAPIKeyFirstUseRecords() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await makeUser(on: app.db)
         let (apiKey, fullKey) = try await makeAPIKey(
@@ -181,7 +180,6 @@ struct LastUsedTrackingTests {
     func testAPIKeyDebouncesRepeatedUse() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await makeUser(on: app.db)
         let (apiKey, fullKey) = try await makeAPIKey(
@@ -216,7 +214,6 @@ struct LastUsedTrackingTests {
     func testConcurrentWritersCollapseToOne() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await makeUser(on: app.db)
         let (apiKey, _) = try await makeAPIKey(
@@ -243,7 +240,6 @@ struct LastUsedTrackingTests {
     func testAPIKeyWritesAfterWindow() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await makeUser(on: app.db)
         let stale = Date().addingTimeInterval(-APIKey.lastUsedDebounceWindow - 60)
@@ -267,7 +263,6 @@ struct LastUsedTrackingTests {
     func testCLISessionDebounce() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await makeUser(on: app.db)
         let (session, accessToken) = try await makeCLISession(

@@ -162,6 +162,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// wedged child cannot park the attach forever. Generous: these are local
     /// netlink operations that answer in milliseconds.
     static let netnsCommandTimeout: Duration = .seconds(15)
+    static let hostCommandTimeout: Duration = .seconds(15)
+    static let hostCommandOutputLimit = 1024 * 1024
 
     // MARK: - Connection Management
 
@@ -201,7 +203,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // chassis that never registers means ports get created but no flows
         // are ever programmed, which must gate the capability, not pass
         // silently (issue #328).
-        try ensureChassisConfiguration()
+        try await ensureChassisConfiguration()
         try await verifyOVNControllerConnected()
 
         // Service_Monitor lives in Southbound. Keep this connection separate
@@ -210,7 +212,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // this read — health observation will report a backend error until the
         // access is fixed.
         do {
-            let connection = try southboundConnectionString()
+            let connection = try await southboundConnectionString()
             var endpoint = try OVSDBEndpoint(parsing: connection)
             if case .ssl(let host, let port, _) = endpoint, let tls = ovnNBTLS {
                 endpoint = .ssl(
@@ -359,11 +361,11 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     }
 
     #if os(Linux)
-    private func southboundConnectionString() throws -> String {
+    private func southboundConnectionString() async throws -> String {
         if let configured = chassisConfig.remote, !configured.isEmpty {
             return configured
         }
-        let result = try runProcess(
+        let result = try await runProcess(
             "ovs-vsctl",
             ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "get", "open_vswitch", ".", "external_ids"])
         guard result.status == 0 else {
@@ -615,7 +617,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
             // Detach the TAP from the integration bridge (idempotent via --if-exists)
             do {
-                try run(
+                try await run(
                     "ovs-vsctl",
                     [
                         "--timeout=\(Self.ovsCommandTimeoutSeconds)",
@@ -693,13 +695,13 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// missing values get defaults (encap IP auto-detected from the default
     /// route). Without these a fresh host looks fully wired but programs no
     /// flows, ever.
-    private func ensureChassisConfiguration() throws {
+    private func ensureChassisConfiguration() async throws {
         guard chassisConfig.bootstrapEnabled else {
             logger.info("OVN chassis bootstrap disabled by configuration; assuming operator-managed external_ids")
             return
         }
 
-        let current = try runProcess(
+        let current = try await runProcess(
             "ovs-vsctl",
             ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "get", "open_vswitch", ".", "external_ids"])
         guard current.status == 0 else {
@@ -711,7 +713,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
         var detectedEncapIP: String?
         if chassisConfig.encapIP == nil, existing["ovn-encap-ip"] == nil {
-            detectedEncapIP = detectEncapIP()
+            detectedEncapIP = await detectEncapIP()
         }
 
         let plan = OVNChassisBootstrap.plan(
@@ -735,7 +737,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         let arguments =
             ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "set", "open_vswitch", "."]
             + plan.settings.map(\.vsctlArgument)
-        let result = try runProcess("ovs-vsctl", arguments)
+        let result = try await runProcess("ovs-vsctl", arguments)
         guard result.status == 0 else {
             throw NetworkError.ovsError(
                 "failed to set chassis external_ids (exit \(result.status)): "
@@ -752,8 +754,10 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// The IP the kernel would use as the source for off-host traffic — the
     /// sensible default tunnel endpoint on single-NIC hosts. Multi-homed
     /// hosts must set `ovn_encap_ip` explicitly.
-    private func detectEncapIP() -> String? {
-        guard let result = try? runProcess("ip", ["-j", "route", "get", "1.1.1.1"]), result.status == 0 else {
+    private func detectEncapIP() async -> String? {
+        guard let result = try? await runProcess("ip", ["-j", "route", "get", "1.1.1.1"]),
+            result.status == 0
+        else {
             return nil
         }
         return OVNChassisBootstrap.parseRouteSourceIP(result.output)
@@ -773,7 +777,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         for attempt in 1...attempts {
             let result: CommandResult
             do {
-                result = try runProcess("ovn-appctl", ["-t", "ovn-controller", "connection-status"])
+                result = try await runProcess(
+                    "ovn-appctl", ["-t", "ovn-controller", "connection-status"])
             } catch {
                 logger.warning(
                     "Cannot verify ovn-controller connection status: \(error.localizedDescription)")
@@ -947,13 +952,13 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             ])
 
         // Idempotent: reuse the device if it already exists (crash recovery, re-attach).
-        if tapDeviceExists(tapName) {
+        if await tapDeviceExists(tapName) {
             logger.debug("TAP interface already exists, reusing", metadata: ["tapName": .string(tapName)])
         } else {
             // Create a persistent single-queue TAP device. It must exist before QEMU
             // opens it (QEMU is launched with `script=no,ifname=<tap>`), and persistence
             // is what lets QEMU attach to the pre-created device.
-            try run("ip", ["tuntap", "add", "dev", tapName, "mode", "tap"])
+            try await run("ip", ["tuntap", "add", "dev", tapName, "mode", "tap"])
             logger.info("Created TAP interface", metadata: ["tapName": .string(tapName)])
         }
 
@@ -970,11 +975,11 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // OVN deployment (nothing routes via the br-int internal port), but it
         // is a host-scoped effect of a per-VM setting.
         if let mtu, mtu > 0 {
-            try run("ip", ["link", "set", tapName, "mtu", String(mtu)])
+            try await run("ip", ["link", "set", tapName, "mtu", String(mtu)])
         }
 
         // Bring the interface up (idempotent).
-        try run("ip", ["link", "set", tapName, "up"])
+        try await run("ip", ["link", "set", tapName, "up"])
 
         return tapName
     }
@@ -1012,7 +1017,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         for command in plan.hostSetup {
             try await runNetnsCommand(command)
         }
-        try run("ovs-vsctl", plan.ovsAttach)
+        try await run("ovs-vsctl", plan.ovsAttach)
 
         _ = try await verifyOVSBinding(
             verify: plan.ovsVerify, device: plan.vethHostName, portName: portName, stage: "attach")
@@ -1074,7 +1079,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     ) async throws -> OVSInterfaceBinding {
         var binding = OVSInterfaceBinding(ofport: nil, error: nil)
         for attempt in 1...Self.ovsBindingReadbackAttempts {
-            binding = OVSInterfaceBinding.parse(try run("ovs-vsctl", verify))
+            binding = OVSInterfaceBinding.parse(try await run("ovs-vsctl", verify))
             if binding.isBound { return binding }
             // An `error` is a verdict, not a race — retrying cannot clear it.
             if binding.error != nil { break }
@@ -1112,7 +1117,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             deletesNamespace: nicIndex == 0)
 
         do {
-            try run("ovs-vsctl", removal.ovsDetach)
+            try await run("ovs-vsctl", removal.ovsDetach)
         } catch {
             logger.warning(
                 "Failed to remove OVS port",
@@ -1180,7 +1185,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // implementation set `ovn-port-name` on the Port, which OVN ignores.
         // `ovs-vsctl` performs the port + interface insert and the external_ids set
         // atomically and idempotently (`--may-exist`).
-        try run(
+        try await run(
             "ovs-vsctl",
             [
                 "--timeout=\(Self.ovsCommandTimeoutSeconds)",
@@ -1200,15 +1205,15 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         logger.debug("Removing TAP interface", metadata: ["tapName": .string(tapInterface)])
 
         // Tolerate an already-absent device (double cleanup, crash recovery).
-        guard tapDeviceExists(tapInterface) else {
+        guard await tapDeviceExists(tapInterface) else {
             logger.debug(
                 "TAP interface already absent, nothing to remove", metadata: ["tapName": .string(tapInterface)])
             return
         }
 
         // Best-effort down, then delete.
-        _ = try? runProcess("ip", ["link", "set", tapInterface, "down"])
-        try run("ip", ["tuntap", "del", "dev", tapInterface, "mode", "tap"])
+        _ = try? await runProcess("ip", ["link", "set", tapInterface, "down"])
+        try await run("ip", ["tuntap", "del", "dev", tapInterface, "mode", "tap"])
         logger.info("Removed TAP interface", metadata: ["tapName": .string(tapInterface)])
     }
 
@@ -1219,39 +1224,21 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         let output: String
     }
 
-    /// Runs a command via `/usr/bin/env` (PATH resolution) and returns its exit
-    /// status and combined stdout/stderr. Mirrors the `Process` usage in
-    /// `FileSystemStorageBackend`.
-    private func runProcess(_ command: String, _ arguments: [String]) throws -> CommandResult {
-        try runProcessAt("/usr/bin/env", [command] + arguments)
-    }
-
-    /// Runs an already-resolved executable, with no `PATH` lookup. The sandbox
-    /// namespace path uses this: its binaries were located at agent start, and a
-    /// stripped service-manager `PATH` must not be able to break a host the
-    /// start-time probe declared usable.
-    private func runProcessAt(_ executable: String, _ arguments: [String]) throws -> CommandResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-
-        try process.run()
-        process.waitUntilExit()
-
-        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        return CommandResult(status: process.terminationStatus, output: output)
+    private func runProcess(_ command: String, _ arguments: [String]) async throws -> CommandResult {
+        let result = try await ProcessRunner.run(
+            executableURL: URL(fileURLWithPath: "/usr/bin/env"),
+            arguments: [command] + arguments,
+            timeout: Self.hostCommandTimeout,
+            maxOutputBytes: Self.hostCommandOutputLimit)
+        return CommandResult(status: result.terminationStatus, output: result.combinedOutput)
     }
 
     /// Runs a command and throws `NetworkError.tapError` on a non-zero exit,
     /// appending the remediation when the output points at a host problem
     /// (missing privileges) rather than a bad invocation.
     @discardableResult
-    private func run(_ command: String, _ arguments: [String]) throws -> String {
-        let result = try runProcess(command, arguments)
+    private func run(_ command: String, _ arguments: [String]) async throws -> String {
+        let result = try await runProcess(command, arguments)
         if result.status != 0 {
             throw NetworkError.tapError(networkCommandFailure(command, arguments, result))
         }
@@ -1283,8 +1270,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     }
 
     /// Returns true if a network interface with the given name exists.
-    private func tapDeviceExists(_ name: String) -> Bool {
-        guard let result = try? runProcess("ip", ["link", "show", name]) else {
+    private func tapDeviceExists(_ name: String) async -> Bool {
+        guard let result = try? await runProcess("ip", ["link", "show", name]) else {
             return false
         }
         return result.status == 0
@@ -1736,7 +1723,7 @@ extension NetworkServiceLinux {
             bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds,
             ratePPS: tcBinaryPath == nil ? 0 : linkLocalServiceRatePPS)
         do {
-            try run("ovs-vsctl", plan.ovsAttach)
+            try await run("ovs-vsctl", plan.ovsAttach)
             _ = try await verifyOVSBinding(
                 verify: plan.ovsVerify, device: plan.interfaceName, portName: plan.logicalPortName,
                 stage: "attach")
@@ -1782,7 +1769,7 @@ extension NetworkServiceLinux {
             try? await runNetnsCommand(command)
         }
         do {
-            try run("ovs-vsctl", removal.ovsDetach)
+            try await run("ovs-vsctl", removal.ovsDetach)
         } catch {
             if !quiet {
                 logger.warning(
@@ -1897,7 +1884,7 @@ extension NetworkServiceLinux {
             for command in plan.namespaceSetup {
                 try await runNetnsCommand(command)
             }
-            try run("ovs-vsctl", plan.ovsAttach)
+            try await run("ovs-vsctl", plan.ovsAttach)
             _ = try await verifyOVSBinding(
                 verify: plan.ovsVerify, device: plan.interfaceName, portName: plan.logicalPortName,
                 stage: "attach")
@@ -1958,7 +1945,7 @@ extension NetworkServiceLinux {
             bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds)
         var failures = 0
         do {
-            try run("ovs-vsctl", removal.ovsDetach)
+            try await run("ovs-vsctl", removal.ovsDetach)
         } catch {
             failures += 1
             if !quiet {
@@ -2339,7 +2326,7 @@ extension NetworkServiceLinux: NetworkActuator {
         // Provider bridge + physnet mapping. The operator connects the bridge to
         // the external network out of band; the agent only wires the OVN side.
         try await ensureProviderBridge(uplink.bridge)
-        try ensureBridgeMapping(physnet: uplink.physnet, bridge: uplink.bridge)
+        try await ensureBridgeMapping(physnet: uplink.physnet, bridge: uplink.bridge)
 
         // External logical switch + localnet port (the provider attachment).
         // Created with the external role marker so observeTopology can tell it
@@ -2813,7 +2800,9 @@ extension NetworkServiceLinux {
     /// catching up; usually the first probe succeeds and this costs one exec.
     fileprivate func warnIfBridgeNetdevMissing(_ bridgeName: String) async {
         for _ in 0..<10 {
-            if let probe = try? runProcess("ip", ["link", "show", "dev", bridgeName]), probe.status == 0 {
+            if let probe = try? await runProcess("ip", ["link", "show", "dev", bridgeName]),
+                probe.status == 0
+            {
                 return
             }
             try? await Task.sleep(nanoseconds: 200_000_000)
@@ -2834,7 +2823,7 @@ extension NetworkServiceLinux {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
-        let chassisName = try localChassisSystemID()
+        let chassisName = try await localChassisSystemID()
         guard let port = try await ovnManager.getLogicalRouterPort(named: portName) else {
             throw NetworkError.ovnError(
                 "external router port \(portName) not found while binding its gateway chassis")
@@ -2865,8 +2854,8 @@ extension NetworkServiceLinux {
     /// The chassis `system-id` of the local OVS — the name `ovn-controller`
     /// registers in the southbound `Chassis` table (set or verified by
     /// `ensureChassisConfiguration` at connect time).
-    fileprivate func localChassisSystemID() throws -> String {
-        let result = try runProcess(
+    fileprivate func localChassisSystemID() async throws -> String {
+        let result = try await runProcess(
             "ovs-vsctl",
             ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "get", "open_vswitch", ".", "external_ids"])
         guard result.status == 0 else {
@@ -2887,15 +2876,15 @@ extension NetworkServiceLinux {
 
     /// Ensure the local OVS carries `ovn-bridge-mappings=<physnet>:<bridge>` for
     /// the provider network, merged with any mappings already present.
-    fileprivate func ensureBridgeMapping(physnet: String, bridge: String) throws {
-        let current = try runProcess(
+    fileprivate func ensureBridgeMapping(physnet: String, bridge: String) async throws {
+        let current = try await runProcess(
             "ovs-vsctl",
             ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "get", "open_vswitch", ".", "external_ids"])
         let existing = OVNChassisBootstrap.parseExternalIDs(current.output)["ovn-bridge-mappings"]
         guard let merged = OVNBridgeMappings.merged(existing: existing, physnet: physnet, bridge: bridge) else {
             return  // already mapped
         }
-        try run(
+        try await run(
             "ovs-vsctl",
             [
                 "--timeout=\(Self.ovsCommandTimeoutSeconds)", "set", "open_vswitch", ".",

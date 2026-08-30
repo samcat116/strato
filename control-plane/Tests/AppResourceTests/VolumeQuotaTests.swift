@@ -27,7 +27,6 @@ final class VolumeQuotaTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -58,25 +57,9 @@ final class VolumeQuotaTests {
             iopsTotal: nil, bpsTotal: nil)
     }
 
-    /// A registered, volume-capable agent, so the endpoints that refuse an
-    /// unplaced volume (`resize`, `snapshot`, `clone`) get as far as admission.
-    /// It never connects, so the mutation degrades in the background — which is
-    /// exactly what these tests want, since the accounting is what is under test.
     private func registerAgent(app: Application, named name: String) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: name, hostname: "\(name).test", version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16, totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40),
-            hypervisors: [
-                HypervisorSupport(
-                    type: .qemu, available: true, accelerated: true, capabilities: .qemu)
-            ],
-            protocolVersion: WireProtocol.currentVersion)
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let uuid = try await app.agentService.registerAgent(
-            message, agentName: name, organizationScope: orgID.map { .organization($0) })
-        return uuid.uuidString
+        try await TestDataBuilder(db: app.db).registerAgent(
+            on: app, named: name, hostname: "\(name).test")
     }
 
     /// A volume the caller owns and can act on, inserted directly so the tests

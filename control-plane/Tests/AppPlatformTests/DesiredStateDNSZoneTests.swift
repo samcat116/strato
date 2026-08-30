@@ -25,7 +25,6 @@ final class DesiredStateDNSZoneTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "DNS Sync Org")
@@ -47,23 +46,12 @@ final class DesiredStateDNSZoneTests {
         protocolVersion: Int = WireProtocol.currentVersion,
         resolverCapable: Bool = false
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: name,
-            hostname: "host-\(name)",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
+        try await TestDataBuilder(db: app.db).registerAgent(
+            on: app,
+            named: name,
             protocolVersion: protocolVersion,
-            resolverCapable: resolverCapable
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let uuid = try await app.agentService.registerAgent(
-            message, agentName: name, siteID: siteID,
-            organizationScope: orgID.map { .organization($0) })
-        return uuid.uuidString
+            resolverCapable: resolverCapable,
+            siteID: siteID)
     }
 
     /// A VM with a hostname and one addressed NIC on `network`, placed on
@@ -191,25 +179,6 @@ final class DesiredStateDNSZoneTests {
             let peerSync = try await app.desiredStateAssembler.assemble(agentId: peer)
             #expect(peerSync.dnsZones == nil)
             #expect(try await app.desiredStateAssembler.assemble(agentId: controller).dnsZones != nil)
-        }
-    }
-
-    @Test("A site-less agent realizes the zones its own VMs' networks attach")
-    func siteLessAgentIsItsOwnAuthority() async throws {
-        try await withDNSSyncApp { app, _, project in
-            let agentId = try await self.registerAgent(app: app, named: "solo")
-            let network = try await TestDataBuilder(db: app.db).createNetwork(
-                name: "solo-net", project: project, subnet: "10.62.0.0/24", gateway: "10.62.0.1")
-            let zone = DNSZone(name: "solo.internal", projectID: try project.requireID())
-            try await zone.save(on: app.db)
-            try await self.attachZone(app: app, zone: zone, to: network, primary: true)
-            try await self.placeVM(
-                app: app, project: project, named: "vm-solo", hostname: "solo-vm",
-                onAgent: agentId, network: network, ipv4: "10.62.0.5")
-
-            let zones = try #require(try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones)
-            #expect(zones.map(\.zoneName) == ["solo.internal"])
-            #expect(zones[0].records.contains { $0.name == "solo-vm.solo.internal" })
         }
     }
 
@@ -552,25 +521,12 @@ final class DesiredStateDNSZoneTests {
         }
     }
 
-    @Test("An agent this assembly cannot load is told nothing about resolvers")
-    func unknownAgentGetsSilence() async throws {
-        // `false` here would be an opinion, and an opinion is a teardown: it
-        // strips the resolver's addresses from the localport, reverts the DHCP
-        // row, and stops CoreDNS — on the one path that knows nothing about the
-        // host it is describing. Silence is the only honest answer.
-        try await withDNSSyncApp { app, _, project in
-            let network = try await TestDataBuilder(db: app.db).createNetwork(
-                name: "ghost-net", project: project, subnet: "10.77.0.0/24", gateway: "10.77.0.1")
-            network.resolverEnabled = true
-            try await network.save(on: app.db)
-
-            // An agent id no row matches — the synthetic and backstop syncs.
-            let sync = try await app.desiredStateAssembler.assemble(agentId: UUID().uuidString)
-            #expect(sync.networks.allSatisfy { $0.resolverEnabled == nil })
-            #expect(
-                sync.vms.allSatisfy { vm in
-                    vm.spec.networks.allSatisfy { $0.resolverEnabled == nil }
-                })
+    @Test("Desired-state assembly rejects an unknown agent")
+    func unknownAgentIsRejected() async throws {
+        try await withDNSSyncApp { app, _, _ in
+            await #expect(throws: Abort.self) {
+                try await app.desiredStateAssembler.assemble(agentId: UUID().uuidString)
+            }
         }
     }
 }

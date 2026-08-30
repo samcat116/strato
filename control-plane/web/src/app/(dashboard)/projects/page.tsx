@@ -35,12 +35,12 @@ export default function ProjectsPage() {
           {
             key: "create",
             action: "project:create",
-            node: { type: "organization", id: orgId },
+            node: { type: "organization" as const, id: orgId },
           },
           {
             key: "update_organization",
             action: "org:update",
-            node: { type: "organization", id: orgId },
+            node: { type: "organization" as const, id: orgId },
           },
         ]
       : []),
@@ -48,17 +48,17 @@ export default function ProjectsPage() {
       {
         key: `update:${project.id}`,
         action: "project:update",
-        node: { type: "project", id: project.id },
+        node: { type: "project" as const, id: project.id },
       },
       {
         key: `transfer:${project.id}`,
         action: "project:transfer",
-        node: { type: "project", id: project.id },
+        node: { type: "project" as const, id: project.id },
       },
       {
         key: `delete:${project.id}`,
         action: "project:delete",
-        node: { type: "project", id: project.id },
+        node: { type: "project" as const, id: project.id },
       },
     ]),
   ]);

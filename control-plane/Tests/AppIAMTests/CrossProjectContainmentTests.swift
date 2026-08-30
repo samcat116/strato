@@ -52,7 +52,6 @@ final class CrossProjectContainmentTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let admin = try await builder.createUser(

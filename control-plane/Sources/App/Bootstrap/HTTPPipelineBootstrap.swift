@@ -9,7 +9,7 @@ extension Application {
         // duration). Registered first so it's the outermost middleware and times the
         // full request. Default on outside production; override with REQUEST_LOGGING.
         let requestLoggingEnabled =
-            controlPlaneConfiguration.bool(.requestLogging)!
+            controlPlaneConfiguration.bool(.requestLogging)
         if requestLoggingEnabled {
             middleware.use(RequestLoggingMiddleware())
             logger.info("Request logging enabled")
@@ -43,7 +43,7 @@ extension Application {
         // that terminate TLS set HTTP_TLS_ENABLED=true (the Helm chart derives it from
         // the resolved browser-facing origin). Governs both HSTS and the Secure cookie
         // flag below.
-        let servedOverTLS = controlPlaneConfiguration.bool(.httpTLSEnabled)!
+        let servedOverTLS = controlPlaneConfiguration.bool(.httpTLSEnabled)
         // Insert at the front so it wraps Vapor's default ErrorMiddleware (which is
         // registered ahead of any `.use`-appended middleware). Otherwise the 4xx/5xx
         // responses ErrorMiddleware synthesizes from thrown errors would flow back out
@@ -154,9 +154,9 @@ extension Application {
     }
 
     private func configureBrowserIdentity() {
-        let relyingPartyID = controlPlaneConfiguration.string(.webauthnRelyingPartyID)!
-        let relyingPartyName = controlPlaneConfiguration.string(.webauthnRelyingPartyName)!
-        let relyingPartyOrigin = controlPlaneConfiguration.string(.webauthnRelyingPartyOrigin)!
+        let relyingPartyID = controlPlaneConfiguration.requiredString(.webauthnRelyingPartyID)
+        let relyingPartyName = controlPlaneConfiguration.requiredString(.webauthnRelyingPartyName)
+        let relyingPartyOrigin = controlPlaneConfiguration.requiredString(.webauthnRelyingPartyOrigin)
 
         configureWebAuthn(
             relyingPartyID: relyingPartyID,

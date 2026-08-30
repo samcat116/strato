@@ -57,8 +57,8 @@ enum SSRFGuard {
         environment: Environment
     ) -> Bool {
         let override =
-            configuration.bool(.outboundFetchAllowPrivateHosts)
-            ?? configuration.bool(.imageFetchAllowPrivateHosts)
+            configuration.optionalBool(.outboundFetchAllowPrivateHosts)
+            ?? configuration.optionalBool(.imageFetchAllowPrivateHosts)
         if let override {
             return override
         }

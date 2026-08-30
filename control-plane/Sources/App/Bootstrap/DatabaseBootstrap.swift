@@ -34,19 +34,19 @@ extension Application {
         let databaseTLS = try makeDatabaseTLS(
             configuration: controlPlaneConfiguration, logger: logger)
         let statementTimeout = try DatabaseStatementTimeout(
-            milliseconds: controlPlaneConfiguration.int(.databaseStatementTimeoutMS)!)
+            milliseconds: controlPlaneConfiguration.int(.databaseStatementTimeoutMS))
         let migrationStatementTimeout = try DatabaseStatementTimeout(
-            milliseconds: controlPlaneConfiguration.int(.databaseMigrationStatementTimeoutMS)!)
+            milliseconds: controlPlaneConfiguration.int(.databaseMigrationStatementTimeoutMS))
         let statementTimeouts = SchemaMigrator.StatementTimeouts(
             normal: statementTimeout,
             migration: migrationStatementTimeout
         )
         let databaseConfiguration = SQLPostgresConfiguration(
-            hostname: controlPlaneConfiguration.string(.databaseHost)!,
-            port: controlPlaneConfiguration.int(.databasePort)!,
-            username: controlPlaneConfiguration.string(.databaseUsername)!,
-            password: controlPlaneConfiguration.string(.databasePassword)!,
-            database: controlPlaneConfiguration.string(.databaseName)!,
+            hostname: controlPlaneConfiguration.requiredString(.databaseHost),
+            port: controlPlaneConfiguration.int(.databasePort),
+            username: controlPlaneConfiguration.requiredString(.databaseUsername),
+            password: controlPlaneConfiguration.requiredString(.databasePassword),
+            database: controlPlaneConfiguration.requiredString(.databaseName),
             tls: databaseTLS
         )
         logger.info(

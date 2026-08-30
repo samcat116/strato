@@ -11,11 +11,6 @@ import Logging
 /// Two neighbours are deliberately *not* duplicated here, because they already
 /// have owners: the VNC socket is `QEMUGraphicsDevice.socketPath(vmDirectory:)`
 /// and swtpm's state and control socket belong to libvirt, not to this layout.
-///
-/// These are now the only spellings of these paths: the process driver's inline
-/// copies went with it (STR-136), so `DomainXMLBuilderTests.vmDirectoryLayout`
-/// pinning what this type returns is enough to keep the document and the agent
-/// looking at the same sockets.
 public enum VMDirectoryLayout {
 
     /// The VM's own directory, `<vmStoragePath>/<vmId>`.

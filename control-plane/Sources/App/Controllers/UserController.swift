@@ -1118,7 +1118,7 @@ extension UserController {
     /// URL), so the `/claim` page and the passkey ceremony share an origin. The
     /// frontend may still rebuild the link from `window.location.origin`.
     static func claimURL(for token: String, configuration: ControlPlaneConfiguration) -> String {
-        let base = configuration.string(.webauthnRelyingPartyOrigin)!
+        let base = configuration.requiredString(.webauthnRelyingPartyOrigin)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         return "\(base)/claim?token=\(token)"
     }

@@ -5,16 +5,6 @@ import PackageDescription
 // plane serves (issue #583). `Sources/StratoAPIClient/openapi.yaml` is a symlink
 // to `control-plane/Sources/App/openapi.yaml`, so there is exactly one spec in
 // the repository and the client cannot drift from the server.
-//
-// Consumers get `Client` (an `APIProtocol` implementation over any transport)
-// plus the full `Components.Schemas` type set:
-//
-//     let client = Client(
-//         serverURL: URL(string: "https://strato.example.com")!,
-//         transport: AsyncHTTPClientTransport(),
-//         middlewares: [BearerTokenMiddleware(token: apiKey)]
-//     )
-//     let projects = try await client.listProjects().ok.body.json
 let package = Package(
     name: "strato-api-client",
     platforms: [

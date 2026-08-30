@@ -25,6 +25,7 @@ struct VolumeAgentSelectionTests {
             name: id,
             hostname: "host-\(id)",
             version: "1.0",
+            siteID: UUID(),
             status: status,
             resources: AgentResources(
                 totalCPU: 8,

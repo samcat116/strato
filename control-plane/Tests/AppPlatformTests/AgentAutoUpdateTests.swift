@@ -31,12 +31,11 @@ final class AgentAutoUpdateTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             // Test processes have no STRATO_VERSION/AGENT_TARGET_VERSION, so
             // the compiled-in target is nil; inject one, plus an artifact
             // resolver that never leaves the process.
-            await app.agentService.setAutoUpdateTargetForTesting(Self.target)
+            await app.agentMaintenance.setAutoUpdateTargetForTesting(Self.target)
             app.agentArtifactResolver = AgentArtifactResolver { _, _, _ in Self.stubArtifact }
 
             let builder = TestDataBuilder(db: app.db)
@@ -63,7 +62,7 @@ final class AgentAutoUpdateTests {
     /// sweep call a fresh in-memory coordination store so none is skipped.
     private func sweep(_ app: Application) async {
         app.coordination = CoordinationService(store: InMemoryCoordinationStore(), logger: app.logger)
-        await app.agentService.sweepAgentAutoUpdates()
+        await app.agentMaintenance.sweepAgentAutoUpdates()
     }
 
     @discardableResult
@@ -76,8 +75,8 @@ final class AgentAutoUpdateTests {
         online: Bool = true,
         operatingSystem: String? = "linux"
     ) async throws -> Agent {
-        let agent = Agent(
-            name: name,
+        let agent = try await TestDataBuilder(db: app.db).createAgent(
+            named: name,
             hostname: "\(name).example",
             version: version,
             status: online ? .online : .offline,
@@ -87,11 +86,10 @@ final class AgentAutoUpdateTests {
                 totalDisk: 100_000_000_000, availableDisk: 100_000_000_000
             ),
             architecture: .x86_64,
-            lastHeartbeat: online ? Date() : Date(timeIntervalSinceNow: -3600)
-        )
+            lastHeartbeat: online ? Date() : Date(timeIntervalSinceNow: -3600),
+            organizationScope: .organization(try org.requireID()))
         agent.operatingSystem = operatingSystem
         agent.autoUpdate = autoUpdate
-        agent.organizationScope = .organization(try org.requireID())
         try await agent.save(on: app.db)
         return agent
     }
@@ -162,7 +160,7 @@ final class AgentAutoUpdateTests {
             // reported: the agent went silent.
             let firstRow = try await self.reload(first, on: app)
             firstRow.updateAttemptedAt = Date(
-                timeIntervalSinceNow: -(AgentService.autoUpdateHealthBudgetSeconds + 60))
+                timeIntervalSinceNow: -(AgentMaintenanceLoop.autoUpdateHealthBudgetSeconds + 60))
             try await firstRow.save(on: app.db)
 
             await self.sweep(app)
@@ -190,7 +188,7 @@ final class AgentAutoUpdateTests {
             let firstRow = try await self.reload(first, on: app)
             firstRow.updateBlockedReason = "2 reconcile work item(s) are in flight"
             firstRow.updateAttemptedAt = Date(
-                timeIntervalSinceNow: -(AgentService.autoUpdateHealthBudgetSeconds + 60))
+                timeIntervalSinceNow: -(AgentMaintenanceLoop.autoUpdateHealthBudgetSeconds + 60))
             try await firstRow.save(on: app.db)
 
             await self.sweep(app)
@@ -284,7 +282,7 @@ final class AgentAutoUpdateTests {
             // rollout runs — but that is exactly when explicit-artifact manual
             // updates get used, and their assignment still has to be cleared
             // once the agent comes back on the new build.
-            await app.agentService.setAutoUpdateTargetForTesting(nil)
+            await app.agentMaintenance.setAutoUpdateTargetForTesting(nil)
             let agent = try await self.makeAgent(
                 app: app, org: org, name: "aa-manual", autoUpdate: false)
             agent.assignUpdate(version: "1.9.0-rc1", source: .manual)
@@ -331,7 +329,7 @@ final class AgentAutoUpdateTests {
                 version: "1.9.0-rc1",
                 source: .manual,
                 artifact: Self.stubArtifact,
-                at: Date(timeIntervalSinceNow: -(AgentService.autoUpdateHealthBudgetSeconds + 60)))
+                at: Date(timeIntervalSinceNow: -(AgentMaintenanceLoop.autoUpdateHealthBudgetSeconds + 60)))
             try await manual.save(on: app.db)
             let enrolled = try await self.makeAgent(app: app, org: org, name: "bb-enrolled")
 
@@ -360,7 +358,7 @@ final class AgentAutoUpdateTests {
             let firstRow = try await self.reload(first, on: app)
             #expect(firstRow.updateAssignmentSource == .rollout)
             firstRow.updateAttemptedAt = Date(
-                timeIntervalSinceNow: -(AgentService.autoUpdateHealthBudgetSeconds + 60))
+                timeIntervalSinceNow: -(AgentMaintenanceLoop.autoUpdateHealthBudgetSeconds + 60))
             try await firstRow.save(on: app.db)
 
             await self.sweep(app)
@@ -660,7 +658,7 @@ final class AgentAutoUpdateTests {
             // the original `updateAttemptedAt` is already past the budget, so
             // the next sweep tick re-records the same failure immediately.
             let agent = try await self.makeAgent(app: app, org: org, name: "aa-agent", autoUpdate: false)
-            let staleClock = Date(timeIntervalSinceNow: -(AgentService.autoUpdateHealthBudgetSeconds + 60))
+            let staleClock = Date(timeIntervalSinceNow: -(AgentMaintenanceLoop.autoUpdateHealthBudgetSeconds + 60))
             agent.assignUpdate(version: Self.target, source: .rollout, at: staleClock)
             agent.recordUpdateFailure("did not re-register at \(Self.target)")
             try await agent.save(on: app.db)

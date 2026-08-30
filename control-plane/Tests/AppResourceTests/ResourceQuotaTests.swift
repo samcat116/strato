@@ -15,7 +15,6 @@ final class ResourceQuotaTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             // Create test user and organization
             let testUser = User(

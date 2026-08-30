@@ -18,7 +18,7 @@ final class ListPaginationTests: BaseTestCase {
 
     @Test("GET /api/vms pages with the envelope: defaults, slices, clamping, validation")
     func vmListPages() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let builder = TestDataBuilder(db: app.db)
             let project = try await builder.createProject(
@@ -87,7 +87,7 @@ final class ListPaginationTests: BaseTestCase {
 
     @Test("total counts only the rows the caller is authorized to read")
     func totalRespectsAuthorization() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let builder = TestDataBuilder(db: app.db)
 

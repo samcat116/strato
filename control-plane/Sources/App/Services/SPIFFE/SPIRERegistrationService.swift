@@ -443,7 +443,7 @@ public struct SPIRERegistrationConfig: Sendable {
         else { return nil }
 
         let apiAddress = try SPIREServerAPIAddress(parsing: apiAddressString)
-        let trustDomain = configuration.string(.spireTrustDomain)!
+        let trustDomain = configuration.requiredString(.spireTrustDomain)
 
         // SPIFFE Workload API socket of a local SPIRE agent, enabling the
         // mTLS admin path. Standard SPIFFE env var; both `unix:///path` and
@@ -470,7 +470,7 @@ public struct SPIRERegistrationConfig: Sendable {
             publicAddress = "localhost:8085"
         }
 
-        let selectorsString = configuration.string(.spireAgentSelectors)!
+        let selectorsString = configuration.requiredString(.spireAgentSelectors)
         var selectors: [SPIRESelector] = []
         for part in selectorsString.split(separator: ",") {
             let trimmed = part.trimmingCharacters(in: .whitespaces)
@@ -490,7 +490,7 @@ public struct SPIRERegistrationConfig: Sendable {
             workloadAPISocketPath: workloadSocketPath,
             serverPublicAddress: publicAddress,
             agentSelectors: selectors,
-            svidTTLSeconds: configuration.int(.spireSVIDTTL)!
+            svidTTLSeconds: configuration.int(.spireSVIDTTL)
         )
     }
 }

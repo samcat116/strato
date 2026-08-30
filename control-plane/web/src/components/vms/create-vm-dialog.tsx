@@ -250,18 +250,11 @@ export function CreateVMDialog({
           // Sent verbatim (no trim): the first bytes are the format header
           // cloud-init dispatches on.
           userData: formData.userData.trim() ? formData.userData : undefined,
-          // Omitted unless on, so pre-#565 control planes ignore them harmlessly.
-          // Never sent for Firecracker, which the API rejects outright.
-          secureBoot: !isFirecracker && secureBoot ? true : undefined,
-          tpm: !isFirecracker && tpm ? true : undefined,
-          // Same omit-unless-on rule (issue #566); Firecracker emulates no
-          // display device and the API rejects the combination.
-          graphicsConsole: !isFirecracker && graphicsConsole ? true : undefined,
-          // Omitted unless *off*, the inverse of the three above, because this
-          // one defaults on: sending `true` would only say what the server
-          // already assumes, while pinning a pre-STR-185 control plane to a key
-          // it does not know.
-          metadataEnabled: metadataEnabled ? undefined : false,
+          secureBoot: !isFirecracker && secureBoot,
+          tpm: !isFirecracker && tpm,
+          guestAgentEnabled: false,
+          graphicsConsole: !isFirecracker && graphicsConsole,
+          metadataEnabled,
           // Keep the selected source explicit so the request matches what the
           // form showed. Paths that cannot reach IMDS record `iso`.
           metadataSource: metadataSourceForcedToISO ? "iso" : metadataSource,
