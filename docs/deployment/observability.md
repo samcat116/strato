@@ -206,6 +206,7 @@ this is the allow/deny rate and evaluation latency for the entire API.
 |--------|------|--------|---------|
 | `strato_ipam_allocations_total` | counter | `family` = `ipv4` \| `ipv6` | A NIC address was allocated from a network's subnet |
 | `strato_ipam_allocation_failures_total` | counter | `family`, `reason` = `pool_exhausted` \| `invalid_subnet` \| `invalid_gateway` | An allocation failed; `pool_exhausted` is the capacity signal |
+| `strato_network_interface_duplicate_mac_addresses` | gauge | — | Canonical MAC addresses assigned to more than one VM or sandbox NIC at startup; zero is healthy |
 
 ### Notes on the labels
 

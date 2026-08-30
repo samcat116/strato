@@ -1403,7 +1403,8 @@ final class SandboxTests {
             let nic = try #require(interfaces.first)
             #expect(nic.logicalNetworkID == network.id)
             #expect(nic.deviceName == "net0")
-            #expect(nic.macAddress.hasPrefix("00:0c:29:"))
+            #expect(nic.macAddress.hasPrefix("02:"))
+            #expect(MACAddress(allocated: nic.macAddress) != nil)
 
             let v4 = try #require(nic.ipv4Address)
             #expect(v4.address == "192.168.1.2")  // .1 is the gateway
@@ -1451,7 +1452,7 @@ final class SandboxTests {
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "peer-vm", project: project)
             let vmNIC = VMNetworkInterface(
                 vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress())
+                macAddress: MACAllocator.generateCandidate().description)
             try await vmNIC.save(on: app.db)
             try await VMInterfaceAddress(
                 interfaceID: try vmNIC.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
@@ -1460,7 +1461,7 @@ final class SandboxTests {
 
             let sbNIC = SandboxNetworkInterface(
                 sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress())
+                macAddress: MACAllocator.generateCandidate().description)
             try await sbNIC.save(on: app.db)
             try await SandboxInterfaceAddress(
                 interfaceID: try sbNIC.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
@@ -1669,7 +1670,7 @@ final class SandboxTests {
             for (deviceName, group) in [("net1", other), ("net0", defaultGroup)] {
                 let nic = SandboxNetworkInterface(
                     sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
-                    macAddress: VMNetworkInterface.generateMACAddress(), deviceName: deviceName)
+                    macAddress: MACAllocator.generateCandidate().description, deviceName: deviceName)
                 try await nic.save(on: app.db)
                 try await SandboxInterfaceSecurityGroup(
                     interfaceID: try nic.requireID(), securityGroupID: try group.requireID()

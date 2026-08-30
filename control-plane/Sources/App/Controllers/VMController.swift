@@ -275,16 +275,19 @@ struct VMController: RouteCollection {
                 // is therefore stable here and is the generation at which the
                 // agent must report this interface as applied.
                 let targetGeneration = vm.generation + 1
+                let interfaceID = UUID()
+                let macAddress = try await MACAllocator.allocate(
+                    for: .vmInterface, ownerID: interfaceID, on: db)
                 let interface = VMNetworkInterface(
+                    id: interfaceID,
                     vmID: vmID,
                     logicalNetworkID: networkID,
-                    macAddress: VMNetworkInterface.generateMACAddress(),
+                    macAddress: macAddress.description,
                     mtu: request.mtu,
                     deviceName: "net\(orderIndex)",
                     orderIndex: orderIndex)
                 interface.attachGeneration = targetGeneration
                 try await interface.save(on: db)
-                let interfaceID = try interface.requireID()
 
                 let groupIDs: [UUID]
                 if requestedGroups.isEmpty {
@@ -1092,16 +1095,19 @@ struct VMController: RouteCollection {
                     for (orderIndex, resolved) in resolvedInterfaces.enumerated() {
                         let allocation = try await IPAMService.allocateIP(for: resolved.network, on: db)
                         let allocation6 = try await IPAMService.allocateIPv6(for: resolved.network, on: db)
+                        let interfaceID = UUID()
+                        let macAddress = try await MACAllocator.allocate(
+                            for: .vmInterface, ownerID: interfaceID, on: db)
                         let networkInterface = VMNetworkInterface(
+                            id: interfaceID,
                             vmID: vmID,
                             logicalNetworkID: resolved.networkID,
-                            macAddress: VMNetworkInterface.generateMACAddress(),
+                            macAddress: macAddress.description,
                             mtu: resolved.request.mtu,
                             deviceName: "net\(orderIndex)",
                             orderIndex: orderIndex)
                         networkInterface.attachGeneration = vm.generation
                         try await networkInterface.save(on: db)
-                        let interfaceID = try networkInterface.requireID()
 
                         let groupIDs: [UUID]
                         if resolved.securityGroupIDs.isEmpty {

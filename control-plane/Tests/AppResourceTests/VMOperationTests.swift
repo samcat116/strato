@@ -114,9 +114,14 @@ final class VMOperationTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40),
             protocolVersion: wireProtocolVersion)
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let organization = try #require(
+            try await Organization.query(on: app.db).sort(\.$createdAt).first())
+        let orgID = try organization.requireID()
+        let site = Site(name: "VM Operation Site", organizationScope: .organization(orgID))
+        try await site.save(on: app.db)
         let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: "reboot-agent", organizationScope: orgID.map { .organization($0) })
+            message, agentName: "reboot-agent", siteID: try site.requireID(),
+            organizationScope: .organization(orgID))
 
         vm.hypervisorId = agentUUID.uuidString
         vm.setStatus(.running)
@@ -159,6 +164,7 @@ final class VMOperationTests {
                     .first())
             #expect(created.deviceName == "net1")
             #expect(created.mtu == 1450)
+            #expect(MACAddress(allocated: created.macAddress) != nil)
             #expect(created.attachGeneration == accepted?.targetGeneration)
 
             try await app.test(.GET, "/api/vms/\(vm.id!)/interfaces") { req in

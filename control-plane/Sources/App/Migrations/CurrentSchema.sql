@@ -55,6 +55,23 @@ END;
 $$;
 
 
+--
+-- Name: release_mac_address_allocation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.release_mac_address_allocation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    DELETE FROM public.mac_address_allocations
+    WHERE mac_address = lower(OLD.mac_address)
+      AND owner_kind = TG_ARGV[0]
+      AND owner_id = OLD.id;
+    RETURN OLD;
+END;
+$$;
+
+
 
 
 --
@@ -572,6 +589,19 @@ CREATE TABLE public.logical_networks (
     resolver_enabled boolean DEFAULT true NOT NULL,
     resolver_index bigint,
     CONSTRAINT ck_logical_networks_name_length CHECK ((char_length(name) <= 128))
+);
+
+
+--
+-- Name: mac_address_allocations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.mac_address_allocations (
+    mac_address text NOT NULL,
+    owner_kind text NOT NULL,
+    owner_id uuid NOT NULL,
+    created_at timestamp with time zone,
+    CONSTRAINT ck_mac_address_allocations_owner_kind CHECK ((owner_kind = ANY (ARRAY['vm'::text, 'sandbox'::text])))
 );
 
 
@@ -1687,6 +1717,22 @@ ALTER TABLE ONLY public.logical_networks
 
 
 --
+-- Name: mac_address_allocations mac_address_allocations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mac_address_allocations
+    ADD CONSTRAINT mac_address_allocations_pkey PRIMARY KEY (mac_address);
+
+
+--
+-- Name: mac_address_allocations uq_mac_address_allocations_owner; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mac_address_allocations
+    ADD CONSTRAINT uq_mac_address_allocations_owner UNIQUE (owner_kind, owner_id);
+
+
+--
 -- Name: oauth_device_authorizations oauth_device_authorizations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2159,6 +2205,14 @@ ALTER TABLE ONLY public.sandbox_network_interfaces
 
 
 --
+-- Name: sandbox_network_interfaces uq_sandbox_network_interfaces_mac_address; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sandbox_network_interfaces
+    ADD CONSTRAINT uq_sandbox_network_interfaces_mac_address UNIQUE (mac_address);
+
+
+--
 -- Name: scim_external_ids uq:scim_external_ids.organization_id+scim_external_ids.resource; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2260,6 +2314,14 @@ ALTER TABLE ONLY public.vm_interface_security_groups
 
 ALTER TABLE ONLY public.vm_network_interfaces
     ADD CONSTRAINT "uq:vm_network_interfaces.vm_id+vm_network_interfaces.device_nam" UNIQUE (vm_id, device_name);
+
+
+--
+-- Name: vm_network_interfaces uq_vm_network_interfaces_mac_address; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vm_network_interfaces
+    ADD CONSTRAINT uq_vm_network_interfaces_mac_address UNIQUE (mac_address);
 
 
 --
@@ -2939,6 +3001,20 @@ CREATE UNIQUE INDEX uq_vm_interface_addresses_network_address ON public.vm_inter
 --
 
 CREATE TRIGGER trg_resource_events_append_only BEFORE DELETE OR UPDATE ON public.resource_events FOR EACH ROW EXECUTE FUNCTION public.resource_events_reject_row_change();
+
+
+--
+-- Name: sandbox_network_interfaces trg_sandbox_network_interfaces_release_mac; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_sandbox_network_interfaces_release_mac AFTER DELETE ON public.sandbox_network_interfaces FOR EACH ROW EXECUTE FUNCTION public.release_mac_address_allocation('sandbox');
+
+
+--
+-- Name: vm_network_interfaces trg_vm_network_interfaces_release_mac; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_vm_network_interfaces_release_mac AFTER DELETE ON public.vm_network_interfaces FOR EACH ROW EXECUTE FUNCTION public.release_mac_address_allocation('vm');
 
 
 --

@@ -430,6 +430,11 @@ public func configure(
     // eligibility intent. Missing disks remain rows until their agent is removed.
     app.migrations.add(CreateStorageDevices())
 
+    // STR-288: one fleet-wide ledger owns VM and sandbox NIC MAC uniqueness.
+    // Existing addresses are retained exactly; incompatible legacy rows make
+    // this migration fail closed with their interface ids.
+    app.migrations.add(CreateMACAddressLedger())
+
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
     // that records it, so concurrent replica boots race the same migration and a
@@ -438,7 +443,21 @@ public func configure(
     // commits each migration with its log row.
     var schemaMigrationOptions = SchemaMigrator.Options.fromConfiguration(app.controlPlaneConfiguration)
     schemaMigrationOptions.statementTimeouts = databaseStatementTimeouts
-    try await SchemaMigrator.run(on: app, options: schemaMigrationOptions)
+    do {
+        try await SchemaMigrator.run(on: app, options: schemaMigrationOptions)
+    } catch {
+        // In particular, let a legacy MAC collision name every affected NIC
+        // before the ledger migration refuses to install only half its safety
+        // constraints. Schemas too old to have both interface tables simply
+        // make this best-effort diagnostic unavailable.
+        try? await MACAddressAudit.warnAboutDuplicates(on: app.db, logger: app.logger)
+        throw error
+    }
+
+    // The migration makes new collisions structurally impossible. Keep the
+    // audit on every boot as defense against a manually damaged/mis-recorded
+    // schema and as an explicit zero-valued health metric.
+    try await MACAddressAudit.warnAboutDuplicates(on: app.db, logger: app.logger)
 
     // STR-186 prevents new tenant IPv6 subnets from overlapping the ULA space
     // used by metadata and per-network resolvers. Existing rows cannot be
