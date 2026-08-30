@@ -145,11 +145,24 @@ enum ResourceFinalizerService {
         return try await R.reap(resource, on: db, app: app) ? .reaped : .alreadyGone
     }
 
-    /// Resolve a VM-owned boot volume when its agent is offline. Physical
+    /// Resolve both halves of an offline VM delete in one transaction. Physical
     /// bytes may remain on that host, matching the VM process orphan policy,
     /// but database ownership still tears down in boot-volume-before-VM order.
+    /// Keeping the boot-volume reap and the VM's agent-finalizer clear in the
+    /// same commit closes the crash gap that could otherwise leave a live VM
+    /// row with no boot volume and no future cleanup trigger (STR-287).
     /// Online deletes never call this; their agent must confirm both absences.
-    static func abandonBootVolumeForOfflineVM(
+    static func abandonOfflineVM(
+        vmID: UUID, on db: any Database, app: Application
+    ) async throws -> ClearOutcome {
+        try await db.transaction { tx in
+            try await abandonBootVolumeForOfflineVM(vmID: vmID, on: tx, app: app)
+            guard let vm = try await VM.find(vmID, on: tx) else { return .alreadyGone }
+            return try await clear(.agentAbsent, from: vm, on: tx, app: app)
+        }
+    }
+
+    private static func abandonBootVolumeForOfflineVM(
         vmID: UUID, on db: any Database, app: Application
     ) async throws {
         let bootVolumes = try await Volume.query(on: db)

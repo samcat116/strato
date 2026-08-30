@@ -84,7 +84,8 @@ struct PreparedControlPlaneObservability {
                 let otel = otelFactory?(label)
                 return ObservabilityBootstrap.composeLogHandlers(
                     console: console,
-                    otel: otel)
+                    otel: otel,
+                    level: level)
             }
         }
     }
@@ -111,9 +112,11 @@ enum ObservabilityBootstrap {
 
     static func composeLogHandlers(
         console: any LogHandler,
-        otel: (any LogHandler)?
+        otel: (any LogHandler)?,
+        level: Logger.Level
     ) -> any LogHandler {
-        guard let otel else { return console }
+        guard var otel else { return console }
+        otel.logLevel = level
         return MultiplexLogHandler([console, otel])
     }
 

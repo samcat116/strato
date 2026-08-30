@@ -41,7 +41,8 @@ struct ObservabilityBootstrapTests {
         let console = LogRecorder()
         let handler = ObservabilityBootstrap.composeLogHandlers(
             console: RecordingLogHandler(recorder: console),
-            otel: nil)
+            otel: nil,
+            level: .debug)
 
         handler.log(event: Self.testEvent)
 
@@ -53,18 +54,20 @@ struct ObservabilityBootstrapTests {
         let console = LogRecorder()
         let otlp = LogRecorder()
         let handler = ObservabilityBootstrap.composeLogHandlers(
-            console: RecordingLogHandler(recorder: console),
-            otel: RecordingLogHandler(recorder: otlp))
+            console: RecordingLogHandler(logLevel: .debug, recorder: console),
+            otel: RecordingLogHandler(logLevel: .info, recorder: otlp),
+            level: .debug)
 
         handler.log(event: Self.testEvent)
 
         #expect(handler is MultiplexLogHandler)
+        #expect(handler.logLevel == .debug)
         #expect(console.messages == ["startup"])
         #expect(otlp.messages == ["startup"])
     }
 
     private static let testEvent = LogEvent(
-        level: .info,
+        level: .debug,
         message: "startup",
         metadata: nil,
         source: "App",
@@ -89,8 +92,13 @@ private struct SignalCase {
 
 private struct RecordingLogHandler: LogHandler {
     var metadata: Logger.Metadata = [:]
-    var logLevel: Logger.Level = .trace
+    var logLevel: Logger.Level
     let recorder: LogRecorder
+
+    init(logLevel: Logger.Level = .trace, recorder: LogRecorder) {
+        self.logLevel = logLevel
+        self.recorder = recorder
+    }
 
     subscript(metadataKey key: String) -> Logger.Metadata.Value? {
         get { metadata[key] }

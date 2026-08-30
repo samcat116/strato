@@ -175,7 +175,7 @@ export function CreateEnrollmentDialog({
                   Trust domain
                 </Label>
                 <code className="text-sm font-mono text-foreground break-all">
-                  {enrollment.spire.trustDomain}
+                  {enrollment.trustDomain}
                 </code>
               </div>
               <div className="flex flex-col gap-1 min-w-0">
@@ -183,15 +183,16 @@ export function CreateEnrollmentDialog({
                   SPIRE server
                 </Label>
                 <code className="text-sm font-mono text-foreground break-all">
-                  {enrollment.spire.serverAddress}
+                  {enrollment.spireServerAddress}
                 </code>
               </div>
             </div>
 
             <div className="p-4 bg-blue-500/10 rounded-lg border border-blue-500/30">
               <p className="text-sm text-blue-800">
-                <strong>Important:</strong> The join token in this command is
-                single-use and will not be shown again.
+                <strong>Important:</strong> The enrollment token in this command
+                is shown once. It expires when the agent registers or at the
+                time below.
               </p>
               <p className="text-sm text-muted-foreground mt-2">
                 Expires: {new Date(enrollment.expiresAt).toLocaleString()}
