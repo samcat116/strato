@@ -67,12 +67,14 @@ export function CreateSnapshotDialog({
       return;
     }
 
+    const payload = {
+      name: trimmedName,
+      description: description.trim() || undefined,
+    };
     await run({
-      request: () =>
-        volumesApi.snapshot(targetId, {
-          name: trimmedName,
-          description: description.trim() || undefined,
-        }),
+      intentKey: JSON.stringify(["POST", `/api/volumes/${targetId}/snapshot`, payload]),
+      request: (idempotencyKey) =>
+        volumesApi.snapshot(targetId, payload, idempotencyKey),
       watch: {
         snapshot: true,
         kind: "create",

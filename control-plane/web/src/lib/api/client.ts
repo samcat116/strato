@@ -14,6 +14,10 @@ interface FetchOptions extends RequestInit {
   params?: Record<string, string>;
 }
 
+function idempotencyHeaders(key?: string): HeadersInit | undefined {
+  return key ? { "Idempotency-Key": key } : undefined;
+}
+
 // The auth provider probes /auth/session on every page (including /login) to
 // hydrate its state, and a 401 there is just the normal signed-out case — so
 // auth endpoints and auth pages never trigger a redirect.
@@ -98,31 +102,57 @@ export const api = {
     return apiClient<T>(endpoint, { method: "GET", params, signal });
   },
 
-  post<T>(endpoint: string, data?: unknown, signal?: AbortSignal): Promise<T> {
+  post<T>(
+    endpoint: string,
+    data?: unknown,
+    signal?: AbortSignal,
+    idempotencyKey?: string
+  ): Promise<T> {
     return apiClient<T>(endpoint, {
       method: "POST",
       body: data ? JSON.stringify(data) : undefined,
       signal,
+      headers: idempotencyHeaders(idempotencyKey),
     });
   },
 
-  put<T>(endpoint: string, data?: unknown, signal?: AbortSignal): Promise<T> {
+  put<T>(
+    endpoint: string,
+    data?: unknown,
+    signal?: AbortSignal,
+    idempotencyKey?: string
+  ): Promise<T> {
     return apiClient<T>(endpoint, {
       method: "PUT",
       body: data ? JSON.stringify(data) : undefined,
       signal,
+      headers: idempotencyHeaders(idempotencyKey),
     });
   },
 
-  patch<T>(endpoint: string, data?: unknown, signal?: AbortSignal): Promise<T> {
+  patch<T>(
+    endpoint: string,
+    data?: unknown,
+    signal?: AbortSignal,
+    idempotencyKey?: string
+  ): Promise<T> {
     return apiClient<T>(endpoint, {
       method: "PATCH",
       body: data ? JSON.stringify(data) : undefined,
       signal,
+      headers: idempotencyHeaders(idempotencyKey),
     });
   },
 
-  delete<T>(endpoint: string, signal?: AbortSignal): Promise<T> {
-    return apiClient<T>(endpoint, { method: "DELETE", signal });
+  delete<T>(
+    endpoint: string,
+    signal?: AbortSignal,
+    idempotencyKey?: string
+  ): Promise<T> {
+    return apiClient<T>(endpoint, {
+      method: "DELETE",
+      signal,
+      headers: idempotencyHeaders(idempotencyKey),
+    });
   },
 };

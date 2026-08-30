@@ -920,6 +920,8 @@ struct VMController: RouteCollection {
                 vm.$id.exists = false
                 vm.generation = initialGeneration
                 return try await req.db.transaction { db in
+                    try await IdempotencyService.reserve(
+                        req.idempotencyContext, actor: .user(userID), on: db)
                     // Enforce and reserve applicable project/OU/org quotas before the VM row
                     // exists. Throws Abort(.forbidden) naming the quota if it would be exceeded.
                     try await QuotaEnforcementService.reserve(
@@ -1216,8 +1218,16 @@ struct VMController: RouteCollection {
                         on: db
                     )
 
-                    return ResourceMutation.Accepted(
+                    let accepted = ResourceMutation.Accepted(
                         mutationID: try event.requireID(), targetGeneration: vm.generation)
+                    try await IdempotencyService.complete(
+                        req.idempotencyContext,
+                        actor: .user(userID),
+                        resourceKind: .virtualMachine,
+                        resourceID: vmID,
+                        accepted: accepted,
+                        on: db)
+                    return accepted
                 }
             }
         } catch let error as IPAMService.IPAMError {
@@ -1292,6 +1302,8 @@ struct VMController: RouteCollection {
     func update(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Mutating a VM")
         let existingVM = try await fetchVMWithAction(req: req, action: "vm:update")
+        let existingVMID = try existingVM.requireID()
+        let actor = MutationActor.user(try user.requireID())
 
         // Decodable rather than Content: `balloonTarget` needs to tell an
         // absent key from an explicit null, which needs a hand-written decode,
@@ -1380,12 +1392,21 @@ struct VMController: RouteCollection {
         let balloonChanged = newBalloonTarget != existingVM.balloonTarget
         guard newCPU != existingVM.cpu || newMemory != existingVM.memory || balloonChanged else {
             let metadataEnabledChanged = try await req.db.transaction { db in
+                try await IdempotencyService.reserve(
+                    req.idempotencyContext, actor: actor, on: db)
                 guard try await existingVM.lockAndRefresh(on: db) else {
                     throw Abort(.notFound, reason: "VM no longer exists")
                 }
                 let changed = try await Self.applyMetadataUpdate(
                     updateRequest.metadataEnabled, to: existingVM, on: db)
                 try await existingVM.save(on: db)
+                try await IdempotencyService.completeSynchronousResponse(
+                    req.idempotencyContext,
+                    actor: actor,
+                    resourceKind: .virtualMachine,
+                    resourceID: existingVMID,
+                    responseStatus: .ok,
+                    on: db)
                 return changed
             }
             await Self.nudgeAfterMetadataOrHostnameUpdate(
@@ -1431,9 +1452,6 @@ struct VMController: RouteCollection {
         guard let project = try await Project.find(existingVM.$project.id, on: req.db) else {
             throw Abort(.internalServerError, reason: "VM's project no longer exists")
         }
-        let cpuDelta = newCPU - existingVM.cpu
-        let memoryDelta = newMemory - existingVM.memory
-
         // A resting VM can apply the new sizing without live-unplug support.
         // QEMU/libvirt still has a persistent definition to update, so this
         // generation must reach the placed agent before it is converged.
@@ -1448,14 +1466,19 @@ struct VMController: RouteCollection {
             try await Self.requirePlacedResizeCapacity(
                 vm: existingVM, newCPU: newCPU, newMemory: newMemory, on: req)
             try await req.db.transaction { db in
+                try await IdempotencyService.reserve(
+                    req.idempotencyContext, actor: actor, on: db)
                 guard try await existingVM.lockAndRefresh(on: db) else {
                     throw Abort(.notFound, reason: "VM no longer exists")
                 }
+                let committed = try await Self.committedVMSizing(existingVMID, on: db)
                 _ = try await Self.applyMetadataUpdate(
                     updateRequest.metadataEnabled, to: existingVM, on: db)
                 try await QuotaEnforcementService.reserveVMResize(
                     for: project, environment: existingVM.environment,
-                    vcpuDelta: cpuDelta, memoryDelta: memoryDelta, on: db)
+                    vcpuDelta: newCPU - committed.cpu,
+                    memoryDelta: newMemory - committed.memory,
+                    on: db)
                 existingVM.cpu = newCPU
                 existingVM.memory = newMemory
                 existingVM.balloonTarget = newBalloonTarget
@@ -1473,6 +1496,13 @@ struct VMController: RouteCollection {
                         reason: "Failed to advance the locked VM generation")
                 }
                 try await existingVM.save(on: db)
+                try await IdempotencyService.completeSynchronousResponse(
+                    req.idempotencyContext,
+                    actor: actor,
+                    resourceKind: .virtualMachine,
+                    resourceID: existingVMID,
+                    responseStatus: .ok,
+                    on: db)
             }
             if let placedAgentId = existingVM.hypervisorId {
                 await req.application.agentService.syncDesiredState(agentId: placedAgentId)
@@ -1521,10 +1551,8 @@ struct VMController: RouteCollection {
         }
         try await Self.requirePlacedResizeCapacity(
             vm: existingVM, newCPU: newCPU, newMemory: newMemory, on: req)
-        let existingVMID = try existingVM.requireID()
-        let userID = try user.requireID()
         let accepted = try await req.resourceMutation.accept(
-            .resize, on: existingVM, actor: .user(userID), dispatch: .stateSync,
+            .resize, on: existingVM, actor: actor, dispatch: .stateSync,
             on: req.db, app: req.application
         ) { @Sendable db in
             // `accept` took and refreshed the row lock before entering this
@@ -1777,7 +1805,7 @@ struct VMController: RouteCollection {
     /// The VM detail DTO with its NIC children loaded. The DTO, not the model:
     /// the raw `VM` encoding would expose fields that must stay server-side
     /// (cloud-init user_data can carry secrets).
-    private static func detailResponse(for vm: VM, on req: Request) async throws -> Response {
+    static func detailResponse(for vm: VM, on req: Request) async throws -> Response {
         try await detail(for: vm, on: req).encodeResponse(for: req)
     }
 
@@ -1785,18 +1813,22 @@ struct VMController: RouteCollection {
     ///   security groups are actually enforced. That answer costs its own
     ///   queries and means nothing for a VM being torn down, so the delete path
     ///   skips it and reports `nil` — "unknown", which is the truth there.
-    private static func detail(
-        for vm: VM, on req: Request, resolvingEnforcement: Bool = true
+    static func detail(
+        for vm: VM,
+        on req: Request,
+        resolvingEnforcement: Bool = true,
+        database: (any Database)? = nil
     ) async throws -> VMDetailResponse {
-        try await loadInterfaces(for: vm, on: req.db)
-        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
+        let database = database ?? req.db
+        try await loadInterfaces(for: vm, on: database)
+        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: database)
         let enforcement =
             resolvingEnforcement
             ? try await SecurityGroupService.enforcement(
                 for: vm,
                 offlineGrace: req.controlPlaneConfiguration.double(
                     .siteControllerOfflineGraceSeconds),
-                on: req.db) : nil
+                on: database) : nil
         return VMDetailResponse(
             from: vm,
             securityGroupsEnforced: enforcement,
@@ -2046,7 +2078,14 @@ struct VMController: RouteCollection {
 
         let accepted = try await req.resourceMutation.accept(
             .delete, on: vm, actor: .user(userID), dispatch: strategy,
-            on: req.db, app: app
+            on: req.db, app: app,
+            idempotencyResponseBody: { @Sendable vm, accepted, db in
+                try await AcceptedMutation(
+                    Self.detail(
+                        for: vm, on: req, resolvingEnforcement: false, database: db),
+                    accepted
+                ).encodedBody()
+            }
         ) { @Sendable db in
             // Stamp before the mark: `stampForDeletion` reads whether the VM
             // is already terminating, and re-stamping a second DELETE would

@@ -13,25 +13,38 @@ import Vapor
 /// record and dispatch it, and let the agent's report close the loop.
 enum SnapshotArtifactMutation {
 
-    /// Appends the capture's attribution event. Call inside the same
-    /// transaction as the insert, after it: a mutation must never apply
-    /// unrecorded, nor be recorded without applying.
+    /// Appends the capture's attribution event and completes its idempotency
+    /// reservation. Call inside the same transaction as the insert, after it:
+    /// a mutation must never apply unrecorded, nor be recorded without applying.
     ///
     /// Separate from `ResourceMutation.accept` for the reason every create path
     /// is: the insert owns its transaction (each family's carries different
-    /// quota and IAM work), so what is shared is the record and the dispatch,
-    /// not the transaction.
+    /// quota and IAM work), so what is shared is completion and dispatch, not
+    /// the transaction. Each caller reserves the key at the start of its own
+    /// transaction before quota, uniqueness, or resource effects can run.
     static func recordCapture<A: SnapshotArtifactResource>(
-        _ artifact: A, actor: MutationActor, on db: any Database
+        _ artifact: A,
+        actor: MutationActor,
+        idempotencyContext: IdempotencyRequestContext? = nil,
+        on db: any Database
     ) async throws -> ResourceMutation.Accepted {
+        let artifactID = try artifact.requireID()
         let event = try await ResourceEvent.record(
             .create,
             resourceKind: A.operationResourceKind,
-            resourceID: try artifact.requireID(),
+            resourceID: artifactID,
             actor: actor,
             on: db)
-        return ResourceMutation.Accepted(
+        let accepted = ResourceMutation.Accepted(
             mutationID: try event.requireID(), targetGeneration: artifact.generation)
+        try await IdempotencyService.complete(
+            idempotencyContext,
+            actor: actor,
+            resourceKind: A.operationResourceKind,
+            resourceID: artifactID,
+            accepted: accepted,
+            on: db)
+        return accepted
     }
 
     /// Nudges the agent that should capture the artifact. Runs after the insert
@@ -61,6 +74,11 @@ enum SnapshotArtifactMutation {
     static func delete<A: SnapshotArtifactResource>(
         _ artifact: A,
         actor: MutationActor,
+        idempotencyContext: IdempotencyRequestContext? = nil,
+        idempotencyResponseBody:
+            @escaping @Sendable (A, ResourceMutation.Accepted, any Database) async throws -> Data? = {
+                _, _, _ in nil
+            },
         on db: any Database,
         app: Application,
         failureReason: String? = nil
@@ -96,7 +114,11 @@ enum SnapshotArtifactMutation {
                 return outcome.isRemoved
             }
 
-        return try await app.resourceMutation.accept(
+        return try await ResourceMutation(
+            agentDispatch: app.agentService,
+            logger: app.logger,
+            idempotencyContext: idempotencyContext
+        ).accept(
             .delete,
             on: artifact,
             actor: actor,
@@ -113,6 +135,7 @@ enum SnapshotArtifactMutation {
                     throw Abort(.conflict, reason: blocker)
                 }
             },
+            idempotencyResponseBody: idempotencyResponseBody,
             applying: { @Sendable transaction in
                 if let failureReason {
                     artifact.lastError = failureReason
@@ -147,10 +170,15 @@ enum SnapshotArtifactMutation {
     static func requestExport(
         _ snapshot: SandboxSnapshot,
         actor: MutationActor,
+        idempotencyContext: IdempotencyRequestContext? = nil,
         on db: any Database,
         app: Application
     ) async throws -> ResourceMutation.Accepted {
-        try await app.resourceMutation.accept(
+        try await ResourceMutation(
+            agentDispatch: app.agentService,
+            logger: app.logger,
+            idempotencyContext: idempotencyContext
+        ).accept(
             .snapshotExport, on: snapshot, actor: actor, dispatch: .stateSync, on: db, app: app
         ) { @Sendable _ in
             snapshot.exportDesired = true

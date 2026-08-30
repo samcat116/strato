@@ -89,7 +89,8 @@ extension SandboxController {
                     size: current.size ?? 0, on: db)
             }
             return try await SnapshotArtifactMutation.requestExport(
-                snapshot, actor: .user(userID), on: db, app: req.application)
+                snapshot, actor: .user(userID), idempotencyContext: req.idempotencyContext,
+                on: db, app: req.application)
         }
 
         req.logger.info(

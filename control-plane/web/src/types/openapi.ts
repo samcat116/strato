@@ -10022,6 +10022,8 @@ export interface components {
         };
     };
     parameters: {
+        /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+        IdempotencyKey: string;
         /** @description The virtual machine's id. */
         VMID: string;
         /** @description The VM network interface's id. */
@@ -10354,7 +10356,10 @@ export interface operations {
     createVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -10402,7 +10407,10 @@ export interface operations {
     updateVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10442,7 +10450,10 @@ export interface operations {
     deleteVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10520,7 +10531,10 @@ export interface operations {
     startVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10566,7 +10580,10 @@ export interface operations {
     attachVMNetworkInterface: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10590,7 +10607,10 @@ export interface operations {
     detachVMNetworkInterface: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10611,7 +10631,10 @@ export interface operations {
     retryVMNetworkInterfaceMutation: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10632,7 +10655,10 @@ export interface operations {
     stopVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10652,7 +10678,10 @@ export interface operations {
     restartVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10672,7 +10701,10 @@ export interface operations {
     pauseVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10692,7 +10724,10 @@ export interface operations {
     resumeVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10834,7 +10869,10 @@ export interface operations {
     createVMSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10858,7 +10896,10 @@ export interface operations {
     deleteVMSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10880,7 +10921,10 @@ export interface operations {
     restoreVMSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10957,7 +11001,10 @@ export interface operations {
     createSandbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -11035,7 +11082,10 @@ export interface operations {
     deleteSandbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11055,7 +11105,10 @@ export interface operations {
     startSandbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11075,7 +11128,10 @@ export interface operations {
     stopSandbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11095,7 +11151,10 @@ export interface operations {
     restartSandbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11237,7 +11296,10 @@ export interface operations {
     createSandboxSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11261,7 +11323,10 @@ export interface operations {
     deleteSandboxSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11283,7 +11348,10 @@ export interface operations {
     restoreSandboxSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11305,7 +11373,10 @@ export interface operations {
     exportSandboxSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11754,7 +11825,10 @@ export interface operations {
     createVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -11831,7 +11905,10 @@ export interface operations {
     deleteVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11851,7 +11928,10 @@ export interface operations {
     attachVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11875,7 +11955,10 @@ export interface operations {
     detachVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11895,7 +11978,10 @@ export interface operations {
     resizeVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11919,7 +12005,10 @@ export interface operations {
     setVolumeIOLimits: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11943,7 +12032,10 @@ export interface operations {
     createVolumeSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11967,7 +12059,10 @@ export interface operations {
     cloneVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -12023,7 +12118,10 @@ export interface operations {
     deleteVolumeSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];

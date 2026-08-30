@@ -110,7 +110,8 @@ export function VMActions({ vm, onActionComplete, allowedActions }: VMActionsPro
     // state and toasts the outcome.
     run({
       busyKey: action,
-      request: () => vmsApi[action](vm.id),
+      intentKey: JSON.stringify(["POST", `/api/vms/${vm.id}/${action}`, null]),
+      request: (idempotencyKey) => vmsApi[action](vm.id, idempotencyKey),
       watch: {
         kind: actionToKind[action],
         resourceKind: "virtual_machine",

@@ -1004,6 +1004,24 @@ actor AgentService {
 
                     try self.checkTickPreconditions()
 
+                    // Idempotency claims retain only the documented 24-hour
+                    // replay window. A plain indexed delete is safe on every
+                    // replica, so run it hourly without a singleton lock.
+                    if tick % 120 == 0 {
+                        do {
+                            let deleted = try await IdempotencyService.sweepExpired(on: app.db)
+                            if deleted > 0 {
+                                app.logger.info(
+                                    "Idempotency retention sweep pruned expired keys",
+                                    metadata: ["deleted": .stringConvertible(deleted)])
+                            }
+                        } catch {
+                            app.logger.error("Idempotency retention sweep failed: \(error)")
+                        }
+                    }
+
+                    try self.checkTickPreconditions()
+
                     // Advance the agent auto-update rollout one agent at a
                     // time (issue #434).
                     await sweepAgentAutoUpdates()

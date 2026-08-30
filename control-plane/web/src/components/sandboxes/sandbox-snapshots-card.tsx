@@ -50,13 +50,15 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
   const submitCreate = async (event: React.FormEvent) => {
     event.preventDefault();
     const trimmedName = snapshotName.trim();
+    const payload = {
+      name: trimmedName || undefined,
+      stop: stopAfterSnapshot || undefined,
+    };
 
     await runCreate({
-      request: () =>
-        sandboxesApi.createSnapshot(sandbox.id, {
-          name: trimmedName || undefined,
-          stop: stopAfterSnapshot || undefined,
-        }),
+      intentKey: JSON.stringify(["POST", `/api/sandboxes/${sandbox.id}/snapshots`, payload]),
+      request: (idempotencyKey) =>
+        sandboxesApi.createSnapshot(sandbox.id, payload, idempotencyKey),
       watch: {
         snapshot: true,
         kind: "create",
@@ -88,7 +90,9 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
   const exportSnapshot = (snapshot: SandboxSnapshot) =>
     runExport({
       busyKey: snapshot.id,
-      request: () => sandboxesApi.exportSnapshot(sandbox.id, snapshot.id),
+      intentKey: JSON.stringify(["POST", `/api/sandboxes/${sandbox.id}/snapshots/${snapshot.id}/export`, null]),
+      request: (idempotencyKey) =>
+        sandboxesApi.exportSnapshot(sandbox.id, snapshot.id, idempotencyKey),
       watch: {
         snapshot: true,
         kind: "snapshot_export",
@@ -114,13 +118,14 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
 
     // A fork is an ordinary sandbox create, so it answers with the new
     // sandbox rather than an operation.
+    const payload = {
+      name: name.trim(),
+      restoreFrom: selected.id,
+      projectId,
+    };
     await runFork({
-      request: () =>
-        sandboxesApi.create({
-          name: name.trim(),
-          restoreFrom: selected.id,
-          projectId,
-        }),
+      intentKey: JSON.stringify(["POST", "/api/sandboxes", payload]),
+      request: (idempotencyKey) => sandboxesApi.create(payload, idempotencyKey),
       watch: {
         kind: "create",
         resourceKind: "sandbox",

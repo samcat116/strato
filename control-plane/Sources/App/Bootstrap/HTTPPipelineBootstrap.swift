@@ -114,6 +114,12 @@ extension Application {
         // both authenticators and the audit middleware (so denials are audited),
         // before authorization.
         middleware.use(UserSecurityMiddleware())
+
+        // STR-289: authentication supplies the principal-scoped key space. Run
+        // before the global authorization gate so a replay can authorize and
+        // return the current named resource without re-entering its mutation
+        // handler.
+        middleware.use(IdempotencyMiddleware())
     }
 
     private func installRateLimitingMiddleware() {

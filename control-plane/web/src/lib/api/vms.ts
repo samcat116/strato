@@ -35,8 +35,8 @@ export const vmsApi = {
     return api.get<VM>(`/api/vms/${id}`, undefined, signal);
   },
 
-  create(data: CreateVMRequest): Promise<AcceptedMutation<VM>> {
-    return api.post<AcceptedMutation<VM>>("/api/vms", data);
+  create(data: CreateVMRequest, idempotencyKey?: string): Promise<AcceptedMutation<VM>> {
+    return api.post<AcceptedMutation<VM>>("/api/vms", data, undefined, idempotencyKey);
   },
 
   patchMetadata(id: string, data: PatchVMMetadataRequest): Promise<VM> {
@@ -49,20 +49,27 @@ export const vmsApi = {
 
   attachInterface(
     id: string,
-    data: CreateVMNetworkInterfaceRequest
+    data: CreateVMNetworkInterfaceRequest,
+    idempotencyKey?: string
   ): Promise<AcceptedMutation<VM>> {
-    return api.post<AcceptedMutation<VM>>(`/api/vms/${id}/interfaces`, data);
-  },
-
-  detachInterface(id: string, interfaceId: string): Promise<AcceptedMutation<VM>> {
-    return api.delete<AcceptedMutation<VM>>(
-      `/api/vms/${id}/interfaces/${interfaceId}`
+    return api.post<AcceptedMutation<VM>>(
+      `/api/vms/${id}/interfaces`, data, undefined, idempotencyKey
     );
   },
 
-  retryInterface(id: string, interfaceId: string): Promise<AcceptedMutation<VM>> {
+  detachInterface(
+    id: string, interfaceId: string, idempotencyKey?: string
+  ): Promise<AcceptedMutation<VM>> {
+    return api.delete<AcceptedMutation<VM>>(
+      `/api/vms/${id}/interfaces/${interfaceId}`, undefined, idempotencyKey
+    );
+  },
+
+  retryInterface(
+    id: string, interfaceId: string, idempotencyKey?: string
+  ): Promise<AcceptedMutation<VM>> {
     return api.post<AcceptedMutation<VM>>(
-      `/api/vms/${id}/interfaces/${interfaceId}/retry`
+      `/api/vms/${id}/interfaces/${interfaceId}/retry`, undefined, undefined, idempotencyKey
     );
   },
 
@@ -74,31 +81,41 @@ export const vmsApi = {
     return api.post<VNCSession>(`/api/vms/${id}/console/vnc`, {});
   },
 
-  delete(id: string): Promise<AcceptedMutation<VM>> {
-    return api.delete<AcceptedMutation<VM>>(`/api/vms/${id}`);
+  delete(id: string, idempotencyKey?: string): Promise<AcceptedMutation<VM>> {
+    return api.delete<AcceptedMutation<VM>>(`/api/vms/${id}`, undefined, idempotencyKey);
   },
 
-  start(id: string): Promise<AcceptedMutation<VM>> {
-    return api.post<AcceptedMutation<VM>>(`/api/vms/${id}/start`);
+  start(id: string, idempotencyKey?: string): Promise<AcceptedMutation<VM>> {
+    return api.post<AcceptedMutation<VM>>(
+      `/api/vms/${id}/start`, undefined, undefined, idempotencyKey
+    );
   },
 
-  stop(id: string): Promise<AcceptedMutation<VM>> {
-    return api.post<AcceptedMutation<VM>>(`/api/vms/${id}/stop`);
+  stop(id: string, idempotencyKey?: string): Promise<AcceptedMutation<VM>> {
+    return api.post<AcceptedMutation<VM>>(
+      `/api/vms/${id}/stop`, undefined, undefined, idempotencyKey
+    );
   },
 
   // Restart joined the rest at backend STR-151: a reboot rides the sync as a
   // monotonic nonce on the VM's desired entry, so it has a generation to
   // converge on like every other mutation.
-  restart(id: string): Promise<AcceptedMutation<VM>> {
-    return api.post<AcceptedMutation<VM>>(`/api/vms/${id}/restart`);
+  restart(id: string, idempotencyKey?: string): Promise<AcceptedMutation<VM>> {
+    return api.post<AcceptedMutation<VM>>(
+      `/api/vms/${id}/restart`, undefined, undefined, idempotencyKey
+    );
   },
 
-  pause(id: string): Promise<AcceptedMutation<VM>> {
-    return api.post<AcceptedMutation<VM>>(`/api/vms/${id}/pause`);
+  pause(id: string, idempotencyKey?: string): Promise<AcceptedMutation<VM>> {
+    return api.post<AcceptedMutation<VM>>(
+      `/api/vms/${id}/pause`, undefined, undefined, idempotencyKey
+    );
   },
 
-  resume(id: string): Promise<AcceptedMutation<VM>> {
-    return api.post<AcceptedMutation<VM>>(`/api/vms/${id}/resume`);
+  resume(id: string, idempotencyKey?: string): Promise<AcceptedMutation<VM>> {
+    return api.post<AcceptedMutation<VM>>(
+      `/api/vms/${id}/resume`, undefined, undefined, idempotencyKey
+    );
   },
 
   // Full-VM checkpoints (issue #564): memory + device state + disks captured
@@ -111,28 +128,34 @@ export const vmsApi = {
 
   createSnapshot(
     id: string,
-    data?: CreateVMSnapshotRequest
+    data?: CreateVMSnapshotRequest,
+    idempotencyKey?: string
   ): Promise<AcceptedMutation<VMSnapshot>> {
     return api.post<AcceptedMutation<VMSnapshot>>(
       `/api/vms/${id}/snapshots`,
-      data ?? {}
+      data ?? {},
+      undefined,
+      idempotencyKey
     );
   },
 
   deleteSnapshot(
     id: string,
-    snapshotId: string
+    snapshotId: string,
+    idempotencyKey?: string
   ): Promise<AcceptedMutation<VMSnapshot>> {
     return api.delete<AcceptedMutation<VMSnapshot>>(
-      `/api/vms/${id}/snapshots/${snapshotId}`
+      `/api/vms/${id}/snapshots/${snapshotId}`, undefined, idempotencyKey
     );
   },
 
   // A restore acts on the VM, not on the checkpoint, so its 202 carries the VM
   // and the generation to wait for (backend STR-151).
-  restoreSnapshot(id: string, snapshotId: string): Promise<AcceptedMutation<VM>> {
+  restoreSnapshot(
+    id: string, snapshotId: string, idempotencyKey?: string
+  ): Promise<AcceptedMutation<VM>> {
     return api.post<AcceptedMutation<VM>>(
-      `/api/vms/${id}/snapshots/${snapshotId}/restore`
+      `/api/vms/${id}/snapshots/${snapshotId}/restore`, undefined, undefined, idempotencyKey
     );
   },
 

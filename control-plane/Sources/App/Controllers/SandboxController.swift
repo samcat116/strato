@@ -148,16 +148,19 @@ struct SandboxController: RouteCollection {
     /// enforcement verdict resolved. Single-sandbox only — the list path uses
     /// `enforcementBySandbox`, which memoizes the host and site lookups this
     /// makes per call.
-    private static func detailResponse(for sandbox: Sandbox, on req: Request) async throws
+    static func detailResponse(
+        for sandbox: Sandbox, on req: Request, database: (any Database)? = nil
+    ) async throws
         -> SandboxDetailResponse
     {
-        try await loadNICDetail(sandbox, on: req.db)
+        let database = database ?? req.db
+        try await loadNICDetail(sandbox, on: database)
         return SandboxDetailResponse(
             from: sandbox,
             securityGroupsEnforced: try await SecurityGroupService.sandboxEnforcement(
                 for: sandbox,
                 offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
-                on: req.db))
+                on: database))
     }
 
     func show(req: Request) async throws -> SandboxDetailResponse {
@@ -561,6 +564,8 @@ struct SandboxController: RouteCollection {
                 sandbox.$id.exists = false
                 sandbox.generation = initialGeneration
                 return try await req.db.transaction { db -> ResourceMutation.Accepted in
+                    try await IdempotencyService.reserve(
+                        req.idempotencyContext, actor: .user(userID), on: db)
                     if let restoreSnapshotID {
                         try await Self.requireSnapshotAvailableForFork(
                             restoreSnapshotID, on: db)
@@ -638,8 +643,16 @@ struct SandboxController: RouteCollection {
                         on: db
                     )
 
-                    return ResourceMutation.Accepted(
+                    let accepted = ResourceMutation.Accepted(
                         mutationID: try event.requireID(), targetGeneration: sandbox.generation)
+                    try await IdempotencyService.complete(
+                        req.idempotencyContext,
+                        actor: .user(userID),
+                        resourceKind: .sandbox,
+                        resourceID: sandboxID,
+                        accepted: accepted,
+                        on: db)
+                    return accepted
                 }
             }
         } catch let error as IPAMService.IPAMError {
@@ -963,7 +976,12 @@ struct SandboxController: RouteCollection {
 
         let accepted = try await req.resourceMutation.accept(
             .delete, on: sandbox, actor: .user(userID), dispatch: strategy,
-            on: req.db, app: app
+            on: req.db, app: app,
+            idempotencyResponseBody: { @Sendable sandbox, accepted, db in
+                try await AcceptedMutation(
+                    Self.detailResponse(for: sandbox, on: req, database: db), accepted
+                ).encodedBody()
+            }
         ) { @Sendable db in
             try await Self.requireSnapshotLineageDeletable(for: sandboxID, on: db)
             // Stamp before the mark — see the VM delete path for why.
