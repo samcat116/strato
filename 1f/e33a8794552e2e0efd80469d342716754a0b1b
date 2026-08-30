@@ -1,0 +1,27 @@
+control-plane/Sources/App/Extensions/Request+SandboxAuthorization.swift
+  s_0f8aca6fbfee89::t_0518d09a4bfe3a 16
+control-plane/Sources/App/Extensions/Request+LoadBalancerAuthorization.swift
+  s_0f8aca6fbfee89::t_0518d09a4bfe3a 10-16
+control-plane/Sources/App/Extensions/Request+ResourceAuthorization.swift
+  s_0f8aca6fbfee89::t_0518d09a4bfe3a 1-21
+control-plane/Sources/App/Extensions/Request+VolumeAuthorization.swift
+  s_0f8aca6fbfee89::t_0518d09a4bfe3a 17
+control-plane/Sources/App/Extensions/Request+VMAuthorization.swift
+  s_0f8aca6fbfee89::t_0518d09a4bfe3a 15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "1fe33a8794552e2e0efd80469d342716754a0b1b",
+  "prompts": {},
+  "sessions": {
+    "s_0f8aca6fbfee89": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04f84-3979-7230-bc64-eeb951b1151d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
