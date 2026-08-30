@@ -178,6 +178,7 @@ let package = Package(
                 .product(name: "VaporTesting", package: "vapor"),
                 .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
                 .product(name: "MetricsTestKit", package: "swift-metrics"),
+                .product(name: "Logging", package: "swift-log"),
                 // Mints the throwaway server certificate GuardedHTTPClientTests
                 // uses to prove TLS is still verified against the hostname when
                 // the connection is pinned to an address.

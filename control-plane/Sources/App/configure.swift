@@ -11,9 +11,21 @@ public func configure(
     // Resolve every operator setting before constructing any service. A value
     // that is present but malformed must stop startup rather than being treated
     // as absent and replaced by a default at its eventual call site.
-    app.controlPlaneConfiguration = try await .load(
+    let configuration = try await ControlPlaneConfiguration.load(
         environmentVariables: environmentVariables,
         for: app.environment)
+    try await configure(
+        app,
+        resolvedConfiguration: configuration,
+        preparedObservability: nil)
+}
+
+func configure(
+    _ app: Application,
+    resolvedConfiguration: ControlPlaneConfiguration,
+    preparedObservability: PreparedControlPlaneObservability?
+) async throws {
+    app.controlPlaneConfiguration = resolvedConfiguration
 
     // Capture this process's identity once, before anything else, so the boot log
     // and the /health endpoints can report exactly who is answering. Two control
@@ -30,7 +42,7 @@ public func configure(
             "environment": .string(identity.environment),
         ])
 
-    try app.bootstrapObservability()
+    try app.bootstrapObservability(preparedObservability)
 
     // Track fire-and-forget background work (async VM operations) so shutdown
     // can drain it before Fluent closes its connection pools. Registered

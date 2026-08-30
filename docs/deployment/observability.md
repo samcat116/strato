@@ -21,7 +21,7 @@ OpenTelemetry is bootstrapped. Controlled by environment variables (see
 |----------|---------|-------|
 | `OTEL_METRICS_ENABLED` | `true` | Master switch for metric export |
 | `OTEL_TRACES_ENABLED` | `true` | Master switch for trace/span export |
-| `OTEL_LOGS_ENABLED` | `true` | Master switch for log export |
+| `OTEL_LOGS_ENABLED` | `true` | Adds OTLP log export; console/stdout logging always remains enabled |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` (gRPC) | Where to ship OTLP |
 | `OTEL_SERVICE_NAME` | `strato-control-plane` | `service.name` resource attribute |
 | `OTEL_RESOURCE_ATTRIBUTES` | — | Extra resource attributes; merged over the built-in `service.version` / `service.instance.id` / `deployment.environment.name` |
@@ -30,9 +30,10 @@ The compose deployment sets all **three** `OTEL_*_ENABLED` variables to
 `false` — its Prometheus and Loki serve agent host telemetry and VM console
 logs, not control-plane OTLP export.
 
-When a pillar is disabled, its facade uses a no-op backend — emission call sites
-(`Counter`/`Gauge`/`Timer`, `withSpan`) stay in the code but cost nothing. The
-bootstrap is also skipped entirely under the `.testing` environment.
+When metrics or traces are disabled, their facade uses a no-op backend —
+emission call sites (`Counter`/`Gauge`/`Timer`, `withSpan`) stay in the code but
+cost nothing. Disabling OTLP logs leaves the console backend in place. The OTel
+backends are skipped entirely under the `.testing` environment.
 
 Production should run with `OTEL_METRICS_ENABLED=true` pointed at a collector.
 The Helm chart wires this via the `opentelemetry.*` values.
@@ -332,9 +333,10 @@ SSF poll delivery are all timer-driven, with no enclosing span to attach to.
 
 ### Correlating traces with logs
 
-`entrypoint.swift` bootstraps SwiftLog with swift-otel's logging metadata
-provider, so any line logged inside a span carries `trace_id`, `span_id` and
-`trace_flags`. The default console handler renders metadata as a sorted,
+`entrypoint.swift` bootstraps SwiftLog once with the console handler, the
+optional OTLP handler, and swift-otel's logging metadata provider. Any line
+logged inside a span therefore carries `trace_id`, `span_id` and `trace_flags`
+in both sinks. The default console handler renders metadata as a sorted,
 bracketed suffix:
 
 ```
