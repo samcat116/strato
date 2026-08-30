@@ -146,7 +146,7 @@ strato:
 | --- | --- |
 | `externalDatabase.*` | Use an external PostgreSQL (`postgresql.enabled: false`). `existingSecret` sources the password from a pre-provisioned Secret; `strato.database.tls` defaults to `require` for external databases. |
 | `externalValkey.*` | Use an external Valkey (`valkey.enabled: false`) — Valkey is required either way. |
-| `strato.secretEncryption` | Points `existingSecret` at a Secret holding the 32-byte key (`openssl rand -hex 32`) that encrypts stored secrets — OIDC client secrets, SSF stream tokens, registry pull secrets, webhook signing secrets — at rest. Without it the control plane warns and stores them unencrypted. |
+| `strato.secretEncryption` | Points `existingSecret` at a Secret holding the primary 32-byte key (`openssl rand -hex 32`) that encrypts recoverable stored secrets. During rotation, `previousKeysKey` names a comma-separated decrypt-only entry in the same Secret. Upgrade every replica to fallback-capable code first, without creating or rotating recoverable secrets during that compatibility rollout. Next stage the future key as previous while keeping the old primary, update the Secret, and explicitly restart and finish every replica. Only then promote the future key to primary while retaining the old key as previous and explicitly restart again. Wait for all four sealing summaries to report `rewrapped=0` and `unopenable=0` before removing the old key. External Secret changes do not change the pod template, so explicitly restart the control-plane rollout after every Secret update. |
 
 Further hardening options (network policies, pod disruption budgets,
 resource limits) are documented in the

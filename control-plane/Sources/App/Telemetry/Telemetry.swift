@@ -225,6 +225,16 @@ enum Telemetry {
         Gauge(label: "strato_diverged_workloads", dimensions: [("kind", kind)]).record(count)
     }
 
+    /// Stored secrets the configured primary/previous keyring cannot open.
+    /// This is level-triggered and records zero at every startup so a repaired
+    /// rotation clears the prior series. `table` is one of four fixed columns.
+    static func recordUnopenableStoredSecrets(table: String, count: Int) {
+        Gauge(
+            label: "strato_secrets_encryption_unopenable",
+            dimensions: [("table", table)]
+        ).record(count)
+    }
+
     // MARK: - Teardown safety (STR-98)
 
     /// A workload an agent holds was confirmed to have no control-plane row,

@@ -182,16 +182,15 @@ public func configure(
     }
     app.middleware.use(app.sessions.middleware)
 
-    // At-rest encryption for recoverable secrets (OIDC client secrets, SSF
-    // stream auth tokens). A malformed key fails startup — a typo must not
-    // silently downgrade to plaintext storage — while an absent key runs
-    // pass-through with a warning so existing deployments keep working until
-    // the operator sets one.
+    // At-rest encryption for all four recoverable-secret columns. Malformed
+    // primary or previous keys fail startup. An absent key remains compatible
+    // with never-encrypted deployments; the post-migration audit below refuses
+    // startup if any ciphertext already exists.
     let secretsEncryption = try SecretsEncryptionService.fromConfiguration(app.controlPlaneConfiguration)
     app.secretsEncryption = secretsEncryption
     if !secretsEncryption.isEnabled {
         app.logger.warning(
-            "STRATO_SECRET_ENCRYPTION_KEY is not set — OIDC client secrets and SSF auth tokens will be stored unencrypted. Generate a key with `openssl rand -hex 32` and set it to enable encryption at rest."
+            "STRATO_SECRET_ENCRYPTION_KEY is not set — recoverable OIDC, SSF, registry, and webhook secrets will be stored unencrypted only if this deployment has no existing ciphertext. Generate a key with `openssl rand -hex 32` and set it to enable encryption at rest."
         )
     }
 
@@ -485,10 +484,10 @@ public func configure(
         await app.cedarPolicySet.rebuild(version: version, on: app.db)
     }
 
-    // Converge any plaintext stored secrets (OIDC client secrets, SSF auth
-    // tokens) to encrypted form. Runs every startup (not a one-shot migration)
-    // so a key added after upgrade still picks up rows written before it
-    // existed. No-op without a key.
+    // Audit all recoverable stored secrets and seal plaintext/previous-key rows
+    // to the primary. The pass is an every-boot convergence boundary, not a
+    // one-shot migration: it validates already-primary ciphertext too, records
+    // unknown rows for readiness/metrics, and refuses ciphertext-without-key.
     try await secretsEncryption.encryptStoredSecrets(on: app.db, logger: app.logger)
 
     // Initialize the WebAuthn decoy credential key (generates if not exists),

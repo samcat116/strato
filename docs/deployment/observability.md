@@ -161,6 +161,7 @@ bounded; unmatched requests fall back to `unmatched`.
 | `strato_vm_errors_total` | counter | `reason` = `reconciliation` \| `convergence_failed` \| `stuck_convergence` \| `mutation_failed` | A VM transitioned into `.error` |
 | `strato_vm_drift_total` | counter | — | A VM's observed state changed out-of-band with no mutation in flight (issue #260) |
 | `strato_diverged_workloads` | gauge | `kind` = `vm` \| `sandbox` | Current workloads whose acknowledged observed status has remained different from desired state for at least 15 minutes with no mutation outstanding. Recorded every sweep, including zero. **Alert on `> 0`** |
+| `strato_secrets_encryption_unopenable` | gauge | `table` = one of the four recoverable-secret columns | Stored secrets the boot keyring could not open. Recorded for every table at startup, including zero. **Alert on `> 0`**; `/health/ready` also reports `secrets-encryption` degraded. |
 
 ### Teardown safety & site networking
 
