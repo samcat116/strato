@@ -10,6 +10,7 @@ import {
   NetworkTable,
   CreateNetworkDialog,
   EditNetworkDialog,
+  NetworkACLDialog,
 } from "@/components/networks";
 import { useNetworks, useInvalidateNetworks, usePermissions } from "@/lib/hooks";
 import { useProjectContext } from "@/providers";
@@ -18,6 +19,10 @@ import type { Network } from "@/types/api";
 export default function NetworksPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Network | null>(null);
+  const [aclSelection, setACLSelection] = useState<{
+    network: Network;
+    canManage: boolean;
+  } | null>(null);
   const { currentProject } = useProjectContext();
   const networksQuery = useNetworks(currentProject?.id);
   const { data: networks = [], isLoading } = networksQuery;
@@ -73,6 +78,9 @@ export default function NetworksPage() {
             isLoading={isLoading}
             onRefresh={invalidateNetworks}
             onEdit={setEditing}
+            onManageACL={(network, canManage) =>
+              setACLSelection({ network, canManage })
+            }
           />
         </CardContent>
       </Card>
@@ -90,6 +98,15 @@ export default function NetworksPage() {
           if (!open) setEditing(null);
         }}
         onUpdated={invalidateNetworks}
+      />
+
+      <NetworkACLDialog
+        network={aclSelection?.network ?? null}
+        canManage={aclSelection?.canManage ?? false}
+        open={aclSelection !== null}
+        onOpenChange={(open) => {
+          if (!open) setACLSelection(null);
+        }}
       />
     </div>
   );

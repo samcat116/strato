@@ -430,6 +430,10 @@ public func configure(
     // eligibility intent. Missing disks remain rows until their agent is removed.
     app.migrations.add(CreateStorageDevices())
 
+    // STR-33: optional one-per-network stateless ACLs with ordered ingress and
+    // egress rules. Existing logical networks intentionally keep no ACL row.
+    app.migrations.add(CreateNetworkACLs())
+
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
     // that records it, so concurrent replica boots race the same migration and a

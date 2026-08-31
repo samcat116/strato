@@ -2151,6 +2151,47 @@ export interface UpdateNetworkRequest {
   resolverEnabled?: boolean;
 }
 
+// Network ACLs (stateless logical-switch filtering)
+
+export type NetworkACLRuleDirection = "ingress" | "egress";
+export type NetworkACLRuleEthertype = "ipv4" | "ipv6";
+export type NetworkACLRuleAction = "allow" | "deny";
+
+/** Server-enforced cap (NetworkACL.maxRules in the control plane). */
+export const MAX_NETWORK_ACL_RULES = 100;
+
+export interface CreateNetworkACLRuleRequest {
+  /** Evaluation order within one direction; lower numbers win. */
+  ruleNumber: number;
+  direction: NetworkACLRuleDirection;
+  ethertype: NetworkACLRuleEthertype;
+  action: NetworkACLRuleAction;
+  /** "tcp", "udp", or "icmp"; absent matches any IP protocol. */
+  protocolName?: "tcp" | "udp" | "icmp";
+  /** tcp/udp: first destination port. icmp: ICMP type. */
+  portRangeMin?: number;
+  /** tcp/udp: last destination port. icmp: ICMP code. */
+  portRangeMax?: number;
+  /** Source CIDR for ingress; destination CIDR for egress. */
+  remoteCIDR: string;
+  description?: string;
+}
+
+export interface NetworkACLRule extends CreateNetworkACLRuleRequest {
+  id: string;
+  createdAt?: string;
+}
+
+export interface NetworkACL {
+  id: string;
+  networkId: string;
+  /** Monotonic full-policy generation used by agent convergence. */
+  generation: number;
+  rules: NetworkACLRule[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 // Security groups (stateful NIC-level firewalls, realized as OVN ACLs)
 
 export type SecurityGroupRuleDirection = "ingress" | "egress";

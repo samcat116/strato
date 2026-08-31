@@ -329,6 +329,23 @@ use in code, tests, docs, and review. Architecture-level maps live in
 
 ## Networking
 
+- **Network ACL (NACL)** — optional, ordered **network-scoped** allow/deny
+  policy attached to a logical switch. Its intent is stateless: ingress and
+  egress rules are authored independently, lower rule numbers win, and each
+  direction defaults to deny. For a new flow, an ACL allow only passes the
+  packet onward to the applicable NIC security groups; it is not an override.
+
+- **Security group** — stateful, **NIC-scoped** allow policy attached through
+  OVN port groups. A NIC may join several groups; their `allow-related` rules
+  collectively admit a connection and the site-wide managed-port group supplies
+  the default drop. Security groups are not ordered tenant deny lists.
+
+- **OVN established-flow boundary** — once a security-group `allow-related`
+  verdict tracks a connection, OVN does not re-evaluate that established return
+  traffic through a switch ACL. Network ACL policy remains stateless in its own
+  rule construction, but this backend cannot provide AWS-exact independent
+  return-path filtering for an already established security-group flow.
+
 - **Chassis service foot** — the per-network pair of things every hypervisor
   builds for a link-local service its guests use: one OVN `localport` on the
   network's logical switch (authored by the site's topology authority) and one
