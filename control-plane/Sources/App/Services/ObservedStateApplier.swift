@@ -1625,9 +1625,17 @@ struct ObservedStateApplier {
                 // would apply one family's facts to another's row, so it is
                 // checked rather than assumed.
                 guard observed.kind == A.artifactKind else { continue }
-                try await withLockedCurrent(artifact, reportedBy: agentId, on: db) { artifact, tx in
+                let shouldEnforceStorageQuota = try await withLockedCurrent(
+                    artifact, reportedBy: agentId, on: db
+                ) { artifact, tx in
                     try await applyObservedSnapshotState(
                         artifact: artifact, observed: observed, on: tx)
+                }
+                if shouldEnforceStorageQuota == true {
+                    // Start quota enforcement only after the row-locking
+                    // transaction commits. A quota-triggered delete takes the
+                    // lineage advisory lock before it locks this row.
+                    try await enforceStorageQuota(on: artifact, on: db)
                 }
             } else {
                 try await withLockedCurrent(artifact, reportedBy: agentId, on: db) { artifact, tx in
@@ -1644,7 +1652,7 @@ struct ObservedStateApplier {
         artifact: A,
         observed: ObservedSnapshotState,
         on db: Database
-    ) async throws {
+    ) async throws -> Bool {
         let artifactID = try artifact.requireID()
         try logSupersededFailureReport(artifact, reportedGeneration: observed.failedGeneration)
         // Captured before anything mutates, for the reasons the VM path
@@ -1681,7 +1689,7 @@ struct ObservedStateApplier {
             if changed {
                 try await artifact.save(on: db)
             }
-            return
+            return false
         }
 
         if observed.observedGeneration > artifact.observedGeneration {
@@ -1705,7 +1713,7 @@ struct ObservedStateApplier {
             if changed {
                 try await artifact.save(on: db)
             }
-            return
+            return false
         }
 
         if !wasConverged, artifact.isConverged {
@@ -1723,9 +1731,7 @@ struct ObservedStateApplier {
             }
         }
 
-        if footprintChanged {
-            try await enforceStorageQuota(on: artifact, on: db)
-        }
+        return footprintChanged
     }
 
     /// Re-checks the storage pool at the moment the agent's real footprint
@@ -1761,11 +1767,11 @@ struct ObservedStateApplier {
                     projectID: scope.projectID, environment: scope.environment, on: db)
             else { return }
 
-            artifact.lastError =
+            let failureReason =
                 "Snapshot's actual size exceeded storage quota '\(violated)' and was deleted"
-            try await artifact.save(on: db)
             _ = try await SnapshotArtifactMutation.delete(
-                artifact, actor: .system, on: db, app: app)
+                artifact, actor: .system, on: db, app: app,
+                failureReason: failureReason)
 
             let artifactID = try artifact.requireID()
             app.logger.notice(

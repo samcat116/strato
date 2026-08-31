@@ -46,7 +46,16 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
             "Creating VM network with user-mode networking",
             metadata: ["strato.vm.id": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
 
-        let macAddress = config.macAddress ?? generateMACAddress()
+        let macAddress: String
+        if let configuredMAC = config.macAddress {
+            guard let parsedMAC = MACAddress(configuredMAC) else {
+                throw NetworkError.invalidConfiguration(
+                    "MAC address '\(configuredMAC)' is not a six-octet unicast address")
+            }
+            macAddress = parsedMAC.description
+        } else {
+            macAddress = generateMACAddress()
+        }
 
         // User-mode networking provides automatic DHCP: VMs get addresses in the
         // 10.0.2.0/24 range from QEMU's SLIRP, so no IP is allocated (or honored)

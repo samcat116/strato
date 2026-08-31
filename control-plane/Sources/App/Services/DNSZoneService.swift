@@ -1,5 +1,4 @@
 import Fluent
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -102,13 +101,12 @@ enum DNSZoneService {
     /// The record-write invariants — CNAME exclusivity, the RRset's shared
     /// TTL, the per-zone cap — are all read-then-write and none is expressible
     /// as an index, so they only hold if a zone's writes are serialized.
-    /// A transaction-scoped Postgres advisory lock, released on commit or
-    /// rollback, and a no-op on any non-Postgres database (like
-    /// `IPAMService`'s allocation lock).
+    /// A transaction-scoped PostgreSQL advisory lock is released on commit or
+    /// rollback. Unsupported database dialects fail rather than silently
+    /// skipping this invariant.
     static func lockZone(_ zoneID: UUID, on db: any Database) async throws {
-        guard let sql = db as? any SQLDatabase, sql.dialect.name == "postgresql" else { return }
-        try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: "dnszone:\(zoneID.uuidString)")))")
-            .run()
+        try await AdvisoryLock.acquireTransactionLock(
+            .object(.dnsZone, id: zoneID), on: db)
     }
 
     /// Apply one TTL/view to every record in an RRset — see the type doc on

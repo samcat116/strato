@@ -103,7 +103,8 @@ final class FloatingIPControllerTests {
         let builder = TestDataBuilder(db: app.db)
         let vm = try await builder.createVM(name: "fip-vm-\(UUID().uuidString.prefix(8))", project: project)
         let nic = VMNetworkInterface(
-            vmID: vm.id!, logicalNetworkID: try network.requireID(), macAddress: VMNetworkInterface.generateMACAddress()
+            vmID: vm.id!, logicalNetworkID: try network.requireID(),
+            macAddress: MACAllocator.generateCandidate().description
         )
         try await nic.save(on: app.db)
         try await VMInterfaceAddress(
