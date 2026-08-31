@@ -2016,10 +2016,8 @@ struct VMController: RouteCollection {
                 }
                 let outcome: ResourceFinalizerService.ClearOutcome
                 do {
-                    try await ResourceFinalizerService.abandonBootVolumeForOfflineVM(
+                    outcome = try await ResourceFinalizerService.abandonOfflineVM(
                         vmID: vmID, on: db, app: app)
-                    outcome = try await ResourceFinalizerService.clear(
-                        .agentAbsent, from: vm, on: db, app: app)
                 } catch {
                     throw ResourceMutation.WorkError(
                         "Failed to delete VM record: \(error.localizedDescription)")

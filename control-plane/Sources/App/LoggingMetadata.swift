@@ -1,29 +1,21 @@
-import Foundation
 import Logging
 import StratoShared
 
 enum ControlPlaneLoggingMetadata {
     static func base(
+        serviceName: String,
+        serviceInstanceID: String,
         environmentName: String,
-        environmentVariables: [String: String]
+        serviceVersion: String
     ) -> Logger.Metadata {
         [
             LogMetadata.Key.serviceName: .string(
-                nonEmpty(environmentVariables["OTEL_SERVICE_NAME"]) ?? "strato-control-plane"),
+                nonEmpty(serviceName) ?? "strato-control-plane"),
+            LogMetadata.Key.serviceInstanceID: .string(serviceInstanceID),
             LogMetadata.Key.serviceVersion: .string(
-                nonEmpty(environmentVariables["STRATO_VERSION"]) ?? "dev"),
+                nonEmpty(serviceVersion) ?? "dev"),
             LogMetadata.Key.deploymentEnvironmentName: .string(environmentName),
         ]
-    }
-
-    static func provider(
-        environmentName: String,
-        environmentVariables: [String: String]
-    ) -> Logger.MetadataProvider {
-        let metadata = base(
-            environmentName: environmentName,
-            environmentVariables: environmentVariables)
-        return Logger.MetadataProvider { metadata }
     }
 
     private static func nonEmpty(_ value: String?) -> String? {

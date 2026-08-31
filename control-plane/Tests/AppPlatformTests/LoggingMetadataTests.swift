@@ -10,13 +10,13 @@ struct LoggingMetadataTests {
     @Test("Control-plane base metadata uses stable canonical keys")
     func baseMetadata() {
         let metadata = ControlPlaneLoggingMetadata.base(
+            serviceName: "strato-api",
+            serviceInstanceID: "replica-284",
             environmentName: "production",
-            environmentVariables: [
-                "OTEL_SERVICE_NAME": "strato-api",
-                "STRATO_VERSION": "v1.2.3",
-            ])
+            serviceVersion: "v1.2.3")
 
         #expect(metadata["service.name"] == "strato-api")
+        #expect(metadata["service.instance.id"] == "replica-284")
         #expect(metadata["service.version"] == "v1.2.3")
         #expect(metadata["deployment.environment.name"] == "production")
     }
@@ -24,11 +24,10 @@ struct LoggingMetadataTests {
     @Test("Empty base metadata overrides fall back to deployment defaults")
     func emptyOverridesFallBack() {
         let metadata = ControlPlaneLoggingMetadata.base(
+            serviceName: "",
+            serviceInstanceID: "replica-284",
             environmentName: "development",
-            environmentVariables: [
-                "OTEL_SERVICE_NAME": "",
-                "STRATO_VERSION": "",
-            ])
+            serviceVersion: "")
 
         #expect(metadata["service.name"] == "strato-control-plane")
         #expect(metadata["service.version"] == "dev")

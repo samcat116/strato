@@ -1,6 +1,7 @@
 import Fluent
 import Foundation
 import SQLKit
+import Vapor
 
 /// The database boundary for every desired-state generation write.
 ///
@@ -60,6 +61,25 @@ enum DesiredStateGenerationWriter {
 
         if let advanced { return .applied(advanced.generation) }
         return try await currentOutcome(schema: schema, id: id, on: sql)
+    }
+
+    @discardableResult
+    static func advanceOrThrow(
+        schema: String,
+        id: UUID,
+        resource: String,
+        on db: any Database
+    ) async throws -> Int64 {
+        switch try await advance(schema: schema, id: id, on: db) {
+        case .applied(let generation):
+            return generation
+        case .missing:
+            throw Abort(.notFound, reason: "\(resource) no longer exists")
+        case .superseded:
+            // No expected generation was supplied, so an existing row always
+            // advances. Keep the impossible case loud.
+            throw Abort(.internalServerError, reason: "\(resource) generation did not advance")
+        }
     }
 
     /// Takes the row lock and verifies that a background writer still owns the

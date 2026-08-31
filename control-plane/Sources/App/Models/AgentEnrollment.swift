@@ -1,15 +1,17 @@
 import Fluent
+import Crypto
+import Foundation
+import SQLKit
 import Vapor
 
 /// A SPIRE enrollment for one agent node.
 ///
-/// Enrollment is the operator half of onboarding: creating one provisions the
-/// node in SPIRE (a one-time join token plus the workload entry that lets it
-/// mint SVIDs) and records the site and organization scope the agent inherits
-/// when it registers. Unlike the registration tokens this replaces, the row
-/// holds no bearer secret of its own — the agent authenticates with its SVID,
-/// and the join token is returned once from the create endpoint and never
-/// persisted here.
+/// Enrollment is the operator half of onboarding: creating one prepares the
+/// SPIRE workload entry that lets the node mint SVIDs and records the site and
+/// organization scope the agent inherits when it registers. The row stores
+/// only a hash of the short-lived bootstrap bearer. A SPIRE join token is
+/// minted just in time when that bearer is redeemed and is never persisted
+/// here; after installation the agent authenticates only with its SVID.
 /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
 /// receive IDs or immutable snapshots and reload their own instance.
 final class AgentEnrollment: Model, Content, @unchecked Sendable {
@@ -32,6 +34,14 @@ final class AgentEnrollment: Model, Content, @unchecked Sendable {
     /// can show the identity without a round trip to the SPIRE server.
     @Field(key: "spiffe_id")
     var spiffeID: String
+
+    /// SHA-256 of the short-lived bearer token used only to fetch the
+    /// server-owned bootstrap configuration. The raw token is returned once
+    /// at creation and never persisted. Nullable so enrollments created before
+    /// the one-token bootstrap cutover remain readable but cannot be redeemed
+    /// through the new endpoint.
+    @OptionalField(key: "bootstrap_token_hash")
+    var bootstrapTokenHash: String?
 
     /// Whether the named agent has completed registration at least once.
     /// Informational only — nothing gates on it. An enrollment is not a
@@ -57,10 +67,10 @@ final class AgentEnrollment: Model, Content, @unchecked Sendable {
     @OptionalField(key: "organizational_unit_id")
     var organizationalUnitID: UUID?
 
-    /// When the SPIRE join token stops being redeemable. The row deliberately
-    /// outlives it: once the node has attested, its SVID — not this window — is
-    /// what authenticates it, and the row remains as the record of which org
-    /// and site the agent was enrolled into.
+    /// When the bootstrap bearer stops being redeemable. Any SPIRE join token
+    /// minted from it is capped to the same deadline. The row deliberately
+    /// outlives the window as the record of which org and site the agent was
+    /// enrolled into.
     @Timestamp(key: "expires_at", on: .none)
     var expiresAt: Date?
 
@@ -77,6 +87,7 @@ final class AgentEnrollment: Model, Content, @unchecked Sendable {
         agentName: String,
         spiffeID: String,
         trustDomain: String = PlatformTrustDomain.current,
+        bootstrapTokenHash: String? = nil,
         expirationHours: Int = 1,
         siteID: UUID? = nil,
         organizationScope: OrganizationScope? = nil
@@ -85,6 +96,7 @@ final class AgentEnrollment: Model, Content, @unchecked Sendable {
         self.agentName = agentName
         self.spiffeID = spiffeID
         self.trustDomain = trustDomain
+        self.bootstrapTokenHash = bootstrapTokenHash
         self.isUsed = false
         self.siteID = siteID
         self.organizationID = organizationScope?.organizationID
@@ -99,17 +111,134 @@ final class AgentEnrollment: Model, Content, @unchecked Sendable {
         return nil
     }
 
-    /// Whether the SPIRE join token is still redeemable — that is, whether a
-    /// node that has not yet attested can still do so with this enrollment.
+    /// Whether the unclaimed bootstrap bearer can still be exchanged for
+    /// configuration and its single SPIRE join token.
     var isValid: Bool {
-        guard let expires = expiresAt else { return false }
+        guard bootstrapTokenHash != nil, let expires = expiresAt else { return false }
         return !isUsed && expires > Date()
+    }
+
+    /// A bootstrap token carries no configuration. It is only a high-entropy
+    /// lookup credential whose hash identifies this enrollment.
+    static func generateBootstrapToken() -> String {
+        let key = SymmetricKey(size: .bits256)
+        let random = key.withUnsafeBytes { Data($0) }
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return "enroll_v1_\(random)"
+    }
+
+    static func hashBootstrapToken(_ token: String) -> String {
+        SHA256.hash(data: Data(token.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    static func findByBootstrapToken(_ token: String, on db: Database) async throws
+        -> AgentEnrollment?
+    {
+        guard token.hasPrefix("enroll_v1_") else { return nil }
+        return try await AgentEnrollment.query(on: db)
+            .filter(\.$bootstrapTokenHash == hashBootstrapToken(token))
+            .first()
+    }
+
+    private enum OperationLockAttempt<Value: Sendable>: Sendable {
+        case busy
+        case completed(Value)
+    }
+
+    /// Serialize credential minting and revocation for one enrollment across
+    /// every control-plane replica. This is session-scoped because both paths
+    /// await SPIRE: a database transaction must not stay open across that
+    /// external call. `withConnection` pins the PostgreSQL session until the
+    /// matching unlock has run. Busy waiters return their connection to the
+    /// pool between cancellable polling attempts.
+    static func withOperationLock<T: Sendable>(
+        enrollmentID: UUID,
+        on db: any Database,
+        _ operation: @escaping @Sendable (any Database) async throws -> T
+    ) async throws -> T {
+        let key = "agent-enrollment:\(enrollmentID.uuidString.lowercased())"
+        while true {
+            let attempt: OperationLockAttempt<T> = try await db.withConnection { connection in
+                guard let sql = connection as? any SQLDatabase,
+                    sql.dialect.name == "postgresql"
+                else {
+                    throw Abort(
+                        .internalServerError,
+                        reason: "Agent enrollment serialization requires PostgreSQL")
+                }
+
+                let acquired =
+                    try await sql.raw(
+                        "SELECT pg_try_advisory_lock(hashtext(\(bind: key))) AS acquired"
+                    ).first(decodingColumn: "acquired", as: Bool.self) ?? false
+                guard acquired else { return .busy }
+
+                do {
+                    let value = try await operation(connection)
+                    let released =
+                        try await sql.raw(
+                            "SELECT pg_advisory_unlock(hashtext(\(bind: key))) AS released"
+                        ).first(decodingColumn: "released", as: Bool.self) ?? false
+                    guard released else {
+                        throw Abort(
+                            .internalServerError,
+                            reason: "Agent enrollment operation lock was not held")
+                    }
+                    return .completed(value)
+                } catch {
+                    let operationError = error
+                    _ = try? await sql.raw(
+                        "SELECT pg_advisory_unlock(hashtext(\(bind: key)))"
+                    ).all()
+                    throw operationError
+                }
+            }
+
+            switch attempt {
+            case .busy:
+                try await Task.sleep(for: .milliseconds(25))
+            case .completed(let value):
+                return value
+            }
+        }
+    }
+
+    /// Atomically claims an unexpired bearer before SPIRE mints any node
+    /// credential. The conditional update is the security boundary: concurrent
+    /// replays may all read the row, but exactly one can clear its unique hash
+    /// and proceed. A failed mint deliberately does not restore the bearer;
+    /// issuing another enrollment is safer than creating two node credentials.
+    static func claimBootstrapToken(
+        _ token: String, on db: any Database, now: Date = Date()
+    ) async throws -> Bool {
+        guard token.hasPrefix("enroll_v1_") else { return false }
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Agent enrollment requires an SQL database")
+        }
+
+        let claimed = try await sql.raw(
+            """
+            UPDATE \(ident: schema)
+            SET bootstrap_token_hash = NULL
+            WHERE bootstrap_token_hash = \(bind: hashBootstrapToken(token))
+              AND is_used = FALSE
+              AND expires_at > \(bind: now)
+            RETURNING id
+            """
+        ).all()
+        return claimed.count == 1
     }
 
     /// Record that the named agent has registered.
     func markAsUsed() {
         self.isUsed = true
         self.usedAt = Date()
+        self.bootstrapTokenHash = nil
     }
 }
 
@@ -120,18 +249,20 @@ struct AgentEnrollmentResponse: Content {
     let agentName: String
     let spiffeId: String
     let expiresAt: Date
-    /// SPIRE node-attestation material. Returned only from the create
-    /// endpoint and never listed: the join token is a one-time bearer secret.
-    let spire: SPIREProvisioningResponse
+    let trustDomain: String
+    let spireServerAddress: String
+    /// Short-lived bearer token used by the installer to fetch the rest of the
+    /// bootstrap configuration. Returned once and stored only as a hash.
+    let bootstrapToken: String
     /// Copy-paste one-liner that installs strato-agent and spire-agent, attests
     /// the node with the join token, and points it at this control plane.
     let bootstrapCommand: String
 
     init(
         from enrollment: AgentEnrollment,
-        webSocketBaseURL: String,
-        spire: SPIREAgentProvisioning,
-        controlPlaneSPIFFEID: String
+        publicOrigin: String,
+        bootstrapToken: String,
+        spire: SPIREAgentConfiguration
     ) throws {
         guard let id = enrollment.id else {
             throw Abort(.internalServerError, reason: "Agent enrollment missing ID")
@@ -141,59 +272,51 @@ struct AgentEnrollmentResponse: Content {
         self.agentName = enrollment.agentName
         self.spiffeId = enrollment.spiffeID
         self.expiresAt = enrollment.expiresAt ?? Date()
-        self.spire = SPIREProvisioningResponse(from: spire)
-        // One curl-able installer (deploy/agent/install.sh) does everything:
-        // downloads strato-agent + spire-agent, attests the node with the join
-        // token, writes the agent config, and sets up host telemetry (Grafana
-        // Alloy + spiffe-helper pushing to /ingest/* over mTLS). The agent name
-        // is validated to SPIFFE path-segment characters before we get here, so
-        // single-quoting it is safe.
-        //
-        // --spire-server-address and --trust-domain both come from the
-        // provisioning result rather than from any platform-wide setting: with
-        // per-org trust domains they name the organization's own SPIRE
-        // instance and domain (issue #615).
-        //
-        // --control-plane-spiffe-id is always passed explicitly. The agent
-        // would otherwise derive spiffe://<its own trust domain>/control-plane,
-        // which is right only while the two domains coincide — an org-domain
-        // agent must pin the control plane in the *platform* domain, and
-        // getting this wrong fails closed at every handshake (issue #552).
+        self.trustDomain = spire.trustDomain
+        self.spireServerAddress = spire.serverAddress
+        self.bootstrapToken = bootstrapToken
+        // The public installer wrapper fixes the control-plane origin. The
+        // operator supplies only the opaque token; every identity and network
+        // value is selected again by the control plane when it is redeemed.
+        let installerURL = "\(publicOrigin)/api/agent-enrollments/install"
         self.bootstrapCommand =
-            "curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh"
-            + " | sudo bash -s --"
-            + " --control-plane-url '\(webSocketBaseURL)/agent/ws'"
-            + " --agent-name '\(enrollment.agentName)'"
-            + " --spire-join-token '\(spire.joinToken)'"
-            + " --spire-server-address '\(spire.serverAddress)'"
-            + " --trust-domain '\(spire.trustDomain)'"
-            + " --control-plane-spiffe-id '\(controlPlaneSPIFFEID)'"
+            "curl -fsSL \(Self.shellQuote(installerURL))"
+            + " | sudo bash -s -- \(Self.shellQuote(bootstrapToken))"
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }
 }
 
-/// The SPIRE material handed back when an enrollment is created. The join
-/// token is a one-time bearer secret: it is returned only from the create
-/// endpoint and never persisted or re-exposed.
-struct SPIREProvisioningResponse: Content {
+/// The private line protocol consumed before the installer can assume `jq` or
+/// any Strato binary exists. Every value is base64 encoded on its own line, so
+/// URLs and future punctuation never acquire shell parsing semantics.
+struct AgentBootstrapBundle: Sendable {
+    static let mediaType = "application/vnd.strato.agent-bootstrap.v1"
+
+    let controlPlaneURL: String
+    let agentName: String
     let joinToken: String
-    let joinTokenExpiresAt: Date
-    let spiffeId: String
-    let nodeId: String
+    let spireServerAddress: String
     let trustDomain: String
-    let serverAddress: String
+    let controlPlaneSPIFFEID: String
 
-    init(from provisioning: SPIREAgentProvisioning) {
-        self.joinToken = provisioning.joinToken
-        self.joinTokenExpiresAt = provisioning.joinTokenExpiresAt
-        self.spiffeId = provisioning.spiffeID
-        self.nodeId = provisioning.nodeID
-        self.trustDomain = provisioning.trustDomain
-        self.serverAddress = provisioning.serverAddress
+    func serialized() -> String {
+        let values = [
+            controlPlaneURL, agentName, joinToken, spireServerAddress, trustDomain,
+            controlPlaneSPIFFEID,
+        ]
+        return (["STRATO_AGENT_BOOTSTRAP_V1"] + values.map(Self.encode)).joined(separator: "\n") + "\n"
+    }
+
+    private static func encode(_ value: String) -> String {
+        Data(value.utf8).base64EncodedString()
     }
 }
 
-/// List-safe view of an enrollment. Deliberately omits everything from the
-/// `spire` block: the join token is shown exactly once, at creation time.
+/// List-safe view of an enrollment. Deliberately omits the bootstrap token,
+/// which is shown exactly once at creation time.
 struct AgentEnrollmentListItem: Content {
     let id: UUID
     let agentName: String

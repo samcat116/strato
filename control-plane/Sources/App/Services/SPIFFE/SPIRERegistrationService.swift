@@ -4,9 +4,8 @@ import Vapor
 
 // MARK: - SPIRE Registration Service
 
-/// Provisions hypervisor nodes in SPIRE as part of the agent registration
-/// flow. Creating an agent registration token also creates, via the SPIRE
-/// Server registration API:
+/// Provisions hypervisor nodes in SPIRE as part of the agent enrollment flow.
+/// Through the SPIRE Server registration API it owns:
 ///
 /// - a one-time **join token** the node's spire-agent uses for node
 ///   attestation, bound to the stable node ID `spiffe://<td>/node/<name>`
@@ -15,8 +14,8 @@ import Vapor
 ///   `spiffe://<td>/agent/<name>` — the identity `SPIREService` expects on
 ///   the mTLS WebSocket path.
 ///
-/// Deleting an unused registration token or deregistering an agent removes
-/// the entry again, which stops SVID issuance for that node.
+/// Deleting an unused enrollment or deregistering an agent removes the entry
+/// again, which stops SVID issuance for that node.
 public struct SPIRERegistrationService: Sendable {
     private let api: any SPIREServerAPI
     private let config: SPIRERegistrationConfig
@@ -105,14 +104,40 @@ public struct SPIRERegistrationService: Sendable {
         joinTokenTTLSeconds: Int32,
         federatesWith: [String] = []
     ) async throws -> SPIREAgentProvisioning {
+        // Preserve the historical ordering: a join token minted before an
+        // entry-creation failure is harmless because there is no workload
+        // grant behind it. The one-token enrollment path calls these two
+        // operations at different times instead: prepare at operator creation,
+        // mint at host redemption.
+        let joinToken = try await mintAgentJoinToken(
+            named: agentName, ttlSeconds: joinTokenTTLSeconds)
+        let configuration = try await prepareAgent(
+            named: agentName, federatesWith: federatesWith)
+
+        return SPIREAgentProvisioning(
+            joinToken: joinToken.value,
+            joinTokenExpiresAt: joinToken.expiresAt,
+            spiffeID: configuration.spiffeID,
+            nodeID: configuration.nodeID,
+            trustDomain: configuration.trustDomain,
+            serverAddress: configuration.serverAddress,
+            federatesWith: configuration.federatesWith
+        )
+    }
+
+    /// Create or reconcile the durable workload grant without minting a node
+    /// attestation token. Enrollment creation uses this so the SPIRE bearer
+    /// secret does not exist until a host presents its bootstrap token.
+    public func prepareAgent(
+        named agentName: String,
+        federatesWith: [String] = []
+    ) async throws -> SPIREAgentConfiguration {
         guard Self.isValidAgentName(agentName) else {
             throw SPIRERegistrationError.invalidAgentName(agentName)
         }
 
         let nodeID = nodeSPIFFEID(agentName: agentName)
         let spiffeID = agentSPIFFEID(agentName: agentName)
-
-        let joinToken = try await api.createJoinToken(ttlSeconds: joinTokenTTLSeconds, agentID: nodeID)
 
         let entryResult: SPIREEntryCreationResult
         do {
@@ -125,11 +150,11 @@ public struct SPIRERegistrationService: Sendable {
                 admin: false
             )
         } catch {
-            // The minted join token cannot be revoked through the API; it is
-            // single-use and expires on its own, so the failed provisioning
-            // leaves nothing an attacker can redeem for a workload identity.
+            // No workload grant exists. In the compatibility `provisionAgent`
+            // path a join token may already have been minted, but without this
+            // entry it cannot yield the strato-agent identity.
             logger.error(
-                "SPIRE workload entry creation failed after join token was minted",
+                "SPIRE workload entry creation failed",
                 metadata: [
                     "strato.agent.name": .string(agentName),
                     "error": .string("\(error)"),
@@ -179,9 +204,7 @@ public struct SPIRERegistrationService: Sendable {
                 "federatesWith": .string(federatesWith.joined(separator: ",")),
             ])
 
-        return SPIREAgentProvisioning(
-            joinToken: joinToken.value,
-            joinTokenExpiresAt: joinToken.expiresAt,
+        return SPIREAgentConfiguration(
             spiffeID: spiffeID,
             nodeID: nodeID,
             trustDomain: config.trustDomain,
@@ -190,10 +213,24 @@ public struct SPIRERegistrationService: Sendable {
         )
     }
 
-    /// Best-effort rollback of `provisionAgent` (used when the registration
-    /// token could not be persisted after SPIRE was provisioned). Failures are
-    /// logged, not thrown — the caller is already propagating the original
-    /// error, and an orphaned entry is recreated/reused on retry.
+    /// Mint a one-time SPIRE node-attestation token for the stable identity
+    /// prepared at enrollment creation. The caller owns the issuance window;
+    /// this method only validates the name and binds the token to the node ID.
+    public func mintAgentJoinToken(named agentName: String, ttlSeconds: Int32) async throws
+        -> SPIREAgentJoinToken
+    {
+        guard Self.isValidAgentName(agentName) else {
+            throw SPIRERegistrationError.invalidAgentName(agentName)
+        }
+        let token = try await api.createJoinToken(
+            ttlSeconds: ttlSeconds, agentID: nodeSPIFFEID(agentName: agentName))
+        return SPIREAgentJoinToken(value: token.value, expiresAt: token.expiresAt)
+    }
+
+    /// Best-effort rollback of a prepared grant when its enrollment could not
+    /// be persisted. Failures are logged, not thrown — the caller is already
+    /// propagating the original error, and an orphaned entry is recreated or
+    /// reused on retry.
     public func rollbackProvisioning(agentName: String) async {
         do {
             _ = try await api.deleteEntries(spiffeID: agentSPIFFEID(agentName: agentName))
@@ -282,8 +319,9 @@ public struct SPIRERegistrationService: Sendable {
 
 // MARK: - Provisioning result
 
-/// Everything a new hypervisor node needs to attest to SPIRE, returned once
-/// alongside the WebSocket registration token and never persisted.
+/// Everything a new hypervisor node needs to attest to SPIRE. The compatibility
+/// provisioning method returns this as one value; the enrollment flow now
+/// prepares the configuration and mints the join token at separate times.
 public struct SPIREAgentProvisioning: Sendable {
     public let joinToken: String
     public let joinTokenExpiresAt: Date
@@ -312,6 +350,40 @@ public struct SPIREAgentProvisioning: Sendable {
         self.trustDomain = trustDomain
         self.serverAddress = serverAddress
         self.federatesWith = federatesWith
+    }
+}
+
+/// Non-secret server-selected facts for a prepared agent workload grant.
+public struct SPIREAgentConfiguration: Sendable {
+    public let spiffeID: String
+    public let nodeID: String
+    public let trustDomain: String
+    public let serverAddress: String
+    public let federatesWith: [String]
+
+    public init(
+        spiffeID: String,
+        nodeID: String,
+        trustDomain: String,
+        serverAddress: String,
+        federatesWith: [String] = []
+    ) {
+        self.spiffeID = spiffeID
+        self.nodeID = nodeID
+        self.trustDomain = trustDomain
+        self.serverAddress = serverAddress
+        self.federatesWith = federatesWith
+    }
+}
+
+/// A freshly minted one-time node-attestation token.
+public struct SPIREAgentJoinToken: Sendable {
+    public let value: String
+    public let expiresAt: Date
+
+    public init(value: String, expiresAt: Date) {
+        self.value = value
+        self.expiresAt = expiresAt
     }
 }
 
@@ -452,15 +524,14 @@ extension Application {
         set { setStorageValue(SPIRERegistrationServiceKey.self, to: newValue) }
     }
 
-    /// Configure SPIRE join-token provisioning for the agent registration
-    /// flow. No-op unless `SPIRE_ENABLED=true` and `SPIRE_SERVER_API_ADDRESS`
-    /// is set, so token-auth deployments and mTLS deployments that provision
-    /// SPIRE out of band keep working unchanged.
+    /// Configure SPIRE workload-grant and join-token provisioning for agent
+    /// enrollment. No-op unless `SPIRE_ENABLED=true` and
+    /// `SPIRE_SERVER_API_ADDRESS` is set.
     public func configureSPIRERegistration() throws {
         guard let config = try SPIRERegistrationConfig.fromConfiguration(controlPlaneConfiguration) else {
             if controlPlaneConfiguration.bool(.spireEnabled) == true {
                 logger.notice(
-                    "SPIRE is enabled but SPIRE_SERVER_API_ADDRESS is not set; registration tokens will not include SPIRE join tokens"
+                    "SPIRE is enabled but SPIRE_SERVER_API_ADDRESS is not set; agent enrollments cannot be provisioned"
                 )
             }
             return

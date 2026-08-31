@@ -330,11 +330,11 @@ enum SiteNetworkAuthority {
     ///
     /// Every condition `SiteController.updateSite` enforces is a property of
     /// the agent's current registration, and agents re-register on every
-    /// reconnect. A controller that comes back in user-mode, or on a
-    /// rolled-back pre-v4 binary, keeps the job while authoring nothing: its
-    /// peers still get `networks: [], authoritative: false` and park forever
-    /// (issue #833). Nothing else re-checks this — `designateIfUnset` only
-    /// looks at designations that are *unset*.
+    /// reconnect. A controller that comes back in user-mode keeps the job
+    /// while authoring nothing: its peers still get `networks: [],
+    /// authoritative: false` and park forever (issue #833). Nothing else
+    /// re-checks this — `designateIfUnset` only looks at designations that are
+    /// *unset*.
     ///
     /// Hands the job back only when the site has another eligible member.
     /// Clearing an irreplaceable designation would trade one silent failure for

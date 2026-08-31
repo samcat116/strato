@@ -107,7 +107,7 @@ extension VMController {
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
             // Checkpoint state draws from the shared storage quota pool
             // (issue #415 enforcement points).
-            try await QuotaEnforcementService.reserveVMSnapshot(
+            try await QuotaEnforcementService.reserveSnapshotStorage(
                 for: project, environment: environment, size: memory, on: db)
             try await snapshot.save(on: db)
             // The creator's binding on the checkpoint, in the create

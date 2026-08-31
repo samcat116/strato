@@ -106,7 +106,7 @@ extension SandboxController {
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
             // Snapshot storage draws from the shared storage quota pool
             // (issue #415 enforcement points).
-            try await QuotaEnforcementService.reserveSandboxSnapshot(
+            try await QuotaEnforcementService.reserveSnapshotStorage(
                 for: project, environment: environment, size: memory, on: db)
             try await snapshot.save(on: db)
             // The creator's binding on the snapshot, in the create

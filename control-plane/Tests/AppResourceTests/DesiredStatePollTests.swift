@@ -169,6 +169,33 @@ struct DesiredStatePollTests {
         }
     }
 
+    @Test("A poison VM is omitted from a 200 response instead of failing the host poll")
+    func poisonVMStillReturns200() async throws {
+        try await withRunningPollApp { app, port in
+            self.enableSPIRE(on: app)
+            let builder = TestDataBuilder(db: app.db)
+            _ = try await builder.createUser(
+                username: "poison-poll-owner", email: "poison-poll-owner@example.com")
+            let org = try await builder.createOrganization(name: "Poison Poll Org")
+            let project = try await builder.createProject(
+                name: "Poison Poll Project", description: "poll isolation", organization: org)
+            let site = try await builder.placementSite(for: project)
+            let agent = try await self.registerAgentRow(
+                app: app, name: "poll-agent", siteID: try site.requireID(),
+                organizationID: try org.requireID())
+            let poison = try await builder.createVM(name: "poison-poll-vm", project: project)
+            poison.hypervisorId = try agent.requireID().uuidString
+            try await poison.save(on: app.db)
+
+            let response = try await self.poll(app: app, port: port)
+
+            #expect(response.status == .ok)
+            #expect(try self.decodeSync(response).vms.isEmpty)
+            let reloaded = try #require(try await VM.find(poison.id, on: app.db))
+            #expect(reloaded.conditions.degraded?.reason.contains("cannot be assembled") == true)
+        }
+    }
+
     // MARK: Conditional requests
 
     @Test("A matching If-None-Match parks and answers 304 with the same ETag")
