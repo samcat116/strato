@@ -3769,9 +3769,17 @@ extension Agent {
                 // Placement resolution can fail before startExec creates its
                 // capture. Give even that earliest failure the same retained,
                 // reconnect-and-ACK lifecycle as every other recorded result.
-                await vmExecSessionManager.retainRecordedStartFailure(
+                let retained = await vmExecSessionManager.retainRecordedStartFailure(
                     sessionId: sessionId, reason: error.localizedDescription)
-                await sendNextRecordedExecTerminalState()
+                if retained {
+                    await sendNextRecordedExecTerminalState()
+                } else {
+                    // Capacity rejection happens before guest spawn. Do not
+                    // turn backpressure into another unbounded retained item.
+                    guestExecSessions.removeValue(forKey: sessionId)
+                    await sendGuestExecClosed(
+                        sessionId: sessionId, reason: error.localizedDescription)
+                }
             } else {
                 guestExecSessions.removeValue(forKey: sessionId)
                 await sendGuestExecClosed(sessionId: sessionId, reason: error.localizedDescription)

@@ -326,6 +326,110 @@ struct VMExecSessionManagerTests {
         #expect(!(await manager.acknowledgeRecordedSession(sessionId: "recorded-command")))
     }
 
+    @Test("recorded capture state is bounded before opening another guest channel")
+    func recordedCaptureCountIsBoundedBeforeSpawn() async throws {
+        let connects = Mutex(0)
+        let manager = VMExecSessionManager(logger: Self.logger) { _, _, _, _ in
+            connects.withLock { $0 += 1 }
+            return FakeConnection(lines: [#"{"type":"exec_started","nonce":"boot-1"}"#])
+        }
+
+        for index in 0..<VMExecSessionManager.recordedCaptureLimit {
+            #expect(
+                await manager.retainRecordedStartFailure(
+                    sessionId: "retained-\(index)", reason: "preflight failed"))
+        }
+        #expect(
+            !(await manager.retainRecordedStartFailure(
+                sessionId: "overflow-failure", reason: "preflight failed")))
+
+        let error = await #expect(throws: VMExecBridgeError.self) {
+            try await manager.startExec(
+                placement: placement(), sessionId: "overflow-start", sessionKind: .recorded,
+                request: request(tty: false), placementIsCurrent: { true }, events: { _ in })
+        }
+        guard case .recordedSessionCapacityExceeded = error else {
+            Issue.record("expected the recorded capture capacity gate")
+            return
+        }
+        #expect(connects.withLock { $0 } == 0)
+        #expect(
+            await manager.recordedSessionSnapshots().count
+                == VMExecSessionManager.recordedCaptureLimit)
+
+        #expect(await manager.acknowledgeRecordedSession(sessionId: "retained-0"))
+        try await manager.startExec(
+            placement: placement(), sessionId: "after-ack", sessionKind: .recorded,
+            request: request(tty: false), placementIsCurrent: { true }, events: { _ in })
+        #expect(connects.withLock { $0 } == 1)
+        await manager.closeAll(reason: "test cleanup")
+    }
+
+    @Test("recorded output is bounded across all retained sessions")
+    func recordedAggregateOutputIsBounded() async throws {
+        let sessionCount =
+            VMExecSessionManager.recordedAggregateOutputLimitBytes
+            / VMExecSessionManager.recordedOutputLimitBytes + 1
+        let connections = (0..<sessionCount).map { _ in
+            FakeConnection(lines: [#"{"type":"exec_started","nonce":"boot-1"}"#])
+        }
+        let pendingConnections = Mutex(connections)
+        let connectCount = Mutex(0)
+        let manager = VMExecSessionManager(logger: Self.logger) { _, _, _, _ in
+            connectCount.withLock { $0 += 1 }
+            return pendingConnections.withLock { $0.removeFirst() }
+        }
+
+        for index in connections.indices {
+            try await manager.startExec(
+                placement: placement(), sessionId: "recorded-\(index)", sessionKind: .recorded,
+                request: request(tty: false), placementIsCurrent: { true }, events: { _ in })
+        }
+
+        let chunk = Data(repeating: 65, count: GuestControlProtocol.Limits.maxPayloadBytes)
+        let fullSessionCount = sessionCount - 1
+        for connection in connections.prefix(fullSessionCount) {
+            var remaining = VMExecSessionManager.recordedOutputLimitBytes
+            while remaining > 0 {
+                let output = Data(chunk.prefix(min(remaining, chunk.count)))
+                await connection.enqueue(
+                    #"{"type":"output","nonce":"boot-1","stream":"stdout","data":"\#(output.base64EncodedString())"}"#)
+                remaining -= output.count
+            }
+        }
+
+        #expect(
+            await eventually(within: .seconds(10)) {
+                await manager.recordedSessionSnapshots().reduce(0) {
+                    $0 + $1.stdout.count + $1.stderr.count
+                } == VMExecSessionManager.recordedAggregateOutputLimitBytes
+            })
+
+        await connections[fullSessionCount].enqueue(
+            #"{"type":"output","nonce":"boot-1","stream":"stdout","data":"YQ=="}"#)
+        #expect(
+            await eventually {
+                await manager.recordedSessionSnapshot(
+                    sessionId: "recorded-\(fullSessionCount)")?.truncated == true
+            })
+        let snapshots = await manager.recordedSessionSnapshots()
+        #expect(
+            snapshots.reduce(0) { $0 + $1.stdout.count + $1.stderr.count }
+                == VMExecSessionManager.recordedAggregateOutputLimitBytes)
+
+        let error = await #expect(throws: VMExecBridgeError.self) {
+            try await manager.startExec(
+                placement: placement(), sessionId: "aggregate-overflow", sessionKind: .recorded,
+                request: request(tty: false), placementIsCurrent: { true }, events: { _ in })
+        }
+        guard case .recordedSessionCapacityExceeded = error else {
+            Issue.record("expected the recorded aggregate capacity gate")
+            return
+        }
+        #expect(connectCount.withLock { $0 } == sessionCount)
+        await manager.closeAll(reason: "test cleanup")
+    }
+
     @Test("closing a recorded command retains partial output as truncated")
     func recordedCloseRetainsPartialCapture() async throws {
         let connection = FakeConnection(lines: [#"{"type":"exec_started","nonce":"boot-1"}"#])

@@ -32,6 +32,7 @@ public enum VMExecBridgeError: Error, LocalizedError, Sendable {
     case noGuestAgent(String)
     case guestAgentNotResponding(vmId: String, detail: String)
     case interactiveSessionsQuiesced
+    case recordedSessionCapacityExceeded
     case sessionManagerStopped
     case sessionNotFound(String)
     case identityMismatch(expected: String, got: String)
@@ -47,6 +48,8 @@ public enum VMExecBridgeError: Error, LocalizedError, Sendable {
             return "guest agent not responding for VM \(vmId): \(detail)"
         case .interactiveSessionsQuiesced:
             return "interactive VM exec is unavailable while the control plane is disconnected"
+        case .recordedSessionCapacityExceeded:
+            return "recorded VM exec capacity is exhausted; command was not started"
         case .sessionManagerStopped:
             return "VM exec session manager is stopping"
         case .sessionNotFound(let sessionId):
@@ -84,6 +87,8 @@ public actor VMExecSessionManager {
     public static let guestAgentPort: UInt32 = 1024
     public static let connectTimeout: TimeInterval = 10
     public static let recordedOutputLimitBytes = GuestExecRecordedStateMessage.outputLimitBytes
+    static let recordedAggregateOutputLimitBytes = 16 * recordedOutputLimitBytes
+    static let recordedCaptureLimit = 64
     private static let missingRecordedExitReason =
         "guest command session closed without an exit code"
 
@@ -104,7 +109,9 @@ public actor VMExecSessionManager {
         var reason: String?
         var truncated = false
 
-        mutating func append(_ data: Data, stream: String) {
+        var capturedByteCount: Int { stdout.count + stderr.count }
+
+        mutating func append(_ data: Data, stream: String, aggregateRemaining: Int) {
             guard status == .running else { return }
             guard stream == "stdout" || stream == "stderr" else {
                 if !truncated {
@@ -113,8 +120,9 @@ public actor VMExecSessionManager {
                 }
                 return
             }
-            let remaining = max(
-                0, VMExecSessionManager.recordedOutputLimitBytes - stdout.count - stderr.count)
+            let remaining = min(
+                max(0, aggregateRemaining),
+                max(0, VMExecSessionManager.recordedOutputLimitBytes - capturedByteCount))
             let wasTruncated = truncated
             if data.count > remaining { truncated = true }
             guard remaining > 0 else {
@@ -177,6 +185,15 @@ public actor VMExecSessionManager {
     private var acceptingSessions = true
     private var acceptingInteractiveSessions = true
 
+    private var recordedCapturedByteCount: Int {
+        recordedCaptures.values.reduce(0) { $0 + $1.capturedByteCount }
+    }
+
+    private var hasRecordedCaptureCapacity: Bool {
+        recordedCaptures.count < Self.recordedCaptureLimit
+            && recordedCapturedByteCount < Self.recordedAggregateOutputLimitBytes
+    }
+
     public init(
         logger: Logger,
         connector: @escaping Connector = { cid, port, timeout, logger in
@@ -205,6 +222,9 @@ public actor VMExecSessionManager {
             // A retained running or terminal record means this same agent
             // process has already accepted the command. Never spawn it twice.
             guard recordedCaptures[sessionId] == nil else { return }
+            guard hasRecordedCaptureCapacity else {
+                throw VMExecBridgeError.recordedSessionCapacityExceeded
+            }
             recordedCaptures[sessionId] = RecordedCapture()
         }
 
@@ -431,11 +451,14 @@ public actor VMExecSessionManager {
     /// the guest channel (for example, placement resolution in the Agent).
     /// Recorded starts are accepted durably: even their earliest failures must
     /// enter the same reconnect-and-ACK path as a later terminal result.
-    public func retainRecordedStartFailure(sessionId: String, reason: String) {
+    @discardableResult
+    public func retainRecordedStartFailure(sessionId: String, reason: String) -> Bool {
         if recordedCaptures[sessionId] == nil {
+            guard hasRecordedCaptureCapacity else { return false }
             recordedCaptures[sessionId] = RecordedCapture()
         }
         recordedCaptures[sessionId]?.finish(.closed(reason: reason))
+        return true
     }
 
     /// Retire only terminal state. A stale or forged ACK must never make a
@@ -449,7 +472,10 @@ public actor VMExecSessionManager {
     private func readerOutput(sessionId: String, stream: String, data: Data) {
         guard let session = sessions[sessionId] else { return }
         if session.sessionKind == .recorded {
-            recordedCaptures[sessionId]?.append(data, stream: stream)
+            let aggregateRemaining = max(
+                0, Self.recordedAggregateOutputLimitBytes - recordedCapturedByteCount)
+            recordedCaptures[sessionId]?.append(
+                data, stream: stream, aggregateRemaining: aggregateRemaining)
         } else {
             session.events(.output(stream: stream, data: data))
         }
