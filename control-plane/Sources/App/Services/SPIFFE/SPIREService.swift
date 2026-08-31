@@ -400,7 +400,7 @@ public actor SPIREService {
         logger.debug(
             "Certificate validated successfully",
             metadata: [
-                "spiffeID": .string(claimedID.uri),
+                "strato.agent.identity": .string(claimedID.uri),
                 "trustDomain": .string(claimedID.trustDomain),
                 "organizationId": .string(organizationID?.uuidString ?? "platform"),
             ])

@@ -1,4 +1,4 @@
-import SandboxDetailPage from "../detail/page";
+import { SandboxDetailPage } from "@/components/sandboxes/sandbox-detail-page";
 
 export default async function SandboxRoute({
   params,

@@ -22,26 +22,16 @@ import { useSecurityGroups } from "@/lib/hooks/use-security-groups";
 import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
 import { MAX_SECURITY_GROUPS_PER_NIC, type MetadataSource } from "@/types/api";
 import { toast } from "sonner";
+import {
+  createNetworkInterfaceDraft as initialNIC,
+  type VMNetworkInterfaceDraft as NICRow,
+} from "@/lib/vm-create-form";
 
 interface CreateVMDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated?: () => void;
 }
-
-interface NICRow {
-  key: string;
-  networkId: string;
-  securityGroupIds: string[];
-  mtu: string;
-}
-
-const initialNIC = (): NICRow => ({
-  key: "nic-0",
-  networkId: "",
-  securityGroupIds: [],
-  mtu: "",
-});
 
 export function CreateVMDialog({
   open,
@@ -225,40 +215,41 @@ export function CreateVMDialog({
 
     setQuotaError(null);
     const GB = 1024 * 1024 * 1024; // 1 GiB in bytes; the API fields are named `memory`/`disk`
+    const payload = {
+      name: formData.name,
+      description: formData.description || undefined,
+      projectId,
+      imageId: formData.imageId,
+      cpu: parseInt(formData.cpu) || 2,
+      memory: (parseInt(formData.memory) || 4) * GB,
+      disk: (parseInt(formData.disk) || 50) * GB,
+      networkInterfaces: networkInterfaces.map((nic) => ({
+        networkId: nic.networkId,
+        securityGroupIds:
+          nic.securityGroupIds.length > 0
+            ? nic.securityGroupIds
+            : undefined,
+        mtu: nic.mtu ? Number(nic.mtu) : undefined,
+      })),
+      sshPublicKey: formData.sshPublicKey.trim() || undefined,
+      // Sent verbatim (no trim): the first bytes are the format header
+      // cloud-init dispatches on.
+      userData: formData.userData.trim() ? formData.userData : undefined,
+      secureBoot: !isFirecracker && secureBoot,
+      tpm: !isFirecracker && tpm,
+      guestAgentEnabled: false,
+      graphicsConsole: !isFirecracker && graphicsConsole,
+      metadataEnabled,
+      // Keep the selected source explicit so the request matches what the
+      // form showed. Paths that cannot reach IMDS record `iso`.
+      metadataSource: metadataSourceForcedToISO ? "iso" as const : metadataSource,
+    };
     // Creation is asynchronous: the server accepts the request and returns the
     // VM with the generation it is converging on, which the MutationWatcher
     // follows and reports on completion.
     await run({
-      request: () =>
-        vmsApi.create({
-          name: formData.name,
-          description: formData.description || undefined,
-          projectId,
-          imageId: formData.imageId,
-          cpu: parseInt(formData.cpu) || 2,
-          memory: (parseInt(formData.memory) || 4) * GB,
-          disk: (parseInt(formData.disk) || 50) * GB,
-          networkInterfaces: networkInterfaces.map((nic) => ({
-            networkId: nic.networkId,
-            securityGroupIds:
-              nic.securityGroupIds.length > 0
-                ? nic.securityGroupIds
-                : undefined,
-            mtu: nic.mtu ? Number(nic.mtu) : undefined,
-          })),
-          sshPublicKey: formData.sshPublicKey.trim() || undefined,
-          // Sent verbatim (no trim): the first bytes are the format header
-          // cloud-init dispatches on.
-          userData: formData.userData.trim() ? formData.userData : undefined,
-          secureBoot: !isFirecracker && secureBoot,
-          tpm: !isFirecracker && tpm,
-          guestAgentEnabled: false,
-          graphicsConsole: !isFirecracker && graphicsConsole,
-          metadataEnabled,
-          // Keep the selected source explicit so the request matches what the
-          // form showed. Paths that cannot reach IMDS record `iso`.
-          metadataSource: metadataSourceForcedToISO ? "iso" : metadataSource,
-        }),
+      intentKey: JSON.stringify(["POST", "/api/vms", payload]),
+      request: (idempotencyKey) => vmsApi.create(payload, idempotencyKey),
       watch: {
         kind: "create",
         resourceKind: "virtual_machine",

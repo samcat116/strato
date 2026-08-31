@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./client";
 import { authorizationApi } from "./authorization";
-import type { ActionCheckItem } from "@/types/api";
+import type { ActionCheckItem } from "@/types/api-contracts";
 
 vi.mock("./client", () => ({
   api: { post: vi.fn() },

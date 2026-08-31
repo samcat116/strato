@@ -321,7 +321,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
         logger.info(
             "Creating sandbox",
-            metadata: ["sandboxId": .string(sandboxId), "image": .string(spec.image)])
+            metadata: ["strato.sandbox.id": .string(sandboxId), "image": .string(spec.image)])
 
         // Once per agent life: clear template debris a crash mid-build left
         // behind (templates are invisible to manifest-driven orphan
@@ -394,7 +394,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             logger.debug(
                 "Firecracker predates snapshot network remapping, so this networked sandbox is cold-provisioned",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
+                    "strato.sandbox.id": .string(sandboxId),
                     "minimumFirecracker": .string(
                         FirecrackerSnapshotFeatures.networkOverridesMinimumVersion),
                 ])
@@ -425,7 +425,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 logger.info(
                     "Sandbox created from warm snapshot",
                     metadata: [
-                        "sandboxId": .string(sandboxId),
+                        "strato.sandbox.id": .string(sandboxId),
                         "warmKey": .string(warmKey.directoryName),
                     ])
                 return
@@ -436,7 +436,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 logger.warning(
                     "Warm-start provisioning failed; invalidating the cache entry and cold-booting",
                     metadata: [
-                        "sandboxId": .string(sandboxId),
+                        "strato.sandbox.id": .string(sandboxId),
                         "warmKey": .string(warmKey.directoryName),
                         "error": .string(error.localizedDescription),
                     ])
@@ -597,7 +597,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         logger.info(
             "Sandbox created",
             metadata: [
-                "sandboxId": .string(sandboxId),
+                "strato.sandbox.id": .string(sandboxId),
                 "jailed": .stringConvertible(vm.jail != nil),
             ])
     }
@@ -758,7 +758,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 logger.warning(
                     "Firecracker did not accept the optional entropy device",
                     metadata: [
-                        "sandboxId": .string(vmId),
+                        "strato.sandbox.id": .string(vmId),
                         "error": .string(error.localizedDescription),
                     ])
             }
@@ -1055,8 +1055,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             logger.info(
                 "Sandbox fork restored and re-identified",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
-                    "sourceSandboxId": .string(sourceSandboxId),
+                    "strato.sandbox.id": .string(sandboxId),
+                    "strato.sandbox.source.id": .string(sourceSandboxId),
                     "snapshotId": .string(snapshotId),
                 ])
         } catch {
@@ -1112,10 +1112,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         case .running:
             break  // already running — idempotent
         case .notStarted:
-            logger.info("Booting sandbox", metadata: ["sandboxId": .string(sandboxId)])
+            logger.info("Booting sandbox", metadata: ["strato.sandbox.id": .string(sandboxId)])
             try await managed.manager.start()
         case .paused:
-            logger.info("Resuming sandbox", metadata: ["sandboxId": .string(sandboxId)])
+            logger.info("Resuming sandbox", metadata: ["strato.sandbox.id": .string(sandboxId)])
             try await managed.manager.resume()
         }
 
@@ -1181,7 +1181,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 logger.warning(
                     "Warm launch failed; demoting the sandbox to a cold boot",
                     metadata: [
-                        "sandboxId": .string(sandboxId),
+                        "strato.sandbox.id": .string(sandboxId),
                         "error": .string(error.localizedDescription),
                     ])
                 try await demoteWarmSandboxToCold(sandboxId)
@@ -1209,7 +1209,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         logger.info(
             "Sandbox guest agent healthy",
             metadata: [
-                "sandboxId": .string(sandboxId),
+                "strato.sandbox.id": .string(sandboxId),
                 "bootPath": .string(bootPath),
                 "bootMillis": .stringConvertible(Int(Date().timeIntervalSince(bootStarted) * 1000)),
             ])
@@ -1347,7 +1347,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             logger.warning(
                 "Guest did not accept clock resync (older guest image?)",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
+                    "strato.sandbox.id": .string(sandboxId),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -1372,7 +1372,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         // already-paused sandbox is idempotently satisfied.
         let info = try await managed.manager.getInstanceInfo()
         if info.state == .running {
-            logger.info("Stopping sandbox", metadata: ["sandboxId": .string(sandboxId)])
+            logger.info("Stopping sandbox", metadata: ["strato.sandbox.id": .string(sandboxId)])
             try await managed.manager.pause()
         }
     }
@@ -1386,7 +1386,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         guard !checkpointing.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
-        logger.info("Deleting sandbox", metadata: ["sandboxId": .string(sandboxId)])
+        logger.info("Deleting sandbox", metadata: ["strato.sandbox.id": .string(sandboxId)])
         // End interactive/log streams first: the guest is about to disappear,
         // and their control-plane sessions must learn why. Deleting is the
         // true end-of-stream for the workload's logs, so flush any partial
@@ -1474,7 +1474,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             logger.info(
                 "Re-adopting orphaned sandbox",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
+                    "strato.sandbox.id": .string(sandboxId),
                     "socket": .string(candidate.socketPath),
                     "jailed": .stringConvertible(candidate.jailPlan != nil),
                 ])
@@ -1542,7 +1542,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         }
         logger.info(
             "Sandbox re-adopted",
-            metadata: ["sandboxId": .string(sandboxId), "status": .string(status.rawValue)])
+            metadata: ["strato.sandbox.id": .string(sandboxId), "status": .string(status.rawValue)])
         return status
     }
 
@@ -1638,7 +1638,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         logger.info(
             "Checkpointing sandbox",
             metadata: [
-                "sandboxId": .string(sandboxId),
+                "strato.sandbox.id": .string(sandboxId),
                 "snapshotId": .string(snapshotId),
                 "mode": .string(mode.rawValue),
             ])
@@ -1722,7 +1722,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         logger.info(
             "Sandbox checkpoint complete",
             metadata: [
-                "sandboxId": .string(sandboxId),
+                "strato.sandbox.id": .string(sandboxId),
                 "snapshotId": .string(snapshotId),
                 "totalBytes": .stringConvertible(result.totalSizeBytes),
             ])
@@ -1781,7 +1781,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
         logger.info(
             "Restoring sandbox from snapshot",
-            metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
+            metadata: ["strato.sandbox.id": .string(sandboxId), "snapshotId": .string(snapshotId)])
 
         // The current guest is about to be replaced wholesale.
         await closeExecSessions(sandboxId: sandboxId, reason: "sandbox restore")
@@ -1873,7 +1873,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         startLogFollow(sandboxId: sandboxId)
         logger.info(
             "Sandbox restored from snapshot",
-            metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
+            metadata: ["strato.sandbox.id": .string(sandboxId), "snapshotId": .string(snapshotId)])
     }
 
     func deleteSandboxSnapshot(sandboxId: String, snapshotId: String) async throws {
@@ -1899,7 +1899,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         try? FileManager.default.removeItem(atPath: snapshotImportDirectory(snapshotId))
         logger.info(
             "Sandbox snapshot deleted",
-            metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
+            metadata: ["strato.sandbox.id": .string(sandboxId), "snapshotId": .string(snapshotId)])
     }
 
     // MARK: - Snapshot mobility (issue #428)
@@ -1969,7 +1969,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         }
         logger.info(
             "Sandbox snapshot exported to object storage",
-            metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
+            metadata: ["strato.sandbox.id": .string(sandboxId), "snapshotId": .string(snapshotId)])
     }
 
     /// Resolve a snapshot's archive directory for restore/fork: the
@@ -2112,14 +2112,14 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     private func resumeAfterFailedPause(managed: Managed, sandboxId: String) async {
         logger.warning(
             "Sandbox pause reported failure; resuming every vCPU defensively",
-            metadata: ["sandboxId": .string(sandboxId)])
+            metadata: ["strato.sandbox.id": .string(sandboxId)])
         do {
             try await managed.manager.recoverFromFailedPause()
         } catch {
             logger.error(
                 "Could not confirm recovery from a failed sandbox pause",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
+                    "strato.sandbox.id": .string(sandboxId),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -2554,8 +2554,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         logger.info(
             "Starting sandbox exec session",
             metadata: [
-                "sandboxId": .string(sandboxId),
-                "sessionId": .string(sessionId),
+                "strato.sandbox.id": .string(sandboxId),
+                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                 "tty": .stringConvertible(request.tty),
             ])
 
@@ -2632,7 +2632,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         guard let session = execSessions.removeValue(forKey: sessionId) else { return }
         logger.info(
             "Closing sandbox exec session",
-            metadata: ["sandboxId": .string(session.sandboxId), "sessionId": .string(sessionId)])
+            metadata: [
+                "strato.sandbox.id": .string(session.sandboxId), "strato.session.kind": .string("guest_exec"),
+                "strato.session.id": .string(sessionId),
+            ])
         // Closing the connection kills the exec process group guest-side and
         // unblocks the reader, whose end-of-session callback finds the session
         // already deregistered and stays silent — the closer needs no event.
@@ -2663,8 +2666,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         logger.info(
             "Sandbox exec session ended",
             metadata: [
-                "sandboxId": .string(session.sandboxId),
-                "sessionId": .string(sessionId),
+                "strato.sandbox.id": .string(session.sandboxId),
+                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                 "terminal": .string(String(describing: terminal)),
             ])
         session.events(terminal)
@@ -2802,7 +2805,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
         logger.debug(
             "Starting sandbox log follow",
-            metadata: ["sandboxId": .string(sandboxId), "sinceSeq": .stringConvertible(follow.lastSeq + 1)])
+            metadata: ["strato.sandbox.id": .string(sandboxId), "sinceSeq": .stringConvertible(follow.lastSeq + 1)])
 
         follow.task = Task.detached { [weak self, logger] in
             await Self.runLogFollowLoop(
@@ -2943,7 +2946,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                     logger.debug(
                         "Sandbox log follow stream ended",
                         metadata: [
-                            "sandboxId": .string(sandboxId),
+                            "strato.sandbox.id": .string(sandboxId),
                             "error": .string(error.localizedDescription),
                         ])
                 }
@@ -2958,7 +2961,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 logger.debug(
                     "Sandbox log follow connect failed",
                     metadata: [
-                        "sandboxId": .string(sandboxId),
+                        "strato.sandbox.id": .string(sandboxId),
                         "error": .string(error.localizedDescription),
                     ])
             }
@@ -3039,7 +3042,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 guard identityMatches(response, sandboxId: sandboxId, expectedNonce: expectedNonce) else {
                     logger.warning(
                         "Ignoring sandbox control status from a mismatched guest identity",
-                        metadata: ["sandboxId": .string(sandboxId)])
+                        metadata: ["strato.sandbox.id": .string(sandboxId)])
                     return .unknown
                 }
                 switch state {

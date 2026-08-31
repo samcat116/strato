@@ -8,7 +8,7 @@ import type {
   CreateImageRequest,
   ImageUploadForm,
   UpdateImageRequest,
-} from "@/types/api";
+} from "@/types/api-contracts";
 
 export const imagesApi = {
   list(projectId: string, signal?: AbortSignal): Promise<Image[]> {

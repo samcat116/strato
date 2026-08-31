@@ -302,8 +302,7 @@ actor ReplicaMessageBridge {
                 Task { await self?.handleDeliveryReply(payload) }
             }
             subscriptionState = .armed
-            app.logger.info(
-                "Replica doorbell channel subscribed", metadata: ["replicaId": .string(replicaId)])
+            app.logger.info("Replica doorbell channel subscribed")
         } catch {
             subscriptionState = .idle
             app.logger.error(
@@ -331,8 +330,7 @@ actor ReplicaMessageBridge {
             // subscription task is already reconnecting; registering another
             // handler here would duplicate every later RPC delivery.
             app.logger.warning(
-                "Replica subscription probe was not received; awaiting store reconnection",
-                metadata: ["replicaId": .string(app.replicaID)])
+                "Replica subscription probe was not received; awaiting store reconnection")
         }
 
         lastProbeSent = now
@@ -380,7 +378,7 @@ actor ReplicaMessageBridge {
         guard let delegate else {
             app.logger.debug(
                 "Doorbell received before the bridge delegate was set; ignoring",
-                metadata: ["agentKey": .string(agentKey)])
+                metadata: ["strato.agent.identity": .string(agentKey)])
             return
         }
         await delegate.deliverDoorbell(agentKey: agentKey)

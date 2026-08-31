@@ -310,9 +310,13 @@ struct OAuthController: RouteCollection {
             .filter(\.$previousRefreshTokenHash == hash)
             .first(), !replayed.isRevoked
         {
+            var metadata: Logger.Metadata = ["strato.session.kind": .string("oauth")]
+            if let sessionID = replayed.id {
+                metadata["strato.session.id"] = .string(sessionID.uuidString)
+            }
             req.logger.warning(
                 "Refresh token replay detected; revoking CLI session",
-                metadata: ["session_id": .string(replayed.id?.uuidString ?? "unknown")]
+                metadata: metadata
             )
             replayed.revokedAt = Date()
             try await replayed.save(on: req.db)

@@ -389,7 +389,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
         logger.info(
             "Creating VM network",
-            metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
+            metadata: ["strato.vm.id": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
 
         // Create logical switch port for the workload's NIC. Everything down to
         // the TAP/veth step below is identical for VMs and sandboxes — only the
@@ -571,7 +571,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         logger.info(
             "VM network created successfully",
             metadata: [
-                "vmId": .string(vmId),
+                "strato.vm.id": .string(vmId),
                 "portName": .string(portName),
                 "tapInterface": .string(tapInterface),
             ])
@@ -579,7 +579,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         return networkInfo
         #else
         // Development mode
-        logger.info("Creating mock VM network (development mode)", metadata: ["vmId": .string(vmId)])
+        logger.info("Creating mock VM network (development mode)", metadata: ["strato.vm.id": .string(vmId)])
 
         return VMNetworkInfo(
             vmId: vmId,
@@ -601,7 +601,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
         logger.info(
             "Detaching VM from network",
-            metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
+            metadata: ["strato.vm.id": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
 
         let portName = Self.portName(workloadId: vmId, nicIndex: nicIndex, placement: placement)
 
@@ -648,10 +648,10 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 sandboxId: vmId, nicIndex: nicIndex, netnsName: netnsName, portName: portName)
         }
 
-        logger.info("VM detached from network successfully", metadata: ["vmId": .string(vmId)])
+        logger.info("VM detached from network successfully", metadata: ["strato.vm.id": .string(vmId)])
         #else
         // Development mode
-        logger.info("Detaching mock VM from network (development mode)", metadata: ["vmId": .string(vmId)])
+        logger.info("Detaching mock VM from network (development mode)", metadata: ["strato.vm.id": .string(vmId)])
         #endif
     }
 
@@ -957,7 +957,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             "Creating TAP interface",
             metadata: [
                 "tapName": .string(tapName),
-                "vmId": .string(vmId),
+                "strato.vm.id": .string(vmId),
             ])
 
         // Idempotent: reuse the device if it already exists (crash recovery, re-attach).
@@ -1053,7 +1053,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         logger.info(
             "Sandbox NIC attached into namespace",
             metadata: [
-                "sandboxId": .string(sandboxId),
+                "strato.sandbox.id": .string(sandboxId),
                 "nicIndex": .stringConvertible(nicIndex),
                 "netns": .string(netnsName),
                 "portName": .string(portName),
@@ -1131,7 +1131,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             logger.warning(
                 "Failed to remove OVS port",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
+                    "strato.sandbox.id": .string(sandboxId),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -1145,7 +1145,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 logger.warning(
                     "Failed to tear down sandbox NIC device",
                     metadata: [
-                        "sandboxId": .string(sandboxId),
+                        "strato.sandbox.id": .string(sandboxId),
                         "command": .string(command.arguments.joined(separator: " ")),
                         "error": .string(error.localizedDescription),
                         // Without an absolute path this ran through `PATH`, which

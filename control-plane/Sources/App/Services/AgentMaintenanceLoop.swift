@@ -97,6 +97,22 @@ actor AgentMaintenanceLoop {
 
                     try self.checkTickPreconditions()
 
+                    // Prune expired idempotency keys every 120 ticks.
+                    if tick % 120 == 0 {
+                        do {
+                            let deleted = try await IdempotencyService.sweepExpired(on: app.db)
+                            if deleted > 0 {
+                                app.logger.info(
+                                    "Idempotency retention sweep pruned expired keys",
+                                    metadata: ["deleted": .stringConvertible(deleted)])
+                            }
+                        } catch {
+                            app.logger.error("Idempotency retention sweep failed: \(error)")
+                        }
+                    }
+
+                    try self.checkTickPreconditions()
+
                     await sweepAgentAutoUpdates()
                 } catch {
                     if !Task.isCancelled {
@@ -163,7 +179,7 @@ actor AgentMaintenanceLoop {
                 if await app.coordination.isAgentPresent(agentKey: agent.identity.key) == true {
                     app.logger.debug(
                         "Agent heartbeat is stale in the database but presence key is live; skipping",
-                        metadata: ["agentName": .string(agent.name)])
+                        metadata: ["strato.agent.name": .string(agent.name)])
                     continue
                 }
 
@@ -180,7 +196,7 @@ actor AgentMaintenanceLoop {
                     agent: agent, connected: false, reason: "stale", on: app.db, logger: app.logger)
                 app.logger.info(
                     "Agent heartbeat stale past threshold; marked offline",
-                    metadata: ["agentName": .string(agent.name)])
+                    metadata: ["strato.agent.name": .string(agent.name)])
                 await warnIfSiteNetworkController(agent)
             }
         } catch {
@@ -202,7 +218,7 @@ actor AgentMaintenanceLoop {
                 app.logger.warning(
                     "Site network controller went offline; nothing authors the site's network topology until it returns",
                     metadata: [
-                        "agentName": .string(agent.name),
+                        "strato.agent.name": .string(agent.name),
                         "site": .string(site.name),
                         "graceSeconds": .stringConvertible(offlineGrace),
                     ])
@@ -210,7 +226,7 @@ actor AgentMaintenanceLoop {
         } catch {
             app.logger.warning(
                 "Failed to check whether the stale agent is a site's network controller",
-                metadata: ["agentName": .string(agent.name), "error": .string("\(error)")])
+                metadata: ["strato.agent.name": .string(agent.name), "error": .string("\(error)")])
         }
     }
 
@@ -830,9 +846,9 @@ actor AgentMaintenanceLoop {
             app.logger.info(
                 "Expiring sandbox",
                 metadata: [
-                    "sandboxId": .string(sandboxID.uuidString),
+                    "strato.sandbox.id": .string(sandboxID.uuidString),
                     "reason": .string(reason.description),
-                    "mutationId": .string(accepted.mutationID.uuidString),
+                    "strato.operation.id": .string(accepted.mutationID.uuidString),
                 ])
         } catch {
             // The "operation already pending" `409` that used to defer an
@@ -845,7 +861,7 @@ actor AgentMaintenanceLoop {
             // so an expired sandbox is deferred rather than dropped.
             app.logger.debug(
                 "Skipping sandbox expiry: \(error)",
-                metadata: ["sandboxId": .string(sandboxID.uuidString)])
+                metadata: ["strato.sandbox.id": .string(sandboxID.uuidString)])
         }
     }
 
@@ -950,7 +966,7 @@ actor AgentMaintenanceLoop {
                     app.logger.notice(
                         "Agent auto-update converged",
                         metadata: [
-                            "agentName": .string(agent.name),
+                            "strato.agent.name": .string(agent.name),
                             "version": .string(agent.version),
                         ])
                     continue
@@ -987,7 +1003,7 @@ actor AgentMaintenanceLoop {
                         app.logger.notice(
                             "Agent auto-update parked: blocked past the health budget; rollout advances without it",
                             metadata: [
-                                "agentName": .string(agent.name),
+                                "strato.agent.name": .string(agent.name),
                                 "targetVersion": .string(assigned),
                                 "blockedReason": .string(agent.updateBlockedReason ?? ""),
                             ])
@@ -1012,7 +1028,7 @@ actor AgentMaintenanceLoop {
                             ? "Agent update failed: agent went silent past the health budget"
                             : "Agent auto-update failed: agent went silent past the health budget; rollout halted",
                         metadata: [
-                            "agentName": .string(agent.name),
+                            "strato.agent.name": .string(agent.name),
                             "targetVersion": .string(assigned),
                         ])
                     rolloutHalted = rolloutHalted || !manual
@@ -1052,7 +1068,7 @@ actor AgentMaintenanceLoop {
                 app.logger.warning(
                     "Agent auto-update artifact unresolvable; not assigning (retries next sweep)",
                     metadata: [
-                        "agentName": .string(next.name),
+                        "strato.agent.name": .string(next.name),
                         "targetVersion": .string(target),
                         "error": .string(String(describing: error)),
                     ])
@@ -1065,7 +1081,7 @@ actor AgentMaintenanceLoop {
             app.logger.notice(
                 "Agent auto-update assigned",
                 metadata: [
-                    "agentName": .string(next.name),
+                    "strato.agent.name": .string(next.name),
                     "currentVersion": .string(next.version),
                     "targetVersion": .string(target),
                 ])

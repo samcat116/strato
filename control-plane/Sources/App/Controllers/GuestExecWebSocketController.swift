@@ -195,8 +195,9 @@ struct GuestExecWebSocketController: RouteCollection {
                     "\(resource.logName) exec attach rejected: \(error)",
                     metadata: [
                         "resourceKind": .string(resource.kind.rawValue),
-                        "resourceId": .string(resourceId.uuidString),
-                        "sessionId": .string(sessionId),
+                        LogMetadata.guestResourceIDKey(for: resource.kind): .string(
+                            resourceId.uuidString),
+                        "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                     ])
                 await req.recordAPIRequestAudit(
                     status: rejectionStatus,
@@ -224,9 +225,10 @@ struct GuestExecWebSocketController: RouteCollection {
                 "\(resource.logName) exec WebSocket connection established",
                 metadata: [
                     "resourceKind": .string(resource.kind.rawValue),
-                    "resourceId": .string(resourceId.uuidString),
-                    "sessionId": .string(sessionId),
-                    "agentName": .string(session.agentKey),
+                    LogMetadata.guestResourceIDKey(for: resource.kind): .string(
+                        resourceId.uuidString),
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(session.agentKey),
                 ])
 
             // Everything sent to the agent for this session flows through a
@@ -332,16 +334,18 @@ struct GuestExecWebSocketController: RouteCollection {
                         "\(resource.logName) exec WebSocket connection closed",
                         metadata: [
                             "resourceKind": .string(resource.kind.rawValue),
-                            "resourceId": .string(resourceId.uuidString),
-                            "sessionId": .string(sessionId),
+                            LogMetadata.guestResourceIDKey(for: resource.kind): .string(
+                                resourceId.uuidString),
+                            "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                         ])
                 case .failure(let error):
                     req.logger.error(
                         "\(resource.logName) exec WebSocket connection closed with error: \(error)",
                         metadata: [
                             "resourceKind": .string(resource.kind.rawValue),
-                            "resourceId": .string(resourceId.uuidString),
-                            "sessionId": .string(sessionId),
+                            LogMetadata.guestResourceIDKey(for: resource.kind): .string(
+                                resourceId.uuidString),
+                            "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                         ])
                 }
 
@@ -453,7 +457,8 @@ struct GuestExecWebSocketController: RouteCollection {
                     "\(resource.logName) exec access denied",
                     metadata: [
                         "resourceKind": .string(resource.kind.rawValue),
-                        "resourceId": .string(resourceId.uuidString),
+                        LogMetadata.guestResourceIDKey(for: resource.kind): .string(
+                            resourceId.uuidString),
                         "userId": .string(userId),
                     ])
                 await req.recordAPIRequestAudit(

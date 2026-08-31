@@ -4,7 +4,7 @@ import { api } from "./client";
 import type {
   OrganizationHierarchy,
   HierarchySearchResponse,
-} from "@/types/api";
+} from "@/types/api-contracts";
 
 export const hierarchyApi = {
   // Full hierarchy tree for an organization

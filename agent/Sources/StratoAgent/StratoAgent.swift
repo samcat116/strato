@@ -7,6 +7,7 @@ import ArgumentParser
 import Foundation
 import Logging
 import StratoAgentCore
+import StratoShared
 
 @main
 struct StratoAgent: AsyncParsableCommand {
@@ -58,6 +59,17 @@ struct AgentOptions: ParsableArguments {
     var debug: Bool = false
 }
 
+enum AgentLoggingMetadata {
+    static func base(instanceID: UUID = UUID()) -> Logger.Metadata {
+        [
+            LogMetadata.Key.serviceName: .string("strato-agent"),
+            LogMetadata.Key.serviceInstanceID: .string(instanceID.uuidString),
+            LogMetadata.Key.serviceVersion: .string(BuildInfo.version),
+            "vcs.revision": .string(BuildInfo.gitSHA),
+        ]
+    }
+}
+
 extension StratoAgent {
     struct Run: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
@@ -75,10 +87,13 @@ extension StratoAgent {
 
 /// Launch path for `run`.
 private func launchAgent(options: AgentOptions) async throws {
+    let processLoggingMetadata = DynamicLogMetadata(AgentLoggingMetadata.base())
     // Keep configuration failures visible without consuming swift-log's single
     // process-wide bootstrap before the final threshold is known.
     let debug = options.debug
-    let startupLogHandlerFactory = AgentLogHandlerFactory(logLevel: debug ? .debug : .info)
+    let startupLogHandlerFactory = AgentLogHandlerFactory(
+        logLevel: debug ? .debug : .info,
+        metadataProvider: processLoggingMetadata.provider)
     var logger = Logger(label: "strato-agent.bootstrap") { label in
         startupLogHandlerFactory.makeHandler(label: label)
     }
@@ -192,16 +207,18 @@ private func launchAgent(options: AgentOptions) async throws {
     let finalHardwareAcceleration = false
     #endif
 
+    processLoggingMetadata[metadataKey: LogMetadata.Key.agentName] = .string(finalAgentID)
     // Bootstrap exactly once with the final level. Every fresh subsystem or
     // dependency logger created after this point receives the same threshold.
-    let logHandlerFactory = AgentLogHandlerFactory(logLevel: finalLogLevel)
+    let logHandlerFactory = AgentLogHandlerFactory(
+        logLevel: finalLogLevel,
+        metadataProvider: processLoggingMetadata.provider)
     logHandlerFactory.bootstrap()
     logger = Logger(label: "strato-agent")
 
     logger.info(
         "Starting Strato Agent",
         metadata: [
-            "agentID": .string(finalAgentID),
             "webSocketURL": .string(finalWebSocketURL),
             "vmStoragePath": .string(finalVMStoragePath),
             "volumeStoragePath": .string(finalVolumeStoragePath),

@@ -84,7 +84,7 @@ actor FirecrackerService: HypervisorService {
         vmId: String, spec: VMSpec, bootArtifacts: FirecrackerBootArtifacts,
         networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
     ) async throws {
-        logger.info("Creating Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Creating Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
 
         // Firecracker can only realize TAP attachments. Reject anything else up
         // front instead of silently launching the VM without its NICs.
@@ -215,7 +215,7 @@ actor FirecrackerService: HypervisorService {
             throw error
         }
 
-        logger.info("Firecracker VM created successfully", metadata: ["vmId": .string(vmId)])
+        logger.info("Firecracker VM created successfully", metadata: ["strato.vm.id": .string(vmId)])
     }
 
     func bootVM(vmId: String) async throws {
@@ -223,9 +223,9 @@ actor FirecrackerService: HypervisorService {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
 
-        logger.info("Booting Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Booting Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
         try await manager.start()
-        logger.info("Firecracker VM booted successfully", metadata: ["vmId": .string(vmId)])
+        logger.info("Firecracker VM booted successfully", metadata: ["strato.vm.id": .string(vmId)])
     }
 
     func shutdownVM(vmId: String) async throws {
@@ -233,10 +233,10 @@ actor FirecrackerService: HypervisorService {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
 
-        logger.info("Shutting down Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Shutting down Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
         // Firecracker doesn't have graceful shutdown, send Ctrl+Alt+Del or destroy
         try await manager.sendCtrlAltDel()
-        logger.info("Shutdown signal sent to Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Shutdown signal sent to Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
     }
 
     func rebootVM(vmId: String) async throws {
@@ -244,9 +244,9 @@ actor FirecrackerService: HypervisorService {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
 
-        logger.info("Rebooting Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Rebooting Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
         try await manager.sendCtrlAltDel()
-        logger.info("Reboot signal sent to Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Reboot signal sent to Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
     }
 
     func pauseVM(vmId: String) async throws {
@@ -254,9 +254,9 @@ actor FirecrackerService: HypervisorService {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
 
-        logger.info("Pausing Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Pausing Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
         try await manager.pause()
-        logger.info("Firecracker VM paused", metadata: ["vmId": .string(vmId)])
+        logger.info("Firecracker VM paused", metadata: ["strato.vm.id": .string(vmId)])
     }
 
     func resumeVM(vmId: String) async throws {
@@ -264,13 +264,13 @@ actor FirecrackerService: HypervisorService {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
 
-        logger.info("Resuming Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Resuming Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
         try await manager.resume()
-        logger.info("Firecracker VM resumed", metadata: ["vmId": .string(vmId)])
+        logger.info("Firecracker VM resumed", metadata: ["strato.vm.id": .string(vmId)])
     }
 
     func deleteVM(vmId: String) async throws {
-        logger.info("Deleting Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Deleting Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
 
         // Destroy the VM through the client (network attachments are torn down
         // by the agent's NetworkOrchestrator after this returns).
@@ -282,7 +282,7 @@ actor FirecrackerService: HypervisorService {
         // below must not run without a preceding teardown, since it would
         // unlink the rootfs of a VM that could still be executing it.
         guard let client = firecrackerClient else {
-            logger.info("Firecracker VM had nothing to tear down", metadata: ["vmId": .string(vmId)])
+            logger.info("Firecracker VM had nothing to tear down", metadata: ["strato.vm.id": .string(vmId)])
             return
         }
         if vmManagers[vmId] != nil {
@@ -303,7 +303,7 @@ actor FirecrackerService: HypervisorService {
         // reached only once the teardown above has returned without throwing.
         await reclaimVMDirectory(vmId: vmId)
 
-        logger.info("Firecracker VM deleted", metadata: ["vmId": .string(vmId)])
+        logger.info("Firecracker VM deleted", metadata: ["strato.vm.id": .string(vmId)])
     }
 
     /// Leaves the host with no Firecracker process for `vmId` when this service
@@ -321,7 +321,7 @@ actor FirecrackerService: HypervisorService {
         guard FileManager.default.fileExists(atPath: socketPath) else {
             logger.warning(
                 "Deleting a Firecracker VM with no manager and no API socket; assuming nothing is left to tear down",
-                metadata: ["vmId": .string(vmId), "socket": .string(socketPath)])
+                metadata: ["strato.vm.id": .string(vmId), "socket": .string(socketPath)])
             return
         }
 
@@ -331,7 +331,7 @@ actor FirecrackerService: HypervisorService {
             logger.warning(
                 "VM has no live Firecracker behind its API socket; deleting what it left on this host",
                 metadata: [
-                    "vmId": .string(vmId),
+                    "strato.vm.id": .string(vmId),
                     "socket": .string(socketPath),
                     "error": .string(error.localizedDescription),
                 ])
@@ -340,7 +340,7 @@ actor FirecrackerService: HypervisorService {
 
         logger.warning(
             "Deleting a VM whose Firecracker is alive but had no manager on this agent",
-            metadata: ["vmId": .string(vmId), "socket": .string(socketPath)])
+            metadata: ["strato.vm.id": .string(vmId), "socket": .string(socketPath)])
         try await client.destroyVM(vmId: vmId)
     }
 
@@ -356,7 +356,7 @@ actor FirecrackerService: HypervisorService {
             // rather than unlink the rootfs of a VM it is still driving.
             logger.error(
                 "Refusing to reclaim the directory of a VM with a live control session",
-                metadata: ["vmId": .string(vmId)])
+                metadata: ["strato.vm.id": .string(vmId)])
             return
         }
         VMDirectoryLayout.removeDirectory(vmStoragePath: vmStoragePath, vmId: vmId, logger: logger)
@@ -448,7 +448,7 @@ actor FirecrackerService: HypervisorService {
         logger.info(
             "Re-adopting orphaned Firecracker VM",
             metadata: [
-                "vmId": .string(vmId),
+                "strato.vm.id": .string(vmId),
                 "socket": .string(socketPath),
             ])
 
@@ -493,7 +493,7 @@ actor FirecrackerService: HypervisorService {
         mmdsPayloads[vmId] = payload
         logger.info(
             "Refreshed Firecracker MMDS snapshot",
-            metadata: ["vmId": .string(vmId), "bytes": .stringConvertible(payload.count)])
+            metadata: ["strato.vm.id": .string(vmId), "bytes": .stringConvertible(payload.count)])
     }
 
     func restoreMetadataInterfaceInventory(vmId: String, interfaces: [String]) async {
@@ -519,7 +519,7 @@ actor FirecrackerService: HypervisorService {
 
         logger.info(
             "Replacing Firecracker VMM to reconfigure MMDS interfaces",
-            metadata: ["vmId": .string(vmId)])
+            metadata: ["strato.vm.id": .string(vmId)])
         if let manager = vmManagers[vmId] {
             try await quiesceForReplacement(vmId: vmId, manager: manager, client: client)
             try await client.destroyVM(vmId: vmId)
@@ -594,12 +594,12 @@ actor FirecrackerService: HypervisorService {
             }
             logger.info(
                 "Firecracker guest shut down cleanly before VMM replacement",
-                metadata: ["vmId": .string(vmId)])
+                metadata: ["strato.vm.id": .string(vmId)])
         } catch {
             if (try? await client.waitForVMExit(vmId: vmId, timeout: .milliseconds(0))) == true {
                 logger.info(
                     "Firecracker VMM exited while quiescing for replacement",
-                    metadata: ["vmId": .string(vmId)])
+                    metadata: ["strato.vm.id": .string(vmId)])
                 return
             }
             if restorePauseOnFailure {
@@ -609,7 +609,7 @@ actor FirecrackerService: HypervisorService {
                     logger.error(
                         "Could not restore paused state after Firecracker shutdown failed",
                         metadata: [
-                            "vmId": .string(vmId),
+                            "strato.vm.id": .string(vmId),
                             "error": .string(error.localizedDescription),
                         ])
                 }
@@ -629,7 +629,7 @@ actor FirecrackerService: HypervisorService {
             logger.error(
                 "Failed to discard partially configured Firecracker VMM",
                 metadata: [
-                    "vmId": .string(vmId),
+                    "strato.vm.id": .string(vmId),
                     "error": .string(error.localizedDescription),
                 ])
         }

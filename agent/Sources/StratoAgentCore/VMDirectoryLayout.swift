@@ -41,7 +41,7 @@ public enum VMDirectoryLayout {
         guard !vmStoragePath.isEmpty, !vmId.isEmpty, vmId != ".", vmId != "..", !vmId.contains("/") else {
             logger.error(
                 "Refusing to remove VM directory: implausible storage path or VM id",
-                metadata: ["vmId": .string(vmId), "vmStoragePath": .string(vmStoragePath)])
+                metadata: ["strato.vm.id": .string(vmId), "vmStoragePath": .string(vmStoragePath)])
             return
         }
 
@@ -56,16 +56,16 @@ public enum VMDirectoryLayout {
             // At info, not debug: this is the only record that a VM's disk
             // space was actually reclaimed, and its absence next to the error
             // below is what tells an operator which deletes leaked.
-            logger.info("Removed VM directory", metadata: ["vmId": .string(vmId), "path": .string(directory)])
+            logger.info("Removed VM directory", metadata: ["strato.vm.id": .string(vmId), "path": .string(directory)])
         } catch let error as NSError
             where error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError
         {
-            logger.debug("VM directory already absent", metadata: ["vmId": .string(vmId)])
+            logger.debug("VM directory already absent", metadata: ["strato.vm.id": .string(vmId)])
         } catch {
             logger.error(
                 "Failed to remove VM directory; its disk image and other artifacts are leaked on this host",
                 metadata: [
-                    "vmId": .string(vmId),
+                    "strato.vm.id": .string(vmId),
                     "path": .string(directory),
                     "error": .string(error.localizedDescription),
                 ])

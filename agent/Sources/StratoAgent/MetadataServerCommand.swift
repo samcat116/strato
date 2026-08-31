@@ -234,19 +234,20 @@ struct MetadataListenerLogHandler: LogHandler {
         set { metadata[key] = newValue }
     }
 
-    func log(
-        level: Logger.Level, message: Logger.Message, metadata: Logger.Metadata?,
-        source: String, file: String, function: String, line: UInt
-    ) {
-        let merged = self.metadata.merging(metadata ?? [:]) { _, new in new }
+    func log(event: LogEvent) {
+        var merged = metadata.merging(event.metadata ?? [:]) { _, new in new }
+        if let error = event.error {
+            merged["error.type"] = .string(String(reflecting: type(of: error)))
+            merged["error.message"] = .string(String(describing: error))
+        }
         let rendered =
             merged.isEmpty
-            ? message.description
-            : message.description + " "
+            ? event.message.description
+            : event.message.description + " "
                 + merged.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
         // Newlines would be read by the parent as extra, untagged lines.
         let oneLine = rendered.replacingOccurrences(of: "\n", with: " ")
-        FileHandle.standardError.write(Data("\(level.rawValue)\t\(oneLine)\n".utf8))
+        FileHandle.standardError.write(Data("\(event.level.rawValue)\t\(oneLine)\n".utf8))
     }
 }
 

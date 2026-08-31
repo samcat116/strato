@@ -40,6 +40,7 @@ struct PreparedControlPlaneObservability {
     let plan: ObservabilitySignalPlan
     let configuration: OTel.Configuration
     let loggingBackend: PreparedOTelLoggingBackend?
+    let baseLoggingMetadata: Logger.Metadata
 
     static func prepare(
         controlPlaneConfiguration: ControlPlaneConfiguration,
@@ -61,17 +62,28 @@ struct PreparedControlPlaneObservability {
             loggingBackend = nil
         }
 
+        let baseLoggingMetadata = ControlPlaneLoggingMetadata.base(
+            serviceName: configuration.serviceName,
+            serviceInstanceID: replicaID,
+            environmentName: environment.name,
+            serviceVersion: BuildInfo.version(configuration: controlPlaneConfiguration))
+
         return Self(
             plan: plan,
             configuration: configuration,
-            loggingBackend: loggingBackend)
+            loggingBackend: loggingBackend,
+            baseLoggingMetadata: baseLoggingMetadata)
     }
 
     /// Bootstrap swift-log exactly once with the console sink and, when
     /// enabled, the already-created OTLP backend.
     func bootstrapLogging(from environment: inout Environment) throws {
         let terminal = Terminal()
-        let metadataProvider = OTel.makeLoggingMetadataProvider()
+        let baseMetadata = baseLoggingMetadata
+        let metadataProvider = Logger.MetadataProvider.multiplex([
+            Logger.MetadataProvider { baseMetadata },
+            OTel.makeLoggingMetadataProvider(),
+        ])
         let otelFactory = loggingBackend?.factory
 
         try LoggingSystem.bootstrap(from: &environment) { level in
@@ -81,7 +93,8 @@ struct PreparedControlPlaneObservability {
                     console: terminal,
                     level: level,
                     metadataProvider: metadataProvider)
-                let otel = otelFactory?(label)
+                var otel = otelFactory?(label)
+                otel?.metadataProvider = metadataProvider
                 return ObservabilityBootstrap.composeLogHandlers(
                     console: console,
                     otel: otel,
@@ -142,7 +155,8 @@ enum ObservabilityBootstrap {
 
         // Resource attributes stamped on every metric/log/trace so signals
         // are queryable per build, per deployment, and per replica. Combined
-        // with anything supplied via OTEL_RESOURCE_ATTRIBUTES.
+        // with anything supplied via OTEL_RESOURCE_ATTRIBUTES. The same
+        // `service.instance.id` is used by log metadata and the health response.
         configuration.resourceAttributes["service.version"] = BuildInfo.version(
             configuration: controlPlaneConfiguration)
         configuration.resourceAttributes["service.instance.id"] = replicaID
@@ -194,7 +208,7 @@ extension Application {
         logger.info(
             "Bootstrapping OpenTelemetry",
             metadata: [
-                "service": .string(prepared.configuration.serviceName),
+                "service.name": .string(prepared.configuration.serviceName),
                 "metrics": .stringConvertible(prepared.plan.metricsEnabled),
                 "logs": .stringConvertible(prepared.plan.logsEnabled),
                 "traces": .stringConvertible(prepared.plan.tracesEnabled),

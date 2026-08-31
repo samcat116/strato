@@ -293,6 +293,40 @@ final class VMOperationTests {
         }
     }
 
+    @Test("replaying one idempotent restart returns its first acceptance and bumps the nonce once")
+    func idempotentRestartIsAppliedOnce() async throws {
+        try await withVMTestApp { app, _, vm, token in
+            try await placeOnAgent(app: app, vm: vm)
+            let key = UUID().uuidString
+            var first: AcceptedMutation<VMDetailResponse>?
+            var replay: AcceptedMutation<VMDetailResponse>?
+
+            try await app.test(.POST, "/api/vms/\(vm.id!)/restart") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                first = try res.content.decode(AcceptedMutation<VMDetailResponse>.self)
+            }
+            try await app.test(.POST, "/api/vms/\(vm.id!)/restart") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                replay = try res.content.decode(AcceptedMutation<VMDetailResponse>.self)
+            }
+
+            #expect(replay?.mutationId == first?.mutationId)
+            #expect(replay?.targetGeneration == first?.targetGeneration)
+            #expect(try await VM.find(vm.id, on: app.db)?.rebootGeneration == 1)
+            #expect(
+                try await ResourceEvent.query(on: app.db)
+                    .filter(\.$resourceID == vm.id!)
+                    .filter(\.$mutation == .reboot)
+                    .count() == 1)
+        }
+    }
+
     // MARK: - 202 + async failure recording
 
     @Test("POST /api/vms/:id/start returns 202 with the VM and its target generation")
@@ -740,6 +774,49 @@ final class VMOperationTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in
                 #expect(res.status == .notFound)
+            }
+        }
+    }
+
+    @Test("An idempotent delete replays its original acceptance after the VM is gone")
+    func idempotentDeleteReplaysAfterTheRowIsGone() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            let vmID = try vm.requireID()
+            let path = "/api/vms/\(vmID)"
+            let key = UUID().uuidString
+            var originalBody: Data?
+            var originalMutationID: UUID?
+
+            let boot = Volume(
+                name: "op-vm-boot", description: "", projectID: vm.$project.id,
+                environment: vm.environment, size: vm.disk, volumeType: .boot,
+                createdByID: try user.requireID())
+            boot.$vm.id = vmID
+            boot.deviceName = "disk0"
+            boot.bootOrder = 0
+            try await boot.save(on: app.db)
+
+            try await app.test(.DELETE, path) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                originalBody = Data(res.body.readableBytesView)
+                originalMutationID = try res.content
+                    .decode(AcceptedMutation<VMDetailResponse>.self).mutationId
+            }
+
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+            #expect(try await VM.find(vmID, on: app.db) == nil)
+
+            try await app.test(.DELETE, path) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                #expect(Data(res.body.readableBytesView) == originalBody)
+                let replayed = try res.content.decode(AcceptedMutation<VMDetailResponse>.self)
+                #expect(replayed.mutationId == originalMutationID)
             }
         }
     }

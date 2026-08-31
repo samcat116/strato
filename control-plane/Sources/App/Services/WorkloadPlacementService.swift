@@ -130,8 +130,8 @@ actor WorkloadPlacementService {
         app.logger.info(
             "VM creation dispatched via desired-state doorbell",
             metadata: [
-                "vmId": .string(vmId),
-                "agentId": .string(agentId),
+                "strato.vm.id": .string(vmId),
+                "strato.agent.id": .string(agentId),
             ])
 
         await app.agentService.syncDesiredState(agentId: agentId)
@@ -295,8 +295,8 @@ actor WorkloadPlacementService {
             app.logger.info(
                 "Sandbox creation dispatched via desired-state doorbell",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
-                    "agentId": .string(agentId),
+                    "strato.sandbox.id": .string(sandboxId),
+                    "strato.agent.id": .string(agentId),
                 ])
 
             await app.agentService.syncDesiredState(agentId: agentId)

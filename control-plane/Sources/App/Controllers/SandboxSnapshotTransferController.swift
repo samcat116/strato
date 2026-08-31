@@ -89,15 +89,16 @@ extension SandboxController {
                     size: current.size ?? 0, on: db)
             }
             return try await SnapshotArtifactMutation.requestExport(
-                snapshot, actor: .user(userID), on: db, app: req.application)
+                snapshot, actor: .user(userID), idempotencyContext: req.idempotencyContext,
+                on: db, app: req.application)
         }
 
         req.logger.info(
             "Sandbox snapshot export accepted",
             metadata: [
-                "sandbox_id": .string(sandboxID.uuidString),
+                "strato.sandbox.id": .string(sandboxID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
-                "agent_id": .string(agentId),
+                "strato.agent.id": .string(agentId),
             ])
         return try AcceptedMutation(SandboxSnapshotResponse(from: snapshot), accepted)
             .acceptedResponse()
@@ -250,7 +251,7 @@ extension SandboxController {
         req.logger.info(
             "Agent snapshot artifact transfer authenticated",
             metadata: [
-                "agent": .string(agent.identity.key),
+                "strato.agent.identity": .string(agent.identity.key),
                 "snapshot_id": .string(snapshotID.uuidString),
                 "kind": .string(kind.rawValue),
                 "method": .string(req.method.rawValue),

@@ -158,7 +158,7 @@ struct WorkloadRegistrationController: RouteCollection {
             req.logger.warning(
                 "Revoking a VM's instance identity; it cannot be reissued for this VM",
                 metadata: [
-                    "vm_id": .string(vmID.uuidString),
+                    "strato.vm.id": .string(vmID.uuidString),
                     "spiffe_id": .string(registration.spiffeID),
                 ])
         }

@@ -30,7 +30,9 @@ final class AgentServiceLifecycleTests {
                 checkedAt: checkedAt,
                 lastHealthyAt: checkedAt,
                 affectedCapabilities: [.qemuPlacement])
-            let agent = try await TestDataBuilder(db: app.db).createAgent(
+            let builder = TestDataBuilder(db: app.db)
+            let organization = try await builder.createOrganization(name: "Lifecycle Org")
+            let agent = try await builder.createAgent(
                 named: "stale-agent",
                 hostname: "stale-agent.example",
                 resources: AgentResources(
@@ -42,7 +44,8 @@ final class AgentServiceLifecycleTests {
                     availableDisk: 100_000_000_000),
                 dependencyObservations: [dependency],
                 dependencyObservationsReceivedAt: checkedAt,
-                lastHeartbeat: Date().addingTimeInterval(-120))
+                lastHeartbeat: Date().addingTimeInterval(-120),
+                organizationScope: .organization(try organization.requireID()))
 
             let metrics = TestMetrics()
             Telemetry.recordDependency(

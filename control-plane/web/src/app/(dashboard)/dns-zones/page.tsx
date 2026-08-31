@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Network, Trash2 } from "lucide-react";
@@ -95,8 +97,8 @@ export default function DNSZonesPage() {
     },
     onError: (error) => toast.error(error.message),
   });
-  const confirmMutation = (message: string, work: () => Promise<unknown>) => {
-    if (window.confirm(message)) mutation.mutate(work);
+  const confirmMutation = async (message: string, work: () => Promise<unknown>) => {
+    if (await confirmAction(message)) mutation.mutate(work);
   };
 
   if (!currentProject) {

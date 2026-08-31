@@ -90,8 +90,8 @@ enum VMGuestExecutionAudit {
             request.logger.warning(
                 "VM organization was absent from the authorization cache for guest execution audit",
                 metadata: [
-                    "vmId": .string(vmID.uuidString),
-                    "projectId": .string(projectID.uuidString),
+                    "strato.vm.id": .string(vmID.uuidString),
+                    "strato.project.id": .string(projectID.uuidString),
                 ])
         }
 

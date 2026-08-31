@@ -103,6 +103,8 @@ extension SandboxController {
         let environment = sandbox.environment
         let memory = sandbox.memory
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+            try await IdempotencyService.reserve(
+                req.idempotencyContext, actor: .user(userID), on: db)
             // Snapshot storage draws from the shared storage quota pool
             // (issue #415 enforcement points).
             try await QuotaEnforcementService.reserveSnapshotStorage(
@@ -143,7 +145,7 @@ extension SandboxController {
                 try await sandbox.save(on: db)
             }
             return try await SnapshotArtifactMutation.recordCapture(
-                snapshot, actor: .user(userID), on: db)
+                snapshot, actor: .user(userID), idempotencyContext: req.idempotencyContext, on: db)
         }
 
         let snapshotID = try snapshot.requireID()
@@ -152,7 +154,7 @@ extension SandboxController {
         req.logger.info(
             "Sandbox snapshot accepted",
             metadata: [
-                "sandbox_id": .string(sandboxID.uuidString),
+                "strato.sandbox.id": .string(sandboxID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
                 "stop": .stringConvertible(stopAfterSnapshot),
             ])
@@ -209,7 +211,12 @@ extension SandboxController {
         }
 
         let accepted = try await SnapshotArtifactMutation.delete(
-            snapshot, actor: .user(try user.requireID()), on: req.db, app: req.application)
+            snapshot, actor: .user(try user.requireID()),
+            idempotencyContext: req.idempotencyContext,
+            idempotencyResponseBody: { @Sendable snapshot, accepted, _ in
+                try AcceptedMutation(SandboxSnapshotResponse(from: snapshot), accepted).encodedBody()
+            },
+            on: req.db, app: req.application)
 
         req.logger.info(
             "Sandbox snapshot deletion requested",
@@ -334,7 +341,7 @@ extension SandboxController {
         req.logger.info(
             "Sandbox restore accepted",
             metadata: [
-                "sandbox_id": .string(sandboxID.uuidString),
+                "strato.sandbox.id": .string(sandboxID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
             ])
         return try await SandboxController.acceptedResponse(for: sandbox, accepted, on: req)
