@@ -149,6 +149,68 @@ bounded; unmatched requests fall back to `unmatched`.
 | `strato_http_server_requests_total` | counter | `method`, `route`, `status` = `2xx`…`5xx` | Request count by route and status class |
 | `strato_http_server_request_duration_seconds` | timer | `method`, `route` | Request latency distribution |
 
+### PostgreSQL advisory locks
+
+| Metric | Type | Labels | Meaning |
+|--------|------|--------|---------|
+| `strato_advisory_lock_acquisitions_total` | counter | `namespace` | Successful transaction- and session-lock acquisitions |
+| `strato_advisory_lock_wait_duration_seconds` | timer | `namespace` | Time from the first attempt until successful acquisition; graph its upper percentiles to find cross-replica contention |
+| `strato_advisory_lock_release_failures_total` | counter | `namespace` | A session lock could not be confirmed released. **Alert on any increase** and inspect the paired critical log for the resource UUID and digest |
+
+`namespace` is deliberately the only metric label. Resource UUIDs and digests
+belong in logs and diagnostic queries, not an unbounded metric dimension. The
+stable `classid` mapping in PostgreSQL's two-`int4` advisory-lock space is:
+
+| `classid` | Namespace | `classid` | Namespace |
+|-----------|-----------|-----------|-----------|
+| 1 | `schema_migration` | 7 | `floating_ip_pool` |
+| 2 | `user_registration` | 8 | `resolver_index` |
+| 3 | `project_network` | 9 | `dns_zone` |
+| 4 | `sandbox_snapshot_lineage` | 10 | `volume_attachment` |
+| 5 | `quota` | 11 | `security_group_membership` |
+| 6 | `ipam` | 12 | `agent_enrollment` |
+
+List held and waiting Strato locks with signed digests that match the
+application's logs:
+
+```sql
+SELECT pid,
+       classid::bigint AS namespace,
+       CASE WHEN objid::bigint > 2147483647
+            THEN objid::bigint - 4294967296
+            ELSE objid::bigint
+       END AS object_digest,
+       mode,
+       granted
+FROM pg_locks
+WHERE locktype = 'advisory'
+  AND objsubid = 2
+  AND classid::bigint BETWEEN 1 AND 12
+ORDER BY granted, namespace, object_digest;
+```
+
+Object keys hash the UUID's 16 binary bytes with SHA-256, take the first four
+bytes in network order, and reinterpret that value as a signed `int4`.
+Singleton locks use digest `0`. To compare a candidate UUID with `objid`:
+
+```sql
+WITH candidate(id) AS (VALUES ('00112233-4455-6677-8899-aabbccddeeff'::uuid)),
+hashed AS (
+  SELECT id,
+         (get_byte(sha256(uuid_send(id)), 0)::bigint << 24)
+       | (get_byte(sha256(uuid_send(id)), 1)::bigint << 16)
+       | (get_byte(sha256(uuid_send(id)), 2)::bigint << 8)
+       |  get_byte(sha256(uuid_send(id)), 3)::bigint AS unsigned_digest
+  FROM candidate
+)
+SELECT id,
+       CASE WHEN unsigned_digest > 2147483647
+            THEN unsigned_digest - 4294967296
+            ELSE unsigned_digest
+       END AS object_digest
+FROM hashed;
+```
+
 ### Agent lifecycle & VM health
 
 | Metric | Type | Labels | Meaning |

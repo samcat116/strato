@@ -107,6 +107,7 @@ struct ResourceMutation {
     /// writes the whole row, so without the refresh a racing mutation's
     /// generation bump would be lost and a concurrent observed-state report's
     /// `observedGeneration` would be written *backwards*.
+    ///
     @discardableResult
     func accept<R: ConvergingResource>(
         _ kind: VMOperationKind,
@@ -117,8 +118,29 @@ struct ResourceMutation {
         app: Application,
         applying mutation: @escaping @Sendable (any Database) async throws -> Void = { _ in }
     ) async throws -> Accepted {
+        try await accept(
+            kind, on: resource, actor: actor, dispatch: strategy, on: db, app: app,
+            beforeResourceLock: { _ in }, applying: mutation)
+    }
+
+    /// The narrow escape hatch for a cross-row invariant whose advisory lock
+    /// must precede the resource row lock. `beforeResourceLock` runs as the
+    /// first statement in the same transaction. Both closures are required and
+    /// labeled so an ordinary trailing mutation closure cannot bind here.
+    @discardableResult
+    func accept<R: ConvergingResource>(
+        _ kind: VMOperationKind,
+        on resource: R,
+        actor: MutationActor,
+        dispatch strategy: Dispatch,
+        on db: any Database,
+        app: Application,
+        beforeResourceLock: @escaping @Sendable (any Database) async throws -> Void,
+        applying mutation: @escaping @Sendable (any Database) async throws -> Void
+    ) async throws -> Accepted {
         let resourceID = try resource.requireID()
         let (accepted, placementAgentIDs) = try await db.transaction { db in
+            try await beforeResourceLock(db)
             guard try await resource.lockAndRefresh(on: db) else {
                 throw Abort(
                     .notFound,

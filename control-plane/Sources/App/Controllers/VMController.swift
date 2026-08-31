@@ -1092,6 +1092,8 @@ struct VMController: RouteCollection {
                     // still share this outer retrying transaction, so any IPAM
                     // race rolls back the whole VM rather than leaving a partial
                     // interface set.
+                    try await IPAMService.lockNetworkAllocations(
+                        resolvedInterfaces.map(\.networkID), on: db)
                     for (orderIndex, resolved) in resolvedInterfaces.enumerated() {
                         let allocation = try await IPAMService.allocateIP(for: resolved.network, on: db)
                         let allocation6 = try await IPAMService.allocateIPv6(for: resolved.network, on: db)

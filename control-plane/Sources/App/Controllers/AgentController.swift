@@ -239,7 +239,7 @@ struct AgentController: RouteCollection {
         }
 
         return try await AgentEnrollment.withOperationLock(
-            enrollmentID: enrollmentID, on: req.db
+            enrollmentID: enrollmentID, on: req.db, logger: req.logger
         ) { db in
             guard
                 let lockedEnrollment = try await AgentEnrollment.findByBootstrapToken(
@@ -581,7 +581,7 @@ struct AgentController: RouteCollection {
         }
 
         return try await AgentEnrollment.withOperationLock(
-            enrollmentID: enrollmentId, on: req.db
+            enrollmentID: enrollmentId, on: req.db, logger: req.logger
         ) { db in
             guard let enrollment = try await AgentEnrollment.find(enrollmentId, on: db) else {
                 throw Abort(.notFound, reason: "Agent enrollment not found")

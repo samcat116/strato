@@ -14,6 +14,62 @@ import StratoShared
 /// See `docs/deployment/observability.md` for the alert runbook built on these.
 enum Telemetry {
 
+    // MARK: - PostgreSQL advisory locks (STR-275)
+
+    /// One successful lock acquisition and the time spent waiting for it.
+    /// Namespace is the only dimension: resource identifiers would create an
+    /// unbounded time series at exactly the fleet sizes this signal diagnoses.
+    static func advisoryLockAcquired(
+        namespace: AdvisoryLockNamespace,
+        waitSeconds: Double,
+        factory: (any MetricsFactory)? = nil
+    ) {
+        let dimensions = [("namespace", namespace.name)]
+        if let factory {
+            Counter(
+                label: "strato_advisory_lock_acquisitions_total",
+                dimensions: dimensions,
+                factory: factory
+            ).increment()
+            Timer(
+                label: "strato_advisory_lock_wait_duration_seconds",
+                dimensions: dimensions,
+                factory: factory
+            ).recordSeconds(waitSeconds)
+        } else {
+            Counter(
+                label: "strato_advisory_lock_acquisitions_total",
+                dimensions: dimensions
+            ).increment()
+            Timer(
+                label: "strato_advisory_lock_wait_duration_seconds",
+                dimensions: dimensions
+            ).recordSeconds(waitSeconds)
+        }
+    }
+
+    /// A session lock could not be confirmed released. This is a counter, not
+    /// a gauge: the paired critical log carries the object id/digest needed to
+    /// investigate without putting either into metric labels.
+    static func advisoryLockReleaseFailed(
+        namespace: AdvisoryLockNamespace,
+        factory: (any MetricsFactory)? = nil
+    ) {
+        let dimensions = [("namespace", namespace.name)]
+        if let factory {
+            Counter(
+                label: "strato_advisory_lock_release_failures_total",
+                dimensions: dimensions,
+                factory: factory
+            ).increment()
+        } else {
+            Counter(
+                label: "strato_advisory_lock_release_failures_total",
+                dimensions: dimensions
+            ).increment()
+        }
+    }
+
     /// The two request shapes the desired-state endpoint accepts. Keeping the
     /// metric dimension typed prevents validators or other request data from
     /// becoming labels and bounds the series to these two values.

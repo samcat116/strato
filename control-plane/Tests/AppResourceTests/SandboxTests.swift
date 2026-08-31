@@ -1468,7 +1468,9 @@ final class SandboxTests {
                 address: "192.168.1.3", prefixLength: 24, gateway: network.gateway
             ).save(on: app.db)
 
-            let allocation = try await IPAMService.allocateIP(for: network, on: app.db)
+            let allocation = try await app.db.transaction { transaction in
+                try await IPAMService.allocateIP(for: network, on: transaction)
+            }
             #expect(allocation.ipAddress == "192.168.1.4")
         }
     }

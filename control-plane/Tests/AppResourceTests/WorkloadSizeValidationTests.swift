@@ -130,8 +130,11 @@ final class WorkloadSizeValidationTests {
             _ = try await builder.createResourceQuota(name: "snapshots", project: project)
 
             let error = await #expect(throws: Abort.self) {
-                try await QuotaEnforcementService.reserveSnapshotStorage(
-                    for: project, environment: "development", size: Int64.max, on: app.db)
+                try await app.db.transaction { transaction in
+                    try await QuotaEnforcementService.reserveSnapshotStorage(
+                        for: project, environment: "development", size: Int64.max,
+                        on: transaction)
+                }
             }
             #expect(error?.status == .forbidden)
         }
