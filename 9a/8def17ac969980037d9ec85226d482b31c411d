@@ -1,0 +1,25 @@
+agent/Sources/StratoAgentCore/VMExecSessionManager.swift
+  s_5778441fd8e552::t_0eb02b2f16ba4a 90-91
+  s_5778441fd8e552::t_ff023bc28cf8c1 35,51-52,112-114,123-125,188-196,225-227,454-455,457,461,475-478
+agent/Tests/StratoAgentTests/VMExecSessionManagerTests.swift
+  s_5778441fd8e552::t_0eb02b2f16ba4a 330,359-365
+  s_5778441fd8e552::t_d44fa8e10ef858 329,331-358,366-432
+agent/Sources/StratoAgent/Agent.swift
+  s_5778441fd8e552::t_ff023bc28cf8c1 3772,3774-3782
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "9a8def17ac969980037d9ec85226d482b31c411d",
+  "prompts": {},
+  "sessions": {
+    "s_5778441fd8e552": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05533-87f2-7ff0-b3ac-d855f8d8f986",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
