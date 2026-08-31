@@ -1,0 +1,20 @@
+deploy/agent/tests/install-sh-test.sh
+  s_d97f14ca566b90::t_4669821ee7cad8 246
+  s_d97f14ca566b90::t_69508b26f46bde 248,250
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "3ebde9aec0e9675e41f8fe388dd8e6eb6b64bfbf",
+  "prompts": {},
+  "sessions": {
+    "s_d97f14ca566b90": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05533-0e01-7bf3-927c-514ebc0b161c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
