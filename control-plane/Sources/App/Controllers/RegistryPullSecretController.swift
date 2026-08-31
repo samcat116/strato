@@ -96,7 +96,7 @@ struct RegistryPullSecretController: RouteCollection {
         req.logger.info(
             "Registry pull secret created",
             metadata: [
-                "project_id": .string(projectID.uuidString),
+                "strato.project.id": .string(projectID.uuidString),
                 "registry": .string(registry),
             ])
 
@@ -134,12 +134,13 @@ struct RegistryPullSecretController: RouteCollection {
 
         try await pullSecret.delete(on: req.db)
 
+        var metadata: Logger.Metadata = ["registry": .string(pullSecret.registry)]
+        if let projectID = project.id {
+            metadata["strato.project.id"] = .string(projectID.uuidString)
+        }
         req.logger.info(
             "Registry pull secret deleted",
-            metadata: [
-                "project_id": .string(project.id?.uuidString ?? ""),
-                "registry": .string(pullSecret.registry),
-            ])
+            metadata: metadata)
         return .noContent
     }
 

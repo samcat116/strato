@@ -5,9 +5,15 @@ extension Application {
     /// method is significant: authentication, tracing, auditing, and default-
     /// deny authorization depend on the effective middleware order.
     func bootstrapHTTPPipeline() throws {
+        // Vapor supplies `request-id` on every request logger. Mirror it into
+        // the canonical taxonomy before request-aware middleware or controllers
+        // log, retaining the legacy key for the bounded STR-284 transition.
+        middleware.use(RequestLogMetadataMiddleware())
+
         // Request logging: one structured line per HTTP request (method/path/status/
-        // duration). Registered first so it's the outermost middleware and times the
-        // full request. Default on outside production; override with REQUEST_LOGGING.
+        // duration). Registered immediately after metadata normalization so it
+        // times the full request. Default on outside production; override with
+        // REQUEST_LOGGING.
         let requestLoggingEnabled =
             controlPlaneConfiguration.bool(.requestLogging)!
         if requestLoggingEnabled {

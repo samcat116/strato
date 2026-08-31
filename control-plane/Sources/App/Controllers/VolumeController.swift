@@ -298,7 +298,7 @@ struct VolumeController: RouteCollection {
             metadata: [
                 "volumeId": .string(volumeId.uuidString),
                 "name": .string(volume.name),
-                "projectId": .string(projectId.uuidString),
+                "strato.project.id": .string(projectId.uuidString),
                 "sizeGB": .stringConvertible(request.sizeGB),
                 "sourceImageId": .string(sourceImage?.id?.uuidString ?? ""),
             ])
@@ -603,7 +603,7 @@ struct VolumeController: RouteCollection {
             "Volume attachment requested",
             metadata: [
                 "volumeId": .string(volume.id!.uuidString),
-                "vmId": .string(vmID.uuidString),
+                "strato.vm.id": .string(vmID.uuidString),
                 "deviceName": .string(volume.deviceName ?? ""),
             ])
 
@@ -660,7 +660,7 @@ struct VolumeController: RouteCollection {
             "Volume detachment requested",
             metadata: [
                 "volumeId": .string(volume.id!.uuidString),
-                "previousVmId": .string(vmId.uuidString),
+                "strato.vm.previous.id": .string(vmId.uuidString),
             ])
 
         return try await AcceptedMutation(

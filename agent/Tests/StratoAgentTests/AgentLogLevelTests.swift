@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import StratoShared
 import Testing
 @testable import StratoAgentCore
 
@@ -9,6 +10,7 @@ struct AgentLogLevelTests {
     private static let filteredMessage = "STRATO_AGENT_INFO_MUST_BE_FILTERED"
     private static let visibleMessage = "STRATO_AGENT_WARNING_MUST_BE_VISIBLE"
     private static let childSentinel = "STRATO_AGENT_LOG_LEVEL_BOOTSTRAP_PASSED"
+    private static let agentNameMetadata = #""strato.agent.name":"agent-284""#
 
     @Test("The authoritative parser accepts every supported level", arguments: AgentLogLevel.allCases)
     func parsesSupportedLevel(_ expected: AgentLogLevel) throws {
@@ -63,9 +65,15 @@ struct AgentLogLevelTests {
             return
         }
 
-        let factory = AgentLogHandlerFactory(logLevel: .warning)
+        let processMetadata = DynamicLogMetadata([
+            LogMetadata.Key.serviceName: "strato-agent"
+        ])
+        let factory = AgentLogHandlerFactory(
+            logLevel: .warning,
+            metadataProvider: processMetadata.provider)
         factory.bootstrap()
         let root = Logger(label: "strato-agent")
+        processMetadata[metadataKey: LogMetadata.Key.agentName] = "agent-284"
         let subsystem = Logger(label: "strato-agent.storage-device-inventory")
         let dependencyLogger = Logger(label: "dependency-created-logger")
 
@@ -101,6 +109,7 @@ struct AgentLogLevelTests {
         try #require(result.terminationStatus == 0, "isolated logging test failed: \(output)")
         #expect(output.contains(Self.childSentinel))
         #expect(output.contains(Self.visibleMessage))
+        #expect(output.contains(Self.agentNameMetadata))
         #expect(!output.contains(Self.filteredMessage))
     }
 }

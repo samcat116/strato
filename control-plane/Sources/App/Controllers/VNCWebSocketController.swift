@@ -81,7 +81,7 @@ struct VNCWebSocketController: RouteCollection {
         guard try await req.can("vm:viewConsole", on: IAMNode(type: .virtualMachine, id: vmId)) else {
             req.logger.warning(
                 "Graphics console access denied",
-                metadata: ["vmId": .string(vmId.uuidString), "userId": .string(userId)])
+                metadata: ["strato.vm.id": .string(vmId.uuidString), "userId": .string(userId)])
             throw Abort(.forbidden, reason: "You do not have permission to access this VM console")
         }
 
@@ -187,8 +187,8 @@ struct VNCWebSocketController: RouteCollection {
                 req.logger.warning(
                     "Graphics console attach rejected: \(error)",
                     metadata: [
-                        "vmId": .string(vmId.uuidString),
-                        "sessionId": .string(sessionId),
+                        "strato.vm.id": .string(vmId.uuidString),
+                        "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
                     ])
                 try? await ws.send(
                     ConsoleSessionManager.errorControlFrame(
@@ -200,9 +200,9 @@ struct VNCWebSocketController: RouteCollection {
             req.logger.info(
                 "Graphics console WebSocket connection established",
                 metadata: [
-                    "vmId": .string(vmId.uuidString),
-                    "sessionId": .string(sessionId),
-                    "agentKey": .string(session.agentKey),
+                    "strato.vm.id": .string(vmId.uuidString),
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(session.agentKey),
                 ])
 
             // Everything bound for the agent goes through one serial pump: the
@@ -281,15 +281,15 @@ struct VNCWebSocketController: RouteCollection {
                     req.logger.info(
                         "Graphics console WebSocket connection closed",
                         metadata: [
-                            "vmId": .string(vmId.uuidString),
-                            "sessionId": .string(sessionId),
+                            "strato.vm.id": .string(vmId.uuidString),
+                            "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
                         ])
                 case .failure(let error):
                     req.logger.error(
                         "Graphics console WebSocket connection closed with error: \(error)",
                         metadata: [
-                            "vmId": .string(vmId.uuidString),
-                            "sessionId": .string(sessionId),
+                            "strato.vm.id": .string(vmId.uuidString),
+                            "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
                         ])
                 }
 

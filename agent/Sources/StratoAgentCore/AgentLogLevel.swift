@@ -56,20 +56,28 @@ public enum AgentLogLevelError: Error, LocalizedError, Equatable, Sendable {
 /// Builds every handler at one validated threshold.
 public struct AgentLogHandlerFactory: Sendable {
     public let logLevel: AgentLogLevel
+    public let metadataProvider: Logger.MetadataProvider?
 
-    public init(logLevel: AgentLogLevel) {
+    public init(
+        logLevel: AgentLogLevel,
+        metadataProvider: Logger.MetadataProvider? = nil
+    ) {
         self.logLevel = logLevel
+        self.metadataProvider = metadataProvider
     }
 
     public func makeHandler(label: String) -> CustomLogHandler {
-        var handler = CustomLogHandler(label: label)
+        var handler = CustomLogHandler(
+            label: label,
+            metadataProvider: metadataProvider)
         handler.logLevel = logLevel.loggerLevel
         return handler
     }
 
     public func bootstrap() {
-        LoggingSystem.bootstrap { label in
-            makeHandler(label: label)
-        }
+        let factory = self
+        LoggingSystem.bootstrap(
+            { label, _ in factory.makeHandler(label: label) },
+            metadataProvider: metadataProvider)
     }
 }

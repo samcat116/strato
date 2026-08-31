@@ -78,7 +78,7 @@ struct AgentGuestIdentityRateLimiter: Sendable {
             request.logger.error(
                 "guest_identity_rate_limit_backend_error",
                 metadata: [
-                    "agentIdentity": .string(identity),
+                    "strato.agent.identity": .string(identity),
                     "error": .string(String(reflecting: error)),
                 ])
             return nil

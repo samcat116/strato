@@ -304,7 +304,7 @@ actor AgentService {
                 app.logger.notice(
                     "Agent re-registered with a new version",
                     metadata: [
-                        "agentName": .string(agentName),
+                        "strato.agent.name": .string(agentName),
                         "previousVersion": .string(existingAgent.version),
                         "version": .string(message.version),
                     ])
@@ -394,7 +394,7 @@ actor AgentService {
             if let refusalReason {
                 app.logger.error(
                     "Ignoring enrollment organization assignment: \(refusalReason)",
-                    metadata: ["agentKey": .string(agentKey)])
+                    metadata: ["strato.agent.identity": .string(agentKey)])
             } else {
                 agent.organizationScope = organizationScope
             }
@@ -452,7 +452,7 @@ actor AgentService {
             if let refusalReason {
                 app.logger.error(
                     "Ignoring enrollment site assignment: \(refusalReason)",
-                    metadata: ["agentKey": .string(agentKey), "requestedSite": .string(siteID.uuidString)])
+                    metadata: ["strato.agent.identity": .string(agentKey), "requestedSite": .string(siteID.uuidString)])
             } else {
                 agent.$site.id = siteID
             }
@@ -492,7 +492,7 @@ actor AgentService {
             } catch {
                 app.logger.warning(
                     "Failed to mark agent enrollment as used",
-                    metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
+                    metadata: ["strato.agent.identity": .string(agentKey), "error": .string("\(error)")])
             }
         }
 
@@ -526,8 +526,8 @@ actor AgentService {
         app.logger.info(
             "Agent registered",
             metadata: [
-                "agentId": .string(agentUUID.uuidString),
-                "agentKey": .string(agentKey),
+                "strato.agent.id": .string(agentUUID.uuidString),
+                "strato.agent.identity": .string(agentKey),
                 "hostname": .string(message.hostname),
                 "version": .string(message.version),
             ])
@@ -605,7 +605,8 @@ actor AgentService {
             let agent = try await Agent.find(agentUUID, on: db)
         else {
             app.logger.warning(
-                "Unregister for unknown agent; ignoring", metadata: ["agentId": .string(agentId)])
+                "Unregister for unknown agent; ignoring",
+                metadata: ["strato.agent.claimed.id": .string(agentId)])
             return
         }
 
@@ -613,9 +614,9 @@ actor AgentService {
             app.logger.warning(
                 "Unregister claims an agentId not owned by the authenticated connection; ignoring",
                 metadata: [
-                    "claimedAgentId": .string(agentId),
-                    "claimedAgentKey": .string(agent.identity.key),
-                    "connectionAgentKey": .string(connectionAgentKey),
+                    "strato.agent.claimed.id": .string(agentId),
+                    "strato.agent.claimed.identity": .string(agent.identity.key),
+                    "strato.agent.connection.identity": .string(connectionAgentKey),
                 ])
             return
         }
@@ -645,7 +646,7 @@ actor AgentService {
             agentName: agent.name, observations: agent.dependencyObservations)
         await WebhookEvents.emitAgentPresence(
             agent: agent, connected: false, reason: "unregistered", on: db, logger: app.logger)
-        app.logger.info("Agent unregistered", metadata: ["agentId": .string(agentId)])
+        app.logger.info("Agent unregistered", metadata: ["strato.agent.id": .string(agentId)])
     }
 
     /// Tear down an agent's in-memory state from an operator action
@@ -660,7 +661,8 @@ actor AgentService {
         let agentKey = identity.key
         guard let agentId = await agentId(forKey: agentKey) else {
             app.logger.warning(
-                "Cannot force unregister: agent not found by identity key", metadata: ["agentKey": .string(agentKey)])
+                "Cannot force unregister: agent not found by identity key",
+                metadata: ["strato.agent.identity": .string(agentKey)])
             return
         }
 
@@ -688,7 +690,7 @@ actor AgentService {
 
         app.logger.info(
             "Agent force unregistered",
-            metadata: ["agentId": .string(agentId), "agentKey": .string(agentKey)])
+            metadata: ["strato.agent.id": .string(agentId), "strato.agent.identity": .string(agentKey)])
     }
 
     /// Socket-close cleanup. Only reached when this socket was still the
@@ -766,7 +768,9 @@ actor AgentService {
         guard let agentUUID = UUID(uuidString: message.agentId),
             let agent = try await Agent.find(agentUUID, on: db)
         else {
-            app.logger.warning("Received heartbeat from unknown agent", metadata: ["agentId": .string(message.agentId)])
+            app.logger.warning(
+                "Received heartbeat from unknown agent",
+                metadata: ["strato.agent.claimed.id": .string(message.agentId)])
             return
         }
 
@@ -774,9 +778,9 @@ actor AgentService {
             app.logger.warning(
                 "Heartbeat claims an agentId not owned by the authenticated connection; ignoring",
                 metadata: [
-                    "claimedAgentId": .string(message.agentId),
-                    "claimedAgentKey": .string(agent.identity.key),
-                    "connectionAgentKey": .string(agentKey),
+                    "strato.agent.claimed.id": .string(message.agentId),
+                    "strato.agent.claimed.identity": .string(agent.identity.key),
+                    "strato.agent.connection.identity": .string(agentKey),
                 ])
             return
         }
@@ -797,7 +801,7 @@ actor AgentService {
         // cluster-wide, not just to the process holding this socket.
         await refreshAgentPresenceIfNeeded(agentKey: agentKey)
 
-        app.logger.debug("Agent heartbeat updated", metadata: ["agentId": .string(message.agentId)])
+        app.logger.debug("Agent heartbeat updated", metadata: ["strato.agent.id": .string(message.agentId)])
     }
 
     /// Apply the mutable fields from a periodic agent report. A real state
@@ -833,7 +837,7 @@ actor AgentService {
                         level: observation.functionalState == .unhealthy ? .error : .info,
                         "Agent dependency state changed",
                         metadata: [
-                            "agent": .string(agent.name),
+                            "strato.agent.name": .string(agent.name),
                             "dependency": .string(observation.id.rawValue),
                             "state": .string(observation.functionalState.rawValue),
                             "reasonCode": .string(observation.reason?.code.rawValue ?? "none"),
@@ -877,7 +881,7 @@ actor AgentService {
         app.logger.warning(
             "Agent reported duplicate dependency observations; retaining the freshest sample",
             metadata: [
-                "agent": .string(agentName),
+                "strato.agent.name": .string(agentName),
                 "dependencyIds": .array(duplicateIDs.map { .string($0) }),
             ])
         return normalized
@@ -1092,7 +1096,7 @@ actor AgentService {
                 if await app.coordination.isAgentPresent(agentKey: agent.identity.key) == true {
                     app.logger.debug(
                         "Agent heartbeat is stale in the database but presence key is live; skipping",
-                        metadata: ["agentName": .string(agent.name)])
+                        metadata: ["strato.agent.name": .string(agent.name)])
                     continue
                 }
 
@@ -1109,7 +1113,7 @@ actor AgentService {
                     agent: agent, connected: false, reason: "stale", on: app.db, logger: app.logger)
                 app.logger.info(
                     "Agent heartbeat stale past threshold; marked offline",
-                    metadata: ["agentName": .string(agent.name)])
+                    metadata: ["strato.agent.name": .string(agent.name)])
                 await warnIfSiteNetworkController(agent)
             }
         } catch {
@@ -1138,7 +1142,7 @@ actor AgentService {
                 app.logger.warning(
                     "Site network controller went offline; nothing authors the site's network topology until it returns",
                     metadata: [
-                        "agentName": .string(agent.name),
+                        "strato.agent.name": .string(agent.name),
                         "site": .string(site.name),
                         "graceSeconds": .stringConvertible(offlineGrace),
                     ])
@@ -1146,7 +1150,7 @@ actor AgentService {
         } catch {
             app.logger.warning(
                 "Failed to check whether the stale agent is a site's network controller",
-                metadata: ["agentName": .string(agent.name), "error": .string("\(error)")])
+                metadata: ["strato.agent.name": .string(agent.name), "error": .string("\(error)")])
         }
     }
 
@@ -1790,9 +1794,9 @@ actor AgentService {
             app.logger.info(
                 "Expiring sandbox",
                 metadata: [
-                    "sandboxId": .string(sandboxID.uuidString),
+                    "strato.sandbox.id": .string(sandboxID.uuidString),
                     "reason": .string(reason.description),
-                    "mutationId": .string(accepted.mutationID.uuidString),
+                    "strato.operation.id": .string(accepted.mutationID.uuidString),
                 ])
         } catch {
             // The "operation already pending" `409` that used to defer an
@@ -1805,7 +1809,7 @@ actor AgentService {
             // so an expired sandbox is deferred rather than dropped.
             app.logger.debug(
                 "Skipping sandbox expiry: \(error)",
-                metadata: ["sandboxId": .string(sandboxID.uuidString)])
+                metadata: ["strato.sandbox.id": .string(sandboxID.uuidString)])
         }
     }
 
@@ -1910,7 +1914,7 @@ actor AgentService {
                     app.logger.notice(
                         "Agent auto-update converged",
                         metadata: [
-                            "agentName": .string(agent.name),
+                            "strato.agent.name": .string(agent.name),
                             "version": .string(agent.version),
                         ])
                     continue
@@ -1947,7 +1951,7 @@ actor AgentService {
                         app.logger.notice(
                             "Agent auto-update parked: blocked past the health budget; rollout advances without it",
                             metadata: [
-                                "agentName": .string(agent.name),
+                                "strato.agent.name": .string(agent.name),
                                 "targetVersion": .string(assigned),
                                 "blockedReason": .string(agent.updateBlockedReason ?? ""),
                             ])
@@ -1972,7 +1976,7 @@ actor AgentService {
                             ? "Agent update failed: agent went silent past the health budget"
                             : "Agent auto-update failed: agent went silent past the health budget; rollout halted",
                         metadata: [
-                            "agentName": .string(agent.name),
+                            "strato.agent.name": .string(agent.name),
                             "targetVersion": .string(assigned),
                         ])
                     rolloutHalted = rolloutHalted || !manual
@@ -2012,7 +2016,7 @@ actor AgentService {
                 app.logger.warning(
                     "Agent auto-update artifact unresolvable; not assigning (retries next sweep)",
                     metadata: [
-                        "agentName": .string(next.name),
+                        "strato.agent.name": .string(next.name),
                         "targetVersion": .string(target),
                         "error": .string(String(describing: error)),
                     ])
@@ -2025,7 +2029,7 @@ actor AgentService {
             app.logger.notice(
                 "Agent auto-update assigned",
                 metadata: [
-                    "agentName": .string(next.name),
+                    "strato.agent.name": .string(next.name),
                     "currentVersion": .string(next.version),
                     "targetVersion": .string(target),
                 ])
@@ -2093,7 +2097,7 @@ actor AgentService {
         guard let agentKey = await agentKey(forId: agentId) else {
             app.logger.warning(
                 "Cannot ring the desired-state doorbell for an unknown agent",
-                metadata: ["agentId": .string(agentId)])
+                metadata: ["strato.agent.id": .string(agentId)])
             return
         }
         await applyDoorbell(agentKey: agentKey)
@@ -2206,15 +2210,16 @@ actor AgentService {
             let agent = try? await Agent.find(agentUUID, on: app.db)
         else {
             app.logger.warning(
-                "Observed-state report from unknown agent", metadata: ["agentId": .string(report.agentId)])
+                "Observed-state report from unknown agent",
+                metadata: ["strato.agent.claimed.id": .string(report.agentId)])
             return
         }
         guard agent.identity.key == agentKey else {
             app.logger.warning(
                 "Observed-state report claims an agentId not owned by the authenticated connection; ignoring",
                 metadata: [
-                    "claimedAgentId": .string(report.agentId),
-                    "connectionAgentKey": .string(agentKey),
+                    "strato.agent.claimed.id": .string(report.agentId),
+                    "strato.agent.connection.identity": .string(agentKey),
                 ])
             return
         }
@@ -2247,7 +2252,7 @@ actor AgentService {
             } catch {
                 app.logger.warning(
                     "Failed to persist agent resources from observed-state report: \(error)",
-                    metadata: ["agentId": .string(report.agentId)])
+                    metadata: ["strato.agent.id": .string(report.agentId)])
             }
         }
 
@@ -2267,7 +2272,7 @@ actor AgentService {
             } catch {
                 app.logger.error(
                     "Failed to apply storage-device inventory: \(error)",
-                    metadata: ["agentId": .string(report.agentId)])
+                    metadata: ["strato.agent.id": .string(report.agentId)])
             }
         }
 
@@ -2289,7 +2294,7 @@ actor AgentService {
         } catch {
             app.logger.error(
                 "Failed to apply observed-state report: \(error)",
-                metadata: ["agentId": .string(report.agentId)])
+                metadata: ["strato.agent.id": .string(report.agentId)])
         }
     }
 
@@ -2332,7 +2337,7 @@ actor AgentService {
         app.logger.error(
             "Agent refused a sync's workload teardowns",
             metadata: [
-                "agentName": .string(agent.name),
+                "strato.agent.name": .string(agent.name),
                 "syncId": .string(refusal.syncId),
                 "requestedTeardowns": .stringConvertible(refusal.requestedTeardowns),
                 "presentWorkloads": .stringConvertible(refusal.presentWorkloads),
@@ -2370,7 +2375,7 @@ actor AgentService {
             else { return false }
             app.logger.notice(
                 "Agent's workload manifest is healthy again",
-                metadata: ["agentName": .string(agent.name)])
+                metadata: ["strato.agent.name": .string(agent.name)])
             agent.manifestStatusReason = nil
             agent.manifestStatusAt = nil
             agent.manifestInventoryComplete = nil
@@ -2390,7 +2395,7 @@ actor AgentService {
                 ? "Agent is holding workloads its build cannot route"
                 : "Agent cannot read its workload manifest; it is quarantined and placing nothing",
             metadata: [
-                "agentName": .string(agent.name),
+                "strato.agent.name": .string(agent.name),
                 "quarantinedEntries": .stringConvertible(status.quarantinedEntries),
                 "reason": .string(status.reason),
             ])
@@ -2428,7 +2433,7 @@ actor AgentService {
                 app.logger.error(
                     "Agent reported its assigned update failed",
                     metadata: [
-                        "agentName": .string(agent.name),
+                        "strato.agent.name": .string(agent.name),
                         "targetVersion": .string(status.targetVersion),
                         "reason": .string(status.reason),
                     ])
@@ -2442,7 +2447,7 @@ actor AgentService {
                 app.logger.info(
                     "Agent reported its assigned update as blocked",
                     metadata: [
-                        "agentName": .string(agent.name),
+                        "strato.agent.name": .string(agent.name),
                         "targetVersion": .string(status.targetVersion),
                         "reason": .string(status.reason),
                     ])
@@ -2578,8 +2583,8 @@ actor AgentService {
         app.logger.info(
             "VM creation dispatched via desired-state doorbell",
             metadata: [
-                "vmId": .string(vmId),
-                "agentId": .string(agentId),
+                "strato.vm.id": .string(vmId),
+                "strato.agent.id": .string(agentId),
             ])
 
         await syncDesiredState(agentId: agentId)
@@ -2761,8 +2766,8 @@ actor AgentService {
             app.logger.info(
                 "Sandbox creation dispatched via desired-state doorbell",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
-                    "agentId": .string(agentId),
+                    "strato.sandbox.id": .string(sandboxId),
+                    "strato.agent.id": .string(agentId),
                 ])
 
             await syncDesiredState(agentId: agentId)

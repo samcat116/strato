@@ -154,7 +154,7 @@ extension SandboxController {
         req.logger.info(
             "Sandbox snapshot accepted",
             metadata: [
-                "sandbox_id": .string(sandboxID.uuidString),
+                "strato.sandbox.id": .string(sandboxID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
                 "stop": .stringConvertible(stopAfterSnapshot),
             ])
@@ -341,7 +341,7 @@ extension SandboxController {
         req.logger.info(
             "Sandbox restore accepted",
             metadata: [
-                "sandbox_id": .string(sandboxID.uuidString),
+                "strato.sandbox.id": .string(sandboxID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
             ])
         return try await SandboxController.acceptedResponse(for: sandbox, accepted, on: req)

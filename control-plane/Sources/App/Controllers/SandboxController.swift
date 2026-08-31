@@ -677,8 +677,8 @@ struct SandboxController: RouteCollection {
         req.logger.info(
             "Sandbox creation accepted",
             metadata: [
-                "sandbox_id": .string(sandboxID.uuidString),
-                "mutation_id": .string(accepted.mutationID.uuidString),
+                "strato.sandbox.id": .string(sandboxID.uuidString),
+                "strato.operation.id": .string(accepted.mutationID.uuidString),
                 "image": .string(imageRef),
             ])
 
@@ -1014,7 +1014,7 @@ struct SandboxController: RouteCollection {
         if sandbox.hypervisorId != nil {
             app.logger.warning(
                 "Deleting sandbox record without agent teardown; agent is offline",
-                metadata: ["sandbox_id": .string(sandboxID.uuidString)])
+                metadata: ["strato.sandbox.id": .string(sandboxID.uuidString)])
         }
 
         let outcome: ResourceFinalizerService.ClearOutcome
@@ -1031,7 +1031,7 @@ struct SandboxController: RouteCollection {
             app.logger.info(
                 "Sandbox delete is waiting on finalizers other than the agent's",
                 metadata: [
-                    "sandbox_id": .string(sandboxID.uuidString),
+                    "strato.sandbox.id": .string(sandboxID.uuidString),
                     "finalizers": .string(remaining.joined(separator: ",")),
                 ])
         }

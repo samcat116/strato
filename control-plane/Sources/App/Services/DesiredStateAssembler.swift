@@ -212,7 +212,7 @@ struct DesiredStateAssembler {
                     app.logger.warning(
                         "Failed to build image info for desired-state sync",
                         metadata: [
-                            "vmId": .string(vmId.uuidString),
+                            "strato.vm.id": .string(vmId.uuidString),
                             "imageId": .string(image.id?.uuidString ?? ""),
                             "error": .string(error.localizedDescription),
                         ])
@@ -220,7 +220,7 @@ struct DesiredStateAssembler {
             } else if vm.$sourceImage.id != nil {
                 app.logger.warning(
                     "VM references an image that is missing or not ready; syncing without image info",
-                    metadata: ["vmId": .string(vmId.uuidString)])
+                    metadata: ["strato.vm.id": .string(vmId.uuidString)])
             }
 
             let metadata = InstanceMetadata.build(
@@ -369,7 +369,7 @@ struct DesiredStateAssembler {
                         app.logger.warning(
                             "Fork is placed off its snapshot's agent but the exported copy is unavailable",
                             metadata: [
-                                "sandboxId": .string(sandboxId.uuidString),
+                                "strato.sandbox.id": .string(sandboxId.uuidString),
                                 "snapshotId": .string(snapshotID.uuidString),
                             ])
                     }
@@ -422,8 +422,8 @@ struct DesiredStateAssembler {
                 app.logger.debug(
                     "Withholding a sandbox's NIC: its host does not advertise sandbox networking",
                     metadata: [
-                        "sandboxId": .string(sandboxId.uuidString),
-                        "agentId": .string(agentId),
+                        "strato.sandbox.id": .string(sandboxId.uuidString),
+                        "strato.agent.id": .string(agentId),
                     ])
             }
             // The restore *edge* (STR-151), as distinct from the fork create
@@ -441,7 +441,7 @@ struct DesiredStateAssembler {
                         app.logger.warning(
                             "Sandbox restore targets a snapshot on another agent whose exported copy is unavailable",
                             metadata: [
-                                "sandboxId": .string(sandboxId.uuidString),
+                                "strato.sandbox.id": .string(sandboxId.uuidString),
                                 "snapshotId": .string(snapshotID.uuidString),
                             ])
                     }
@@ -536,7 +536,7 @@ struct DesiredStateAssembler {
         app.logger.error(
             "Omitting an unassemblable VM from desired state",
             metadata: [
-                "vmId": .string(vmId.uuidString),
+                "strato.vm.id": .string(vmId.uuidString),
                 "reason": .string(reasonCode),
                 "error": .string(detail),
             ])
@@ -554,7 +554,7 @@ struct DesiredStateAssembler {
         guard let sql = db as? any SQLDatabase else {
             app.logger.error(
                 "Could not record the VM desired-state assembly failure: SQL database required",
-                metadata: ["vmId": .string(vmId.uuidString)])
+                metadata: ["strato.vm.id": .string(vmId.uuidString)])
             return
         }
         do {
@@ -584,7 +584,7 @@ struct DesiredStateAssembler {
             app.logger.error(
                 "Could not record the VM desired-state assembly failure",
                 metadata: [
-                    "vmId": .string(vmId.uuidString),
+                    "strato.vm.id": .string(vmId.uuidString),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -610,7 +610,7 @@ struct DesiredStateAssembler {
             app.logger.error(
                 "Could not clear a repaired VM desired-state assembly failure",
                 metadata: [
-                    "vmId": .string(vmId.uuidString),
+                    "strato.vm.id": .string(vmId.uuidString),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -1021,7 +1021,7 @@ struct DesiredStateAssembler {
             app.logger.warning(
                 "Could not resolve the agent update artifact for the sync; omitting it",
                 metadata: [
-                    "agentName": .string(agent.name),
+                    "strato.agent.name": .string(agent.name),
                     "targetVersion": .string(assigned),
                     "error": .string(String(describing: error)),
                 ])
@@ -1108,12 +1108,13 @@ struct DesiredStateAssembler {
         guard sandbox.desiredStatus != .absent else { return nil }
 
         guard let ref = OCIImageReference.parse(sandbox.image) else {
+            var metadata: Logger.Metadata = ["image": .string(sandbox.image)]
+            if let sandboxID = sandbox.id {
+                metadata["strato.sandbox.id"] = .string(sandboxID.uuidString)
+            }
             app.logger.warning(
                 "Sandbox image reference is unparseable; syncing without digest or credential",
-                metadata: [
-                    "sandboxId": .string(sandbox.id?.uuidString ?? ""),
-                    "image": .string(sandbox.image),
-                ])
+                metadata: metadata)
             return nil
         }
 
@@ -1158,7 +1159,7 @@ struct DesiredStateAssembler {
                     app.logger.info(
                         "Pinned sandbox image tag to digest",
                         metadata: [
-                            "sandboxId": .string(sandboxId.uuidString),
+                            "strato.sandbox.id": .string(sandboxId.uuidString),
                             "image": .string(sandbox.image),
                             "digest": .string(digest),
                         ])
@@ -1172,7 +1173,7 @@ struct DesiredStateAssembler {
                 app.logger.warning(
                     "Failed to resolve sandbox image tag to a digest; syncing unpinned",
                     metadata: [
-                        "sandboxId": .string(sandboxId.uuidString),
+                        "strato.sandbox.id": .string(sandboxId.uuidString),
                         "image": .string(sandbox.image),
                         "error": .string(error.localizedDescription),
                     ])
@@ -1313,7 +1314,7 @@ struct DesiredStateAssembler {
             // this is a misconfiguration, not a transient.
             app.logger.warning(
                 "Site has no network controller; its networks will not be reconciled",
-                metadata: ["site": .string(site.name), "agentName": .string(agent.name)])
+                metadata: ["site": .string(site.name), "strato.agent.name": .string(agent.name)])
             return NetworkAssemblyScope(
                 networkIDs: [],
                 authoritative: false,

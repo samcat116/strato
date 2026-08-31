@@ -9,7 +9,8 @@ control-plane logs never reached disk because stdout was block-buffered under
 
 Both the control plane and the agent log to **stdout/stderr** via SwiftLog. They
 do not write log files themselves — capture is the responsibility of whatever
-supervises the process.
+supervises the process. The control plane keeps Vapor's console format, while
+the agent writes JSON Lines to stderr.
 
 The control plane always installs that console sink. When
 `OTEL_LOGS_ENABLED=true`, the same SwiftLog records are also exported over OTLP;
@@ -34,6 +35,117 @@ Two other subsystems ride this same stdout pipeline:
 - When tracing is enabled, every line logged inside a span carries
   `trace_id` / `span_id` metadata for log↔trace correlation — see
   [Observability](/deployment/observability#correlating-traces-with-logs).
+
+## Agent JSON record contract
+
+Each agent event is one UTF-8 JSON object followed by one line feed. Its
+top-level fields are `timestamp`, `level`, `label`, `source`, `message`,
+`metadata`, and `truncated`. When truncation occurs, `truncation` identifies the
+affected part and reports each byte limit.
+
+```json
+{"label":"strato-agent","level":"ERROR","message":"VM start failed","metadata":{"error.message":"permission denied","error.type":"POSIXError","service.name":"strato-agent","service.version":"1.2.3","strato.vm.id":"..."},"source":"StratoAgent","timestamp":"2026-08-30T20:14:23.418Z","truncated":false}
+```
+
+The contract is designed for both humans and line-oriented ingestion:
+
+- JSON encoding deterministically sorts object keys and escapes quotes,
+  backslashes, newlines, carriage returns, NULs, and other control characters.
+  User-supplied text cannot create a second record.
+- UTC timestamps use ISO 8601 with fractional seconds.
+- A SwiftLog typed error is retained as `error.type` and `error.message`; those
+  fields take precedence over manually supplied fields with the same names.
+- Message text is limited to 8 KiB of UTF-8. Encoded metadata is limited to
+  16 KiB, and the complete record, including its terminal line feed, is limited
+  to 16 KiB. `truncated: true` plus the `truncation` object makes every reduction
+  explicit.
+- The handler constructs the complete record before taking a process-wide write
+  lock. Concurrent loggers therefore write whole records without interleaving.
+
+The total ceiling is intentionally below journald's usual 48 KiB `LineMax`, so
+systemd does not split a valid application record before Alloy sees it.
+
+## Metadata taxonomy
+
+Use the exact keys below for SwiftLog console fields and OTLP attributes. OTel
+semantic-convention keys are used where their meaning is exact; Strato-owned
+identifiers live under `strato.*` so they cannot be confused with generic OTel
+concepts.
+
+| Concept | Canonical key | Meaning |
+| --- | --- | --- |
+| Service | `service.name` | Logical executable: normally `strato-control-plane` or `strato-agent` |
+| Instance | `service.instance.id` | UUID unique to one process boot |
+| Environment | `deployment.environment.name` | Configured deployment environment; omitted when the agent has no such setting |
+| Version | `service.version` | Version of the executable that emitted the event |
+| Revision | `vcs.revision` | Optional source revision of the emitting build |
+| Request | `strato.request.id` | HTTP request or wire-message correlation ID |
+| Operation | `strato.operation.id` | Accepted mutation or operation UUID |
+| Agent ID | `strato.agent.id` | Persisted agent database UUID only |
+| Agent name | `strato.agent.name` | Operator-selected registration name or hostname |
+| Agent identity | `strato.agent.identity` | Full SPIFFE identity/key |
+| VM | `strato.vm.id` | VM UUID |
+| Sandbox | `strato.sandbox.id` | Sandbox UUID |
+| Project | `strato.project.id` | Project UUID |
+| Session | `strato.session.id` | Console, guest-exec, or OAuth session ID |
+| Session kind | `strato.session.kind` | `console`, `guest_exec`, or `oauth` |
+
+When an event contains multiple IDs of the same entity, qualify the role:
+`strato.agent.claimed.id`, `strato.vm.previous.id`, and so on. Collections use
+`.ids` and a metadata array. Do not repurpose `service.version` for a peer,
+protocol, policy, or configuration version.
+
+Both logging bootstraps attach stable base metadata. The control plane supplies
+service name, version, environment, and the same process UUID used by health and
+OTel resources. The agent supplies service name, per-boot instance UUID,
+version, and build revision; its resolved registration name is attached as
+`strato.agent.name`. The internal metadata-listener child uses a deliberately
+minimal relay format, and its parent republishes those lines through the agent
+handler with the parent's base metadata.
+
+### Legacy-key transition
+
+Producers must emit canonical keys now. Through **2026-12-01**, the agent handler
+translates only these proven spelling aliases:
+
+- `requestID`, `requestId`, `request_id`, `request-id` → `strato.request.id`
+- `vmID`, `vmId`, `vm_id` → `strato.vm.id`
+- `sandboxID`, `sandboxId`, `sandbox_id` → `strato.sandbox.id`
+- `projectID`, `projectId`, `project_id` → `strato.project.id`
+
+Translation emits only the canonical key. If a layer supplies both spellings,
+the canonical value wins deterministically; later SwiftLog metadata layers still
+override earlier layers. Agent and session variants are not aliases because the
+old names mixed database IDs, operator names, SPIFFE identities, and different
+session kinds.
+
+Vapor continues to attach `request-id` to control-plane request loggers during
+the same transition, and always-on middleware mirrors its value to
+`strato.request.id`. After the date above, delete the handler alias table and
+have the middleware remove Vapor's provider-owned key after copying it; the
+canonical request key remains.
+
+## Deployment ingestion compatibility
+
+The repository-controlled paths preserve the record boundary and payload:
+
+- The systemd agent unit captures stderr in journald. Alloy's
+  `loki.source.journal` selects the unit and forwards journald's `MESSAGE`
+  unchanged; it does not parse or rewrite the old flat format. The new JSON
+  object therefore reaches Loki as one parseable line while the existing
+  `agent=<agent name>` stream label remains unchanged.
+- Docker and Kubernetes capture stderr one line at a time. The compose stack has
+  no application-log parser, and the Helm workload runs the control-plane binary
+  directly, so neither path depends on the agent's former rendering.
+- The control-plane ConsoleKit rendering is intentionally unchanged. Existing
+  Loki/Grafana extraction such as the documented `trace_id` derived-field regex
+  remains compatible, while the same canonical metadata is available to the
+  optional OTLP log sink.
+
+Handler contract tests decode every emitted record as JSON and cover control
+character escaping, typed errors, deterministic metadata, fractional UTC
+timestamps, byte ceilings, truncation signals, alias precedence, and concurrent
+write serialization.
 
 ### Production: run under a supervisor that captures stdout/stderr
 

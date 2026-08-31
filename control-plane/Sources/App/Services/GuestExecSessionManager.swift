@@ -139,10 +139,10 @@ final class GuestExecSessionManager: @unchecked Sendable {
         app.logger.info(
             "Guest exec session created",
             metadata: [
-                "sessionId": .string(session.sessionId),
+                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(session.sessionId),
                 "resourceKind": .string(resourceKind.rawValue),
-                "resourceId": .string(resourceId),
-                "agentKey": .string(agentKey),
+                LogMetadata.guestResourceIDKey(for: resourceKind): .string(resourceId),
+                "strato.agent.identity": .string(agentKey),
             ])
 
         return session
@@ -222,10 +222,11 @@ final class GuestExecSessionManager: @unchecked Sendable {
         app.logger.info(
             "Guest exec session attached",
             metadata: [
-                "sessionId": .string(sessionId),
+                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                 "resourceKind": .string(session.resourceKind.rawValue),
-                "resourceId": .string(session.resourceId),
-                "agentKey": .string(session.agentKey),
+                LogMetadata.guestResourceIDKey(for: session.resourceKind): .string(
+                    session.resourceId),
+                "strato.agent.identity": .string(session.agentKey),
             ])
 
         return session
@@ -306,8 +307,9 @@ final class GuestExecSessionManager: @unchecked Sendable {
             app.logger.info(
                 "Closed guest exec session: agent disconnected",
                 metadata: [
-                    "sessionId": .string(removed.session.sessionId),
-                    "agentKey": .string(agentKey),
+                    "strato.session.kind": .string("guest_exec"),
+                    "strato.session.id": .string(removed.session.sessionId),
+                    "strato.agent.identity": .string(agentKey),
                 ])
             guard let websocket = removed.websocket else { continue }
             Self.sendControlFrameAndClose(
@@ -393,11 +395,19 @@ final class GuestExecSessionManager: @unchecked Sendable {
         case .duplicate:
             app.logger.debug(
                 "Ignoring duplicate guest exec started event",
-                metadata: ["sessionId": .string(sessionId), "agentKey": .string(agentKey)])
+                metadata: [
+                    "strato.session.kind": .string("guest_exec"),
+                    "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
+                ])
         case .unknown:
             app.logger.debug(
                 "Guest exec started for unknown session",
-                metadata: ["sessionId": .string(sessionId), "agentKey": .string(agentKey)])
+                metadata: [
+                    "strato.session.kind": .string("guest_exec"),
+                    "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
+                ])
         case .wrongAgent(let expectedAgentKey):
             logWrongAgent(
                 event: "started",
@@ -440,7 +450,10 @@ final class GuestExecSessionManager: @unchecked Sendable {
             default:
                 app.logger.warning(
                     "Dropping guest exec output with unknown stream",
-                    metadata: ["sessionId": .string(sessionId), "stream": .string(stream)])
+                    metadata: [
+                        "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
+                        "stream": .string(stream),
+                    ])
                 return
             }
             var frame = [UInt8]()
@@ -470,7 +483,11 @@ final class GuestExecSessionManager: @unchecked Sendable {
         case .unknown:
             app.logger.debug(
                 "Guest exec exit for unknown session",
-                metadata: ["sessionId": .string(sessionId), "agentKey": .string(agentKey)])
+                metadata: [
+                    "strato.session.kind": .string("guest_exec"),
+                    "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
+                ])
         case .wrongAgent(let expectedAgentKey):
             logWrongAgent(
                 event: "exit",
@@ -504,7 +521,11 @@ final class GuestExecSessionManager: @unchecked Sendable {
         case .unknown:
             app.logger.debug(
                 "Guest exec closed for unknown session",
-                metadata: ["sessionId": .string(sessionId), "agentKey": .string(agentKey)])
+                metadata: [
+                    "strato.session.kind": .string("guest_exec"),
+                    "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
+                ])
         case .wrongAgent(let expectedAgentKey):
             logWrongAgent(
                 event: "closed",
@@ -611,9 +632,11 @@ final class GuestExecSessionManager: @unchecked Sendable {
         app.logger.info(
             "Guest exec session removed",
             metadata: [
-                "sessionId": .string(sessionId),
+                "strato.session.kind": .string("guest_exec"),
+                "strato.session.id": .string(sessionId),
                 "resourceKind": .string(session.resourceKind.rawValue),
-                "resourceId": .string(session.resourceId),
+                LogMetadata.guestResourceIDKey(for: session.resourceKind): .string(
+                    session.resourceId),
             ])
         return RemovedExecSession(session: session, websocket: websocket, endedAt: endedAt)
     }
@@ -643,9 +666,10 @@ final class GuestExecSessionManager: @unchecked Sendable {
         app.logger.warning(
             "Dropping guest exec \(event) from an agent that does not own the session",
             metadata: [
-                "sessionId": .string(sessionId),
-                "agentKey": .string(reportingAgentKey),
-                "sessionAgentName": .string(expectedAgentKey),
+                "strato.session.kind": .string("guest_exec"),
+                "strato.session.id": .string(sessionId),
+                "strato.agent.identity": .string(reportingAgentKey),
+                "strato.agent.session.identity": .string(expectedAgentKey),
             ])
     }
 
@@ -658,16 +682,19 @@ final class GuestExecSessionManager: @unchecked Sendable {
         guard let session else {
             app.logger.debug(
                 "Guest exec \(event) for unknown session",
-                metadata: ["sessionId": .string(sessionId), "agentKey": .string(agentKey)])
+                metadata: [
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
+                ])
             return nil
         }
         guard session.agentKey == agentKey else {
             app.logger.warning(
                 "Dropping guest exec \(event) from an agent that does not own the session",
                 metadata: [
-                    "sessionId": .string(sessionId),
-                    "agentKey": .string(agentKey),
-                    "sessionAgentName": .string(session.agentKey),
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
+                    "strato.agent.session.identity": .string(session.agentKey),
                 ])
             return nil
         }
@@ -687,7 +714,10 @@ final class GuestExecSessionManager: @unchecked Sendable {
         websocket.send(data)
         app.logger.debug(
             "Sent exec close for unknown session back to reporting agent",
-            metadata: ["sessionId": .string(sessionId), "agentKey": .string(agentKey)])
+            metadata: [
+                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
+                "strato.agent.identity": .string(agentKey),
+            ])
     }
 
     /// JSON control frame sent to the browser as a text message.
@@ -729,9 +759,10 @@ final class GuestExecSessionManager: @unchecked Sendable {
             app.logger.debug(
                 "Expired unattached guest exec session",
                 metadata: [
-                    "sessionId": .string(sessionId),
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                     "resourceKind": .string(pending.resourceKind.rawValue),
-                    "resourceId": .string(pending.resourceId),
+                    LogMetadata.guestResourceIDKey(for: pending.resourceKind): .string(
+                        pending.resourceId),
                 ])
         }
     }
@@ -743,7 +774,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
         guard let websocket = app.websocketManager.getConnection(agentKey: agentKey) else {
             app.logger.error(
                 "Agent WebSocket not found for guest exec message",
-                metadata: ["agentKey": .string(agentKey)])
+                metadata: ["strato.agent.identity": .string(agentKey)])
             throw GuestExecSessionError.agentNotConnected(agentKey)
         }
 
