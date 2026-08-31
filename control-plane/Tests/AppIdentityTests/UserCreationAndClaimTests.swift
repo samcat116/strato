@@ -22,7 +22,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
     @Test("create is forbidden for non-admins")
     func testCreateForbidden() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             try await app.test(.POST, "/api/users") { req in
@@ -44,7 +44,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
     @Test("admin create makes a local user and a valid claim token")
     func testCreateSucceeds() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let adminToken = try await makeAdminToken(on: app.db)
 
@@ -84,7 +84,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
     @Test("admin create can grant system admin rights")
     func testCreateGrantsAdmin() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let adminToken = try await makeAdminToken(on: app.db)
 
@@ -104,7 +104,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
     @Test("admin create rejects a duplicate username or email")
     func testCreateConflict() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let adminToken = try await makeAdminToken(on: app.db)
 
@@ -122,7 +122,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
     @Test("admin create can provision the invitee into an organization")
     func testCreateWithOrgAssignment() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let adminToken = try await makeAdminToken(on: app.db)
             let orgID = try testOrganization.requireID()
@@ -151,7 +151,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
     @Test("admin create rejects an unknown assigned organization")
     func testCreateWithUnknownOrg() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let adminToken = try await makeAdminToken(on: app.db)
 
@@ -173,7 +173,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
     @Test("org list-all is system-admin only and includes non-member orgs")
     func testListAllOrganizations() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let adminToken = try await makeAdminToken(on: app.db)
 
@@ -200,7 +200,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
     @Test("admin create rejects an invalid org role")
     func testCreateWithInvalidRole() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let adminToken = try await makeAdminToken(on: app.db)
             let orgID = try testOrganization.requireID()
@@ -221,7 +221,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
     @Test("claim info reports a valid invite")
     func testClaimInfoValid() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let adminToken = try await makeAdminToken(on: app.db)
 
@@ -250,7 +250,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
     @Test("claim info 404s for an unknown token")
     func testClaimInfoUnknown() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             try await app.test(.GET, "/auth/claim/claim_does_not_exist") { res in
@@ -261,7 +261,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
     @Test("an expired claim token is reported invalid and cannot begin a ceremony")
     func testExpiredClaimToken() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             let invitee = User(
@@ -294,7 +294,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
     @Test("claim begin stores its challenge under a claim-only operation")
     func testClaimBeginNamespacesChallenge() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let adminToken = try await makeAdminToken(on: app.db)
 
@@ -326,7 +326,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
     @Test("claim-token consume is atomic and one-time")
     func testClaimTokenConsumeIsOneTime() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             let invitee = User(
@@ -370,7 +370,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
 
     @Test("invited accounts cannot be claimed via open self-registration")
     func testRegisterBeginBlockedForInvitedAccount() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let adminToken = try await makeAdminToken(on: app.db)
 
@@ -409,7 +409,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
     /// account's owner or its pending-enrollment session.
     @Test("a claimed invite no longer blocks passkey enrollment")
     func testRegisterBeginAllowedAfterInviteClaimed() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             var sessionCookie: String?

@@ -369,7 +369,7 @@ struct AgentWebSocketIntegrationTests {
 /// ephemeral loopback port, and hand the bound port to the test. The server and
 /// application are always torn down, even if the test body throws.
 private func withRunningApp(_ test: (Application, Int) async throws -> Void) async throws {
-    try await withApp { app in
+    try await withTestApp { app in
         try await app.server.start(address: .hostname("127.0.0.1", port: 0))
         do {
             guard let port = app.http.server.shared.localAddress?.port else {

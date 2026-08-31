@@ -4081,15 +4081,6 @@ extension Agent {
                 metadata: ["strato.sandbox.id": .string(sandboxId), "error": .string(error.localizedDescription)])
         }
     }
-
-    // MARK: - Volume frames (none remain)
-
-    // `handleVolumeInfo` is gone with the `volume_info` frame (wire v32, ADR
-    // 0001 stage 7, STR-149), and `handleVolumeSnapshot`/`...Delete` with the
-    // two artifact verbs (v33, stage 8, STR-150). `StorageBackend.volumeInfo` remains, as the
-    // agent's own probe behind `volumeVirtualSize` — the size cache the resize
-    // planner reads. Nothing asks the agent to read a volume on the control
-    // plane's behalf anymore.
 }
 
 // MARK: - Reconciliation (issue #260)

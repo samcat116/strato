@@ -82,7 +82,7 @@ enum VolumeAttachmentService {
             .filter { $0.id != volume.id }
 
         let deviceName =
-            try requested
+            requested
             ?? VolumeNaming.nextDeviceName(
                 existingDeviceNames: siblings.map(\.deviceName))
 

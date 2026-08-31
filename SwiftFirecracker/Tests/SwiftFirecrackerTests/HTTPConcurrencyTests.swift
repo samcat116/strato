@@ -285,11 +285,10 @@ struct HTTPConcurrencyTests {
 
         let manager = FirecrackerManager(socketPath: socketPath, logger: Logger(label: "test"))
         try await manager.connect()
-        // A fresh manager is NotStarted, an even stricter proof than the
-        // Running state Firecracker exposes after a partial pause.
-        #expect(await manager.vmState == .notStarted)
+        // A fresh manager is NotStarted, so the guarded `resume()` would reject
+        // this call before reaching the VMM.
         try await manager.recoverFromFailedPause()
-        #expect(await manager.vmState == .running)
+        #expect(server.receivedPaths() == ["/vm"])
         await manager.disconnect()
     }
 }
@@ -302,6 +301,7 @@ private final class EchoingAPIServer: Sendable {
         var stopped = false
         var connections: [Int32] = []
         var silentRequestsRemaining: Int
+        var receivedPaths: [String] = []
     }
 
     private let socketPath: String
@@ -396,6 +396,10 @@ private final class EchoingAPIServer: Sendable {
         state.withLockedValue { $0.stopped }
     }
 
+    func receivedPaths() -> [String] {
+        state.withLockedValue { $0.receivedPaths }
+    }
+
     /// Consumes one of the leading requests that go unanswered.
     private func swallowRequest() -> Bool {
         state.withLockedValue { state in
@@ -422,6 +426,7 @@ private final class EchoingAPIServer: Sendable {
                     header
                     .components(separatedBy: "\r\n").first?
                     .components(separatedBy: " ").dropFirst().first ?? "/"
+                state.withLockedValue { $0.receivedPaths.append(path) }
 
                 // A small stagger makes the requests genuinely overlap on the
                 // wire rather than completing one at a time.

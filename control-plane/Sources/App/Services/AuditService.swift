@@ -157,17 +157,17 @@ struct AuditConfig: Sendable {
             .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
             .filter { !$0.isEmpty } ?? ["database"]
         return AuditConfig(
-            enabled: configuration.bool(.auditEnabled)!,
+            enabled: configuration.bool(.auditEnabled),
             backendNames: backends,
-            includeReads: configuration.bool(.auditIncludeReads)!,
+            includeReads: configuration.bool(.auditIncludeReads),
             webhookURL: configuration.string(.auditWebhookURL),
             lokiEndpoint: configuration.string(.lokiEndpoint),
-            retentionDays: configuration.int(.auditRetentionDays),
-            synchronousWrites: configuration.bool(.auditSynchronous)!,
-            maxQueueDepth: configuration.int(.auditMaxQueueDepth)!,
-            maxQueueBytes: configuration.int(.auditMaxQueueBytes)!,
-            maxBatchSize: configuration.int(.auditMaxBatchSize)!,
-            maxBatchBytes: configuration.int(.auditMaxBatchBytes)!
+            retentionDays: configuration.optionalInt(.auditRetentionDays),
+            synchronousWrites: configuration.bool(.auditSynchronous),
+            maxQueueDepth: configuration.int(.auditMaxQueueDepth),
+            maxQueueBytes: configuration.int(.auditMaxQueueBytes),
+            maxBatchSize: configuration.int(.auditMaxBatchSize),
+            maxBatchBytes: configuration.int(.auditMaxBatchBytes)
         )
     }
 }

@@ -23,7 +23,6 @@ final class NetworkControllerTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -982,11 +981,10 @@ final class NetworkControllerTests {
         let siteB = UUID()
         func incapableAgent(named name: String, site: UUID) -> Agent {
             let agent = Agent(
-                name: name, hostname: name, version: "1.0",
+                name: name, hostname: name, version: "1.0", siteID: site,
                 resources: AgentResources(
                     totalCPU: 1, availableCPU: 1, totalMemory: 1, availableMemory: 1,
                     totalDisk: 1, availableDisk: 1))
-            agent.$site.id = site
             return agent
         }
         let index = ResolverCapability.Index(incapable: [

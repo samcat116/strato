@@ -283,7 +283,7 @@ public enum DomainXMLBuilder {
 
         let spec = input.spec
         let machine = spec.effectiveMachine
-        let hotplugBytes = MemoryHotplugPlan.alignedHotplugBytes(
+        let hotplugBytes = QEMUMemoryReservation.alignedHotplugBytes(
             spec: spec, architecture: input.architecture)
         let totalMemoryBytes = spec.memoryBytes + hotplugBytes
         // A spec decoded straight off the wire is not guaranteed to have
@@ -731,7 +731,7 @@ public enum DomainXMLBuilder {
             devices.append(
                 memoryDeviceNode(
                     sizeBytes: hotplugBytes,
-                    blockBytes: MemoryHotplugPlan.blockBytes(architecture: input.architecture),
+                    blockBytes: QEMUMemoryReservation.blockBytes(architecture: input.architecture),
                     requestedBytes: 0))
         }
 
@@ -823,7 +823,7 @@ public enum DomainXMLBuilder {
     public static func reservedHotplugPortCount(_ input: DomainXMLInput) -> Int {
         spareHotplugPortIndexes(
             input,
-            hotplugBytes: MemoryHotplugPlan.alignedHotplugBytes(
+            hotplugBytes: QEMUMemoryReservation.alignedHotplugBytes(
                 spec: input.spec, architecture: input.architecture)
         ).count
     }

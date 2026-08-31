@@ -240,7 +240,7 @@ export function AgentDetailPage({ agentId: id }: { agentId: string }) {
             <div>
               <p className="text-muted-foreground">Registered</p>
               <p className="text-foreground">
-                {new Date(agent.createdAt).toLocaleString()}
+                {agent.createdAt ? new Date(agent.createdAt).toLocaleString() : "Unknown"}
               </p>
             </div>
           </div>

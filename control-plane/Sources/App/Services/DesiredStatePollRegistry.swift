@@ -99,7 +99,7 @@ actor DesiredStatePollRegistry {
                 // long enough to clean up its own entry.
                 Task {
                     try? await Task.sleep(until: deadline, clock: ContinuousClock())
-                    await self.resume(agentKey: agentKey, id: id)
+                    self.resume(agentKey: agentKey, id: id)
                 }
             }
         } onCancel: {
@@ -130,7 +130,7 @@ actor DesiredStatePollRegistry {
         guard flushTask == nil else { return }
         flushTask = Task {
             try? await Task.sleep(for: Self.coalesceWindow, clock: ContinuousClock())
-            await self.flush()
+            self.flush()
         }
     }
 

@@ -1,18 +1,8 @@
 import Foundation
 import StratoShared
 
-// Supporting value types for AgentService: the service's error enum. The
-// in-memory AgentInfo snapshot that used to live here is gone (issue #261) —
-// the Agent database row plus the Valkey presence key are the registry, so
-// every replica shares one view. `AgentServiceResponse` — the success/error
-// verdict of a correlated exchange — went with the exchanges themselves
-// (STR-152).
-
-// MARK: - Supporting Types
-
 enum AgentServiceError: Error, LocalizedError, Sendable {
     case schedulingFailed(String)
-    case agentNotFound(String)
     case invalidResponse(String)
     case unsupportedProtocolVersion(agentName: String, version: Int)
     case missingOrganizationScope(agentName: String)
@@ -20,9 +10,7 @@ enum AgentServiceError: Error, LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .schedulingFailed(let reason):
-            return "VM placement failed: \(reason)"
-        case .agentNotFound(let agentId):
-            return "Agent not found: \(agentId)"
+            return "Workload placement failed: \(reason)"
         case .invalidResponse(let message):
             return "Invalid response from agent: \(message)"
         case .unsupportedProtocolVersion(let agentName, let version):

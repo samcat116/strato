@@ -33,6 +33,7 @@ const verbs: Record<OperationKind, { succeeded: string; infinitive: string }> = 
   // what says that, and no agent populates it yet — so a success toast here
   // must not claim the caps took effect (backend STR-19).
   throttle: { succeeded: "I/O limits recorded", infinitive: "record the I/O limits of" },
+  run: { succeeded: "Command completed", infinitive: "run a command on" },
 };
 
 // The list query key to refresh when a mutation settles, so a create/delete/

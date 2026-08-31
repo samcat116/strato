@@ -97,7 +97,6 @@ struct ImageFetchRedirectTests {
             app.imageObjectStore = FilesystemImageObjectStore(rootPath: storagePath)
             // Deliberately NOT the mock: the point is the real HTTP path.
             app.imageFetchService = ImageFetchService(app: app)
-            try await app.autoMigrate()
 
             try await test(app, port)
         } catch {

@@ -26,7 +26,6 @@ final class VolumeConvergenceTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -50,24 +49,8 @@ final class VolumeConvergenceTests {
     private func registerAgent(
         app: Application, named name: String, protocolVersion: Int = WireProtocol.currentVersion
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: name,
-            hostname: "\(name).test",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
-            protocolVersion: protocolVersion
-        )
-        let project = try #require(try await Project.query(on: app.db).sort(\.$createdAt).first())
-        let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let uuid = try await app.agentService.registerAgent(
-            message, agentName: name, siteID: siteID,
-            organizationScope: orgID.map { .organization($0) })
-        return uuid.uuidString
+        try await TestDataBuilder(db: app.db).registerAgent(
+            on: app, named: name, hostname: "\(name).test", protocolVersion: protocolVersion)
     }
 
     @discardableResult

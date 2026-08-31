@@ -28,7 +28,6 @@ struct SecurityHeadersTests {
     func testHeadersOnErrorResponse() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
         // An unmatched route is denied (403) by the default-deny
         // `AuthorizationMiddleware` (#482) before it can reach the router's

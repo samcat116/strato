@@ -42,23 +42,15 @@ struct DesiredStatePollTests {
         siteID: UUID? = nil,
         organizationID: UUID? = nil
     ) async throws -> Agent {
-        let agent = Agent(
-            name: name,
+        try await TestDataBuilder(db: app.db).createAgent(
+            named: name,
             hostname: "\(name).test",
-            version: "1.0.0",
-            status: .online,
             resources: AgentResources(
                 totalCPU: 8, availableCPU: 8,
                 totalMemory: 1 << 33, availableMemory: 1 << 33,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            )
-        )
-        if let siteID {
-            agent.$site.id = siteID
-        }
-        agent.$organization.id = organizationID
-        try await agent.save(on: app.db)
-        return agent
+                totalDisk: 1 << 40, availableDisk: 1 << 40),
+            siteID: siteID,
+            organizationScope: organizationID.map(OrganizationScope.organization))
     }
 
     private func poll(
@@ -456,7 +448,7 @@ struct DesiredStatePollTests {
 /// A real bound HTTP server, needed for the XFCC provenance check (which
 /// demands a loopback remote address).
 private func withRunningPollApp(_ test: (Application, Int) async throws -> Void) async throws {
-    try await withApp { app in
+    try await withTestApp { app in
         try await app.server.start(address: .hostname("127.0.0.1", port: 0))
 
         // `defer` cannot hold an `await`, so the outcome is captured and

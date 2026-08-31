@@ -1,9 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-export function logRefetchInterval(pollingEnabled: boolean): 5000 | false {
-  return pollingEnabled ? 5000 : false;
-}
-
 /**
  * Builds the log-polling hook and its companion invalidator for one resource
  * kind. VMs and sandboxes differ only in their query-key prefix, API method,
@@ -19,8 +15,7 @@ export function makeResourceLogsHooks<TParams, TEntry>(
       queryKey: [resourceKey, id, params],
       queryFn: ({ signal }) => getLogs(id, params, signal),
       enabled: !!id,
-      // Poll every 5 seconds when viewing logs
-      refetchInterval: logRefetchInterval(pollingEnabled),
+      refetchInterval: pollingEnabled ? 5000 : false,
       // Keep previous data while refetching for smoother UX
       placeholderData: (previousData) => previousData,
     });

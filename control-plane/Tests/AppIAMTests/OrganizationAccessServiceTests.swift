@@ -18,7 +18,6 @@ final class OrganizationAccessServiceTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app, TestDataBuilder(db: app.db))
         } catch {
             try await app.shutdownForTesting()
