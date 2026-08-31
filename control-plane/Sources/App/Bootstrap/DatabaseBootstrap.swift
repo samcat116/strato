@@ -119,6 +119,9 @@ extension Application {
         // STR-79: durable captured VM command state with cold output payloads.
         migrations.add(CreateVMCommandExecutions())
 
+        // STR-84: append-only guest command and interactive execution facts.
+        migrations.add(AddVMGuestExecutionAudit())
+
         // STR-154: preserve the attachment case and its coordinates instead of
         // interpreting every agent-owned storage reference as a host path.
         migrations.add(ReplaceVolumeReplicaDatasetPath())

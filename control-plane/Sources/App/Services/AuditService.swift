@@ -38,6 +38,17 @@ enum AuditEventType: String, Sendable {
     case guestIdentityMinted = "identity.guest_svid_minted"
     /// A verified agent was refused a guest JWT-SVID after authentication.
     case guestIdentityRefused = "identity.guest_svid_refused"
+    /// A durable, captured guest command was accepted for dispatch.
+    case vmCommandRequested = "vm.command.requested"
+    /// A durable guest command reached a terminal fact. A corrected timeout is
+    /// another append-only completion event, never an edit of the first one.
+    case vmCommandCompleted = "vm.command.completed"
+    /// An interactive VM exec session was accepted for later WebSocket attach.
+    case vmExecRequested = "vm.exec.requested"
+    /// The owning agent confirmed that an interactive VM exec process started.
+    case vmExecStarted = "vm.exec.started"
+    /// An interactive VM exec session reached its first terminal transition.
+    case vmExecEnded = "vm.exec.ended"
 }
 
 // MARK: - Record
@@ -62,6 +73,40 @@ struct AuditRecord: Content, Sendable {
     var metadata: [String: String]?
 }
 
+extension AuditRecord {
+    /// Conservative in-memory cost used by the bounded audit queue. The
+    /// record retains Swift strings rather than encoded JSON, so UTF-8 payload
+    /// bytes plus fixed/container overhead tracks the memory at risk without
+    /// allocating another multi-megabyte encoding on the producer path.
+    var estimatedQueueBytes: Int {
+        var total = 512
+        func add(_ value: Int) {
+            total = value > Int.max - total ? Int.max : total + value
+        }
+        func add(_ value: String?) {
+            guard let value else { return }
+            add(value.utf8.count)
+        }
+
+        add(eventType)
+        add(username)
+        add(method)
+        add(path)
+        add(resourceType)
+        add(resourceID)
+        add(action)
+        add(sourceIP)
+        if let metadata {
+            for (key, value) in metadata {
+                add(64)
+                add(key)
+                add(value)
+            }
+        }
+        return total
+    }
+}
+
 // MARK: - Configuration
 
 /// Audit-logging configuration, read from the environment (issue #39):
@@ -76,8 +121,10 @@ struct AuditRecord: Content, Sendable {
 ///   days; unset (or non-positive) keeps events forever.
 /// - `AUDIT_SYNCHRONOUS` — write events on the request path instead of
 ///   draining them in the background; default true only under `.testing`.
-/// - `AUDIT_MAX_QUEUE_DEPTH` / `AUDIT_MAX_BATCH_SIZE` — bounds on the
-///   background queue and on how many events one drained batch writes.
+/// - `AUDIT_MAX_QUEUE_DEPTH` / `AUDIT_MAX_QUEUE_BYTES` — count and memory
+///   bounds on the background queue.
+/// - `AUDIT_MAX_BATCH_SIZE` / `AUDIT_MAX_BATCH_BYTES` — count and payload
+///   bounds on one drained batch.
 struct AuditConfig: Sendable {
     var enabled: Bool
     var backendNames: [String]
@@ -97,9 +144,11 @@ struct AuditConfig: Sendable {
     /// shed. A queue that grows without limit only trades a slow SIEM for an
     /// OOM.
     var maxQueueDepth: Int
+    var maxQueueBytes: Int
     /// How many queued events one drain pass writes together; the `database`
     /// backend turns a batch into a single multi-row insert.
     var maxBatchSize: Int
+    var maxBatchBytes: Int
 
     static func fromConfiguration(_ configuration: ControlPlaneConfiguration) -> AuditConfig {
         let backends =
@@ -116,7 +165,9 @@ struct AuditConfig: Sendable {
             retentionDays: configuration.optionalInt(.auditRetentionDays),
             synchronousWrites: configuration.bool(.auditSynchronous),
             maxQueueDepth: configuration.int(.auditMaxQueueDepth),
-            maxBatchSize: configuration.int(.auditMaxBatchSize)
+            maxQueueBytes: configuration.int(.auditMaxQueueBytes),
+            maxBatchSize: configuration.int(.auditMaxBatchSize),
+            maxBatchBytes: configuration.int(.auditMaxBatchBytes)
         )
     }
 }
@@ -177,9 +228,12 @@ final class DatabaseAuditBackend: AuditBackend, Sendable {
         // shutdown may have cancelled, and reading `app.db` after storage is
         // cleared force-unwraps nil (see `Application.liveDB`).
         guard let db = app.liveDB else {
-            app.logger.debug(
-                "Dropping audit events; application is shutting down",
-                metadata: ["count": .stringConvertible(records.count)])
+            app.logger.warning(
+                "Dropping audit events because the database is unavailable during shutdown",
+                metadata: [
+                    "count": .stringConvertible(records.count),
+                    "eventTypes": .string(Set(records.map(\.eventType)).sorted().joined(separator: ",")),
+                ])
             return
         }
         do {
@@ -208,6 +262,10 @@ struct LogAuditBackend: AuditBackend {
     func write(_ record: AuditRecord) async {
         var metadata: Logger.Metadata = [
             "eventType": .string(record.eventType),
+            // The logger's own timestamp is delivery time. Preserve producer
+            // time explicitly so a log-only backend can reconstruct causal
+            // order when concurrent drains deliver batches out of order.
+            "timestamp": .string(String(record.timestamp.timeIntervalSince1970)),
             "adminBypass": .stringConvertible(record.adminBypass),
         ]
         if let userID = record.userID { metadata["userID"] = .string(userID.uuidString) }
@@ -215,6 +273,7 @@ struct LogAuditBackend: AuditBackend {
         if let organizationID = record.organizationID {
             metadata["organizationID"] = .string(organizationID.uuidString)
         }
+        if let apiKeyID = record.apiKeyID { metadata["apiKeyID"] = .string(apiKeyID.uuidString) }
         if let method = record.method { metadata["method"] = .string(method) }
         if let path = record.path { metadata["path"] = .string(path) }
         if let status = record.status { metadata["status"] = .stringConvertible(status) }
@@ -222,6 +281,11 @@ struct LogAuditBackend: AuditBackend {
         if let resourceID = record.resourceID { metadata["resourceID"] = .string(resourceID) }
         if let action = record.action { metadata["action"] = .string(action) }
         if let sourceIP = record.sourceIP { metadata["sourceIP"] = .string(sourceIP) }
+        if let recordMetadata = record.metadata {
+            for (key, value) in recordMetadata {
+                metadata["metadata.\(key)"] = .string(value)
+            }
+        }
         logger.info("audit_event", metadata: metadata)
     }
 }
@@ -330,18 +394,32 @@ final class WebhookAuditBackend: AuditBackend, Sendable {
 /// wait for a slot — the whole point is that the request path does not block on
 /// audit — so the backpressure valve is shedding, not queuing the caller.
 actor AuditEventQueue {
+    enum ShedReason: String, Equatable, Sendable {
+        case countLimit = "count_limit"
+        case byteLimit = "byte_limit"
+        case recordTooLarge = "record_too_large"
+    }
+
     /// What `enqueue` did with the event.
     enum EnqueueOutcome: Equatable, Sendable {
         /// Buffered. `startDrain` is true when the caller must start the drain
         /// task because no drain is running.
         case enqueued(startDrain: Bool)
         /// Dropped because the buffer is full, with the running total.
-        case shed(total: Int)
+        case shed(total: Int, reason: ShedReason)
+    }
+
+    private struct QueuedRecord: Sendable {
+        let record: AuditRecord
+        let bytes: Int
     }
 
     private let maxQueueDepth: Int
+    private let maxQueueBytes: Int
     private let maxBatchSize: Int
-    private var pending: [AuditRecord] = []
+    private let maxBatchBytes: Int
+    private var pending: [QueuedRecord] = []
+    private var pendingBytes = 0
     private var draining = false
     private var shedTotal = 0
     /// Batches handed out by `nextBatch` and not yet reported delivered. An
@@ -362,17 +440,36 @@ actor AuditEventQueue {
     /// database problem.
     static let maxSupportedBatchSize = 1024
 
-    init(maxQueueDepth: Int, maxBatchSize: Int) {
+    init(
+        maxQueueDepth: Int,
+        maxQueueBytes: Int = 64 * 1_024 * 1_024,
+        maxBatchSize: Int,
+        maxBatchBytes: Int = 8 * 1_024 * 1_024
+    ) {
         self.maxQueueDepth = max(1, maxQueueDepth)
+        self.maxQueueBytes = max(1, maxQueueBytes)
         self.maxBatchSize = min(max(1, maxBatchSize), Self.maxSupportedBatchSize)
+        self.maxBatchBytes = max(1, maxBatchBytes)
     }
 
     func enqueue(_ record: AuditRecord) -> EnqueueOutcome {
-        guard pending.count < maxQueueDepth else {
-            shedTotal += 1
-            return .shed(total: shedTotal)
+        let bytes = record.estimatedQueueBytes
+        let shedReason: ShedReason?
+        if bytes > maxBatchBytes {
+            shedReason = .recordTooLarge
+        } else if pending.count >= maxQueueDepth {
+            shedReason = .countLimit
+        } else if bytes > maxQueueBytes - min(pendingBytes, maxQueueBytes) {
+            shedReason = .byteLimit
+        } else {
+            shedReason = nil
         }
-        pending.append(record)
+        if let shedReason {
+            shedTotal += 1
+            return .shed(total: shedTotal, reason: shedReason)
+        }
+        pending.append(QueuedRecord(record: record, bytes: bytes))
+        pendingBytes += bytes
         guard !draining else { return .enqueued(startDrain: false) }
         draining = true
         return .enqueued(startDrain: true)
@@ -392,10 +489,20 @@ actor AuditEventQueue {
             if endDrainWhenEmpty { draining = false }
             return nil
         }
-        let batch = Array(pending.prefix(maxBatchSize))
-        pending.removeFirst(batch.count)
+        var batchCount = 0
+        var batchBytes = 0
+        for queued in pending.prefix(maxBatchSize) {
+            guard queued.bytes <= maxBatchBytes - batchBytes else { break }
+            batchCount += 1
+            batchBytes += queued.bytes
+        }
+        // `enqueue` rejects a record larger than `maxBatchBytes`, so a
+        // non-empty queue always contributes at least one record here.
+        let queuedBatch = Array(pending.prefix(batchCount))
+        pending.removeFirst(batchCount)
+        pendingBytes = max(0, pendingBytes - batchBytes)
         inFlight += 1
-        return batch
+        return queuedBatch.map(\.record)
     }
 
     /// Report a claimed batch delivered (or given up on).
@@ -415,8 +522,8 @@ actor AuditEventQueue {
     }
 
     /// Snapshot for tests and diagnostics.
-    var stats: (queued: Int, draining: Bool, shed: Int) {
-        (pending.count, draining, shedTotal)
+    var stats: (queued: Int, queuedBytes: Int, inFlight: Int, draining: Bool, shed: Int) {
+        (pending.count, pendingBytes, inFlight, draining, shedTotal)
     }
 }
 
@@ -455,7 +562,10 @@ final class AuditService: Sendable {
         self.logger = app.logger
         self.app = app
         self.queue = AuditEventQueue(
-            maxQueueDepth: config.maxQueueDepth, maxBatchSize: config.maxBatchSize)
+            maxQueueDepth: config.maxQueueDepth,
+            maxQueueBytes: config.maxQueueBytes,
+            maxBatchSize: config.maxBatchSize,
+            maxBatchBytes: config.maxBatchBytes)
         if config.maxBatchSize > AuditEventQueue.maxSupportedBatchSize {
             app.logger.warning(
                 "AUDIT_MAX_BATCH_SIZE exceeds the supported ceiling; clamping",
@@ -513,8 +623,24 @@ final class AuditService: Sendable {
             await deliver([record])
             return
         }
+        await enqueue(record)
+    }
+
+    /// Record a fact whose producer must never wait on audit availability.
+    ///
+    /// Guest execution uses this path even when `AUDIT_SYNCHRONOUS` is set:
+    /// the accepted command/session and its terminal transitions are security
+    /// facts, but a database or SIEM cannot become part of starting, stopping,
+    /// or correcting the guest process. Callers await only the bounded actor
+    /// hop that appends to the in-memory queue; delivery remains asynchronous.
+    func recordFailOpen(_ record: AuditRecord) async {
+        guard isEnabled else { return }
+        await enqueue(record)
+    }
+
+    private func enqueue(_ record: AuditRecord) async {
         switch await queue.enqueue(record) {
-        case .shed(let total):
+        case .shed(let total, let reason):
             // Log the first drop and then every hundredth: a saturated queue
             // is a standing condition, not an incident to repeat per event.
             if total == 1 || total % 100 == 0 {
@@ -522,7 +648,10 @@ final class AuditService: Sendable {
                     "Audit events shed under backpressure",
                     metadata: [
                         "shed_total": .stringConvertible(total),
+                        "reason": .string(reason.rawValue),
                         "max_queue_depth": .stringConvertible(config.maxQueueDepth),
+                        "max_queue_bytes": .stringConvertible(config.maxQueueBytes),
+                        "max_batch_bytes": .stringConvertible(config.maxBatchBytes),
                     ])
             }
         case .enqueued(let startDrain):
@@ -598,10 +727,14 @@ final class AuditService: Sendable {
             try? await Task.sleep(for: .milliseconds(5))
         }
         let remaining = await queue.stats
-        if remaining.queued > 0 {
+        if remaining.queued > 0 || remaining.inFlight > 0 {
             logger.warning(
-                "Audit flush timed out with events still queued",
-                metadata: ["queued": .stringConvertible(remaining.queued)])
+                "Audit flush timed out with events still pending delivery",
+                metadata: [
+                    "queued": .stringConvertible(remaining.queued),
+                    "queued_bytes": .stringConvertible(remaining.queuedBytes),
+                    "in_flight_batches": .stringConvertible(remaining.inFlight),
+                ])
         }
     }
 

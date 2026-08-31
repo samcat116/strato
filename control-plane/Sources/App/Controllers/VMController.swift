@@ -1860,15 +1860,29 @@ struct VMController: RouteCollection {
                 reason: "Agent '\(agent.name)' does not support VM guest exec for \(vm.hypervisorType.rawValue)")
         }
 
+        let executionID = UUID()
+        let auditContext = VMGuestExecutionAudit.makeContext(
+            vmID: vmID,
+            projectID: vm.$project.id,
+            correlationID: executionID.uuidString,
+            argv: run.command,
+            on: req)
         let execution = VMCommandExecution(
+            id: executionID,
             vmID: vmID,
             actorID: try user.requireID(),
             agentKey: agent.identity.key,
-            deadline: Date().addingTimeInterval(VMCommandExecutionService.completionBudget))
+            deadline: Date().addingTimeInterval(VMCommandExecutionService.completionBudget),
+            actorUsername: auditContext.username,
+            apiKeyID: auditContext.apiKeyID,
+            organizationID: auditContext.organizationID,
+            sourceIP: auditContext.sourceIP,
+            adminBypass: auditContext.adminBypass)
         try await req.db.transaction { db in
             try await execution.create(command: run.command, on: db)
         }
-        let executionID = try execution.requireID()
+        let requestedAuditRecord = VMGuestExecutionAudit.makeCommandRequestedRecord(auditContext)
+        await req.audit.recordFailOpen(requestedAuditRecord)
 
         do {
             try await req.application.replicaBridge.deliver(
@@ -1960,7 +1974,15 @@ struct VMController: RouteCollection {
             )
         }
 
+        let sessionId = UUID().uuidString
+        let auditContext = VMGuestExecutionAudit.makeContext(
+            vmID: vmID,
+            projectID: vm.$project.id,
+            correlationID: sessionId,
+            argv: execRequest.command,
+            on: req)
         let session = req.guestExecSessionManager.createPendingSession(
+            sessionId: sessionId,
             resourceKind: .virtualMachine,
             resourceId: vmID.uuidString,
             agentKey: agent.identity.key,
@@ -1971,8 +1993,11 @@ struct VMController: RouteCollection {
             tty: execRequest.tty ?? false,
             rows: execRequest.rows,
             cols: execRequest.cols,
-            outputMode: execRequest.outputMode ?? .raw
+            outputMode: execRequest.outputMode ?? .raw,
+            auditContext: auditContext
         )
+        let requestedAuditRecord = VMGuestExecutionAudit.makeExecRequestedRecord(auditContext)
+        await req.audit.recordFailOpen(requestedAuditRecord)
 
         let response = Response(status: .created)
         try response.content.encode(

@@ -87,7 +87,9 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
     case rateLimitTrustedProxyHops = "RATE_LIMIT_TRUSTED_PROXY_HOPS"
     case auditRetentionDays = "AUDIT_RETENTION_DAYS"
     case auditMaxQueueDepth = "AUDIT_MAX_QUEUE_DEPTH"
+    case auditMaxQueueBytes = "AUDIT_MAX_QUEUE_BYTES"
     case auditMaxBatchSize = "AUDIT_MAX_BATCH_SIZE"
+    case auditMaxBatchBytes = "AUDIT_MAX_BATCH_BYTES"
     case iamDecisionLogRetentionDays = "IAM_DECISION_LOG_RETENTION_DAYS"
     case iamDecisionLogMaxQueueDepth = "IAM_DECISION_LOG_MAX_QUEUE_DEPTH"
     case iamDecisionLogMaxBatchSize = "IAM_DECISION_LOG_MAX_BATCH_SIZE"
@@ -122,7 +124,9 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
         case .rateLimitTrustedProxyHops: 1
         case .auditRetentionDays: nil
         case .auditMaxQueueDepth, .iamDecisionLogMaxQueueDepth: 2048
+        case .auditMaxQueueBytes: 64 * 1_024 * 1_024
         case .auditMaxBatchSize, .iamDecisionLogMaxBatchSize: 128
+        case .auditMaxBatchBytes: 8 * 1_024 * 1_024
         case .iamDecisionLogRetentionDays: 30
         case .webhookDeliveryIntervalSeconds: 15
         case .webhookAutoDisableDays: 3
@@ -149,7 +153,8 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
         case .rateLimitAuthMax, .rateLimitAuthWindow, .rateLimitAPIMax, .rateLimitAPIWindow,
             .rateLimitFailureThreshold, .rateLimitFailureBaseDelay, .rateLimitFailureMaxDelay,
             .rateLimitFailureWindow, .rateLimitTrustedProxyHops, .auditMaxQueueDepth,
-            .auditMaxBatchSize, .iamDecisionLogMaxQueueDepth, .iamDecisionLogMaxBatchSize,
+            .auditMaxQueueBytes, .auditMaxBatchSize, .auditMaxBatchBytes,
+            .iamDecisionLogMaxQueueDepth, .iamDecisionLogMaxBatchSize,
             .webhookDeliveryIntervalSeconds, .webhookAutoDisableDays, .spireSVIDTTL,
             .spireIssuanceWindowHours, .guestIdentityJWTTTL, .guestIdentityJWTMaxTTL,
             .ssfPollIntervalSeconds:
