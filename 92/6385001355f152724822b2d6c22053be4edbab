@@ -39,6 +39,8 @@ agent/Sources/StratoAgent/Agent.swift
   s_223cf433eba0c9::t_12ff04006a7bba 839-844
   s_223cf433eba0c9::t_27c209cd438d49 342-345,347-349,368-371,464,502-503
   s_223cf433eba0c9::t_b84c93a3a1c97a 845-847
+  s_223cf433eba0c9::t_ceaae558784c06 6152
+  s_223cf433eba0c9::t_036202a2abf07d 3076,3095,3174,3181,4315,6071,6099
 agent/Tests/StratoAgentTests/SandboxJailTests.swift
   s_223cf433eba0c9::t_88c37c8848f0da 9-21,25-53,68-81,91-93,103-104,119,124,140,177-180
   s_223cf433eba0c9::t_81f50f2ed9150e 55-61,63-65,90,94-96
@@ -128,6 +130,8 @@ SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerClient.swift
   s_223cf433eba0c9::t_4f2f3e697fc47f 14-28
   s_223cf433eba0c9::t_535c3635b15131 1051-1054,1100,1139-1142,1180,1206-1209,1247
   s_223cf433eba0c9::t_145ba8e226cdcc 66-69,83-95,111-112,511
+  s_223cf433eba0c9::t_ceaae558784c06 392,649-652,664-667
+  s_223cf433eba0c9::t_036202a2abf07d 525,863
 agent/Tests/StratoAgentTests/AgentConfigTests.swift
   s_223cf433eba0c9::t_57c033feca0c22 523
   s_223cf433eba0c9::t_590876baf7a151 450,465-481,522,524
