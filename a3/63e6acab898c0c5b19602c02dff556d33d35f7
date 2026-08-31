@@ -32,13 +32,18 @@ agent/Sources/StratoAgent/FirecrackerService.swift
   s_d97f14ca566b90::t_1148e7420c876d 99,637
   s_d97f14ca566b90::t_6764ae22389c84 84-93,97-98,486-489
   s_cc7d6a0c5fc541::t_0693a4fb2bf0e1 490
+  s_d97f14ca566b90::t_7121198e5252e2 330,410
+  s_d97f14ca566b90::t_8d1a698d1fc42b 683
 control-plane/Sources/App/Services/SnapshotArtifactMutation.swift
   s_d97f14ca566b90::t_fffc1887bc0776 82-99,128,169-172
   s_d97f14ca566b90::t_ddb91b02c7e0ae 102-103,167-168
   s_d97f14ca566b90::t_c15ad95cf36e5e 75,104,165
+  s_d97f14ca566b90::t_8025093c352f33 129,159-163
 control-plane/Sources/App/Services/SecretsEncryptionService.swift
   s_d97f14ca566b90::t_69f87900009a4c 528,537
   s_d97f14ca566b90::t_5923e6c98aeb45 540
+  s_d97f14ca566b90::t_18fb1b5ba3f838 612-614
+  s_d97f14ca566b90::t_71f816deb59f5b 519,527,559-562,607-611
 shared/Tests/StratoSharedTests/DesiredVolumeStorageTests.swift
   s_d97f14ca566b90::t_eefc40aa0c8348 1-16,18-50,52-105
   s_d97f14ca566b90::t_25dd9456285203 17,51
@@ -125,6 +130,7 @@ agent/Tests/StratoAgentTests/FirecrackerServiceLifecycleTests.swift
 control-plane/Tests/AppResourceTests/StoragePoolTests.swift
   s_d97f14ca566b90::t_f001c44317c8c8 3,13-16,18-25,28-43,45,47-49,52-53,55-57,59-61,64,66-70,73,75,81-98,109-110
   s_d97f14ca566b90::t_edb3619bcdc58f 76-78
+  s_d97f14ca566b90::t_5e8a54bb4183e9 44,46
 agent/Tests/StratoAgentTests/DomainDiskInventoryTests.swift
   s_d97f14ca566b90::t_218468f4507af2 226
   s_d97f14ca566b90::t_31936aa34a57ce 214-219,227-229,231-232
@@ -253,6 +259,7 @@ control-plane/web/src/components/volumes/create-volume-dialog.tsx
   s_d97f14ca566b90::t_8a504181c6b112 19,47,55-65,68,70,94,230,258-269,271-277,279-302
   s_d97f14ca566b90::t_221386e8fe2abc 102-110,351-356
   s_d97f14ca566b90::t_39305a43267ec6 303
+  s_d97f14ca566b90::t_c6ff836ecbda5c 141
 agent/Sources/StratoAgentCore/DomainXMLBuilder.swift
   s_d97f14ca566b90::t_ba09c30c160c84 886-887,895
   s_d97f14ca566b90::t_3300486512571f 880-882,896,899-902,907-910,952
@@ -312,6 +319,7 @@ shared/Sources/StratoShared/WireProtocol.swift
   s_d97f14ca566b90::t_819af2f0ccd585 17-20
   s_d97f14ca566b90::t_80c8db5f854b52 14-16,28
   s_d97f14ca566b90::t_c1d080788390f0 21
+  s_d97f14ca566b90::t_17760830d50836 22-27
 agent/Sources/StratoAgentCore/InitialNodeDependencyModules.swift
   s_d97f14ca566b90::t_aaf592e80f5dfb 383-384,388-390,399,405,410,428-437,441
   s_d97f14ca566b90::t_f017cf40484f51 385-387,400,406,411,426-427
@@ -364,6 +372,7 @@ control-plane/web/src/types/openapi.ts
   s_d97f14ca566b90::t_b0548a26fbc9d0 4113,4155,4161,5828-5832,8816,8820,8822-8823,8831,8859,17913-17916,17923
   s_d97f14ca566b90::t_e386366759d6e6 4118,4123,6614,8800-8801,8804,8809-8810,8813,8841,8863-8864
   s_d97f14ca566b90::t_378fea6d3c68f8 17792
+  s_d97f14ca566b90::t_17760830d50836 17927-17935
 shared/Sources/StratoShared/ReconciliationProtocol.swift
   s_d97f14ca566b90::t_e227aa3103b958 370-373,392-396,417,427,432-454
   s_d97f14ca566b90::t_80c8db5f854b52 455,565-578,640-644,670,685
@@ -372,6 +381,7 @@ docs/deployment/agents.md
   s_d97f14ca566b90::t_625a3decdd46b1 40-46
 control-plane/web/src/components/vms/create-vm-dialog.tsx
   s_d97f14ca566b90::t_a7da29a598b2e9 21,51-52,76-89,184-192,298-299,447-489,900-902
+  s_d97f14ca566b90::t_171530f492dbe3 252
 control-plane/Sources/App/Services/DesiredStateAssembler.swift
   s_d97f14ca566b90::t_8e430aba0a54bf 1018-1022
   s_d97f14ca566b90::t_b21fe137f92873 795-799
@@ -380,6 +390,7 @@ control-plane/Sources/App/Services/DesiredStateAssembler.swift
   s_d97f14ca566b90::t_56eaac0f9fdf60 713,716-720,727-731,747-748,808,928,944-947,957-959,978,988-1017,1023-1024,1026
   s_d97f14ca566b90::t_edb3619bcdc58f 948-956,960-977,979-987
   s_d97f14ca566b90::t_5ac2a2eb054398 1027-1028
+  s_d97f14ca566b90::t_9de6f8f414e694 458-467
 agent/Sources/StratoAgent/Agent.swift
   s_d97f14ca566b90::t_4c2b795ce03e5f 4729,4736
   s_d97f14ca566b90::t_1b3cfddbd94945 5270-5271,5285-5286
@@ -405,6 +416,16 @@ agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
   s_d97f14ca566b90::t_a8e45938bef87d 367-371,404-410,504-510,572-576
 control-plane/Sources/App/Controllers/OrganizationController.swift
   s_d97f14ca566b90::t_2bb3a3ba0f6654 270-295,343,375-377
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_d97f14ca566b90::t_5f91a8cdaea0ae 156-161
+control-plane/web/src/types/api-contracts.ts
+  s_d97f14ca566b90::t_842fac0b520315 104-111
+control-plane/Sources/App/Services/WorkloadPlacementService.swift
+  s_d97f14ca566b90::t_24d64b61518062 56-57,63-98,107-111,146-160
+control-plane/web/src/types/api.ts
+  s_d97f14ca566b90::t_842fac0b520315 122-129
+control-plane/Sources/App/Bootstrap/StateStoresBootstrap.swift
+  s_d97f14ca566b90::t_5f91a8cdaea0ae 59,61-63,68
 ---
 {
   "schema_version": "authorship/3.0.0",
