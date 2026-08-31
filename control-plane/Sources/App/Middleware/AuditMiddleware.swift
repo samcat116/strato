@@ -88,12 +88,15 @@ struct AuditMiddleware: AsyncMiddleware {
         }
 
         let guestExecution = isVMGuestExecutionAuditPath(request.url.path)
+        let deferredAttach = isVMGuestExecAttachAuditPath(request.url.path)
         do {
             let response = try await next.respond(to: request)
-            await request.recordAPIRequestAudit(
-                status: response.status,
-                failOpen: guestExecution,
-                redactErrorDetails: guestExecution)
+            if !deferredAttach {
+                await request.recordAPIRequestAudit(
+                    status: response.status,
+                    failOpen: guestExecution,
+                    redactErrorDetails: guestExecution)
+            }
             return response
         } catch {
             let status = (error as? any AbortError)?.status ?? .internalServerError
@@ -122,7 +125,19 @@ func isVMGuestExecutionAuditPath(_ path: String) -> Bool {
     if suffix == ["actions", "run"] || suffix == ["exec"] {
         return true
     }
-    return suffix.count == 3 && suffix[0] == "exec" && suffix[2] == "attach"
+    return isVMGuestExecAttachAuditPath(path)
+}
+
+/// WebSocket upgrade completion precedes the asynchronous attach handler's
+/// authorization and session checks. That handler records the final outcome.
+func isVMGuestExecAttachAuditPath(_ path: String) -> Bool {
+    let components = path.split(separator: "/").map(String.init)
+    guard components.count == 6,
+        components[0] == "api",
+        components[1] == "vms"
+    else { return false }
+
+    return components[3] == "exec" && components[5] == "attach"
 }
 
 struct AuditResourceRef: Equatable {

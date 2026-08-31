@@ -117,7 +117,7 @@ struct GuestExecAttachIntegrationTests {
     func vmAttachSessionRejectionsArePreciselyAudited(
         rejection: VMAttachRejection
     ) async throws {
-        try await withRunningExecApp { app, port in
+        try await withRunningExecApp(includeAuditReads: true) { app, port in
             let builder = TestDataBuilder(db: app.db)
             let organization = try await builder.createOrganization(name: "Attach Status Org")
             let project = try await builder.createProject(
@@ -218,6 +218,7 @@ struct GuestExecAttachIntegrationTests {
                 .filter(\.$eventType == "api.request")
                 .filter(\.$path == path)
                 .all()
+            #expect(facts.count == 1)
             let refusals = facts.filter { $0.status == rejection.status }
             #expect(refusals.count == 1)
             let refusal = try #require(refusals.first)
@@ -415,6 +416,21 @@ struct GuestExecAttachIntegrationTests {
             #expect(start.workingDir == workingDirectorySentinel)
             #expect(start.tty == true)
 
+            if resourceKind == .virtualMachine {
+                await app.audit.flush()
+                let attachSuccesses = try await AuditEvent.query(on: app.db)
+                    .filter(\.$eventType == "api.request")
+                    .filter(\.$path == session.websocketPath)
+                    .filter(\.$status == Int(HTTPResponseStatus.switchingProtocols.code))
+                    .all()
+                #expect(attachSuccesses.count == 1)
+                let attachSuccess = try #require(attachSuccesses.first)
+                #expect(attachSuccess.resourceType == "vms")
+                #expect(attachSuccess.resourceID == resourceId)
+                #expect(attachSuccess.adminBypass == true)
+                #expect(attachSuccess.metadata == nil)
+            }
+
             // Agent reports the spawn; the browser sees the ready frame.
             agent.send(
                 text: try encodeEnvelope(
@@ -559,8 +575,16 @@ enum ExecTestOutputMode: String, CaseIterable, Sendable {
 
 // MARK: - Running-server harness (mirrors AgentWebSocketIntegrationTests)
 
-private func withRunningExecApp(_ test: (Application, Int) async throws -> Void) async throws {
+private func withRunningExecApp(
+    includeAuditReads: Bool = false,
+    _ test: (Application, Int) async throws -> Void
+) async throws {
     try await withApp { app in
+        if includeAuditReads {
+            var config = AuditConfig.fromConfiguration(app.controlPlaneConfiguration)
+            config.includeReads = true
+            app.audit = AuditService(app: app, config: config)
+        }
         try await app.server.start(address: .hostname("127.0.0.1", port: 0))
         do {
             guard let port = app.http.server.shared.localAddress?.port else {

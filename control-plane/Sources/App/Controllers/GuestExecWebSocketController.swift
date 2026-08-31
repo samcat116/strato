@@ -208,6 +208,18 @@ struct GuestExecWebSocketController: RouteCollection {
                 return
             }
 
+            // The HTTP middleware sees only a successful WebSocket upgrade,
+            // before this asynchronous handler validates authorization and
+            // consumes the session. Record the generic success only now that
+            // both checks have completed; rejection paths above record their
+            // final status instead.
+            if case .virtualMachine = resource {
+                await req.recordAPIRequestAudit(
+                    status: .switchingProtocols,
+                    failOpen: true,
+                    redactErrorDetails: true)
+            }
+
             req.logger.info(
                 "\(resource.logName) exec WebSocket connection established",
                 metadata: [
