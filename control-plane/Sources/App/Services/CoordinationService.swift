@@ -1008,7 +1008,8 @@ extension Application {
     /// Generated fresh at every process start — a restarted replica is a new
     /// replica.
     var replicaID: String {
-        lazyService(ReplicaIDKey.self) { UUID().uuidString }
+        get { lazyService(ReplicaIDKey.self) { UUID().uuidString } }
+        set { setStorageValue(ReplicaIDKey.self, to: newValue) }
     }
 
     private struct CoordinationServiceKey: StorageKey, LockKey {

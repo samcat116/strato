@@ -1,44 +1,29 @@
-import Logging
+import Foundation
 import NIOCore
 import NIOPosix
-import OTel
-// Terminal / ConsoleLogger below come from ConsoleKit, which Vapor re-exports;
-// it is not a direct dependency of this target.
 import Vapor
 
 @main
 enum Entrypoint {
     static func main() async throws {
         var env = try Environment.detect()
+        let environmentVariables = ProcessInfo.processInfo.environment
+        let controlPlaneConfiguration = try await ControlPlaneConfiguration.load(
+            environmentVariables: environmentVariables,
+            for: env)
+        let replicaID = UUID().uuidString
+        let observability = try PreparedControlPlaneObservability.prepare(
+            controlPlaneConfiguration: controlPlaneConfiguration,
+            environment: env,
+            replicaID: replicaID)
 
-        // Vapor's own `LoggingSystem.bootstrap(from:)` is this, minus the
-        // metadata provider — it is re-spelled here only to attach one.
-        //
-        // The provider stamps `trace_id` / `span_id` / `trace_flags` onto every
-        // line logged inside a span, which is what makes a log line
-        // addressable from its trace (and vice versa: Grafana's Loki
-        // datasource extracts `trace_id` from the rendered metadata and links
-        // it to Tempo). Without it the two signals can only be correlated by
-        // pod and timestamp.
-        //
-        // Safe to install unconditionally: it reads `ServiceContext.current`
-        // and returns no metadata when there is no active span — which is the
-        // case for all logging before OTel bootstraps in `configure`, and for
-        // every deployment that leaves tracing disabled.
-        let metadataProvider = OTel.makeLoggingMetadataProvider()
-        try LoggingSystem.bootstrap(from: &env) { level in
-            let console = Terminal()
-            return { (label: String) in
-                ConsoleLogger(
-                    label: label,
-                    console: console,
-                    level: level,
-                    metadataProvider: metadataProvider
-                )
-            }
-        }
+        // Application.make constructs the logger retained by Vapor, so the one
+        // process-global logging decision must happen first. It always includes
+        // the console and adds the OTLP handler when configured.
+        try observability.bootstrapLogging(from: &env)
 
         let app = try await Application.make(env)
+        app.replicaID = replicaID
 
         // This attempts to install NIO as the Swift Concurrency global executor.
         // You can enable it if you'd like to reduce the amount of context switching between NIO and Swift Concurrency.
@@ -48,7 +33,10 @@ enum Entrypoint {
         // app.logger.debug("Tried to install SwiftNIO's EventLoopGroup as Swift's global concurrency executor", metadata: ["success": .stringConvertible(executorTakeoverSuccess)])
 
         do {
-            try await configure(app)
+            try await configure(
+                app,
+                resolvedConfiguration: controlPlaneConfiguration,
+                preparedObservability: observability)
         } catch {
             app.logger.report(error: error)
             try? await app.asyncShutdown()
