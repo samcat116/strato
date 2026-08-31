@@ -1231,7 +1231,7 @@ struct VMController: RouteCollection {
             req.logger.warning(
                 "VM create exhausted its retries on a constraint failure",
                 metadata: [
-                    "project_id": .string(projectId.uuidString),
+                    "strato.project.id": .string(projectId.uuidString),
                     "error": .string(String(describing: error)),
                 ])
             throw Abort(
@@ -1258,8 +1258,8 @@ struct VMController: RouteCollection {
         req.logger.info(
             "VM creation accepted",
             metadata: [
-                "vm_id": .string(vmID.uuidString),
-                "mutation_id": .string(accepted.mutationID.uuidString),
+                "strato.vm.id": .string(vmID.uuidString),
+                "strato.operation.id": .string(accepted.mutationID.uuidString),
                 "created_from": .string("image"),
             ])
 
@@ -1879,7 +1879,7 @@ struct VMController: RouteCollection {
                 "VM command delivery outcome is unknown; leaving operation pending",
                 metadata: [
                     "executionId": .string(executionID.uuidString),
-                    "agentKey": .string(agent.identity.key),
+                    "strato.agent.identity": .string(agent.identity.key),
                     "error": .string(error.localizedDescription),
                 ])
         } catch {
@@ -2012,7 +2012,7 @@ struct VMController: RouteCollection {
                 if vm.hypervisorId != nil {
                     app.logger.warning(
                         "Deleting VM record without agent teardown; agent is offline",
-                        metadata: ["vm_id": .string(vmID.uuidString)])
+                        metadata: ["strato.vm.id": .string(vmID.uuidString)])
                 }
                 let outcome: ResourceFinalizerService.ClearOutcome
                 do {
@@ -2031,7 +2031,7 @@ struct VMController: RouteCollection {
                     app.logger.info(
                         "VM delete is waiting on finalizers other than the agent's",
                         metadata: [
-                            "vm_id": .string(vmID.uuidString),
+                            "strato.vm.id": .string(vmID.uuidString),
                             "finalizers": .string(remaining.joined(separator: ",")),
                         ])
                 }

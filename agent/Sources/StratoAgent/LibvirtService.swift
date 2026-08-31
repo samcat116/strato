@@ -285,7 +285,7 @@ actor LibvirtService: HypervisorService {
         } catch let error as StageBudgetError {
             logger.error(
                 "libvirt call exceeded its budget",
-                metadata: ["vmId": .string(vmId), "stage": .string(stage)])
+                metadata: ["strato.vm.id": .string(vmId), "stage": .string(stage)])
             throw HypervisorServiceError.timeout("\(stage) for VM \(vmId): \(error.localizedDescription)")
         } catch {
             if LibvirtFailure.isConnectionLost(error) { invalidate(client) }
@@ -583,7 +583,7 @@ actor LibvirtService: HypervisorService {
         vsockCID: UInt32? = nil
     ) async throws {
         try await perform("create", vmId: vmId) {
-            logger.info("Creating libvirt domain", metadata: ["vmId": .string(vmId)])
+            logger.info("Creating libvirt domain", metadata: ["strato.vm.id": .string(vmId)])
 
             let machine = spec.effectiveMachine
             // The agent never advertises the TPM capability where libvirt
@@ -664,7 +664,7 @@ actor LibvirtService: HypervisorService {
                 logger.warning(
                     "VM has fewer spare PCIe root ports than usual, and a boot cannot win them back",
                     metadata: [
-                        "vmId": .string(vmId),
+                        "strato.vm.id": .string(vmId),
                         "sparePorts": .stringConvertible(spares),
                         "usualSparePorts": .stringConvertible(DomainXMLBuilder.spareHotplugPorts),
                         "detail": .string(
@@ -684,7 +684,7 @@ actor LibvirtService: HypervisorService {
                 try await client.domainDefineXML(xml: xml, deadline: deadline)
             }
 
-            logger.info("libvirt domain defined", metadata: ["vmId": .string(vmId)])
+            logger.info("libvirt domain defined", metadata: ["strato.vm.id": .string(vmId)])
         }
     }
 
@@ -719,14 +719,14 @@ actor LibvirtService: HypervisorService {
             for refusal in widening.refusals {
                 logger.warning(
                     "This VM's definition could not be widened to what its spec asks for",
-                    metadata: ["vmId": .string(vmId), "detail": .string(refusal)])
+                    metadata: ["strato.vm.id": .string(vmId), "detail": .string(refusal)])
             }
             guard let xml = widening.xml else { return }
 
             logger.info(
                 "Widening the domain definition before boot",
                 metadata: [
-                    "vmId": .string(vmId),
+                    "strato.vm.id": .string(vmId),
                     "addedHotplugPorts": .stringConvertible(widening.addedHotplugPorts),
                     "memoryCeilingBytes": widening.memoryCeilingBytes.map {
                         .stringConvertible($0)
@@ -787,7 +787,7 @@ actor LibvirtService: HypervisorService {
             guard let repairedXML else { return }
             logger.info(
                 "Adding the IMDS NoCloud datasource hint before boot",
-                metadata: ["vmId": .string(vmId)])
+                metadata: ["strato.vm.id": .string(vmId)])
             _ = try await call(
                 "libvirt-redefine", vmId: vmId, seconds: StageBudget.hypervisorSpawnSeconds
             ) { client, deadline in
@@ -824,7 +824,7 @@ actor LibvirtService: HypervisorService {
             // enforce one and the boot must not be held behind its removal.
             logger.warning(
                 "Could not remove a stale QEMU memory ceiling on a host without cgroup memory support",
-                metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
+                metadata: ["strato.vm.id": .string(vmId), "error": .string(error.localizedDescription)])
         }
     }
 
@@ -838,7 +838,7 @@ actor LibvirtService: HypervisorService {
             guard !LibvirtDomain.isRunningOrPaused(rawState: try await state(of: dom, vmId: vmId)) else {
                 logger.info(
                     "libvirt domain is already running; treating boot as a no-op",
-                    metadata: ["vmId": .string(vmId)])
+                    metadata: ["strato.vm.id": .string(vmId)])
                 return
             }
 
@@ -848,7 +848,7 @@ actor LibvirtService: HypervisorService {
             // reached with the domain inactive, so no live console is cut.
             clearStaleSockets(vmId: vmId)
 
-            logger.info("Starting libvirt domain", metadata: ["vmId": .string(vmId)])
+            logger.info("Starting libvirt domain", metadata: ["strato.vm.id": .string(vmId)])
             do {
                 _ = try await call("libvirt-create", vmId: vmId, seconds: StageBudget.hypervisorSpawnSeconds) {
                     client, deadline in
@@ -862,7 +862,7 @@ actor LibvirtService: HypervisorService {
                 guard try await satisfied(dom, vmId: vmId, by: LibvirtDomain.isRunningOrPaused(rawState:))
                 else { throw error }
             }
-            logger.info("libvirt domain started", metadata: ["vmId": .string(vmId)])
+            logger.info("libvirt domain started", metadata: ["strato.vm.id": .string(vmId)])
         }
     }
 
@@ -879,11 +879,11 @@ actor LibvirtService: HypervisorService {
             guard LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId)) else {
                 logger.info(
                     "libvirt domain is already inactive; treating shutdown as a no-op",
-                    metadata: ["vmId": .string(vmId)])
+                    metadata: ["strato.vm.id": .string(vmId)])
                 return
             }
 
-            logger.info("Shutting down libvirt domain", metadata: ["vmId": .string(vmId)])
+            logger.info("Shutting down libvirt domain", metadata: ["strato.vm.id": .string(vmId)])
             do {
                 try await call("libvirt-shutdown", vmId: vmId) { client, deadline in
                     // `SHUTDOWN_DEFAULT`, so libvirt tries the guest agent
@@ -903,7 +903,7 @@ actor LibvirtService: HypervisorService {
             logger.warning(
                 "Guest did not power off within its budget; destroying the domain",
                 metadata: [
-                    "vmId": .string(vmId),
+                    "strato.vm.id": .string(vmId),
                     "budgetSeconds": .stringConvertible(Self.gracefulShutdownSeconds),
                 ])
             try await destroy(dom, vmId: vmId)
@@ -923,7 +923,7 @@ actor LibvirtService: HypervisorService {
     func rebootVM(vmId: String) async throws {
         try await perform("reboot", vmId: vmId) {
             let dom = try await domain(vmId)
-            logger.info("Rebooting libvirt domain", metadata: ["vmId": .string(vmId)])
+            logger.info("Rebooting libvirt domain", metadata: ["strato.vm.id": .string(vmId)])
             do {
                 try await call("libvirt-reboot", vmId: vmId) { client, deadline in
                     try await client.domainReboot(dom: dom, flags: 0, deadline: deadline)
@@ -933,7 +933,7 @@ actor LibvirtService: HypervisorService {
                 else { throw error }
                 logger.info(
                     "libvirt domain is already down; the reboot is superseded by the boot that follows",
-                    metadata: ["vmId": .string(vmId)])
+                    metadata: ["strato.vm.id": .string(vmId)])
             }
         }
     }
@@ -941,7 +941,7 @@ actor LibvirtService: HypervisorService {
     func pauseVM(vmId: String) async throws {
         try await perform("pause", vmId: vmId) {
             let dom = try await domain(vmId)
-            logger.info("Pausing libvirt domain", metadata: ["vmId": .string(vmId)])
+            logger.info("Pausing libvirt domain", metadata: ["strato.vm.id": .string(vmId)])
             do {
                 try await call("libvirt-suspend", vmId: vmId) { client, deadline in
                     try await client.domainSuspend(dom: dom, deadline: deadline)
@@ -958,7 +958,7 @@ actor LibvirtService: HypervisorService {
     func resumeVM(vmId: String) async throws {
         try await perform("resume", vmId: vmId) {
             let dom = try await domain(vmId)
-            logger.info("Resuming libvirt domain", metadata: ["vmId": .string(vmId)])
+            logger.info("Resuming libvirt domain", metadata: ["strato.vm.id": .string(vmId)])
             do {
                 try await call("libvirt-resume", vmId: vmId) { client, deadline in
                     try await client.domainResume(dom: dom, deadline: deadline)
@@ -982,7 +982,7 @@ actor LibvirtService: HypervisorService {
     /// presence); here the daemon simply answers the question.
     func deleteVM(vmId: String) async throws {
         try await perform("delete", vmId: vmId) {
-            logger.info("Deleting libvirt domain", metadata: ["vmId": .string(vmId)])
+            logger.info("Deleting libvirt domain", metadata: ["strato.vm.id": .string(vmId)])
             do {
                 let dom = try await domain(vmId)
                 try await destroy(dom, vmId: vmId)
@@ -993,13 +993,13 @@ actor LibvirtService: HypervisorService {
             } catch let error where LibvirtFailure.isDomainMissing(error) {
                 logger.info(
                     "libvirt has no domain for this VM; deleting what it left on this host",
-                    metadata: ["vmId": .string(vmId)])
+                    metadata: ["strato.vm.id": .string(vmId)])
             }
 
             // Safe now: either the domain is gone or the calls above threw, so
             // nothing can still be running from the disk this unlinks.
             await reclaimVMDirectory(vmId: vmId)
-            logger.info("libvirt domain deleted", metadata: ["vmId": .string(vmId)])
+            logger.info("libvirt domain deleted", metadata: ["strato.vm.id": .string(vmId)])
         }
     }
 
@@ -1021,7 +1021,7 @@ actor LibvirtService: HypervisorService {
             guard !LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId)) else {
                 logger.error(
                     "Refusing to reclaim the directory of a VM whose domain is still active",
-                    metadata: ["vmId": .string(vmId)])
+                    metadata: ["strato.vm.id": .string(vmId)])
                 return
             }
         } catch let error where LibvirtFailure.isDomainMissing(error) {
@@ -1029,7 +1029,7 @@ actor LibvirtService: HypervisorService {
         } catch {
             logger.error(
                 "Could not confirm the domain is inactive; leaving its files for manual cleanup",
-                metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
+                metadata: ["strato.vm.id": .string(vmId), "error": .string(error.localizedDescription)])
             return
         }
 
@@ -1049,7 +1049,8 @@ actor LibvirtService: HypervisorService {
             // A budget overrun: the domain is likely fine behind a slow daemon,
             // so report `.unknown` rather than fabricating a power state.
             guard case .timeout = error else { throw error }
-            logger.warning("libvirt status query timed out; reporting unknown", metadata: ["vmId": .string(vmId)])
+            logger.warning(
+                "libvirt status query timed out; reporting unknown", metadata: ["strato.vm.id": .string(vmId)])
             return .unknown
         } catch {
             throw LibvirtFailure.hypervisorError(error, vmId: vmId, operation: "status")
@@ -1077,7 +1078,7 @@ actor LibvirtService: HypervisorService {
             }
             logger.info(
                 "Adopted libvirt domain",
-                metadata: ["vmId": .string(vmId), "status": .string(status.rawValue)])
+                metadata: ["strato.vm.id": .string(vmId), "status": .string(status.rawValue)])
             return status
         } catch let error where LibvirtFailure.isDomainMissing(error) {
             throw HypervisorServiceError.adoptionTargetGone(
@@ -1305,7 +1306,7 @@ actor LibvirtService: HypervisorService {
                 logger.debug(
                     "Guest observation query failed",
                     metadata: [
-                        "vmId": .string(vmId), "stage": .string(stage),
+                        "strato.vm.id": .string(vmId), "stage": .string(stage),
                         "error": .string(error.localizedDescription),
                     ])
             }
@@ -1375,7 +1376,7 @@ actor LibvirtService: HypervisorService {
             guard !present.contains(mac) else {
                 logger.info(
                     "Network interface is already present; treating the attach as a no-op",
-                    metadata: ["vmId": .string(vmId), "mac": .string(mac)])
+                    metadata: ["strato.vm.id": .string(vmId), "mac": .string(mac)])
                 return
             }
             let flags = try await deviceFlags(dom, vmId: vmId)
@@ -1407,7 +1408,7 @@ actor LibvirtService: HypervisorService {
             guard present.contains(mac) else {
                 logger.info(
                     "Network interface is already absent; treating the detach as a no-op",
-                    metadata: ["vmId": .string(vmId), "mac": .string(mac)])
+                    metadata: ["strato.vm.id": .string(vmId), "mac": .string(mac)])
                 return
             }
             let flags = try await deviceFlags(dom, vmId: vmId)
@@ -1443,7 +1444,7 @@ actor LibvirtService: HypervisorService {
                 logger.info(
                     "Volume is already attached to this domain; treating the attach as a no-op",
                     metadata: [
-                        "vmId": .string(vmId), "volumeId": .string(volumeId),
+                        "strato.vm.id": .string(vmId), "volumeId": .string(volumeId),
                         "target": .string(existing.target),
                     ])
                 return
@@ -1457,7 +1458,7 @@ actor LibvirtService: HypervisorService {
             logger.info(
                 "Attaching disk to libvirt domain",
                 metadata: [
-                    "vmId": .string(vmId), "volumeId": .string(volumeId),
+                    "strato.vm.id": .string(vmId), "volumeId": .string(volumeId),
                     "deviceName": .string(deviceName), "target": .string(target),
                     "attachment": .string(String(describing: attachment)),
                     "readonly": .stringConvertible(readonly),
@@ -1486,7 +1487,7 @@ actor LibvirtService: HypervisorService {
             logger.info(
                 "Disk attached",
                 metadata: [
-                    "vmId": .string(vmId), "volumeId": .string(volumeId), "target": .string(target),
+                    "strato.vm.id": .string(vmId), "volumeId": .string(volumeId), "target": .string(target),
                 ])
         }
     }
@@ -1513,7 +1514,7 @@ actor LibvirtService: HypervisorService {
                 if anonymous.isEmpty {
                     logger.info(
                         "No disk on this domain carries the volume; treating the detach as a no-op",
-                        metadata: ["vmId": .string(vmId), "volumeId": .string(volumeId)])
+                        metadata: ["strato.vm.id": .string(vmId), "volumeId": .string(volumeId)])
                 } else {
                     logger.warning(
                         """
@@ -1522,7 +1523,7 @@ actor LibvirtService: HypervisorService {
                         identified; recreate the VM to detach it
                         """,
                         metadata: [
-                            "vmId": .string(vmId), "volumeId": .string(volumeId),
+                            "strato.vm.id": .string(vmId), "volumeId": .string(volumeId),
                             "unidentifiedTargets": .string(anonymous.joined(separator: ",")),
                         ])
                 }
@@ -1533,7 +1534,7 @@ actor LibvirtService: HypervisorService {
             logger.info(
                 "Detaching disk from libvirt domain",
                 metadata: [
-                    "vmId": .string(vmId), "volumeId": .string(volumeId),
+                    "strato.vm.id": .string(vmId), "volumeId": .string(volumeId),
                     "deviceName": .string(deviceName), "target": .string(disk.target),
                 ])
             try await call("libvirt-detach-disk", vmId: vmId) { client, deadline in
@@ -1543,7 +1544,7 @@ actor LibvirtService: HypervisorService {
             logger.info(
                 "Disk detached",
                 metadata: [
-                    "vmId": .string(vmId), "volumeId": .string(volumeId),
+                    "strato.vm.id": .string(vmId), "volumeId": .string(volumeId),
                     "target": .string(disk.target),
                 ])
         }
@@ -1651,7 +1652,7 @@ actor LibvirtService: HypervisorService {
                 ? "Hot-added vCPUs"
                 : "vCPU \(growing ? "grow" : "shrink") written to the stopped domain definition",
             metadata: [
-                "vmId": .string(vmId), "from": .stringConvertible(currentCPUs),
+                "strato.vm.id": .string(vmId), "from": .stringConvertible(currentCPUs),
                 "to": .stringConvertible(spec.cpus),
             ])
     }
@@ -1717,7 +1718,7 @@ actor LibvirtService: HypervisorService {
         logger.info(
             "Requested virtio-mem resize",
             metadata: [
-                "vmId": .string(vmId), "targetBytes": .stringConvertible(spec.memoryBytes),
+                "strato.vm.id": .string(vmId), "targetBytes": .stringConvertible(spec.memoryBytes),
                 "requestedSize": .stringConvertible(requested),
             ])
     }
@@ -1766,7 +1767,7 @@ actor LibvirtService: HypervisorService {
         logger.info(
             "Memory resize written to the domain definition; it lands at the next boot",
             metadata: [
-                "vmId": .string(vmId), "fromBytes": .stringConvertible(layout.bootBytes),
+                "strato.vm.id": .string(vmId), "fromBytes": .stringConvertible(layout.bootBytes),
                 "toBytes": .stringConvertible(bytes),
             ])
     }
@@ -1803,12 +1804,12 @@ actor LibvirtService: HypervisorService {
             }
             logger.info(
                 "Requested balloon target",
-                metadata: ["vmId": .string(vmId), "targetBytes": .stringConvertible(target)])
+                metadata: ["strato.vm.id": .string(vmId), "targetBytes": .stringConvertible(target)])
         } catch {
             logger.warning(
                 "Balloon target could not be applied",
                 metadata: [
-                    "vmId": .string(vmId), "targetBytes": .stringConvertible(target),
+                    "strato.vm.id": .string(vmId), "targetBytes": .stringConvertible(target),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -1835,7 +1836,7 @@ actor LibvirtService: HypervisorService {
             logger.info(
                 "Checkpointing libvirt domain",
                 metadata: [
-                    "vmId": .string(vmId), "snapshotId": .string(snapshotId), "name": .string(name),
+                    "strato.vm.id": .string(vmId), "snapshotId": .string(snapshotId), "name": .string(name),
                     "includesMemory": .stringConvertible(running),
                 ])
 
@@ -1863,7 +1864,7 @@ actor LibvirtService: HypervisorService {
                 logger.warning(
                     "Checkpoint create failed but the checkpoint is present; treating it as captured",
                     metadata: [
-                        "vmId": .string(vmId), "snapshotId": .string(snapshotId),
+                        "strato.vm.id": .string(vmId), "snapshotId": .string(snapshotId),
                         "error": .string(error.localizedDescription),
                     ])
             }
@@ -1872,7 +1873,7 @@ actor LibvirtService: HypervisorService {
             logger.info(
                 "libvirt domain checkpoint captured",
                 metadata: [
-                    "vmId": .string(vmId), "snapshotId": .string(snapshotId),
+                    "strato.vm.id": .string(vmId), "snapshotId": .string(snapshotId),
                     "vmStateSizeBytes": .string(report.vmStateSizeBytes.map(String.init) ?? "unknown"),
                 ])
             return report
@@ -1891,7 +1892,7 @@ actor LibvirtService: HypervisorService {
             let name = VMSnapshotTag.tag(for: snapshotId)
             logger.info(
                 "Restoring libvirt domain from checkpoint",
-                metadata: ["vmId": .string(vmId), "snapshotId": .string(snapshotId)])
+                metadata: ["strato.vm.id": .string(vmId), "snapshotId": .string(snapshotId)])
 
             let snapshot: DomainSnapshot
             do {
@@ -1908,7 +1909,7 @@ actor LibvirtService: HypervisorService {
             }
             logger.info(
                 "libvirt domain restored from checkpoint",
-                metadata: ["vmId": .string(vmId), "snapshotId": .string(snapshotId)])
+                metadata: ["strato.vm.id": .string(vmId), "snapshotId": .string(snapshotId)])
         }
     }
 
@@ -1935,12 +1936,12 @@ actor LibvirtService: HypervisorService {
                 // inside the VM's own disks, so either way it is gone.
                 logger.info(
                     "Checkpoint is already absent; delete is a no-op",
-                    metadata: ["vmId": .string(vmId), "snapshotId": .string(snapshotId)])
+                    metadata: ["strato.vm.id": .string(vmId), "snapshotId": .string(snapshotId)])
                 return
             }
             logger.info(
                 "libvirt domain checkpoint deleted",
-                metadata: ["vmId": .string(vmId), "snapshotId": .string(snapshotId)])
+                metadata: ["strato.vm.id": .string(vmId), "snapshotId": .string(snapshotId)])
         }
     }
 

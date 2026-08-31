@@ -66,7 +66,7 @@ actor MockHypervisorService: HypervisorService {
         vmId: String, spec: VMSpec, imageInfo: ImageInfo?, networkAttachments: [ResolvedNetworkAttachment],
         metadata: InstanceMetadata?, vsockCID: UInt32?
     ) async throws {
-        logger.info("Creating mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
+        logger.info("Creating mock VM (mock mode)", metadata: ["strato.vm.id": .string(vmId)])
         vms[vmId] = MockVM(
             spec: spec,
             status: .created,
@@ -74,35 +74,35 @@ actor MockHypervisorService: HypervisorService {
     }
 
     func bootVM(vmId: String) async throws {
-        logger.info("Booting mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
+        logger.info("Booting mock VM (mock mode)", metadata: ["strato.vm.id": .string(vmId)])
         try await Task.sleep(for: bootDelay)  // Simulate boot delay
         vms[vmId]?.status = .running
     }
 
     func shutdownVM(vmId: String) async throws {
-        logger.info("Shutting down mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
+        logger.info("Shutting down mock VM (mock mode)", metadata: ["strato.vm.id": .string(vmId)])
         try await Task.sleep(for: shutdownDelay)  // Simulate shutdown delay
         vms[vmId]?.status = .shutdown
     }
 
     func rebootVM(vmId: String) async throws {
-        logger.info("Rebooting mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
+        logger.info("Rebooting mock VM (mock mode)", metadata: ["strato.vm.id": .string(vmId)])
         try await Task.sleep(for: bootDelay)  // Simulate reboot delay
         vms[vmId]?.status = .running
     }
 
     func pauseVM(vmId: String) async throws {
-        logger.info("Pausing mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
+        logger.info("Pausing mock VM (mock mode)", metadata: ["strato.vm.id": .string(vmId)])
         vms[vmId]?.status = .paused
     }
 
     func resumeVM(vmId: String) async throws {
-        logger.info("Resuming mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
+        logger.info("Resuming mock VM (mock mode)", metadata: ["strato.vm.id": .string(vmId)])
         vms[vmId]?.status = .running
     }
 
     func deleteVM(vmId: String) async throws {
-        logger.info("Deleting mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
+        logger.info("Deleting mock VM (mock mode)", metadata: ["strato.vm.id": .string(vmId)])
         vms.removeValue(forKey: vmId)
     }
 
@@ -144,7 +144,7 @@ actor MockHypervisorService: HypervisorService {
         logger.info(
             "Mock: attaching disk to VM (mock mode)",
             metadata: [
-                "vmId": .string(vmId),
+                "strato.vm.id": .string(vmId),
                 "volumeId": .string(volumeId),
                 "attachment": .string(String(describing: attachment)),
                 "deviceName": .string(deviceName),
@@ -155,7 +155,7 @@ actor MockHypervisorService: HypervisorService {
         logger.info(
             "Mock: detaching disk from VM (mock mode)",
             metadata: [
-                "vmId": .string(vmId),
+                "strato.vm.id": .string(vmId),
                 "volumeId": .string(volumeId),
                 "deviceName": .string(deviceName),
             ])
@@ -179,7 +179,7 @@ actor MockHypervisorService: HypervisorService {
         logger.info(
             "Mock: resized VM (mock mode)",
             metadata: [
-                "vmId": .string(vmId),
+                "strato.vm.id": .string(vmId),
                 "cpus": .stringConvertible(spec.cpus),
                 "memoryBytes": .stringConvertible(spec.memoryBytes),
             ])
@@ -190,7 +190,7 @@ actor MockHypervisorService: HypervisorService {
     /// re-adopted VM keeps reserving capacity and reports as running. This lets
     /// a simulated agent restart converge exactly like a real one.
     func adoptVM(vmId: String, spec: VMSpec) async throws -> VMStatus {
-        logger.info("Re-adopting mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
+        logger.info("Re-adopting mock VM (mock mode)", metadata: ["strato.vm.id": .string(vmId)])
         vms[vmId] = MockVM(
             spec: spec,
             status: .running,

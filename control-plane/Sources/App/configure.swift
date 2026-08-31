@@ -1,6 +1,7 @@
 import Fluent
 import FluentPostgresDriver
 import NIOSSL
+import StratoShared
 import Vapor
 import Valkey
 
@@ -19,15 +20,16 @@ public func configure(
     // and the /health endpoints can report exactly who is answering. Two control
     // planes on the same port will report different instanceIds — the tell we
     // lacked when a stale duplicate silently intercepted port 8080.
-    let identity = InstanceIdentity(environment: app.environment.name)
+    let identity = InstanceIdentity(
+        instanceId: UUID(uuidString: app.replicaID)!,
+        environment: app.environment.name)
     app.instanceIdentity = identity
+    app.logger[metadataKey: LogMetadata.Key.serviceInstanceID] =
+        .string(identity.instanceId.uuidString)
     app.logger.info(
         "Control plane booting",
         metadata: [
-            "instanceId": .string(identity.instanceId.uuidString),
-            "version": .string(BuildInfo.version(configuration: app.controlPlaneConfiguration)),
-            "gitSHA": .string(BuildInfo.gitSHA(configuration: app.controlPlaneConfiguration)),
-            "environment": .string(identity.environment),
+            "vcs.revision": .string(BuildInfo.gitSHA(configuration: app.controlPlaneConfiguration))
         ])
 
     try app.bootstrapObservability()
@@ -79,6 +81,11 @@ public func configure(
     // with `body: .stream` and are unaffected: a streaming route never
     // collects, and each already enforces its own byte ceiling.
     app.routes.defaultMaxBodySize = "1mb"
+
+    // Vapor supplies `request-id` on every request logger. Mirror it into the
+    // canonical taxonomy before any request-aware middleware or controller
+    // logs, retaining Vapor's legacy key only for the bounded transition.
+    app.middleware.use(RequestLogMetadataMiddleware())
 
     // Request logging: one structured line per HTTP request (method/path/status/
     // duration). Registered first so it's the outermost middleware and times the

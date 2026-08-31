@@ -124,7 +124,7 @@ public actor FileSPIFFEClient: SPIFFEClientProtocol {
         logger.info(
             "Loaded X.509 SVID",
             metadata: [
-                "spiffeID": .string(svid.spiffeID.uri),
+                "strato.agent.identity": .string(svid.spiffeID.uri),
                 "expiresAt": .string(svid.expiresAt.description),
             ])
 
@@ -232,7 +232,7 @@ public actor FileSPIFFEClient: SPIFFEClientProtocol {
                             logger.info(
                                 "SVID rotated, notified watchers",
                                 metadata: [
-                                    "spiffeID": .string(svid.spiffeID.uri)
+                                    "strato.agent.identity": .string(svid.spiffeID.uri)
                                 ])
                         }
                     }

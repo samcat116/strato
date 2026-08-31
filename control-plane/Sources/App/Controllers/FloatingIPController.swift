@@ -559,7 +559,7 @@ struct FloatingIPController: RouteCollection {
             metadata: [
                 "floatingIpId": .string(floatingIP.id!.uuidString),
                 "address": .string(floatingIP.address),
-                "vmId": .string(vmID.uuidString),
+                "strato.vm.id": .string(vmID.uuidString),
                 "interfaceId": .string(interfaceId.uuidString),
             ])
         return try FloatingIPResponse(from: floatingIP, interface: interface)

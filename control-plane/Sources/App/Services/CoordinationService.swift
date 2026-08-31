@@ -602,7 +602,7 @@ actor CoordinationService {
         } catch {
             logger.warning(
                 "Failed to record agent socket route",
-                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
+                metadata: ["strato.agent.identity": .string(agentKey), "error": .string("\(error)")])
             return false
         }
     }
@@ -615,7 +615,7 @@ actor CoordinationService {
         } catch {
             logger.warning(
                 "Failed to read agent socket route",
-                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
+                metadata: ["strato.agent.identity": .string(agentKey), "error": .string("\(error)")])
             return nil
         }
     }
@@ -629,7 +629,7 @@ actor CoordinationService {
         } catch {
             logger.warning(
                 "Failed to clear agent socket route; TTL will reclaim it",
-                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
+                metadata: ["strato.agent.identity": .string(agentKey), "error": .string("\(error)")])
         }
     }
 
@@ -655,7 +655,7 @@ actor CoordinationService {
         } catch {
             logger.warning(
                 "Failed to record agent presence in coordination store",
-                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
+                metadata: ["strato.agent.identity": .string(agentKey), "error": .string("\(error)")])
             return false
         }
     }
@@ -673,7 +673,7 @@ actor CoordinationService {
         } catch {
             logger.warning(
                 "Failed to clear agent presence in coordination store; TTL will reclaim it",
-                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
+                metadata: ["strato.agent.identity": .string(agentKey), "error": .string("\(error)")])
         }
     }
 
@@ -688,7 +688,7 @@ actor CoordinationService {
         } catch {
             logger.warning(
                 "Failed to read agent presence from coordination store",
-                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
+                metadata: ["strato.agent.identity": .string(agentKey), "error": .string("\(error)")])
             return nil
         }
     }
@@ -763,7 +763,7 @@ actor CoordinationService {
             logger.warning(
                 "Failed to record image download grant in coordination store",
                 metadata: [
-                    "agentId": .string(agentId),
+                    "strato.agent.id": .string(agentId),
                     "imageId": .string(imageId.uuidString),
                     "error": .string("\(error)"),
                 ])
@@ -782,7 +782,7 @@ actor CoordinationService {
             logger.warning(
                 "Failed to read image download grant from coordination store",
                 metadata: [
-                    "agentId": .string(agentId),
+                    "strato.agent.id": .string(agentId),
                     "imageId": .string(imageId.uuidString),
                     "error": .string("\(error)"),
                 ])
@@ -846,8 +846,8 @@ actor CoordinationService {
             logger.warning(
                 "Failed to write placement reservation; placing without one",
                 metadata: [
-                    "agentId": .string(agentId),
-                    "vmId": .string(vmId),
+                    "strato.agent.id": .string(agentId),
+                    "strato.vm.id": .string(vmId),
                     "error": .string("\(error)"),
                 ])
             return true
@@ -866,8 +866,8 @@ actor CoordinationService {
             logger.warning(
                 "Failed to release placement reservation; TTL will reclaim it",
                 metadata: [
-                    "agentId": .string(agentId),
-                    "vmId": .string(vmId),
+                    "strato.agent.id": .string(agentId),
+                    "strato.vm.id": .string(vmId),
                     "error": .string("\(error)"),
                 ])
         }
@@ -894,7 +894,7 @@ actor CoordinationService {
         } catch {
             logger.warning(
                 "Failed to release reported VMs' reservations; TTL will reclaim them",
-                metadata: ["agentId": .string(agentId), "error": .string("\(error)")])
+                metadata: ["strato.agent.id": .string(agentId), "error": .string("\(error)")])
         }
     }
 
@@ -953,8 +953,7 @@ actor CoordinationService {
             logger.warning(
                 "Failed to publish desired-state doorbell; the agent's own re-fetch will converge it",
                 metadata: [
-                    "agentKey": .string(agentKey),
-                    "replicaId": .string(replicaId),
+                    "strato.agent.identity": .string(agentKey),
                     "error": .string("\(error)"),
                 ])
         }

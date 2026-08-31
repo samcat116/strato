@@ -335,7 +335,7 @@ actor WebSocketClient {
             "Sending WebSocket message",
             metadata: [
                 "type": .string(message.type.rawValue),
-                "requestId": .string(message.requestId),
+                "strato.request.id": .string(message.requestId),
             ])
 
         // Encode message to JSON

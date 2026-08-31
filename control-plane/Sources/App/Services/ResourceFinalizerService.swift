@@ -274,7 +274,7 @@ extension VM: FinalizableResource {
                 app.logger.info(
                     "Released volumes from deleted VM",
                     metadata: [
-                        "vm_id": .string(vmID.uuidString),
+                        "strato.vm.id": .string(vmID.uuidString),
                         "volume_ids": .array(released.map { .string($0.uuidString) }),
                     ])
             }

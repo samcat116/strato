@@ -81,8 +81,8 @@ struct InstanceIdentity: Sendable {
     /// Vapor environment name (development, production, testing, …).
     let environment: String
 
-    init(environment: String) {
-        self.instanceId = UUID()
+    init(instanceId: UUID = UUID(), environment: String) {
+        self.instanceId = instanceId
         self.startedAt = Date()
         self.environment = environment
     }

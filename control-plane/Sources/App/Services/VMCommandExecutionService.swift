@@ -102,7 +102,7 @@ actor VMCommandExecutionService {
                 "Could not classify started VM command; retrying",
                 metadata: [
                     "executionId": .string(id.uuidString),
-                    "agentKey": .string(agentKey),
+                    "strato.agent.identity": .string(agentKey),
                     "error": .string(error.localizedDescription),
                 ])
             Task { [weak self] in
@@ -272,7 +272,7 @@ actor VMCommandExecutionService {
                 "Could not deliver VM command stdin EOF; awaiting command stream",
                 metadata: [
                     "executionId": .string(id.uuidString),
-                    "agentKey": .string(agentKey),
+                    "strato.agent.identity": .string(agentKey),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -302,7 +302,7 @@ actor VMCommandExecutionService {
                     "Could not classify started VM command; retrying",
                     metadata: [
                         "executionId": .string(id.uuidString),
-                        "agentKey": .string(agentKey),
+                        "strato.agent.identity": .string(agentKey),
                         "error": .string(error.localizedDescription),
                     ])
                 nextDelay = min(nextDelay + nextDelay, .seconds(30))

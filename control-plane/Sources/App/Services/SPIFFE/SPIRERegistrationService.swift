@@ -131,7 +131,7 @@ public struct SPIRERegistrationService: Sendable {
             logger.error(
                 "SPIRE workload entry creation failed after join token was minted",
                 metadata: [
-                    "agentName": .string(agentName),
+                    "strato.agent.name": .string(agentName),
                     "error": .string("\(error)"),
                 ])
             throw error
@@ -158,7 +158,7 @@ public struct SPIRERegistrationService: Sendable {
                 logger.error(
                     "Failed to reconcile federation on a reused SPIRE entry",
                     metadata: [
-                        "agentName": .string(agentName),
+                        "strato.agent.name": .string(agentName),
                         "entryID": .string(entryResult.entryID),
                         "federatesWith": .string(federatesWith.joined(separator: ",")),
                         "error": .string("\(error)"),
@@ -170,8 +170,8 @@ public struct SPIRERegistrationService: Sendable {
         logger.info(
             "Provisioned agent in SPIRE",
             metadata: [
-                "agentName": .string(agentName),
-                "spiffeID": .string(spiffeID),
+                "strato.agent.name": .string(agentName),
+                "strato.agent.identity": .string(spiffeID),
                 "entryID": .string(entryResult.entryID),
                 "entryReused": .string(entryReused ? "yes" : "no"),
                 // The set now in effect on the entry, not merely the one asked
@@ -202,7 +202,7 @@ public struct SPIRERegistrationService: Sendable {
             logger.warning(
                 "Failed to roll back SPIRE provisioning; the entry will be reused on retry",
                 metadata: [
-                    "agentName": .string(agentName),
+                    "strato.agent.name": .string(agentName),
                     "error": .string("\(error)"),
                 ])
         }
@@ -237,8 +237,8 @@ public struct SPIRERegistrationService: Sendable {
         logger.info(
             "Deprovisioned agent in SPIRE",
             metadata: [
-                "agentName": .string(agentName),
-                "spiffeID": .string(spiffeID),
+                "strato.agent.name": .string(agentName),
+                "strato.agent.identity": .string(spiffeID),
                 "workloadEntriesDeleted": .string("\(workloadDeleted)"),
                 "nodeAliasesDeleted": .string("\(aliasesDeleted)"),
                 "attestedAgentEvicted": .string(evicted ? "yes" : "no"),

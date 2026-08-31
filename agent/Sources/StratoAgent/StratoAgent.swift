@@ -7,6 +7,7 @@ import ArgumentParser
 import Foundation
 import Logging
 import StratoAgentCore
+import StratoShared
 
 @main
 struct StratoAgent: AsyncParsableCommand {
@@ -58,6 +59,17 @@ struct AgentOptions: ParsableArguments {
     var debug: Bool = false
 }
 
+enum AgentLoggingMetadata {
+    static func base(instanceID: UUID = UUID()) -> Logger.Metadata {
+        [
+            LogMetadata.Key.serviceName: .string("strato-agent"),
+            LogMetadata.Key.serviceInstanceID: .string(instanceID.uuidString),
+            LogMetadata.Key.serviceVersion: .string(BuildInfo.version),
+            "vcs.revision": .string(BuildInfo.gitSHA),
+        ]
+    }
+}
+
 extension StratoAgent {
     struct Run: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
@@ -75,13 +87,18 @@ extension StratoAgent {
 
 /// Launch path for `run`.
 private func launchAgent(options: AgentOptions) async throws {
-    // Set up custom logging with clean timestamps (no timezone suffix)
     let debug = options.debug
-    LoggingSystem.bootstrap { label in
-        var handler = CustomLogHandler(label: label)
-        handler.logLevel = debug ? .debug : .info
-        return handler
-    }
+    let baseLoggingMetadata = AgentLoggingMetadata.base()
+    let baseMetadataProvider = Logger.MetadataProvider { baseLoggingMetadata }
+    LoggingSystem.bootstrap(
+        { label, metadataProvider in
+            var handler = CustomLogHandler(
+                label: label,
+                metadataProvider: metadataProvider)
+            handler.logLevel = debug ? .debug : .info
+            return handler
+        },
+        metadataProvider: baseMetadataProvider)
 
     var logger = Logger(label: "strato-agent")
     logger.logLevel = debug ? .debug : .info
@@ -188,11 +205,11 @@ private func launchAgent(options: AgentOptions) async throws {
 
     // Update log level based on final configuration
     logger.logLevel = debug ? .debug : Logger.Level(rawValue: finalLogLevel) ?? .info
+    logger[metadataKey: LogMetadata.Key.agentName] = .string(finalAgentID)
 
     logger.info(
         "Starting Strato Agent",
         metadata: [
-            "agentID": .string(finalAgentID),
             "webSocketURL": .string(finalWebSocketURL),
             "vmStoragePath": .string(finalVMStoragePath),
             "volumeStoragePath": .string(finalVolumeStoragePath),

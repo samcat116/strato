@@ -140,7 +140,7 @@ struct SecurityGroupController: RouteCollection {
             metadata: [
                 "securityGroupId": .string(group.id!.uuidString),
                 "name": .string(name),
-                "projectId": .string(projectId.uuidString),
+                "strato.project.id": .string(projectId.uuidString),
             ])
         // A fresh group has no rules and no attachments.
         return try SecurityGroupResponse(from: loadedEmpty(group), attachmentCount: 0)

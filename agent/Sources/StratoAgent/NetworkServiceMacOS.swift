@@ -44,7 +44,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
     ) async throws -> VMNetworkInfo {
         logger.info(
             "Creating VM network with user-mode networking",
-            metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
+            metadata: ["strato.vm.id": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
 
         let macAddress = config.macAddress ?? generateMACAddress()
 
@@ -64,7 +64,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
         logger.info(
             "VM network created with user-mode networking",
             metadata: [
-                "vmId": .string(vmId),
+                "strato.vm.id": .string(vmId),
                 "macAddress": .string(macAddress),
             ])
 
@@ -74,7 +74,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
     func detachVMFromNetwork(vmId: String, nicIndex: Int, placement: NICPlacement) async throws {
         logger.info(
             "Detaching VM from user-mode network",
-            metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
+            metadata: ["strato.vm.id": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
     }
 
     func reconcileNetworks(

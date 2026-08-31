@@ -1,3 +1,4 @@
+import Foundation
 import Logging
 import NIOCore
 import NIOPosix
@@ -23,7 +24,13 @@ enum Entrypoint {
         // and returns no metadata when there is no active span — which is the
         // case for all logging before OTel bootstraps in `configure`, and for
         // every deployment that leaves tracing disabled.
-        let metadataProvider = OTel.makeLoggingMetadataProvider()
+        let baseMetadataProvider = ControlPlaneLoggingMetadata.provider(
+            environmentName: env.name,
+            environmentVariables: ProcessInfo.processInfo.environment)
+        let metadataProvider = Logger.MetadataProvider.multiplex([
+            baseMetadataProvider,
+            OTel.makeLoggingMetadataProvider(),
+        ])
         try LoggingSystem.bootstrap(from: &env) { level in
             let console = Terminal()
             return { (label: String) in

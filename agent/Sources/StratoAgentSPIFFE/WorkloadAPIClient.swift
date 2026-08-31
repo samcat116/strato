@@ -93,7 +93,7 @@ public actor WorkloadAPISPIFFEClient: SPIFFEClientProtocol {
         logger.info(
             "Fetched X.509 SVID from Workload API",
             metadata: [
-                "spiffeID": .string(svid.spiffeID.uri),
+                "strato.agent.identity": .string(svid.spiffeID.uri),
                 "expiresAt": .string(svid.expiresAt.description),
             ])
 
@@ -151,7 +151,7 @@ public actor WorkloadAPISPIFFEClient: SPIFFEClientProtocol {
         logger.info(
             "Fetched JWT-SVID from Workload API",
             metadata: [
-                "spiffeID": .string(svid.spiffeID.uri),
+                "strato.agent.identity": .string(svid.spiffeID.uri),
                 "audience": .string(svid.audience.joined(separator: ",")),
                 "expiresAt": .string(svid.expiresAt.description),
             ])
@@ -247,7 +247,7 @@ public actor WorkloadAPISPIFFEClient: SPIFFEClientProtocol {
                             self.logger.info(
                                 "Received SVID update from Workload API",
                                 metadata: [
-                                    "spiffeID": .string(svid.spiffeID.uri),
+                                    "strato.agent.identity": .string(svid.spiffeID.uri),
                                     "expiresAt": .string(svid.expiresAt.description),
                                 ])
                             continuation.yield(svid)

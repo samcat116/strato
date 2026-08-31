@@ -22,9 +22,8 @@ extension Application {
     /// HTTP spans never reached the backend even though both libraries ship
     /// instrumentation. See `docs/deployment/observability.md`.
     ///
-    /// Resource attributes read `replicaID` (lazily generated on first access)
-    /// and `environment` (fixed at `Application.make`), so nothing in `configure`
-    /// needs to precede this call.
+    /// Resource attributes read the process identity captured at the start of
+    /// `configure` and `environment` (fixed at `Application.make`).
     func bootstrapObservability() throws {
         // Tests never export telemetry: the facades stay on their no-op
         // backends, and `LoggingSystem` keeps the handler the test harness set.
@@ -57,12 +56,11 @@ extension Application {
         // Resource attributes stamped on every metric/log/trace so signals
         // are queryable per build, per deployment, and per replica. Combined
         // with anything supplied via OTEL_RESOURCE_ATTRIBUTES.
-        // `service.instance.id` uses the coordination replica ID so a metric
-        // series or a trace can be tied back to the exact process that emitted
-        // it in a multi-replica deployment.
+        // `service.instance.id` is shared by logs, telemetry, and the health
+        // response so every signal identifies the same process boot.
         otelConfig.resourceAttributes["service.version"] = BuildInfo.version(
             configuration: controlPlaneConfiguration)
-        otelConfig.resourceAttributes["service.instance.id"] = replicaID
+        otelConfig.resourceAttributes["service.instance.id"] = instanceIdentity.instanceId.uuidString
         otelConfig.resourceAttributes["deployment.environment.name"] = environment.name
         let gitSHA = BuildInfo.gitSHA(configuration: controlPlaneConfiguration)
         if gitSHA != "unknown" {
@@ -91,7 +89,7 @@ extension Application {
         logger.info(
             "Bootstrapping OpenTelemetry",
             metadata: [
-                "service": .string(otelConfig.serviceName),
+                "service.name": .string(otelConfig.serviceName),
                 "metrics": .stringConvertible(otelConfig.metrics.enabled),
                 "logs": .stringConvertible(otelConfig.logs.enabled),
                 "traces": .stringConvertible(otelConfig.traces.enabled),

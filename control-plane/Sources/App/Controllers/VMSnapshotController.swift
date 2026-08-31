@@ -131,7 +131,7 @@ extension VMController {
         req.logger.info(
             "VM checkpoint accepted",
             metadata: [
-                "vm_id": .string(vmID.uuidString),
+                "strato.vm.id": .string(vmID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
             ])
         return try AcceptedMutation(VMSnapshotResponse(from: snapshot), accepted).acceptedResponse()
@@ -251,7 +251,7 @@ extension VMController {
         req.logger.info(
             "VM restore accepted",
             metadata: [
-                "vm_id": .string(vmID.uuidString),
+                "strato.vm.id": .string(vmID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
             ])
         return try await Self.acceptedResponse(for: vm, accepted, on: req)
