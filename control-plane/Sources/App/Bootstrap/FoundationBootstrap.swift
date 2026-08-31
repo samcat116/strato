@@ -8,9 +8,21 @@ extension Application {
         // Resolve every operator setting before constructing any service. A value
         // that is present but malformed must stop startup rather than being treated
         // as absent and replaced by a default at its eventual call site.
-        controlPlaneConfiguration = try await .load(
+        let configuration = try await ControlPlaneConfiguration.load(
             environmentVariables: environmentVariables,
             for: environment)
+        try bootstrapFoundation(
+            resolvedConfiguration: configuration,
+            preparedObservability: nil)
+    }
+
+    /// Installs foundation facilities from the configuration and logging
+    /// backend prepared before `Application.make` by the executable entrypoint.
+    func bootstrapFoundation(
+        resolvedConfiguration: ControlPlaneConfiguration,
+        preparedObservability: PreparedControlPlaneObservability?
+    ) throws {
+        controlPlaneConfiguration = resolvedConfiguration
 
         // Capture this process's identity once, before anything else, so the boot log
         // and the /health endpoints can report exactly who is answering. Two control
@@ -27,7 +39,7 @@ extension Application {
                 "environment": .string(identity.environment),
             ])
 
-        try bootstrapObservability()
+        try bootstrapObservability(preparedObservability)
 
         // Track fire-and-forget background work (async VM operations) so shutdown
         // can drain it before Fluent closes its connection pools. Registered

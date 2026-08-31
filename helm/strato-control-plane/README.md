@@ -165,6 +165,10 @@ startup rather than run with an unbounded query.
 | `gateway.tls.certManager.enabled` | bool | `false` | Add the cert-manager Gateway-shim annotation to the rendered Gateway (DNS-01 issuer required for the multi-host SAN) |
 | `networkPolicy.enabled` | bool | `false` | Enable network policies |
 | `podDisruptionBudget.enabled` | bool | `false` | Enable pod disruption budget |
+| `opentelemetry.enabled` | bool | `true` | Configure control-plane OTLP export and the chart's observability components |
+| `opentelemetry.metrics.enabled` | bool | `true` | Export control-plane metrics over OTLP |
+| `opentelemetry.logs.enabled` | bool | `true` | Add OTLP as a control-plane log sink; console/stdout logging remains enabled |
+| `opentelemetry.traces.enabled` | bool | `true` | Export control-plane traces over OTLP |
 | `opentelemetry.prometheusExport.enabled` | bool | `true` | Expose Prometheus-format scrape endpoints (collector `prometheus` exporter, SPIRE telemetry), independent of the bundled Prometheus |
 | `opentelemetry.prometheusExport.serviceMonitor.enabled` | bool | `false` | Render ServiceMonitors for a Prometheus Operator install (requires the CRDs) |
 | `opentelemetry.prometheusExport.serviceMonitor.labels` | object | `{}` | Extra ServiceMonitor labels — usually what the operator's `serviceMonitorSelector` matches |
