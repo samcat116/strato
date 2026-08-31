@@ -9,7 +9,7 @@ import type {
   UpdateSecurityGroupRequest,
   CreateSecurityGroupRuleRequest,
   AttachSecurityGroupRequest,
-} from "@/types/api";
+} from "@/types/api-contracts";
 
 export const securityGroupsApi = {
   list(projectId?: string, signal?: AbortSignal): Promise<SecurityGroup[]> {

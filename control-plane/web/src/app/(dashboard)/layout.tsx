@@ -6,6 +6,7 @@ import { Header, Sidebar } from "@/components/layout";
 import { Button } from "@/components/ui/button";
 import { MutationWatcher } from "@/components/vms";
 import { useAuth, useOrganization } from "@/providers";
+import { loginHrefFor } from "@/lib/post-login-route";
 
 export default function DashboardLayout({
   children,
@@ -18,7 +19,8 @@ export default function DashboardLayout({
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated && !sessionError) {
-      router.replace("/login");
+      const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      router.replace(loginHrefFor(currentPath));
     }
   }, [isAuthenticated, isLoading, router, sessionError]);
 

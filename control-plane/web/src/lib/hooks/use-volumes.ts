@@ -5,9 +5,9 @@ import { makeResourceQueryHooks } from "./use-resource-queries";
 const hooks = makeResourceQueryHooks({
   queryKey: "volumes",
   scopeKey: "projectId",
-  list: (projectId) => volumesApi.list(projectId),
-  get: (id) => volumesApi.get(id),
-  listSnapshots: (id) => volumesApi.listSnapshots(id),
+  list: (projectId, signal) => volumesApi.list(projectId, signal),
+  get: (id, signal) => volumesApi.get(id, signal),
+  listSnapshots: (id, signal) => volumesApi.listSnapshots(id, signal),
   // Still polled, but as a backstop rather than the mechanism: since backend
   // STR-148 a volume's own mutations are followed by MutationWatcher off its
   // `conditions`, and this only has to catch changes nothing in this tab
@@ -16,7 +16,7 @@ const hooks = makeResourceQueryHooks({
 });
 
 export function useVolumes(projectId?: string) {
-  return hooks.useList(projectId);
+  return hooks.useList(projectId, { enabled: !!projectId });
 }
 
 export function useProjectVolumeSnapshots(projectId?: string) {

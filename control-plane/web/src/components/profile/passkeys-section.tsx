@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useState } from "react";
 import { Check, KeyRound, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -135,7 +137,7 @@ export function PasskeysSection() {
   const handleDelete = async (passkey: Passkey) => {
     const label = passkey.name || "this passkey";
     if (
-      !window.confirm(
+      !await confirmAction(
         `Remove ${label}? The device it lives on will no longer be able to sign in.`
       )
     ) {
