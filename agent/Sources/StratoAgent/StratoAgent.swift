@@ -87,20 +87,16 @@ extension StratoAgent {
 
 /// Launch path for `run`.
 private func launchAgent(options: AgentOptions) async throws {
-    let debug = options.debug
     let processLoggingMetadata = DynamicLogMetadata(AgentLoggingMetadata.base())
-    LoggingSystem.bootstrap(
-        { label, metadataProvider in
-            var handler = CustomLogHandler(
-                label: label,
-                metadataProvider: metadataProvider)
-            handler.logLevel = debug ? .debug : .info
-            return handler
-        },
+    // Keep configuration failures visible without consuming swift-log's single
+    // process-wide bootstrap before the final threshold is known.
+    let debug = options.debug
+    let startupLogHandlerFactory = AgentLogHandlerFactory(
+        logLevel: debug ? .debug : .info,
         metadataProvider: processLoggingMetadata.provider)
-
-    var logger = Logger(label: "strato-agent")
-    logger.logLevel = debug ? .debug : .info
+    var logger = Logger(label: "strato-agent.bootstrap") { label in
+        startupLogHandlerFactory.makeHandler(label: label)
+    }
 
     // Load configuration from file or defaults
     let config: AgentConfig
@@ -112,12 +108,21 @@ private func launchAgent(options: AgentOptions) async throws {
             config = try await AgentConfig.loadDefaultConfig(logger: logger)
         }
     } catch {
-        logger.error("Failed to load agent configuration: \(error)")
+        logger.error("Failed to load agent configuration: \(startupErrorDescription(error))")
         throw ExitCode.failure
     }
 
     // Override config values with command-line arguments if provided
-    let finalLogLevel = options.logLevel ?? config.logLevel ?? "info"
+    let finalLogLevel: AgentLogLevel
+    do {
+        finalLogLevel = try AgentLogLevel.resolve(
+            commandLineValue: options.logLevel,
+            configuredValue: config.logLevel,
+            debug: debug)
+    } catch {
+        logger.error("Failed to load agent configuration: \(startupErrorDescription(error))")
+        throw ExitCode.failure
+    }
     let finalAgentID = options.agentID ?? ProcessInfo.processInfo.hostName
 
     // The agent authenticates solely with its SPIRE-issued X.509 SVID, so the
@@ -202,9 +207,14 @@ private func launchAgent(options: AgentOptions) async throws {
     let finalHardwareAcceleration = false
     #endif
 
-    // Update log level based on final configuration
-    logger.logLevel = debug ? .debug : Logger.Level(rawValue: finalLogLevel) ?? .info
     processLoggingMetadata[metadataKey: LogMetadata.Key.agentName] = .string(finalAgentID)
+    // Bootstrap exactly once with the final level. Every fresh subsystem or
+    // dependency logger created after this point receives the same threshold.
+    let logHandlerFactory = AgentLogHandlerFactory(
+        logLevel: finalLogLevel,
+        metadataProvider: processLoggingMetadata.provider)
+    logHandlerFactory.bootstrap()
+    logger = Logger(label: "strato-agent")
 
     logger.info(
         "Starting Strato Agent",
@@ -226,7 +236,7 @@ private func launchAgent(options: AgentOptions) async throws {
             "hardwareAcceleration": .string(finalHardwareAcceleration ? "enabled" : "disabled"),
             "qemuMemoryOverheadMB": .stringConvertible(
                 config.qemuMemoryOverheadMB ?? AgentConfig.defaultQEMUMemoryOverheadMB),
-            "logLevel": .string(finalLogLevel),
+            "logLevel": .string(finalLogLevel.rawValue),
             "simulation": .string(finalSimulation?.enabled == true ? "enabled" : "disabled"),
         ])
 
@@ -350,6 +360,15 @@ private func launchAgent(options: AgentOptions) async throws {
     }
 
     exitImmediately(0)
+}
+
+private func startupErrorDescription(_ error: any Error) -> String {
+    if let localizedError = error as? any LocalizedError,
+        let description = localizedError.errorDescription
+    {
+        return description
+    }
+    return String(describing: error)
 }
 
 /// How long after a termination signal the agent gives graceful shutdown before

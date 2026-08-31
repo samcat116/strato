@@ -100,8 +100,8 @@ actor Agent {
     // `inboundContinuation` in arrival order; `messageConsumerTask` drains the stream and
     // routes each frame onto a per-resource serial lane in `messageQueue`, so operations on
     // the same VM/volume are applied in the order the control plane sent them (issue #179).
-    private nonisolated let inboundMessages: AsyncStream<MessageEnvelope>
-    private nonisolated let inboundContinuation: AsyncStream<MessageEnvelope>.Continuation
+    private nonisolated let inboundMessages: AsyncStream<InboundWebSocketFrame>
+    private nonisolated let inboundContinuation: AsyncStream<InboundWebSocketFrame>.Continuation
     private let messageQueue = SerialTaskQueue()
     private var messageConsumerTask: Task<Void, Never>?
 
@@ -512,7 +512,7 @@ actor Agent {
         self.metadataHopLimit = metadataHopLimit
         self.vmExecSessionManager = VMExecSessionManager(logger: logger)
 
-        let (stream, continuation) = AsyncStream.makeStream(of: MessageEnvelope.self)
+        let (stream, continuation) = AsyncStream.makeStream(of: InboundWebSocketFrame.self)
         self.inboundMessages = stream
         self.inboundContinuation = continuation
 
@@ -2158,8 +2158,6 @@ actor Agent {
         if let client = websocketClient {
             try await client.sendMessage(message)
         }
-        logger.debug("Heartbeat sent", metadata: ["strato.agent.id": .string(effectiveAgentID)])
-
         // The beat is already on the wire before this bounded host probe runs,
         // so a slow lsblk cannot make the control plane mark the agent offline.
         _ = await storageDeviceInventory.refreshForHeartbeat()
@@ -2518,33 +2516,53 @@ extension Agent {
         guard messageConsumerTask == nil else { return }
         let stream = inboundMessages
         messageConsumerTask = Task { [weak self] in
-            for await envelope in stream {
-                await self?.routeInboundMessage(envelope)
+            for await frame in stream {
+                await self?.routeInboundMessage(frame)
             }
         }
     }
 
+    private func routeInboundMessage(_ frame: InboundWebSocketFrame) async {
+        await routeInboundMessage(frame.envelope, wireByteCount: frame.byteCount)
+    }
+
     /// Route a decoded inbound frame onto its per-resource serial lane. Frames for the same
     /// resource run in arrival order; frames for unrelated resources run concurrently.
-    private func routeInboundMessage(_ envelope: MessageEnvelope) async {
+    private func routeInboundMessage(_ envelope: MessageEnvelope, wireByteCount: Int? = nil) async {
         await messageQueue.enqueue(keys: envelope.serializationKeys) { [weak self] in
-            await self?.handleMessage(envelope)
+            await self?.handleMessage(envelope, wireByteCount: wireByteCount)
         }
     }
 
-    func handleMessage(_ envelope: MessageEnvelope) async {
-        logger.debug(
-            "Handling message from control plane",
-            metadata: [
-                "type": .string(envelope.type.rawValue)
-            ])
+    /// Decode once for normal handling, then derive transport metadata from the
+    /// typed value. HTTP-polled desired state has no WebSocket byte count and is
+    /// deliberately omitted from the WebSocket transport log.
+    private func decodeInboundMessage<T: WebSocketMessage>(
+        _ envelope: MessageEnvelope,
+        as type: T.Type,
+        wireByteCount: Int?
+    ) throws -> T {
+        let message = try envelope.decode(as: type)
+        if let wireByteCount {
+            WireMessageLogger.log(
+                message: message,
+                direction: .inbound,
+                byteCount: wireByteCount,
+                logger: logger)
+        }
+        return message
+    }
 
+    func handleMessage(_ envelope: MessageEnvelope, wireByteCount: Int? = nil) async {
         do {
             switch envelope.type {
             case .agentRegisterResponse:
                 let message: AgentRegisterResponseMessage
                 do {
-                    message = try envelope.decode(as: AgentRegisterResponseMessage.self)
+                    message = try decodeInboundMessage(
+                        envelope,
+                        as: AgentRegisterResponseMessage.self,
+                        wireByteCount: wireByteCount)
                 } catch DecodingError.keyNotFound(let key, _)
                     where key.stringValue == "protocolVersion"
                 {
@@ -2563,7 +2581,10 @@ extension Agent {
             // desired entry at wire v34 (STR-151), joining capture and delete,
             // which became desired artifacts at v33 (STR-150).
             case .desiredState:
-                let message = try envelope.decode(as: DesiredStateMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: DesiredStateMessage.self,
+                    wireByteCount: wireByteCount)
                 // Realize logical networks (per-project routers, SNAT uplinks)
                 // before converging VMs, so a VM's switch and L3 gateway exist
                 // before its NIC attaches (issue #342). Level-triggered and
@@ -2720,26 +2741,47 @@ extension Agent {
                 // arrives with the lanes already drained.
                 await handleDesiredAgentUpdate(message.desiredAgentUpdate)
             case .consoleConnect:
-                let message = try envelope.decode(as: ConsoleConnectMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: ConsoleConnectMessage.self,
+                    wireByteCount: wireByteCount)
                 await handleConsoleConnect(message)
             case .consoleDisconnect:
-                let message = try envelope.decode(as: ConsoleDisconnectMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: ConsoleDisconnectMessage.self,
+                    wireByteCount: wireByteCount)
                 await handleConsoleDisconnect(message)
             case .consoleData:
-                let message = try envelope.decode(as: ConsoleDataMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: ConsoleDataMessage.self,
+                    wireByteCount: wireByteCount)
                 await handleConsoleData(message)
             // Guest exec sessions (STR-78).
             case .guestExecStart:
-                let message = try envelope.decode(as: GuestExecStartMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: GuestExecStartMessage.self,
+                    wireByteCount: wireByteCount)
                 await handleGuestExecStart(message)
             case .guestExecInput:
-                let message = try envelope.decode(as: GuestExecInputMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: GuestExecInputMessage.self,
+                    wireByteCount: wireByteCount)
                 await handleGuestExecInput(message)
             case .guestExecResize:
-                let message = try envelope.decode(as: GuestExecResizeMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: GuestExecResizeMessage.self,
+                    wireByteCount: wireByteCount)
                 await handleGuestExecResize(message)
             case .guestExecClose:
-                let message = try envelope.decode(as: GuestExecCloseMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: GuestExecCloseMessage.self,
+                    wireByteCount: wireByteCount)
                 await handleGuestExecClose(message)
             // No sandbox lifecycle frames remain either: `sandbox_restore`
             // became `DesiredSandboxState.restore` at wire v34 (STR-151), and
@@ -2749,23 +2791,24 @@ extension Agent {
             // deleted at v32 as a read that was never an action (STR-149), and
             // both snapshot verbs became desired artifacts at v33 (STR-150).
             case .success:
-                // ACK to a control-plane-initiated request (incl. every heartbeat).
-                // Logged at debug so it stops surfacing as "unknown message type".
-                let message = try envelope.decode(as: SuccessMessage.self)
-                logger.debug(
-                    "Received success response from control plane",
-                    metadata: [
-                        "strato.request.id": .string(message.requestId),
-                        "message": .string(message.message ?? ""),
-                    ])
+                // ACK to an agent-initiated request (including every heartbeat).
+                // It needs no action; the transport record already carries its
+                // type, request id and size without exposing `message`.
+                _ = try decodeInboundMessage(
+                    envelope,
+                    as: SuccessMessage.self,
+                    wireByteCount: wireByteCount)
             case .error:
-                let message = try envelope.decode(as: ErrorMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: ErrorMessage.self,
+                    wireByteCount: wireByteCount)
                 await handleErrorResponse(message)
             default:
                 logger.warning("Received unknown message type: \(envelope.type)")
             }
         } catch {
-            logger.error("Failed to handle message: \(error)")
+            WireMessageLogger.logMessageHandlingFailure(envelope: envelope, logger: logger)
         }
     }
 

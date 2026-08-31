@@ -58,7 +58,13 @@ extension StratoAgent {
             // A tab-tagged handler rather than `StreamLogHandler`, so the parent
             // can re-emit each line at the level the child chose instead of
             // flattening everything to one level and printing the level twice.
-            let level = Logger.Level(rawValue: logLevel) ?? .info
+            let configuredLogLevel: AgentLogLevel
+            do {
+                configuredLogLevel = try AgentLogLevel(parsing: logLevel)
+            } catch {
+                throw ValidationError(error.localizedDescription)
+            }
+            let level = configuredLogLevel.loggerLevel
             LoggingSystem.bootstrap { _ in
                 var handler = MetadataListenerLogHandler()
                 handler.logLevel = level
