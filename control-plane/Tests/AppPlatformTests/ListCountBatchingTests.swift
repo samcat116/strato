@@ -129,7 +129,7 @@ final class ListCountBatchingTests {
                     let vm = try await builder.createVM(name: "nic-holder-\(index)-\(nic)", project: project)
                     try await VMNetworkInterface(
                         vmID: vm.id!, logicalNetworkID: try network.requireID(),
-                        macAddress: VMNetworkInterface.generateMACAddress()
+                        macAddress: MACAllocator.generateCandidate().description
                     ).save(on: app.db)
                 }
             }

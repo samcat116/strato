@@ -642,7 +642,7 @@ final class DesiredStateAssemblerTests {
                         try await self.attachNIC(
                             app: app, vm: vm, network: network, deviceName: "net\(nic)",
                             orderIndex: nic,
-                            mac: VMNetworkInterface.generateMACAddress(),
+                            mac: MACAllocator.generateCandidate().description,
                             ipv4: ("10.50.\(index % 250).\(10 + nic)", 24, "10.50.\(index % 250).1"))
                     }
                 }

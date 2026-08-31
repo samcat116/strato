@@ -145,66 +145,33 @@ final class AgentEnrollment: Model, Content, @unchecked Sendable {
             .first()
     }
 
-    private enum OperationLockAttempt<Value: Sendable>: Sendable {
-        case busy
-        case completed(Value)
-    }
-
     /// Serialize credential minting and revocation for one enrollment across
     /// every control-plane replica. This is session-scoped because both paths
     /// await SPIRE: a database transaction must not stay open across that
-    /// external call. `withConnection` pins the PostgreSQL session until the
-    /// matching unlock has run. Busy waiters return their connection to the
-    /// pool between cancellable polling attempts.
+    /// external call. The production SPIRE adapter bounds every RPC at ten
+    /// seconds. The shared helper pins the winning PostgreSQL session through
+    /// the checked unlock, returns busy connections to the pool between polls,
+    /// and turns the bounded acquisition deadline into an actionable conflict.
     static func withOperationLock<T: Sendable>(
         enrollmentID: UUID,
         on db: any Database,
+        logger: Logger,
+        timeout: Duration = .seconds(5),
+        pollInterval: Duration = .milliseconds(25),
         _ operation: @escaping @Sendable (any Database) async throws -> T
     ) async throws -> T {
-        let key = "agent-enrollment:\(enrollmentID.uuidString.lowercased())"
-        while true {
-            let attempt: OperationLockAttempt<T> = try await db.withConnection { connection in
-                guard let sql = connection as? any SQLDatabase,
-                    sql.dialect.name == "postgresql"
-                else {
-                    throw Abort(
-                        .internalServerError,
-                        reason: "Agent enrollment serialization requires PostgreSQL")
-                }
-
-                let acquired =
-                    try await sql.raw(
-                        "SELECT pg_try_advisory_lock(hashtext(\(bind: key))) AS acquired"
-                    ).first(decodingColumn: "acquired", as: Bool.self) ?? false
-                guard acquired else { return .busy }
-
-                do {
-                    let value = try await operation(connection)
-                    let released =
-                        try await sql.raw(
-                            "SELECT pg_advisory_unlock(hashtext(\(bind: key))) AS released"
-                        ).first(decodingColumn: "released", as: Bool.self) ?? false
-                    guard released else {
-                        throw Abort(
-                            .internalServerError,
-                            reason: "Agent enrollment operation lock was not held")
-                    }
-                    return .completed(value)
-                } catch {
-                    let operationError = error
-                    _ = try? await sql.raw(
-                        "SELECT pg_advisory_unlock(hashtext(\(bind: key)))"
-                    ).all()
-                    throw operationError
-                }
-            }
-
-            switch attempt {
-            case .busy:
-                try await Task.sleep(for: .milliseconds(25))
-            case .completed(let value):
-                return value
-            }
+        do {
+            return try await AdvisoryLock.withSessionLock(
+                .object(.agentEnrollment, id: enrollmentID),
+                on: db,
+                timeout: timeout,
+                pollInterval: pollInterval,
+                logger: logger,
+                operation: operation)
+        } catch AdvisoryLockError.acquisitionTimedOut {
+            throw Abort(
+                .conflict,
+                reason: "Another operation on this enrollment is in progress")
         }
     }
 

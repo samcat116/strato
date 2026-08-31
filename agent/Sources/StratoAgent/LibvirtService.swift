@@ -1365,17 +1365,18 @@ actor LibvirtService: HypervisorService {
         vmId: String, spec: NetworkSpec, attachment: ResolvedNetworkAttachment
     ) async throws {
         try await perform("attach-network", vmId: vmId) {
-            guard let mac = spec.macAddress?.lowercased() else {
+            guard let configuredMAC = spec.macAddress, let mac = MACAddress(configuredMAC) else {
                 throw HypervisorServiceError.invalidConfiguration(
-                    "VM network hot-plug requires a stable MAC address")
+                    "VM network hot-plug requires a valid stable unicast MAC address")
             }
+            let macAddress = mac.description
             let dom = try await domain(vmId)
             let present = try DomainNetworkInventory.macAddresses(
                 inDomainXML: try await domainXML(dom, vmId: vmId))
-            guard !present.contains(mac) else {
+            guard !present.contains(macAddress) else {
                 logger.info(
                     "Network interface is already present; treating the attach as a no-op",
-                    metadata: ["vmId": .string(vmId), "mac": .string(mac)])
+                    metadata: ["vmId": .string(vmId), "mac": .string(macAddress)])
                 return
             }
             let flags = try await deviceFlags(dom, vmId: vmId)
@@ -1397,21 +1398,22 @@ actor LibvirtService: HypervisorService {
 
     func detachNetworkInterface(vmId: String, spec: NetworkSpec) async throws {
         try await perform("detach-network", vmId: vmId) {
-            guard let mac = spec.macAddress?.lowercased() else {
+            guard let configuredMAC = spec.macAddress, let mac = MACAddress(configuredMAC) else {
                 throw HypervisorServiceError.invalidConfiguration(
-                    "VM network hot-unplug requires a stable MAC address")
+                    "VM network hot-unplug requires a valid stable unicast MAC address")
             }
+            let macAddress = mac.description
             let dom = try await domain(vmId)
             let present = try DomainNetworkInventory.macAddresses(
                 inDomainXML: try await domainXML(dom, vmId: vmId))
-            guard present.contains(mac) else {
+            guard present.contains(macAddress) else {
                 logger.info(
                     "Network interface is already absent; treating the detach as a no-op",
-                    metadata: ["vmId": .string(vmId), "mac": .string(mac)])
+                    metadata: ["vmId": .string(vmId), "mac": .string(macAddress)])
                 return
             }
             let flags = try await deviceFlags(dom, vmId: vmId)
-            let xml = DomainDeviceXML.detachNetwork(macAddress: mac)
+            let xml = DomainDeviceXML.detachNetwork(macAddress: macAddress)
             try await call("libvirt-detach-network", vmId: vmId) { client, deadline in
                 try await client.domainDetachDeviceFlags(
                     dom: dom, xml: xml, flags: flags, deadline: deadline)

@@ -98,6 +98,28 @@ jobs:
           grep -A 1 'name: STRATO_GIT_SHA' /tmp/git-sha-template.yaml \
             | grep -q "value: \"$git_sha\""
 
+      - name: Assert non-overlapping control-plane replacement
+        run: |
+          python3 - <<'EOF'
+          import re
+
+          rendered = open('/tmp/default-template.yaml').read()
+          deployments = [
+              document
+              for document in rendered.split('\n---\n')
+              if re.search(r'^kind: Deployment$', document, re.MULTILINE)
+              and 'app.kubernetes.io/component: control-plane' in document
+          ]
+          assert len(deployments) == 1, \
+              f"expected one control-plane Deployment, found {len(deployments)}"
+          assert re.search(
+              r'^  strategy:\n    type: Recreate$',
+              deployments[0],
+              re.MULTILINE,
+          ), "control-plane Deployment must use Recreate for the STR-275 cutover"
+          print("Control-plane Deployment replacement is non-overlapping")
+          EOF
+
       - name: Template every checked-in values scenario
         run: |
           for values in helm/strato-control-plane/ci/*.yaml; do

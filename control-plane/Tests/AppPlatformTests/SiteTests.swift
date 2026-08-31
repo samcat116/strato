@@ -103,7 +103,7 @@ final class SiteTests {
         try await vm.save(on: app.db)
         let nic = VMNetworkInterface(
             vmID: vm.id!, logicalNetworkID: try network.requireID(),
-            macAddress: VMNetworkInterface.generateMACAddress())
+            macAddress: MACAllocator.generateCandidate().description)
         try await nic.save(on: app.db)
     }
 
@@ -940,7 +940,7 @@ final class SiteTests {
             let vm = try await builder.createVM(name: "unplaceable-vm", project: project)
             let nic = VMNetworkInterface(
                 vmID: try vm.requireID(), logicalNetworkID: try pinned.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress())
+                macAddress: MACAllocator.generateCandidate().description)
             try await nic.save(on: app.db)
 
             await #expect(throws: AgentServiceError.self) {
@@ -1123,7 +1123,7 @@ final class SiteTests {
             let pending = try await builder.createVM(name: "guard-unplaceable", project: project)
             try await VMNetworkInterface(
                 vmID: try pending.requireID(), logicalNetworkID: try pinned.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress()
+                macAddress: MACAllocator.generateCandidate().description
             ).save(on: app.db)
             await #expect(throws: AgentServiceError.self) {
                 try await app.workloadPlacement.createVM(vm: pending, db: app.db)

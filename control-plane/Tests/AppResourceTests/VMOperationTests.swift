@@ -146,6 +146,7 @@ final class VMOperationTests {
                     .first())
             #expect(created.deviceName == "net1")
             #expect(created.mtu == 1450)
+            #expect(MACAddress(allocated: created.macAddress) != nil)
             #expect(created.attachGeneration == accepted?.targetGeneration)
 
             try await app.test(.GET, "/api/vms/\(vm.id!)/interfaces") { req in

@@ -367,10 +367,10 @@ struct SecurityGroupController: RouteCollection {
                 return true
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
-            // Backstop only: the lock above already serializes duplicates, and
-            // a non-Postgres database (where the advisory lock is a no-op)
-            // still lands on the unique pair index. Either way a duplicate
-            // attach is a no-op, not an error.
+            // Backstop only: the lock above already serializes duplicate
+            // requests, while the unique pair index also protects against
+            // corrupted or legacy writers. Either way a duplicate attach is a
+            // no-op, not an error.
             return .noContent
         }
         guard changed else { return .noContent }

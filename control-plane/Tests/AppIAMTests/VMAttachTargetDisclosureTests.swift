@@ -152,7 +152,7 @@ struct VMAttachTargetDisclosureTests {
             let vm = try await builder.createVM(name: "disclosure-vm", project: other)
             let nic = VMNetworkInterface(
                 vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress())
+                macAddress: MACAllocator.generateCandidate().description)
             try await nic.save(on: app.db)
             try await VMInterfaceAddress(
                 interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(),

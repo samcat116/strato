@@ -80,7 +80,7 @@ final class LoadBalancerControllerTests {
             let nic = VMNetworkInterface(
                 vmID: try vm.requireID(),
                 logicalNetworkID: try remoteBackendNetwork.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress())
+                macAddress: MACAllocator.generateCandidate().description)
             try await nic.save(on: app.db)
             try await VMInterfaceAddress(
                 interfaceID: try nic.requireID(),

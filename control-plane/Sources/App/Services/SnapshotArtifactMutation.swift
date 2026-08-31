@@ -55,7 +55,8 @@ enum SnapshotArtifactMutation {
         _ artifact: A,
         actor: MutationActor,
         on db: any Database,
-        app: Application
+        app: Application,
+        failureReason: String? = nil
     ) async throws -> ResourceMutation.Accepted {
         let artifactID = try artifact.requireID()
 
@@ -86,14 +87,33 @@ enum SnapshotArtifactMutation {
             }
 
         return try await app.resourceMutation.accept(
-            .delete, on: artifact, actor: actor, dispatch: strategy, on: db, app: app
-        ) { @Sendable transaction in
-            // Stamp before the mark: `stampForDeletion` reads whether the
-            // artifact is already terminating, and re-stamping a second DELETE
-            // would resurrect tokens their participants have already cleared.
-            try await ResourceFinalizerService.stampForDeletion(artifact, on: transaction)
-            artifact.setDesiredStatus(.absent)
-        }
+            .delete,
+            on: artifact,
+            actor: actor,
+            dispatch: strategy,
+            on: db,
+            app: app,
+            beforeResourceLock: { @Sendable transaction in
+                guard A.artifactKind == .sandboxSnapshot else { return }
+                try await AdvisoryLock.acquireTransactionLock(
+                    .object(.sandboxSnapshotLineage, id: artifactID), on: transaction)
+                if let blocker = try await SnapshotDeletionGuard.blocker(
+                    for: artifact, on: transaction)
+                {
+                    throw Abort(.conflict, reason: blocker)
+                }
+            },
+            applying: { @Sendable transaction in
+                if let failureReason {
+                    artifact.lastError = failureReason
+                }
+                // Stamp before the mark: `stampForDeletion` reads whether the
+                // artifact is already terminating, and re-stamping a second DELETE
+                // would resurrect tokens their participants have already cleared.
+                try await ResourceFinalizerService.stampForDeletion(artifact, on: transaction)
+                artifact.setDesiredStatus(.absent)
+            }
+        )
     }
 
     /// Accepts an export request: the placement fact "this snapshot should also

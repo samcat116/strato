@@ -9,6 +9,12 @@ metadata:
     {{- include "strato-control-plane.labels" . | nindent 4 }}
     app.kubernetes.io/component: control-plane
 spec:
+  # STR-275 moves control-plane advisory locks from the legacy one-bigint
+  # keyspace to PostgreSQL's disjoint two-int keyspace. Old and new binaries
+  # therefore cannot safely serve together. Recreate waits for every old pod to
+  # terminate (and its database sessions to close) before starting the new set.
+  strategy:
+    type: Recreate
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}

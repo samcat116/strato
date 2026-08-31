@@ -4,9 +4,11 @@
 
 # Control-plane replicas. Counts above 1 are supported: mutations ring a
 # contentless doorbell over Valkey and whichever replica holds the agent's
-# parked poll acts on it, all durable state lives in PostgreSQL, and rolling
-# deploys just cause agents to reconnect to surviving replicas. Valkey is
-# required either way; see docs/architecture/multi-replica.md.
+# parked poll acts on it, and all durable state lives in PostgreSQL. Deployment
+# replacement deliberately uses Recreate, not RollingUpdate: STR-275 moved
+# advisory locks into PostgreSQL's disjoint two-int keyspace, so a legacy and a
+# current binary must never serve the same database together. Valkey is required
+# either way; see docs/architecture/multi-replica.md.
 replicaCount: 1
 
 image:

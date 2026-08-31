@@ -423,7 +423,7 @@ final class NetworkControllerTests {
             // In use by a NIC — additive IPv6 must still be allowed.
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "grow6-vm", project: project)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, logicalNetworkID: network.id!, macAddress: VMNetworkInterface.generateMACAddress())
+                vmID: vm.id!, logicalNetworkID: network.id!, macAddress: MACAllocator.generateCandidate().description)
             try await nic.save(on: app.db)
 
             try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
@@ -466,7 +466,7 @@ final class NetworkControllerTests {
             try await network.save(on: app.db)
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "shrink6-vm", project: project)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, logicalNetworkID: network.id!, macAddress: VMNetworkInterface.generateMACAddress())
+                vmID: vm.id!, logicalNetworkID: network.id!, macAddress: MACAllocator.generateCandidate().description)
             try await nic.save(on: app.db)
             let address6 = VMInterfaceAddress(
                 interfaceID: nic.id!, logicalNetworkID: network.id!, family: .ipv6,
@@ -1036,7 +1036,7 @@ final class NetworkControllerTests {
 
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "gw-vm", project: project)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, logicalNetworkID: network.id!, macAddress: VMNetworkInterface.generateMACAddress())
+                vmID: vm.id!, logicalNetworkID: network.id!, macAddress: MACAllocator.generateCandidate().description)
             try await nic.save(on: app.db)
 
             try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
@@ -1058,7 +1058,7 @@ final class NetworkControllerTests {
 
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "nic-vm", project: project)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, logicalNetworkID: network.id!, macAddress: VMNetworkInterface.generateMACAddress())
+                vmID: vm.id!, logicalNetworkID: network.id!, macAddress: MACAllocator.generateCandidate().description)
             try await nic.save(on: app.db)
 
             // Safe since issue #765: the NIC references the row by id, so the
@@ -1108,7 +1108,7 @@ final class NetworkControllerTests {
 
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "busy-vm", project: project)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, logicalNetworkID: network.id!, macAddress: VMNetworkInterface.generateMACAddress())
+                vmID: vm.id!, logicalNetworkID: network.id!, macAddress: MACAllocator.generateCandidate().description)
             try await nic.save(on: app.db)
 
             try await app.test(.DELETE, "/api/networks/\(network.id!)") { req in
@@ -1128,7 +1128,7 @@ final class NetworkControllerTests {
             let sandbox = try await builder.createSandbox(name: "sb", project: project)
             let nic = SandboxNetworkInterface(
                 sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress())
+                macAddress: MACAllocator.generateCandidate().description)
             try await nic.save(on: app.db)
 
             // A sandbox NIC holds an address from the same pool, so the network

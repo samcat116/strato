@@ -664,8 +664,8 @@ struct SandboxController: RouteCollection {
         return try await Self.acceptedResponse(for: sandbox, accepted, on: req)
     }
 
-    /// Allocates and persists the sandbox's single NIC (issue #416), reusing the
-    /// VM NIC's MAC generation and IPAM. Must run inside the create transaction
+    /// Allocates and persists the sandbox's single NIC (issue #416), sharing
+    /// fleet-wide MAC allocation and per-network IPAM with VMs. Must run inside the create transaction
     /// so the address is reserved before the `202` returns and before placement.
     ///
     /// A named network is resolved within the sandbox's own project, exactly as
@@ -705,13 +705,16 @@ struct SandboxController: RouteCollection {
         // Dual-stack network: the NIC gets one address per family.
         let allocation6 = try await IPAMService.allocateIPv6(for: logicalNetwork, on: db)
 
+        let interfaceID = UUID()
+        let macAddress = try await MACAllocator.allocate(
+            for: .sandboxInterface, ownerID: interfaceID, on: db)
         let networkInterface = SandboxNetworkInterface(
+            id: interfaceID,
             sandboxID: sandboxID,
             logicalNetworkID: logicalNetworkID,
-            macAddress: VMNetworkInterface.generateMACAddress()
+            macAddress: macAddress.description
         )
         try await networkInterface.save(on: db)
-        let interfaceID = try networkInterface.requireID()
 
         let groupIDs: [UUID]
         if securityGroupIDs.isEmpty {

@@ -9,7 +9,7 @@ import Vapor
 
 @Suite("Current schema baseline", .serialized)
 struct CurrentSchemaBaselineTests {
-    private static let expectedCatalogMD5 = "e8e7f8ac62839a58de3ee45b6a0041d5"
+    private static let expectedCatalogMD5 = "836f85a4a909c640e9cf46f62f39845a"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -29,13 +29,13 @@ struct CurrentSchemaBaselineTests {
             #expect(fluentEnumRows.count == 12)
 
             let counts = try await catalogCounts(on: app.db)
-            #expect(counts.tables == 64)
-            #expect(counts.columns == 842)
-            #expect(counts.constraints == 292)
-            #expect(counts.indexes == 190)
+            #expect(counts.tables == 65)
+            #expect(counts.columns == 849)
+            #expect(counts.constraints == 297)
+            #expect(counts.indexes == 194)
             #expect(counts.enums == 3)
-            #expect(counts.triggers == 1)
-            #expect(counts.functions == 1)
+            #expect(counts.triggers == 3)
+            #expect(counts.functions == 2)
 
             let catalogMD5 = try await catalogMD5(on: app.db)
             #expect(catalogMD5 == Self.expectedCatalogMD5)
@@ -54,6 +54,25 @@ struct CurrentSchemaBaselineTests {
             let catalogBeforeUpgrade = try await catalogMD5(on: app.db)
 
             let migration = AddGuestAgentEnabledToVM()
+            try await migration.prepare(on: app.db)
+            try await migration.prepare(on: app.db)
+
+            #expect(try await catalogMD5(on: app.db) == catalogBeforeUpgrade)
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
+    @Test("The MAC ledger upgrade leaves a fresh schema unchanged")
+    func macLedgerUpgradeIsIdempotentOnFreshSchema() async throws {
+        let app = try await Application.makeForBareDatabaseTesting()
+        do {
+            try await CurrentSchemaBaseline().prepare(on: app.db)
+            let catalogBeforeUpgrade = try await catalogMD5(on: app.db)
+
+            let migration = CreateMACAddressLedger()
             try await migration.prepare(on: app.db)
             try await migration.prepare(on: app.db)
 
