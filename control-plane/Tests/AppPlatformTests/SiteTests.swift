@@ -21,7 +21,6 @@ final class SiteTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             // Site topology endpoints are system-admin only.
@@ -53,35 +52,17 @@ final class SiteTests {
         try await app.shutdownForTesting()
     }
 
-    /// Registers an in-memory agent, optionally into a site (as its
-    /// registration token would). New agents require an org scope; default to
-    /// the harness's organization (the oldest one). Returns the agent's UUID
-    /// string.
     private func registerAgent(
         app: Application, named name: String, siteID: UUID? = nil,
         protocolVersion: Int = WireProtocol.currentVersion,
         networkCapability: NetworkCapability = .overlay
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: name,
-            hostname: "host-\(name)",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
-            hypervisors: [
-                HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
-            ],
+        try await TestDataBuilder(db: app.db).registerAgent(
+            on: app,
+            named: name,
             networkCapability: networkCapability,
-            protocolVersion: protocolVersion
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let uuid = try await app.agentService.registerAgent(
-            message, agentName: name, siteID: siteID,
-            organizationScope: orgID.map { .organization($0) })
-        return uuid.uuidString
+            protocolVersion: protocolVersion,
+            siteID: siteID)
     }
 
     /// Backdates an agent's heartbeat, the state a node that crashed or is
@@ -624,9 +605,26 @@ final class SiteTests {
             var agent = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.db))
             #expect(agent.$site.id == site.id)
 
-            // Reconnect with a rotated token that carries no site: the
-            // assignment is durable on the agent row.
-            _ = try await self.registerAgent(app: app, named: "node-1", siteID: nil)
+            let reconnect = AgentRegisterMessage(
+                agentId: "node-1",
+                hostname: "host-node-1",
+                version: "1.0.0",
+                resources: AgentResources(
+                    totalCPU: 16, availableCPU: 16,
+                    totalMemory: 1 << 34, availableMemory: 1 << 34,
+                    totalDisk: 1 << 40, availableDisk: 1 << 40),
+                hypervisors: [
+                    HypervisorSupport(
+                        type: .qemu, available: true, accelerated: true, capabilities: .qemu)
+                ],
+                networkCapability: .overlay)
+            let organizationID = try #require(
+                try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id)
+            _ = try await app.agentService.registerAgent(
+                reconnect,
+                agentName: "node-1",
+                siteID: nil,
+                organizationScope: .organization(organizationID))
             agent = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.db))
             #expect(agent.$site.id == site.id)
         }
@@ -635,7 +633,7 @@ final class SiteTests {
     // MARK: - Scheduler site constraint
 
     private func makeSchedulable(
-        id: String = UUID().uuidString, name: String, siteID: UUID? = nil,
+        id: String = UUID().uuidString, name: String, siteID: UUID = UUID(),
         supportsInterVMNetworking: Bool = true
     ) -> SchedulableAgent {
         SchedulableAgent(
@@ -656,14 +654,14 @@ final class SiteTests {
         let siteB = UUID()
         let inSite = makeSchedulable(name: "in-site", siteID: siteA)
         let elsewhere = makeSchedulable(name: "elsewhere", siteID: siteB)
-        let siteless = makeSchedulable(name: "siteless")
+        let otherSite = makeSchedulable(name: "other-site")
 
         let scheduler = SchedulerService(logger: Logger(label: "test"))
         let requirements = VMPlacementRequirements(
             cpu: 1, memory: 1 << 30, disk: 1 << 30, siteID: siteA)
 
         let selected = try scheduler.selectAgent(
-            requirements: requirements, from: [elsewhere, siteless, inSite])
+            requirements: requirements, from: [elsewhere, otherSite, inSite])
         #expect(selected == inSite.id)
     }
 
@@ -676,7 +674,7 @@ final class SiteTests {
         #expect(throws: SchedulerError.self) {
             try scheduler.selectAgent(
                 requirements: requirements,
-                from: [self.makeSchedulable(name: "siteless"), self.makeSchedulable(name: "other", siteID: UUID())]
+                from: [self.makeSchedulable(name: "first"), self.makeSchedulable(name: "other", siteID: UUID())]
             )
         }
     }
@@ -703,7 +701,7 @@ final class SiteTests {
         }
     }
 
-    @Test("Unconstrained VMs still place on sited and site-less agents alike")
+    @Test("A VM without a site requirement can use any site")
     func schedulerNoSiteRequirement() throws {
         let scheduler = SchedulerService(logger: Logger(label: "test"))
         let requirements = VMPlacementRequirements(cpu: 1, memory: 1 << 30, disk: 1 << 30)
@@ -775,20 +773,6 @@ final class SiteTests {
         }
     }
 
-    @Test("A site-less agent keeps the legacy model: own networks, authoritative")
-    func sitelessAssembly() async throws {
-        try await withSiteTestApp { app, _, project, _ in
-            let agentId = try await self.registerAgent(app: app, named: "legacy-agent")
-            try await self.placeVM(
-                app: app, project: project, named: "legacy-vm", onAgent: agentId,
-                network: try await self.network(app: app, project: project))
-
-            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(sync.networksAuthoritative)
-            #expect(sync.networks.contains { $0.name == "default" })
-        }
-    }
-
     // MARK: - Automatic controller designation (issue #743)
 
     @Test("The first topology-capable node to join a site becomes its controller")
@@ -840,9 +824,9 @@ final class SiteTests {
         try await withSiteTestApp { app, _, _, token in
             let site = try await self.makeSite(app: app, name: "dc-assign")
             let siteID = try #require(site.id)
-            // Registered site-less, then moved in through the sites API —
-            // the other way an agent joins a site.
-            let agentId = try await self.registerAgent(app: app, named: "assign-node")
+            let sourceSite = try await self.makeSite(app: app, name: "dc-source")
+            let agentId = try await self.registerAgent(
+                app: app, named: "assign-node", siteID: try sourceSite.requireID())
 
             try await app.test(.POST, "/api/sites/\(siteID.uuidString)/agents/\(agentId)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)

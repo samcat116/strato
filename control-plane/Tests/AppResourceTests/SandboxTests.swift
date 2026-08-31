@@ -29,7 +29,6 @@ final class SandboxTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -76,15 +75,10 @@ final class SandboxTests {
         // older one; everything else wants a host that is simply current.
         firecrackerVersion: String? = FirecrackerSnapshotFeatures.networkOverridesMinimumVersion
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: agentName,
+        let agentID = try await TestDataBuilder(db: app.db).registerAgent(
+            on: app,
+            named: agentName,
             hostname: "test-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
             architecture: architecture,
             hypervisors: [
                 HypervisorSupport(
@@ -97,17 +91,12 @@ final class SandboxTests {
             networkCapability: (sandboxNetworkingCapable ?? false) ? .overlay : nil,
             protocolVersion: protocolVersion,
             sandboxCapable: sandboxCapable,
-            sandboxNetworkingCapable: sandboxNetworkingCapable
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: agentName,
-            organizationScope: orgID.map { .organization($0) })
+            sandboxNetworkingCapable: sandboxNetworkingCapable)
         if let sandbox {
-            sandbox.hypervisorId = agentUUID.uuidString
+            sandbox.hypervisorId = agentID
             try await sandbox.save(on: app.db)
         }
-        return agentUUID.uuidString
+        return agentID
     }
 
     private func report(

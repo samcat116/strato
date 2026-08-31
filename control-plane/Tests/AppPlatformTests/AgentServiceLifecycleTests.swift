@@ -30,11 +30,11 @@ final class AgentServiceLifecycleTests {
                 checkedAt: checkedAt,
                 lastHealthyAt: checkedAt,
                 affectedCapabilities: [.qemuPlacement])
-            let agent = Agent(
-                name: "stale-agent",
+            let builder = TestDataBuilder(db: app.db)
+            let organization = try await builder.createOrganization(name: "Lifecycle Org")
+            let agent = try await builder.createAgent(
+                named: "stale-agent",
                 hostname: "stale-agent.example",
-                version: "1.0.0",
-                status: .online,
                 resources: AgentResources(
                     totalCPU: 8,
                     availableCPU: 8,
@@ -44,8 +44,8 @@ final class AgentServiceLifecycleTests {
                     availableDisk: 100_000_000_000),
                 dependencyObservations: [dependency],
                 dependencyObservationsReceivedAt: checkedAt,
-                lastHeartbeat: Date().addingTimeInterval(-120))
-            try await agent.save(on: app.db)
+                lastHeartbeat: Date().addingTimeInterval(-120),
+                organizationScope: .organization(try organization.requireID()))
 
             let metrics = TestMetrics()
             Telemetry.recordDependency(
@@ -66,21 +66,16 @@ final class AgentServiceLifecycleTests {
         }
     }
 
-    @Test("app shutdown cancels the AgentService heartbeat loop")
+    @Test("app shutdown cancels the agent maintenance heartbeat loop")
     func shutdownCancelsHeartbeat() async throws {
         let app = try await Application.makeForTesting()
-        // Assigned once the DB is up (AgentService.init touches `app.db`); held so the
-        // actor can be inspected after the app is torn down.
         let service: AgentService
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             service = app.agentService
 
-            // The loop is armed from AgentService.init's detached task; give it a
-            // moment to run so the assertion isn't racing initialization.
             for _ in 0..<50 where await !service.maintenance.isHeartbeatActive {
                 try await Task.sleep(for: .milliseconds(10))
             }
@@ -91,8 +86,6 @@ final class AgentServiceLifecycleTests {
             throw error
         }
 
-        // asyncShutdown runs the registered AgentServiceLifecycleHandler, which must
-        // cancel the loop before `app.core` is torn down.
         try await app.shutdownForTesting()
 
         #expect(await !service.maintenance.isHeartbeatActive)
@@ -111,7 +104,6 @@ final class AgentServiceLifecycleTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let service = AgentService(app: app, heartbeatInterval: .milliseconds(1))
 
@@ -148,7 +140,6 @@ final class AgentServiceLifecycleTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
         } catch {
             try await app.shutdownForTesting()
             throw error

@@ -24,7 +24,6 @@ final class AgentOrganizationScopeTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Scope Org")

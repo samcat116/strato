@@ -168,17 +168,4 @@ struct SwiftFirecrackerTests {
         #expect(json.contains("\"iface_id\":\"eth0\""))
         #expect(json.contains("\"host_dev_name\":\"tapb2c3d4e5f601\""))
     }
-
-    @Test("FirecrackerError provides descriptions")
-    func testErrorDescriptions() {
-        let error1 = FirecrackerError.vmNotFound("test-vm")
-        #expect(error1.localizedDescription.contains("test-vm"))
-
-        let error2 = FirecrackerError.httpError(statusCode: 400, message: "Bad request")
-        #expect(error2.localizedDescription.contains("400"))
-
-        let error3 = FirecrackerError.invalidState(current: "Running", expected: "Paused")
-        #expect(error3.localizedDescription.contains("Running"))
-        #expect(error3.localizedDescription.contains("Paused"))
-    }
 }

@@ -142,7 +142,10 @@ export function WorkloadIdentityView({
 
             {/* Rail */}
             <aside className="w-full space-y-4 lg:w-[320px] lg:shrink-0">
-              <TrustBundleCard trustDomain={data?.trustDomain} trustBundle={data?.trustBundle} />
+              <TrustBundleCard
+                trustDomain={data?.trustDomain ?? undefined}
+                trustBundle={data?.trustBundle}
+              />
               {data && <FederationCard federation={data.federation} />}
               <NodeAttestationCard groups={data?.nodeAttestation ?? []} />
               {data && <IssuanceCard issuance={data.issuance} />}

@@ -32,8 +32,8 @@ struct ProxyTrustConfig: Sendable {
 
     static func fromConfiguration(_ configuration: ControlPlaneConfiguration) -> ProxyTrustConfig {
         ProxyTrustConfig(
-            trustForwardedFor: configuration.bool(.rateLimitTrustForwardedFor)!,
-            trustedProxyHops: configuration.int(.rateLimitTrustedProxyHops)!
+            trustForwardedFor: configuration.bool(.rateLimitTrustForwardedFor),
+            trustedProxyHops: configuration.int(.rateLimitTrustedProxyHops)
         )
     }
 

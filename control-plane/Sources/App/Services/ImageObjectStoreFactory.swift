@@ -35,13 +35,7 @@ enum ImageObjectStoreFactory {
 
     static func configure(_ app: Application) throws {
         let configuration = app.controlPlaneConfiguration
-        let raw = configuration.string(.imageStorageBackend)!
-        guard let backend = Backend(rawValue: raw) else {
-            throw ImageError.storageFailed(
-                "Unknown IMAGE_STORAGE_BACKEND '\(raw)' (expected 'filesystem' or 's3')")
-        }
-
-        switch backend {
+        switch configuration.imageStorageBackend {
         case .filesystem:
             let root = FilesystemImageObjectStore.rootPath(configuration: configuration)
             app.imageObjectStore = FilesystemImageObjectStore(
@@ -105,7 +99,7 @@ enum ImageObjectStoreFactory {
         // A region is still required for request signing even against an
         // implementation that ignores regions; us-east-1 is the conventional
         // placeholder MinIO and Garage accept.
-        let region = Region(rawValue: configuration.string(.imageS3Region)!)
+        let region = Region(rawValue: configuration.requiredString(.imageS3Region))
 
         let s3 = S3(
             client: client,

@@ -316,7 +316,6 @@ strato:
       secretAccessKey: ""
 
   database:
-    host: ""  # Will be set from PostgreSQL subchart if enabled
     port: 5432
     name: vapor_database
     username: vapor_username

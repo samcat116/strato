@@ -7,10 +7,6 @@ import StratoShared
 /// consumes after image materialization and volume resolution have run. The
 /// attachment stays typed so the driver cannot reinterpret a network identity
 /// as a host path.
-///
-/// The process driver carried an identical private struct of its own; it was left
-/// alone so the libvirt work stays additive, and the `LibvirtService` issue
-/// collapses the two.
 public struct ResolvedDisk: Sendable, Equatable {
     public let attachment: DiskAttachment
     public let readonly: Bool

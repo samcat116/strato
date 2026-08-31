@@ -37,6 +37,8 @@ const network: Network = {
   dnsServers: [],
   metadataEnabled: true,
   resolverEnabled: true,
+  externalAccess: false,
+  siteId: "site-1",
 };
 
 describe("network ACL permissions", () => {

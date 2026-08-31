@@ -14,21 +14,15 @@ extension NetworkSpec {
     /// display name and the DHCP/DNS configuration agents program into OVN.
     /// `securityGroupIds` is the NIC's security-group membership — VM and
     /// sandbox NICs alike since STR-102, resolved from whichever join table
-    /// owns the NIC and already gated on the receiving agent's protocol version
-    /// by the assembly. Nil is "unmanaged", never "no groups".
+    /// owns the NIC. Nil is "unmanaged", never "no groups".
     ///
-    /// `sendsMetadataPort` is the same kind of gate, for `metadataEnabled` (STR-49):
-    /// false omits the field entirely for an agent that predates it, so nil on
-    /// the wire always means "the sender has no opinion" rather than "off".
+    /// `sendsMetadataPort` controls `metadataEnabled` (STR-49): false omits the
+    /// field, so nil means "the sender has no opinion" rather than "off".
     ///
     /// `siteResolverCapable` carries both halves of the resolver gate (STR-40)
-    /// in one parameter, because neither alone decides the field. Nil means the
-    /// receiver predates v37 and the key is omitted entirely, exactly as
-    /// `sendsMetadataPort: false` does. A non-nil value is whether the
-    /// receiver's **site** can answer on the resolver address at all — every
-    /// agent in it reports `resolverCapable` — which is ANDed with the
-    /// network's own opt-out. The site half is a scalar and the network half is
-    /// per row, so this is the only place they meet.
+    /// in one parameter, because neither alone decides the field. Nil omits the
+    /// resolver fields. A non-nil value says whether every agent in the site can
+    /// answer on the resolver address and is combined with the network's opt-out.
     static func build(
         interface: some NetworkAddressable, network: LogicalNetwork, securityGroupIds: [UUID]? = nil,
         sendsMetadataPort: Bool = true,
@@ -51,7 +45,6 @@ extension NetworkSpec {
             networkId: interface.logicalNetworkID,
             macAddress: interface.macAddress,
             ipAddress: ipv4?.address,
-            // Old agents still read a dotted netmask off the wire.
             netmask: interface.ipv4Netmask,
             gateway: ipv4?.gateway,
             ipv6Address: ipv6?.address,

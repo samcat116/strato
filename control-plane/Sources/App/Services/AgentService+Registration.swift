@@ -161,10 +161,10 @@ extension AgentService {
                 throw Abort(.badRequest, reason: "Agent enrollment requires a site")
             }
             // Create new agent
-            agent = Agent.from(registration: message, name: agentName, trustDomain: trustDomain)
+            agent = Agent.from(
+                registration: message, name: agentName, siteID: siteID, trustDomain: trustDomain)
             agent.dependencyObservations = dependencyObservations
             agent.dependencyObservationsReceivedAt = dependencyObservationsReceivedAt
-            agent.$site.id = siteID
             agent.status = .online
             newAgentEnrollment = enrollment
         }

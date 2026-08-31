@@ -33,7 +33,6 @@ final class ResourceFinalizerTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -72,30 +71,17 @@ final class ResourceFinalizerTests {
         app: Application, vm: VM? = nil, sandbox: Sandbox? = nil,
         named agentName: String = "finalizer-agent"
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: agentName,
-            hostname: "test-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
-            protocolVersion: WireProtocol.currentVersion
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: agentName,
-            organizationScope: orgID.map { .organization($0) })
+        let agentID = try await TestDataBuilder(db: app.db).registerAgent(
+            on: app, named: agentName, hostname: "test-host")
         if let vm {
-            vm.hypervisorId = agentUUID.uuidString
+            vm.hypervisorId = agentID
             try await vm.save(on: app.db)
         }
         if let sandbox {
-            sandbox.hypervisorId = agentUUID.uuidString
+            sandbox.hypervisorId = agentID
             try await sandbox.save(on: app.db)
         }
-        return agentUUID.uuidString
+        return agentID
     }
 
     /// A full report that mentions neither VMs nor sandboxes: the agent holds

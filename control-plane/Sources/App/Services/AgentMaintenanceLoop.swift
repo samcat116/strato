@@ -710,7 +710,7 @@ actor AgentMaintenanceLoop {
     /// value keeps terminal records — and the quota they still hold — forever,
     /// which is a deliberate opt-in, not the default.
     static func sandboxRetentionHours(configuration: ControlPlaneConfiguration) -> Int? {
-        guard let raw = configuration.int(.sandboxRetentionHours) else { return nil }
+        let raw = configuration.int(.sandboxRetentionHours)
         return raw > 0 ? raw : nil
     }
 

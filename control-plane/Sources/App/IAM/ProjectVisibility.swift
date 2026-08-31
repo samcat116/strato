@@ -2,39 +2,10 @@ import Fluent
 import Foundation
 import Vapor
 
-/// Which projects a caller may see — the scoping question the project-scoped
-/// list endpoints (`/api/volumes`, `/api/networks`, `/api/security-groups`,
-/// `/api/floating-ips`) ask when the request names no `project_id` (issue #688).
-///
-/// Answering it is two steps, and the split between them is the whole design:
-///
-/// 1. **Narrow, in SQL.** From the caller's own grants, derive the projects
-///    they could conceivably reach: the containers their role bindings hang on,
-///    and the resource scopes of the authored permit policies in the compiled
-///    set. This is a *superset* by construction and is only ever permitted to
-///    be one — it exists to keep the row query off projects the caller has no
-///    path to, and decides nothing.
-/// 2. **Decide, in the evaluator.** Every candidate project that actually
-///    carries rows goes through the ordinary `view_project` check. Cedar has
-///    the last word, so guardrail and authored forbids, conditioned bindings,
-///    roles this replica has not compiled yet, and truncated ancestor chains
-///    all land exactly as they do on the item routes.
-///
-/// What this replaced was four copy-pasted `getAccessibleProjects` helpers that
-/// loaded **every project in the installation** and ran a full evaluation
-/// against each — `1 + P × ~7` queries before the endpoint's own query, with
-/// `P` the platform-wide project count. Deriving the set in pure SQL instead
-/// would be cheaper still, but it would be a second authorization model living
-/// next to the evaluator, agreeing with it only by prose: it would miss the
-/// ceilings that neutralise a real grant (a guardrail forbid, an authored
-/// forbid), and it would honour bindings the entity-slice loader deliberately
-/// skips. The narrow-then-decide split keeps one model and pays only for the
-/// projects the caller could plausibly see.
-///
-/// The remaining per-candidate evaluations are one decision each, and this type
-/// is the intended first consumer of the batch decision entry point (issue
-/// #687): when it lands, `readableProjects` becomes a single batched call and
-/// the whole resolution is O(1) queries.
+/// Narrows project-scoped list queries when no `project_id` is supplied
+/// (issue #688). SQL derives a conservative superset from the caller's grants;
+/// the evaluator still decides every candidate, so guardrails, authored
+/// policies, conditions, and truncated ancestor chains retain the final say.
 struct ProjectVisibility: Sendable {
 
     /// The projects to narrow a row query to, or nil when no bound can be

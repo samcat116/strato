@@ -20,10 +20,7 @@ private actor MessageCollector {
     }
 }
 
-/// Store-level tests for what is left of the phase-3 primitives (issue #261)
-/// once STR-152 removed the socket-route key and the value-carrying store
-/// operations that existed to serve it: pub/sub, and the doorbell payloads
-/// built on it.
+/// Store-level tests for pub/sub and doorbell payloads.
 @Suite("Replica Routing Primitive Tests")
 struct ReplicaRoutingPrimitiveTests {
 
@@ -94,10 +91,6 @@ struct ReplicaRoutingPrimitiveTests {
 /// AgentService-level doorbell tests (issue #261, STR-146): a mutation rings
 /// the fleet-wide broadcast without consulting any directory, an offline agent
 /// is rung anyway, and a socket close marks the agent offline.
-///
-/// The route-key half of this suite — registration claiming
-/// `agent:{name}:replica`, a close deferring to a foreign claim, and the two
-/// cross-replica RPC round trips — went with the directory itself in STR-152.
 @Suite("Replica Routing AgentService Tests", .serialized)
 final class ReplicaRoutingAgentServiceTests {
 
@@ -111,7 +104,6 @@ final class ReplicaRoutingAgentServiceTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let store = InMemoryCoordinationStore()
             let coordination = CoordinationService(store: store, logger: app.logger)
@@ -131,19 +123,6 @@ final class ReplicaRoutingAgentServiceTests {
         app: Application,
         named agentName: String = "routed-agent"
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: agentName,
-            hostname: "test-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
-            protocolVersion: WireProtocol.currentVersion
-        )
-        // New agents need an owning org; this harness creates no other data,
-        // so mint one on first use.
         let orgID: UUID
         if let existing = try await Organization.query(on: app.db).sort(\.$createdAt).first() {
             orgID = try existing.requireID()
@@ -152,9 +131,9 @@ final class ReplicaRoutingAgentServiceTests {
             try await org.save(on: app.db)
             orgID = try org.requireID()
         }
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: agentName, organizationScope: .organization(orgID))
-        return agentUUID.uuidString
+        return try await TestDataBuilder(db: app.db).registerAgent(
+            on: app, named: agentName, hostname: "test-host",
+            organizationScope: .organization(orgID))
     }
 
     /// The point of the broadcast: a mutation publishes without consulting

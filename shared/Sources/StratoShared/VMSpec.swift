@@ -21,22 +21,18 @@ public enum MetadataSource: String, Codable, CaseIterable, Sendable {
 /// sockets, machine types, queue sizing — is derived by each agent-side
 /// `HypervisorService` when it translates the spec into its driver-native form
 /// (QEMU arguments, Firecracker API calls, ...).
-/// > Adding a stored property here also means adding it to `withVolumes(_:)`
-/// > below, which has to enumerate every field because they are all `let`. A
-/// > field left out of that list is silently dropped from the spec of every VM
-/// > whose attachments change.
 public struct VMSpec: Codable, Sendable {
     /// Number of vCPUs the VM boots with.
-    public let cpus: Int
+    public private(set) var cpus: Int
     /// Maximum number of vCPUs (for hotplug on backends that support it).
-    public let maxCpus: Int
+    public private(set) var maxCpus: Int
     /// Guest memory size in bytes.
-    public let memoryBytes: Int64
+    public private(set) var memoryBytes: Int64
     /// Maximum guest memory in bytes (for hot-add on backends that support
     /// it), mirroring how `maxCpus` bounds vCPU hot-add. Equal to
     /// `memoryBytes` when the VM was created without headroom, in which case
     /// no hot-pluggable memory device is realized at all.
-    public let maxMemoryBytes: Int64
+    public private(set) var maxMemoryBytes: Int64
     /// Memory the guest may keep, in bytes, when an operator has asked for
     /// some of its grant back (issue #567 phase 2). Realized by inflating the
     /// VM's virtio-balloon device to `memoryBytes - balloonTargetBytes`, which
@@ -47,12 +43,12 @@ public struct VMSpec: Codable, Sendable {
     /// everything. Always at most `memoryBytes`; ballooning cannot hand a guest
     /// more memory than it was granted (that is `maxMemoryBytes` and
     /// virtio-mem).
-    public let balloonTargetBytes: Int64?
+    public private(set) var balloonTargetBytes: Int64?
     /// Disk requirement in bytes — the figure the scheduler gated placement on
     /// (`vm.disk`), carried so agents can account committed disk without
     /// deriving it from volumes (which don't carry sizes). Nil means the caller
     /// has no disk reservation to report.
-    public let diskBytes: Int64?
+    public private(set) var diskBytes: Int64?
     /// Whether guest memory should be file-backed/shared (required by e.g. vhost-user backends).
     public let sharedMemory: Bool
     /// Whether guest memory should be backed by huge pages.
@@ -68,9 +64,9 @@ public struct VMSpec: Codable, Sendable {
     public let guestAgentEnabled: Bool
     /// Managed volumes to attach, in boot order. Every VM has exactly one boot
     /// volume; image materialization belongs to that volume's desired state.
-    public let volumes: [VolumeSpec]
+    public private(set) var volumes: [VolumeSpec]
     /// Network interfaces, each referencing a logical network by name.
-    public let networks: [NetworkSpec]
+    public private(set) var networks: [NetworkSpec]
     /// Console preference. Drivers may realize this however their backend allows.
     public let console: ConsoleSpec?
     /// SSH public keys to authorize for the guest's default user. Injected via
@@ -165,86 +161,31 @@ public struct VMSpec: Codable, Sendable {
     /// default.
     public var effectiveMachine: MachineProfile { machine ?? .default }
 
-    /// A copy of this spec with a different volume list.
-    ///
-    /// Hand-enumerates every stored property because they are all `let`. Keep
-    /// it in step with the declarations above — see the note on the type.
-    ///
-    /// The agent uses this to keep a VM's manifest entry in step with the
-    /// attachments the volume reconciler has realized (STR-148): the entry's
-    /// `volumes` is the agent's durable record of what is plugged into the VM,
-    /// and it is what the spawn path rebuilds the guest's disk set from after
-    /// a power cycle or an agent restart.
+    /// A copy whose volume list records the attachments this agent has realized.
     public func withVolumes(_ volumes: [VolumeSpec]) -> VMSpec {
-        VMSpec(
-            cpus: cpus,
-            maxCpus: maxCpus,
-            memoryBytes: memoryBytes,
-            maxMemoryBytes: maxMemoryBytes,
-            balloonTargetBytes: balloonTargetBytes,
-            diskBytes: diskBytes,
-            sharedMemory: sharedMemory,
-            hugepages: hugepages,
-            boot: boot,
-            machine: machine,
-            guestAgentEnabled: guestAgentEnabled,
-            volumes: volumes,
-            networks: networks,
-            console: console,
-            sshAuthorizedKeys: sshAuthorizedKeys,
-            userData: userData,
-            metadataSource: metadataSource
-        )
+        var copy = self
+        copy.volumes = volumes
+        return copy
     }
 
-    /// A copy of this spec with a different network-interface list.
-    ///
-    /// The VM manifest uses this as its durable record of which NICs the agent
-    /// has realized, just as `withVolumes(_:)` records realized disks.
+    /// A copy whose network list records the interfaces this agent has realized.
     public func withNetworks(_ networks: [NetworkSpec]) -> VMSpec {
-        VMSpec(
-            cpus: cpus,
-            maxCpus: maxCpus,
-            memoryBytes: memoryBytes,
-            maxMemoryBytes: maxMemoryBytes,
-            balloonTargetBytes: balloonTargetBytes,
-            diskBytes: diskBytes,
-            sharedMemory: sharedMemory,
-            hugepages: hugepages,
-            boot: boot,
-            machine: machine,
-            guestAgentEnabled: guestAgentEnabled,
-            volumes: volumes,
-            networks: networks,
-            console: console,
-            sshAuthorizedKeys: sshAuthorizedKeys,
-            userData: userData,
-            metadataSource: metadataSource
-        )
+        var copy = self
+        copy.networks = networks
+        return copy
     }
 
     /// A copy with the desired resource-sizing fields while retaining the
     /// attachment lists already realized by this agent.
     public func withSizing(from desired: VMSpec) -> VMSpec {
-        VMSpec(
-            cpus: desired.cpus,
-            maxCpus: desired.maxCpus,
-            memoryBytes: desired.memoryBytes,
-            maxMemoryBytes: desired.maxMemoryBytes,
-            balloonTargetBytes: desired.balloonTargetBytes,
-            diskBytes: desired.diskBytes,
-            sharedMemory: sharedMemory,
-            hugepages: hugepages,
-            boot: boot,
-            machine: machine,
-            guestAgentEnabled: guestAgentEnabled,
-            volumes: volumes,
-            networks: networks,
-            console: console,
-            sshAuthorizedKeys: sshAuthorizedKeys,
-            userData: userData,
-            metadataSource: metadataSource
-        )
+        var copy = self
+        copy.cpus = desired.cpus
+        copy.maxCpus = desired.maxCpus
+        copy.memoryBytes = desired.memoryBytes
+        copy.maxMemoryBytes = desired.maxMemoryBytes
+        copy.balloonTargetBytes = desired.balloonTargetBytes
+        copy.diskBytes = desired.diskBytes
+        return copy
     }
 
 }

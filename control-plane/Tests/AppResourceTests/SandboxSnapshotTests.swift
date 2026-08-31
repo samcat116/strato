@@ -8,13 +8,8 @@ import AppTestSupport
 @testable import App
 
 /// Tests for the sandbox snapshot / checkpoint-resume surface (issue #426):
-/// `POST/GET/DELETE /api/sandboxes/:id/snapshots` and `.../restore` ride the
-/// generalized 202-operation machinery, snapshot rows and desired-state
-/// changes commit atomically with the operation record, storage quota admits
-/// the estimated footprint, and the agent RPC's verdict resolves the
-/// operation. No live agent socket exists in these tests, so background RPCs
-/// fail fast (`agentNotFound`) — which exercises exactly the failure
-/// bookkeeping (error rows, quota release, desired-state revert).
+/// desired snapshot artifacts, quota admission, observed-state completion,
+/// restore compatibility, export storage, and deletion guards.
 @Suite("Sandbox Snapshot Tests", .serialized)
 final class SandboxSnapshotTests {
 
@@ -25,7 +20,6 @@ final class SandboxSnapshotTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -64,15 +58,10 @@ final class SandboxSnapshotTests {
         supportsSnapshots: Bool = true,
         status: SandboxStatus = .running
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: "snapshot-agent",
+        let agentID = try await TestDataBuilder(db: app.db).registerAgent(
+            on: app,
+            named: "snapshot-agent",
             hostname: "test-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
             hypervisors: [
                 HypervisorSupport(
                     type: .firecracker,
@@ -87,15 +76,9 @@ final class SandboxSnapshotTests {
                         maxVCPUs: 32,
                         maxMemory: 32 * 1024 * 1024 * 1024))
             ],
-            protocolVersion: WireProtocol.currentVersion,
-            sandboxCapable: true
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: "snapshot-agent",
-            organizationScope: orgID.map { .organization($0) })
+            sandboxCapable: true)
 
-        sandbox.hypervisorId = agentUUID.uuidString
+        sandbox.hypervisorId = agentID
         sandbox.setStatus(status)
         sandbox.observedGeneration = 1
         sandbox.generation = 1
@@ -103,7 +86,7 @@ final class SandboxSnapshotTests {
             sandbox.desiredStatus = .running
         }
         try await sandbox.save(on: app.db)
-        return agentUUID.uuidString
+        return agentID
     }
 
     // MARK: - Create guards
@@ -667,15 +650,10 @@ final class SandboxSnapshotTests {
         architecture: CPUArchitecture? = CPUArchitecture.current,
         protocolVersion: Int = WireProtocol.currentVersion
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: name,
+        try await TestDataBuilder(db: app.db).registerAgent(
+            on: app,
+            named: name,
             hostname: "\(name)-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
             architecture: architecture,
             hypervisors: [
                 HypervisorSupport(
@@ -684,13 +662,7 @@ final class SandboxSnapshotTests {
             ],
             protocolVersion: protocolVersion,
             sandboxCapable: true,
-            hostInfo: HostInfo(cpuModel: cpuModel)
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: name,
-            organizationScope: orgID.map { .organization($0) })
-        return agentUUID.uuidString
+            hostInfo: HostInfo(cpuModel: cpuModel))
     }
 
     /// Seeds a ready snapshot with a complete export record.

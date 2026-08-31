@@ -24,8 +24,8 @@
 2. Database Connection:
 {{- if .Values.postgresql.enabled }}
    - PostgreSQL is deployed as part of this release
-   - Database: {{ .Values.strato.database.name }}
-   - Username: {{ .Values.strato.database.username }}
+   - Database: {{ include "strato-control-plane.databaseName" . }}
+   - Username: {{ include "strato-control-plane.databaseUsername" . }}
 {{- if not .Values.postgresql.auth.password }}
    - Password (auto-generated on first install):
      kubectl get secret --namespace {{ .Release.Namespace }} {{ .Release.Name }}-strato-credentials -o jsonpath='{.data.db-password}' | base64 -d

@@ -4,13 +4,13 @@ import { Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { UsageBar } from "./usage-bar";
-import type { ResourceQuota } from "@/types/api";
+import type { HierarchyQuota } from "@/types/api";
 
 interface QuotaCardProps {
-  quota: ResourceQuota;
+  quota: HierarchyQuota;
   canManage: boolean;
-  onEdit: (quota: ResourceQuota) => void;
-  onDelete: (quota: ResourceQuota) => void;
+  onEdit: (quota: HierarchyQuota) => void;
+  onDelete: (quota: HierarchyQuota) => void;
 }
 
 export function QuotaCard({
@@ -105,7 +105,7 @@ export function QuotaCard({
         {maxVolumes !== null && (
           <UsageBar
             label="Volumes"
-            used={usage.volumeCount}
+            used={usage.volumeCount ?? 0}
             limit={maxVolumes}
             percent={utilization.volumePercent ?? 0}
           />
@@ -118,7 +118,7 @@ export function QuotaCard({
             <>Networks: {usage.networkCount} / {limits.maxNetworks}</>
           )}
           {!quota.environment && maxVolumes === null && <> &middot; </>}
-          {maxVolumes === null && <>Volumes: {usage.volumeCount} (no limit)</>}
+          {maxVolumes === null && <>Volumes: {usage.volumeCount ?? 0} (no limit)</>}
         </div>
       )}
     </div>

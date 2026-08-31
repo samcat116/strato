@@ -37,7 +37,6 @@ final class VMOperationTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -103,31 +102,16 @@ final class VMOperationTests {
     /// Registers an agent and places `vm` on it, converged and running.
     @discardableResult
     private func placeOnAgent(app: Application, vm: VM) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: "reboot-agent",
-            hostname: "test-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40),
-            protocolVersion: WireProtocol.currentVersion)
-        let organization = try #require(
-            try await Organization.query(on: app.db).sort(\.$createdAt).first())
-        let orgID = try organization.requireID()
-        let site = Site(name: "VM Operation Site", organizationScope: .organization(orgID))
-        try await site.save(on: app.db)
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: "reboot-agent", siteID: try site.requireID(),
-            organizationScope: .organization(orgID))
+        let agentID = try await TestDataBuilder(db: app.db).registerAgent(
+            on: app, named: "reboot-agent", hostname: "test-host")
 
-        vm.hypervisorId = agentUUID.uuidString
+        vm.hypervisorId = agentID
         vm.setStatus(.running)
         vm.desiredStatus = .running
         vm.generation = 1
         vm.observedGeneration = 1
         try await vm.save(on: app.db)
-        return agentUUID.uuidString
+        return agentID
     }
 
     @Test("VM interface attach uses the lowest free stable slot and returns a 202 mutation")

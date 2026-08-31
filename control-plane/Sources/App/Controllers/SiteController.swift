@@ -380,9 +380,8 @@ struct SiteController: RouteCollection {
         // Changing site while the agent hosts VMs is the same hazard the
         // removal path guards: the old site's controller scopes its networks
         // by current membership, so networks referenced only by this agent's
-        // still-running VMs would drop out of the old shared NB. (A site-less
-        // agent's VMs live in its private local NB, which the new site's
-        // shared deployment won't contain either.) Require a drain first.
+        // still-running VMs would drop out of the old shared NB. Require a
+        // drain first.
         if agent.$site.id != targetSiteId {
             let hostedVMs = try await VM.query(on: req.db)
                 .filter(\.$hypervisorId == agentId.uuidString)

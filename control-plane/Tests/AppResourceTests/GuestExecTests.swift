@@ -24,7 +24,6 @@ final class GuestExecTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -66,15 +65,10 @@ final class GuestExecTests {
         named agentName: String = "exec-agent",
         supportsVMGuestExec: Bool? = nil
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: agentName,
+        let agentID = try await TestDataBuilder(db: app.db).registerAgent(
+            on: app,
+            named: agentName,
             hostname: "test-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
             hypervisors: [
                 HypervisorSupport(
                     type: .qemu,
@@ -84,24 +78,16 @@ final class GuestExecTests {
                     supportsVsock: true,
                     supportsGuestExec: supportsVMGuestExec)
             ],
-            protocolVersion: WireProtocol.currentVersion,
-            sandboxCapable: true
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let project = try #require(try await Project.query(on: app.db).sort(\.$createdAt).first())
-        let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: agentName, siteID: siteID,
-            organizationScope: orgID.map { .organization($0) })
+            sandboxCapable: true)
         if let sandbox {
-            sandbox.hypervisorId = agentUUID.uuidString
+            sandbox.hypervisorId = agentID
             try await sandbox.save(on: app.db)
         }
         if let vm {
-            vm.hypervisorId = agentUUID.uuidString
+            vm.hypervisorId = agentID
             try await vm.save(on: app.db)
         }
-        return agentUUID.uuidString
+        return agentID
     }
 
     private struct ExecBody: Content {
