@@ -17,6 +17,32 @@ struct GuestExecRequest: Content {
         guard !command.isEmpty else {
             throw Abort(.badRequest, reason: "'command' must be a non-empty array of strings")
         }
+        try Validate.stringList(command, "command", maxEntries: 128)
+        try Validate.stringMap(env, "env", maxEntries: 128)
+        _ = try Validate.text(workingDir, "workingDir")
+        guard !command[0].isEmpty else {
+            throw Abort(.badRequest, reason: "The executable in 'command' must not be empty")
+        }
+        guard command.allSatisfy({ !$0.contains("\0") }) else {
+            throw Abort(.badRequest, reason: "Entries in 'command' must not contain NUL characters")
+        }
+        if let env {
+            for (key, value) in env {
+                guard
+                    !key.isEmpty, !key.contains("="), !key.contains("\0"),
+                    !value.contains("\0")
+                else {
+                    throw Abort(
+                        .badRequest,
+                        reason:
+                            "Environment keys must be non-empty and contain neither '=' nor NUL; values must not contain NUL"
+                    )
+                }
+            }
+        }
+        guard workingDir?.contains("\0") != true else {
+            throw Abort(.badRequest, reason: "'workingDir' must not contain NUL characters")
+        }
     }
 }
 
@@ -127,9 +153,16 @@ struct GuestExecWebSocketController: RouteCollection {
             let sessionId = req.parameters.get("sessionID"),
             !sessionId.isEmpty
         else {
-            ws.send(
-                #"{"type":"error","message":"Invalid \#(resource.displayName) or session ID"}"#)
-            _ = ws.close(code: .unacceptableData)
+            Task {
+                await req.recordAPIRequestAudit(
+                    status: .badRequest,
+                    force: true,
+                    failOpen: true,
+                    redactErrorDetails: true)
+                try? await ws.send(
+                    #"{"type":"error","message":"Invalid \#(resource.displayName) or session ID"}"#)
+                try? await ws.close(code: .unacceptableData)
+            }
             return
         }
 
@@ -157,6 +190,7 @@ struct GuestExecWebSocketController: RouteCollection {
                     websocket: ws
                 )
             } catch {
+                let rejectionStatus = Self.attachRejectionStatus(for: error)
                 req.logger.warning(
                     "\(resource.logName) exec attach rejected: \(error)",
                     metadata: [
@@ -164,9 +198,26 @@ struct GuestExecWebSocketController: RouteCollection {
                         "resourceId": .string(resourceId.uuidString),
                         "sessionId": .string(sessionId),
                     ])
+                await req.recordAPIRequestAudit(
+                    status: rejectionStatus,
+                    force: true,
+                    failOpen: true,
+                    redactErrorDetails: true)
                 try? await ws.send(#"{"type":"error","message":"Invalid, expired, or already attached exec session"}"#)
                 try? await ws.close(code: .policyViolation)
                 return
+            }
+
+            // The HTTP middleware sees only a successful WebSocket upgrade,
+            // before this asynchronous handler validates authorization and
+            // consumes the session. Record the generic success only now that
+            // both checks have completed; rejection paths above record their
+            // final status instead.
+            if case .virtualMachine = resource {
+                await req.recordAPIRequestAudit(
+                    status: .switchingProtocols,
+                    failOpen: true,
+                    redactErrorDetails: true)
             }
 
             req.logger.info(
@@ -202,7 +253,10 @@ struct GuestExecWebSocketController: RouteCollection {
                             started = true
                         } catch {
                             req.logger.error("Failed to start guest exec on agent: \(error)")
-                            manager.removeSession(sessionId: sessionId)
+                            await manager.endSession(
+                                sessionId: sessionId,
+                                outcome: .refused,
+                                reason: "Could not dispatch exec start: \(error.localizedDescription)")
                             try? await ws.send(
                                 #"{"type":"error","message":"Failed to start exec session on agent"}"#)
                             try? await ws.close(code: .unexpectedServerError)
@@ -233,7 +287,10 @@ struct GuestExecWebSocketController: RouteCollection {
                         if started {
                             try? await manager.sendExecClose(sessionId: sessionId, reason: "browser disconnected")
                         }
-                        manager.removeSession(sessionId: sessionId)
+                        await manager.endSession(
+                            sessionId: sessionId,
+                            outcome: .terminated,
+                            reason: "browser disconnected")
                     }
                 }
             }
@@ -334,6 +391,23 @@ struct GuestExecWebSocketController: RouteCollection {
         }
     }
 
+    private static func attachRejectionStatus(for error: any Error) -> HTTPResponseStatus {
+        switch error as? GuestExecSessionError {
+        case .sessionNotFound:
+            return .notFound
+        case .sessionExpired:
+            return .gone
+        case .sessionMismatch:
+            return .forbidden
+        case .alreadyAttached:
+            return .conflict
+        case .agentNotConnected:
+            return .internalServerError
+        case nil:
+            return (error as? any AbortError)?.status ?? .internalServerError
+        }
+    }
+
     /// Authenticates the request and re-checks the resource's exec permission.
     /// Returns the user ID on success; on any failure it
     /// reports the error over the socket, closes it, and returns nil.
@@ -348,12 +422,22 @@ struct GuestExecWebSocketController: RouteCollection {
         do {
             guard let user = req.auth.get(User.self) else {
                 req.logger.warning("Guest exec WebSocket authentication failed - no user found")
+                await req.recordAPIRequestAudit(
+                    status: .unauthorized,
+                    force: true,
+                    failOpen: true,
+                    redactErrorDetails: true)
                 try? await ws.send(#"{"type":"error","message":"Authentication required"}"#)
                 try? await ws.close(code: .policyViolation)
                 return nil
             }
 
             guard let userId = user.id?.uuidString, !userId.isEmpty else {
+                await req.recordAPIRequestAudit(
+                    status: .unauthorized,
+                    force: true,
+                    failOpen: true,
+                    redactErrorDetails: true)
                 try? await ws.send(#"{"type":"error","message":"Invalid user session"}"#)
                 try? await ws.close(code: .policyViolation)
                 return nil
@@ -372,6 +456,11 @@ struct GuestExecWebSocketController: RouteCollection {
                         "resourceId": .string(resourceId.uuidString),
                         "userId": .string(userId),
                     ])
+                await req.recordAPIRequestAudit(
+                    status: .forbidden,
+                    force: true,
+                    failOpen: true,
+                    redactErrorDetails: true)
                 try? await ws.send(
                     #"{"type":"error","message":"You do not have permission to exec into this \#(resource.displayName)"}"#
                 )
@@ -382,6 +471,13 @@ struct GuestExecWebSocketController: RouteCollection {
             return userId
         } catch {
             req.logger.error("Guest exec WebSocket handler error: \(error)")
+            let status = (error as? any AbortError)?.status ?? .internalServerError
+            await req.recordAPIRequestAudit(
+                status: status,
+                error: error,
+                force: true,
+                failOpen: true,
+                redactErrorDetails: true)
             try? await ws.close(code: .unexpectedServerError)
             return nil
         }

@@ -30,7 +30,7 @@ import Vapor
 ///
 ///  - **Serialization.** A session-scoped `pg_advisory_lock` is held for the
 ///    duration. It cannot be `pg_advisory_xact_lock` (the idiom
-///    `IPAMService.lockAllocations` and `QuotaEnforcementService.lockQuotas`
+///    `IPAMService.lockNetworkAllocations` and `QuotaEnforcementService.lockQuotas`
 ///    use): the phase is many transactions, so an xact-scoped lock would
 ///    release at the first statement boundary. A session-scoped lock lives on
 ///    its connection, which is why the connection has to be pinned.
@@ -53,10 +53,9 @@ import Vapor
 /// replaced.
 enum SchemaMigrator {
 
-    /// The advisory lock every control-plane process takes before touching the
-    /// schema. Hashed with `hashtext` at the call site, matching the string-keyed
-    /// idiom the IPAM and quota locks use.
-    static let lockName = "strato:schema-migrations"
+    /// Operator-facing name for the typed advisory-lock namespace every
+    /// control-plane process takes before touching the schema.
+    static let lockName = AdvisoryLockNamespace.schemaMigration.name
 
     /// Whether this process migrates at all. Defaults to true, so compose,
     /// local development and the test harness are untouched; a deployment that
@@ -139,14 +138,12 @@ enum SchemaMigrator {
             }
 
             let migrate = {
-                let lock = try await acquireLock(
+                try await withMigrationLock(
                     on: connection,
                     timeout: options.lockTimeout,
                     poll: options.lockPoll,
                     logger: logger
-                )
-
-                try await whileHolding(lock, logger: logger) {
+                ) { lockedConnection in
                     // Under the lock: create `_fluent_migrations` if it is missing,
                     // then read the unapplied list. Both have to happen here rather
                     // than before the lock — a list read outside it is exactly the
@@ -156,12 +153,13 @@ enum SchemaMigrator {
                     if pending.isEmpty {
                         logger.info("[SchemaMigrator] Schema is up to date")
                     } else {
-                        let batch = try await nextBatchNumber(on: connection)
+                        let batch = try await nextBatchNumber(on: lockedConnection)
                         logger.info(
                             "[SchemaMigrator] Applying \(pending.count) migration(s)",
                             metadata: ["batch": .stringConvertible(batch)]
                         )
-                        try await applyBatch(pending, batch: batch, on: connection, logger: logger)
+                        try await applyBatch(
+                            pending, batch: batch, on: lockedConnection, logger: logger)
                     }
                 }
             }
@@ -309,107 +307,40 @@ enum SchemaMigrator {
 
     // MARK: - The advisory lock
 
-    /// A held advisory lock.
-    struct LockHandle {
-        let release: @Sendable () async throws -> Void
-    }
-
-    /// Runs `body`, then releases `lock` exactly once on either outcome. When
-    /// both fail, the migration error stays primary and the cleanup failure is
-    /// logged alongside it.
-    private static func whileHolding(
-        _ lock: LockHandle,
-        logger: Logger,
-        body: () async throws -> Void
-    ) async throws {
-        var bodyError: (any Error)?
-        do {
-            try await body()
-        } catch {
-            bodyError = error
-        }
-
-        do {
-            try await lock.release()
-        } catch {
-            guard let bodyError else { throw error }
-            logger.error(
-                "[SchemaMigrator] Failed to release the migration lock after the migration phase failed",
-                metadata: [
-                    "migrationError": .string(String(reflecting: bodyError)),
-                    "releaseError": .string(String(reflecting: error)),
-                ]
-            )
-        }
-
-        if let bodyError { throw bodyError }
-    }
-
-    /// Takes the migration lock, polling `pg_try_advisory_lock` rather than
-    /// blocking in `pg_advisory_lock`, so a wedged migration on another replica
-    /// surfaces as a named error instead of a readiness gate that never opens.
+    /// Runs `body` under the schema-migration session lock. The shared lock
+    /// module polls with `pg_try_advisory_lock`, so a wedged migration on
+    /// another replica surfaces as a named error instead of a readiness gate
+    /// that never opens.
     ///
     /// Postgres has been the only supported backend since the SQLite removal.
     /// Fail hard if that contract changes under us: silently skipping the lock
     /// would restore the cross-replica migration race this type exists to stop.
-    static func acquireLock(
+    static func withMigrationLock(
         on connection: any Database,
         timeout: Double,
         poll: Double,
-        logger: Logger
-    ) async throws -> LockHandle {
-        guard let sql = connection as? any SQLDatabase else {
-            let error = SchemaMigrationError.postgresRequired(actualDialect: nil)
-            logger.critical("\(error.description)")
-            throw error
-        }
-        guard sql.dialect.name == "postgresql" else {
-            let error = SchemaMigrationError.postgresRequired(actualDialect: sql.dialect.name)
-            logger.critical("\(error.description)")
-            throw error
-        }
-
-        let name = lockName
-        let started = Date()
-        var attempt = 0
-
-        while true {
-            attempt += 1
-            let acquired =
-                try await sql.raw("SELECT pg_try_advisory_lock(hashtext(\(bind: name))) AS acquired")
-                .first(decodingColumn: "acquired", as: Bool.self) ?? false
-            if acquired {
-                if attempt > 1 {
-                    logger.notice(
-                        "[SchemaMigrator] Acquired the migration lock",
-                        metadata: [
-                            "lock": .string(name),
-                            "waitedSeconds": .stringConvertible(Int(Date().timeIntervalSince(started))),
-                        ]
-                    )
-                }
-                return LockHandle(release: {
-                    // Must actually run: the connection goes back to the pool
-                    // afterwards, and a session-scoped lock rides the session,
-                    // not the transaction.
-                    _ = try await sql.raw("SELECT pg_advisory_unlock(hashtext(\(bind: name)))").all()
-                })
+        logger: Logger,
+        body: @escaping @Sendable (any Database) async throws -> Void
+    ) async throws {
+        do {
+            try await AdvisoryLock.withSessionLock(
+                .singleton(.schemaMigration),
+                on: connection,
+                timeout: .seconds(timeout),
+                pollInterval: .seconds(poll),
+                logger: logger,
+                operation: body)
+        } catch let error as AdvisoryLockError {
+            switch error {
+            case .acquisitionTimedOut:
+                throw SchemaMigrationError.lockTimeout(lockName: lockName, seconds: timeout)
+            case .postgresRequired(let actualDialect):
+                let mapped = SchemaMigrationError.postgresRequired(actualDialect: actualDialect)
+                logger.critical("\(mapped.description)")
+                throw mapped
+            case .transactionRequired, .releaseFailed:
+                throw error
             }
-
-            let elapsed = Date().timeIntervalSince(started)
-            guard elapsed < timeout else {
-                throw SchemaMigrationError.lockTimeout(lockName: name, seconds: timeout)
-            }
-            logger.notice(
-                "[SchemaMigrator] Waiting for the migration lock; another replica is migrating",
-                metadata: [
-                    "lock": .string(name),
-                    "attempt": .stringConvertible(attempt),
-                    "elapsedSeconds": .stringConvertible(Int(elapsed)),
-                    "timeoutSeconds": .stringConvertible(Int(timeout)),
-                ]
-            )
-            try await Task.sleep(for: .seconds(poll))
         }
     }
 }

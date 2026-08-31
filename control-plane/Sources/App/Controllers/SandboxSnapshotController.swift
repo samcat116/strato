@@ -1,6 +1,5 @@
 import Fluent
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -202,10 +201,9 @@ extension SandboxController {
 
         // The lineage guard is a data-dependency rule, not a lifecycle one:
         // deleting a checkpoint that live forks were built from would break
-        // them. Checked here and again under the lineage lock inside the
-        // mutation, and shared with the retention sweep so a clock is refused
-        // for exactly the reasons a human is.
-        try await Self.lockSnapshotLineage([snapshotID], on: req.db)
+        // them. This is a readable preflight; `SnapshotArtifactMutation.delete`
+        // checks it authoritatively under the lineage lock in its transaction,
+        // shared with every API and retention deletion path.
         if let blocker = try await SnapshotDeletionGuard.blocker(for: snapshot, on: req.db) {
             throw Abort(.conflict, reason: blocker)
         }
@@ -354,12 +352,8 @@ extension SandboxController {
     /// the snapshot IDs they touch. Postgres advisory locks span replicas and
     /// live until the enclosing transaction commits.
     static func lockSnapshotLineage(_ snapshotIDs: [UUID], on db: any Database) async throws {
-        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
-        for snapshotID in Set(snapshotIDs).sorted(by: { $0.uuidString < $1.uuidString }) {
-            try await sql.raw(
-                "SELECT pg_advisory_xact_lock(hashtext(\(bind: "sandbox-snapshot-lineage:\(snapshotID.uuidString)")))"
-            ).run()
-        }
+        try await AdvisoryLock.acquireTransactionLocks(
+            .sandboxSnapshotLineage, objectIDs: snapshotIDs, on: db)
     }
 
     /// Removes the exported object-store copies of every snapshot belonging

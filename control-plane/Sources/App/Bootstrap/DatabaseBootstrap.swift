@@ -18,7 +18,16 @@ extension Application {
         // commits each migration with its log row.
         var schemaMigrationOptions = SchemaMigrator.Options.fromConfiguration(controlPlaneConfiguration)
         schemaMigrationOptions.statementTimeouts = databaseStatementTimeouts
-        try await SchemaMigrator.run(on: self, options: schemaMigrationOptions)
+        do {
+            try await SchemaMigrator.run(on: self, options: schemaMigrationOptions)
+        } catch {
+            // In particular, let a legacy MAC collision name every affected NIC
+            // before the ledger migration refuses to install only half its safety
+            // constraints. Schemas too old to have both interface tables simply
+            // make this best-effort diagnostic unavailable.
+            try? await MACAddressAudit.warnAboutDuplicates(on: db, logger: logger)
+            throw error
+        }
     }
 
     private func configureDatabaseDriver() throws -> SchemaMigrator.StatementTimeouts? {
@@ -110,6 +119,9 @@ extension Application {
         // STR-79: durable captured VM command state with cold output payloads.
         migrations.add(CreateVMCommandExecutions())
 
+        // STR-84: append-only guest command and interactive execution facts.
+        migrations.add(AddVMGuestExecutionAudit())
+
         // STR-154: preserve the attachment case and its coordinates instead of
         // interpreting every agent-owned storage reference as a host path.
         migrations.add(ReplaceVolumeReplicaDatasetPath())
@@ -117,6 +129,15 @@ extension Application {
         // STR-156: durable agent-reported physical disk inventory and operator OSD
         // eligibility intent. Missing disks remain rows until their agent is removed.
         migrations.add(CreateStorageDevices())
+
+        // STR-288: one fleet-wide ledger owns VM and sandbox NIC MAC uniqueness.
+        // Existing addresses are retained exactly; incompatible legacy rows make
+        // this migration fail closed with their interface ids.
+        migrations.add(CreateMACAddressLedger())
+
+        // STR-33: optional one-per-network stateless ACLs with ordered ingress and
+        // egress rules. Existing logical networks intentionally keep no ACL row.
+        migrations.add(CreateNetworkACLs())
 
         // STR-287: keep a per-VM assembly failure visible even though the agent's
         // heartbeat still reports convergence for its last successfully received

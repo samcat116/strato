@@ -1,10 +1,13 @@
 // Network API endpoints
 
-import { api } from "./client";
+import { api, ApiError } from "./client";
 import { listAllPages } from "./pagination";
 import type {
   Network,
+  NetworkACL,
+  NetworkACLRule,
   CreateNetworkRequest,
+  CreateNetworkACLRuleRequest,
   UpdateNetworkRequest,
 } from "@/types/api-contracts";
 
@@ -30,5 +33,51 @@ export const networksApi = {
 
   delete(id: string): Promise<void> {
     return api.delete(`/api/networks/${id}`);
+  },
+
+  async getACL(
+    networkId: string,
+    signal?: AbortSignal
+  ): Promise<NetworkACL | null> {
+    try {
+      return await api.get<NetworkACL>(
+        `/api/networks/${networkId}/acl`,
+        undefined,
+        signal
+      );
+    } catch (error) {
+      // An ACL is optional. The backend represents absence as 404 because
+      // there is no subresource to return, not as a failed network lookup.
+      if (
+        error instanceof ApiError &&
+        error.status === 404 &&
+        error.message === "Network ACL not found"
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  },
+
+  createACL(networkId: string): Promise<NetworkACL> {
+    return api.post<NetworkACL>(`/api/networks/${networkId}/acl`);
+  },
+
+  deleteACL(networkId: string): Promise<void> {
+    return api.delete(`/api/networks/${networkId}/acl`);
+  },
+
+  createACLRule(
+    networkId: string,
+    data: CreateNetworkACLRuleRequest
+  ): Promise<NetworkACLRule> {
+    return api.post<NetworkACLRule>(
+      `/api/networks/${networkId}/acl/rules`,
+      data
+    );
+  },
+
+  deleteACLRule(networkId: string, ruleId: string): Promise<void> {
+    return api.delete(`/api/networks/${networkId}/acl/rules/${ruleId}`);
   },
 };

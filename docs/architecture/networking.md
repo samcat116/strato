@@ -33,8 +33,14 @@ Most of the layered model below is implemented. What exists today:
   advertisement via OVN dynamic routing + FRR (§Phase 3).
 - **Security groups** as OVN ACLs on port groups, with a site-wide
   default-drop group (§Security groups).
+- **Network ACLs** as optional, ordered stateless ACLs on tenant logical
+  switches, composed with security groups through OVN tiers (§Network ACLs).
 - **IPv4/IPv6 dual-stack**: a generated ULA /64 alongside each network's v4
   subnet by default, per-family NIC address rows, RA + DHCPv6 delivery.
+- **Fleet-wide MAC allocation.** VM and sandbox NICs draw locally administered
+  unicast addresses from `MACAllocator`; a shared database ledger makes the
+  canonical MAC unique across both interface tables, while per-table unique
+  constraints provide an additional backstop.
 - **Instance metadata (IMDS)**: guests read their own metadata over HTTP at
   `169.254.169.254` / `[fd00:ec2::254]` behind a mandatory IMDSv2-style token
   handshake (STR-56). The document rides the sync (wire v26). QEMU guests use
@@ -110,6 +116,19 @@ is only visible through the QEMU guest agent, reported per-MAC and persisted
 separately (`vm_interface_observed_addresses`) so the API and UI can show
 observed alongside allocated (issue #563). See
 [agent](./agent.md#qemu-guest-agent-qga).
+
+The NIC's MAC comes from `MACAllocator`, not from the agent or a vendor OUI.
+It uses the locally administered `02:` prefix plus 40 random bits, canonicalized
+as six lowercase colon-separated octets by `MACAddress`. Randomness supplies a
+candidate, not the uniqueness guarantee: allocation inserts it into
+`mac_address_allocations`, whose primary key spans VM and sandbox interfaces,
+and redraws on conflict. Each interface table also has a unique `mac_address`
+constraint. Deleting an interface releases its ledger row through a database
+trigger, including when its owning workload is cascade-deleted. Existing MACs
+are never renumbered during upgrade; the ledger migration backfills them and
+refuses to install over a collision while naming every affected interface. A
+startup audit repeats that diagnosis and records the duplicate-group gauge so
+a damaged or incorrectly recorded schema cannot make a collision silent.
 
 ## The layered model
 
@@ -578,8 +597,9 @@ the snapshot arm still queued behind it (STR-104) are in
 ## Security groups
 
 Stateful, NIC-level firewalling modeled AWS-style and realized as **OVN ACLs
-on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
-(v24 added per-rule ACL logging).
+on Port_Groups** (the OpenStack/ovn-kubernetes pattern). The fields first
+shipped in wire v20 (v24 added per-rule ACL logging); the current v53 contract
+is lockstep and has no per-feature protocol-version gates.
 
 ### Model (control plane)
 
@@ -629,12 +649,9 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
     member of anything.
 
   The attach gate is correspondingly two-part for a sandbox (STR-103): its
-  host must speak v20 *and* advertise sandbox networking, since only then does
-  the port exist to be filtered. Enforcing the version half alone — all that
-  existed before the capability did — would have refused attaches that were
-  still inert while passing a v20 agent that cannot realize a sandbox NIC at
-  all. `SandboxDetail.securityGroupsEnforced` reports the same answer the gate
-  does.
+  host must advertise sandbox networking, so a port exists to be filtered, and
+  its site's live topology authority must be able to author the ACLs.
+  `SandboxDetail.securityGroupsEnforced` reports the same answer the gate does.
 
 ### Wire and rollout
 
@@ -647,31 +664,28 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
   port unmanaged (it joins no groups, drop group included), which is what
   keeps legacy traffic flowing for ports created before the feature.
 - **The API says when filtering is inert.** `VMDetail.securityGroupsEnforced`
-  is false when a realizing agent — the host, or its site's network
-  controller — registered pre-v20, *or* when nothing would author the site's
-  ACLs at all (no controller, or an unusable one), so neither a mixed-version
-  fleet nor a broken site can quietly show attached groups that no ACL
-  applies; nil means the VM is unplaced. It and the attach/detach gate share
-  one resolution (`SecurityGroupService.realization`, itself resolved through
-  `SiteNetworkAuthority`) so they cannot disagree. Per-NIC membership is on
-  the same response (`NetworkInterface.securityGroupIds`), absent rather than
-  empty when the server didn't load it.
-- Per-rule `log` (v24) is additive with **no gate**, unlike v20's fields: a
-  pre-v24 agent builds the identical enforcing ACL and only omits the log
-  line, so the failure mode is a missing diagnostic, not open traffic.
+  is false when nothing would author the site's ACLs at all (no controller, or
+  an unusable one), so a broken site cannot quietly show attached groups that
+  no ACL applies; nil means the VM is unplaced. It and the attach/detach gate
+  share one resolution (`SecurityGroupService.realization`, itself resolved
+  through `SiteNetworkAuthority`) so they cannot disagree. Per-NIC membership
+  is on the same response (`NetworkInterface.securityGroupIds`), absent rather
+  than empty when the server didn't load it.
+- Per-rule `log` remains an optional field within the exact contract. It changes
+  diagnostics, not the rule's enforcing verdict.
 
 ### Enforcement (agent)
 
 - One OVN **Port_Group per group** (`pg_<uuid-hex>` — identifier-safe, since
   the name appears in match expressions and in OVN's auto-generated
   `$pg_…_ip4`/`_ip6` address sets, which is also what makes group-reference
-  peers work with zero IP bookkeeping). One `allow-related` ACL per rule at
-  priority 1002, built by the pure `SecurityGroupACLBuilder`
+  peers work with zero IP bookkeeping). One tier-2 `allow-related` ACL per rule
+  at priority 1002, built by the pure `SecurityGroupACLBuilder`
   (`agent/Sources/StratoAgentCore/SecurityGroupReconciler.swift`).
 - The site-singleton **`pg_strato_drop`** group holds every managed port and
-  provides the default deny: both-direction `ip` drops at priority 1001 (ARP
-  is not `ip`, so address resolution survives) plus DHCPv4/v6, IPv6
-  ND/RS/RA, and MLD carve-outs at 1002. MLD is spelled as explicit
+  provides the default deny: tier-2, both-direction `ip` drops at priority
+  1001 (ARP is not `ip`, so address resolution survives) plus tier-0 DHCPv4/v6,
+  IPv6 ND/RS/RA, and MLD carve-outs at 1002. MLD is spelled as explicit
   `icmp6.type` values rather than OVN's `mldv1`/`mldv2` predicates, so the
   match parses on every OVN version we support — and it is **asymmetric**: a
   member port may send listener Reports and Dones (131/132/143) but only
@@ -700,8 +714,8 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
 
 ### The implicit link-local allows
 
-The drop group also carries `allow-related` ACLs for egress to the link-local
-services, at priority **1003** — above every rule-derived allow. Six of them,
+The drop group also carries tier-0 `allow-related` ACLs for egress to the
+link-local services, at priority **1003** within that tier. Six of them,
 because an OVN ACL match is per family *and* per protocol:
 
 - instance metadata (STR-54): `169.254.169.254:80` and `[fd00:ec2::254]:80`;
@@ -768,14 +782,10 @@ in its own right rather than a plausible allocation, and nothing rejects one
 today. An operator who insists on numbering a network out of link-local space
 inherits both carve-outs pointed at their own addresses.
 
-The step above 1002 still buys nothing against *rules* — a security-group rule
-can only allow, so nothing at rule priority can contradict this one — and it is
-there because the rule vocabulary is control-plane data, and the
-switch-attached stateless NACLs below are the deny-capable shape: two ACLs
-matching at equal priority resolve arbitrarily in OVN, so sharing 1002 would
-make "non-overridable" a property of today's rule model rather than of this
-ACL. What the step *has* bought is the room the kill switch's deny now sits in,
-one above it at 1004.
+The link-local allows and the metadata kill switch now live in system tier 0,
+ahead of both tenant policy layers. Their priorities still order policy *within*
+that tier: the metadata deny at 1004 wins over the service allow at 1003. A
+tenant NACL deny or security-group default drop cannot strand platform traffic.
 
 Three scoping decisions, each narrowing what the carve-out opens:
 
@@ -796,16 +806,13 @@ Three scoping decisions, each narrowing what the carve-out opens:
   alternative (a per-network port group) is a whole new object lifetime bought
   for the ability to deny traffic that already goes nowhere.
 
-`dropGroupRevision` was bumped to **5** (4 added the metadata allow, 5 the
-resolver's) so the drop group is rewritten on upgrade instead of waiting for an
-unrelated rule edit. Note **whose** upgrade:
-port groups and their ACLs are authored only by the site's network-controller
-agent, so the carve-out appears when *that* agent reaches this build — in a
-mixed-version site with an older authority, guests on freshly upgraded agents
-keep getting IMDS dropped. The reverse is safe: `needsACLRewrite` returns false
-when the planned generation is *older* than the observed one, so an authority
-still on revision 3 leaves a revision-4 drop group alone rather than stripping
-the carve-out back off.
+`dropGroupRevision` is **6** (4 added the metadata allow, 5 the resolver, and 6
+widened the resolver carve-out to the full per-network link-local space). STR-33
+does not change that counter. It bumps **`aclSchemaRevision` from 2 to 3** so
+the topology authority rewrites every managed security-group ACL into the new
+tier layout without waiting for an unrelated rule edit. `needsACLRewrite`
+still refuses to replace an observed generation newer than its plan, so a
+stale desired payload cannot strip newer policy back off.
 
 ### The per-instance kill switch
 
@@ -878,9 +885,8 @@ mutation's dispatch.
 - A sandbox's groups are realized on every topology authority, but its NIC is
   only a member of them on a host that advertises sandbox networking (STR-103
   — see the model section above).
-- Network-level stateless ACLs (NACLs, switch-attached) are a follow-up, as
-  are ACL meters/stats — `log` is wired, `meter` is not, so a chatty logged
-  rule has no rate limit.
+- ACL meters/stats remain a follow-up — `log` is wired, `meter` is not, so a
+  chatty logged rule has no rate limit.
 - The per-network resolver puts one interface and one `ip rule` per network in
   the **host** namespace. Forwarding off, loose `rp_filter`, ARP scoped to the
   interface's own addresses, RAs ignored, an ingress policer and a source-keyed
@@ -891,11 +897,104 @@ mutation's dispatch.
   preflight reports rather than fixes.
 - Resolver indexes are allocated fleet-wide from ~65k addresses and are never
   reused while a network holds one; exhaustion is a `409` on network create.
-- A mixed-version site whose network-controller agent predates
-  `dropGroupRevision` 5 leaves the resolver carve-out off for every port in the
-  site, including ports on hosts that already run a resolver. On a network whose
-  guests are in a restrictive security group that reads as a broken resolver
-  until the controller is upgraded.
+- A site whose network-controller is stale or unhealthy can leave the resolver
+  carve-out absent for every port in the site, including ports on hosts that
+  already run a resolver. On a network whose guests are in a restrictive
+  security group that reads as a broken resolver until the authority recovers.
+
+## Network ACLs
+
+Network ACLs (NACLs, STR-33) are the stateless network-level complement to
+stateful NIC security groups. One optional **`NetworkACL`** attaches to a
+`LogicalNetwork`; its OVN ACL rows attach directly to that network's logical
+switch, so the policy applies regardless of each port's security-group
+membership. Existing networks have no ACL row and are not backfilled: filtering
+begins only when an operator explicitly creates one.
+
+### Model and API
+
+- **`NetworkACLRule`** rows are immutable (edit = delete + recreate). Ingress
+  and egress have independent rule-number spaces from 1 through 32766; lower
+  numbers run first. A rule carries an `allow` or `deny` action, address family,
+  required source CIDR (ingress) or destination CIDR (egress), and optional
+  `tcp`/`udp` ports or ICMP type/code. Each ACL accepts at most 100 rules.
+- Both directions have an implicit default deny. Creating the ACL before adding
+  rules therefore blocks unmatched IP traffic in both directions immediately;
+  deleting the ACL removes network-level filtering but leaves NIC security
+  groups in force.
+- The nested API is `GET`/`POST`/`DELETE /api/networks/{networkId}/acl`,
+  `POST /api/networks/{networkId}/acl/rules`, and
+  `DELETE /api/networks/{networkId}/acl/rules/{ruleId}`. It inherits the owning
+  network's `network:read` and `network:update` permissions rather than creating
+  a second IAM resource tree.
+- Every rule mutation advances both the ACL generation and its logical
+  network's outer generation. Deletion advances the network generation in the
+  same transaction, preventing an older desired payload from resurrecting the
+  last removed policy.
+
+### Wire, authority, and OVN tiers
+
+Wire v53 adds `DesiredNetworkState.networkACLs`. `nil` means the receiving agent
+has no opinion, `[]` authoritatively tears down managed switch ACLs, and the
+schema-enforced one-element list carries the full current policy. This is an
+exact-version payload change, not a `supportsNetworkACLs` capability. The site's
+live overlay topology authority is the only agent allowed to write the shared
+logical-switch rows.
+
+OVN priorities do not compose switch ACLs and port-group ACLs as two independent
+policy boundaries: the highest-priority matching terminal verdict would let one
+layer bypass the other. Strato uses OVN's tier and `pass` semantics instead:
+
+| OVN tier | Owner | Behavior |
+| --- | --- | --- |
+| 0 | System services | Terminal DHCP, IPv6 control, metadata, and resolver allows; metadata kill-switch deny |
+| 1 | Network ACL | API `deny` becomes `drop`; API `allow` becomes `pass`; unmatched IP traffic drops |
+| 2 | Security group | Stateful `allow-related` rules and the managed-port default drop |
+
+The agent maps rule number `n` to OVN priority `32767 - n`, leaving priority 0
+for each direction's implicit default drop. A network `allow` deliberately maps
+to `pass`, not terminal `allow`: it advances to tier 2, so a new flow must satisfy
+both the network ACL and its applicable NIC security groups. System traffic
+stays in tier 0 so tenant policy cannot strand services the platform needs to
+configure and identify guests.
+
+Before attaching any tier-1 policy, the topology authority rewrites all planned
+security-group ACLs with tier-aware builder revision 3 and verifies that
+revision from OVN. This prevents an old tier-0 security-group allow from
+bypassing the new network layer during rollout.
+
+Network ACL replacement is full-policy and generation stamped, but mixed
+allow/deny rules cannot use a create-all-before-delete-all swap: opposite
+verdicts at the same priority have undefined ordering in OVN. The reconciler
+therefore fails closed in stages:
+
+1. Attach temporary priority-32767 drops in both directions, above every user
+   rule.
+2. Remove old positive verdicts, then old drops.
+3. Attach the new implicit defaults, explicit drops, and positive verdicts.
+4. Remove the temporary guards and stamp the logical switch with the completed
+   generation.
+
+An interrupted replacement can temporarily deny a permitted flow, but cannot
+let an old positive verdict outrank the guard and open traffic the new policy
+blocks. Guards have their own managed row kind and are reused across retries,
+so the next level-triggered sync can safely finish an incomplete generation.
+Teardown only removes ACLs attached to that switch with Strato's managed
+network-ACL ownership markers, leaving operator and other subsystem rows
+untouched.
+
+### Established-flow limitation
+
+The NACL rules themselves are stateless and never create connection-tracking
+state. OVN's later tier-2 `allow-related` security-group verdict does: OVN
+documents that established return traffic admitted by that state cannot be
+changed by another ACL. Consequently, editing a network ACL is deterministic
+for new packets but cannot retroactively block the return side of an already
+established security-group connection. Exact AWS-style independent return-path
+filtering would require a data-plane enforcement point before OVN's stateful ACL
+shortcut, not another priority assignment. See
+[ADR 0010](../adr/0010-layer-network-acls-with-ovn-tiers.md) for the composition
+and rollout decision.
 
 ## OVN dynamic routing (native, 25.03+)
 

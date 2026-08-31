@@ -40,6 +40,24 @@ To install with custom values:
 helm install strato-control-plane ./helm/strato-control-plane -f my-values.yaml
 ```
 
+## Upgrades
+
+The control-plane Deployment deliberately uses Kubernetes' `Recreate` strategy.
+STR-275 moved advisory locks from the legacy one-argument PostgreSQL keyspace to
+the disjoint two-argument keyspace, so an old and a new control-plane process do
+not protect each other. Kubernetes must terminate every old pod before it starts
+the replacement set. Expect a brief API and agent-channel outage while the old
+pods drain and the new pods boot; durable state remains in PostgreSQL and agents
+reconnect automatically.
+
+For the first upgrade across this boundary, stage the new chart while keeping
+the exact current image tag, verify the Deployment reports `Recreate`, and only
+then upgrade to the new image. That leaves a non-overlapping Helm revision to
+roll back to if the new image fails. Do not run a blue/green control-plane or a
+second Helm release against the same database during this cutover. See the
+[Kubernetes upgrade runbook](../../docs/deployment/kubernetes.md#upgrades) for
+the complete sequence.
+
 ## Configuration
 
 ### Required Configuration
@@ -148,6 +166,9 @@ startup rather than run with an unbounded query.
 | `resources.requests.memory` | string | `"512Mi"` | Memory request |
 | `strato.logLevel` | string | `"info"` | Log level (debug, info, warn, error) |
 | `strato.database.statementTimeoutMs` | int | `300000` | Maximum duration in milliseconds for statements on normal pooled control-plane connections |
+| `strato.secretEncryption.existingSecret` | string | `""` | Secret containing the primary and optional previous stored-secret encryption keys |
+| `strato.secretEncryption.key` | string | `"encryption-key"` | Secret entry containing the primary 32-byte hex/base64 key |
+| `strato.secretEncryption.previousKeysKey` | string | `""` | Optional Secret entry containing comma-separated decrypt-only keys during rotation |
 | `strato.webauthn.relyingPartyId` | string | `""` | WebAuthn relying party identifier; empty derives it from the Gateway hostname (falling back to `localhost`) |
 | `strato.webauthn.relyingPartyName` | string | `"Strato"` | WebAuthn relying party name |
 | `strato.webauthn.relyingPartyOrigin` | string | `""` | WebAuthn relying party origin; empty derives it from the Gateway settings (falling back to `http://localhost:8080`) |

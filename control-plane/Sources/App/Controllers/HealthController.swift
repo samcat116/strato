@@ -64,6 +64,9 @@ struct HealthController: RouteCollection {
     ///   traffic nowhere and merely drops the traffic sessions don't back
     ///   (agent mTLS, API keys, the reconciler). Absent under `.testing`, which
     ///   uses Fluent sessions.
+    /// - **secrets-encryption** (degraded) — one or more stored secrets could
+    ///   not be opened by the boot keyring. One stale row must not remove every
+    ///   replica from service, but the exact table counts remain operator-visible.
     /// - **drain** (fatal) — set once SIGTERM arrives.
     func readiness(req: Request) async throws -> Response {
         var checks: [HealthCheck] = []
@@ -153,6 +156,18 @@ struct HealthController: RouteCollection {
                     failed = true
                 }
             }
+        }
+
+        if let encryption = req.secretsEncryption.degradation {
+            checks.append(
+                HealthCheck(
+                    name: "secrets-encryption",
+                    status: "degraded",
+                    error:
+                        "\(encryption.total) stored secret(s) cannot be opened: \(encryption.summary)"))
+            degraded = true
+        } else {
+            checks.append(HealthCheck(name: "secrets-encryption", status: "up"))
         }
 
         let status: String

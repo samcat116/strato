@@ -167,7 +167,7 @@ tags:
   - name: Volumes
     description: Persistent block volumes and their snapshots.
   - name: Networks
-    description: Logical (SDN) networks.
+    description: Logical (SDN) networks and their optional stateless ACLs.
   - name: Load Balancers
     description: Project-scoped native L4 load balancers.
   - name: Floating IPs
@@ -1820,6 +1820,104 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/networks/{networkId}/acl:
+    parameters:
+      - $ref: "#/components/parameters/NetworkID"
+    get:
+      operationId: getNetworkACL
+      summary: Get a network's stateless ACL
+      description: >-
+        Returns the optional ACL attached to this logical network. A network
+        without an ACL returns 404 and remains unaffected by network-level
+        filtering.
+      tags: [Networks]
+      responses:
+        "200":
+          description: The network ACL and its complete ordered rule set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkACL"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createNetworkACL
+      summary: Attach an empty stateless ACL to a network
+      description: >-
+        A network ACL is optional and is never backfilled. Creating one with no
+        rules immediately defaults both ingress and egress IP traffic to deny.
+      tags: [Networks]
+      responses:
+        "200":
+          description: The created empty network ACL.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkACL"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteNetworkACL
+      summary: Remove a network's stateless ACL
+      description: >-
+        Removes network-level filtering and all of its rules. Security groups
+        attached to workload NICs continue to apply.
+      tags: [Networks]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/networks/{networkId}/acl/rules:
+    parameters:
+      - $ref: "#/components/parameters/NetworkID"
+    post:
+      operationId: createNetworkACLRule
+      summary: Add an ordered rule to a network ACL
+      description: >-
+        Rules are immutable; edit by deleting and recreating. Rule numbers are
+        unique within each direction, and the lowest matching number wins.
+        At most 100 rules may be attached to one network ACL.
+      tags: [Networks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateNetworkACLRuleRequest"
+      responses:
+        "200":
+          description: The created network ACL rule.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkACLRule"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/networks/{networkId}/acl/rules/{ruleId}:
+    parameters:
+      - $ref: "#/components/parameters/NetworkID"
+      - $ref: "#/components/parameters/NetworkACLRuleID"
+    delete:
+      operationId: deleteNetworkACLRule
+      summary: Delete a rule from a network ACL
+      tags: [Networks]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /api/load-balancers:
     get:
@@ -6821,6 +6919,8 @@ paths:
         - $ref: "#/components/parameters/AuditEventTypeQuery"
         - $ref: "#/components/parameters/AuditUserIdQuery"
         - $ref: "#/components/parameters/AuditOrganizationIdQuery"
+        - $ref: "#/components/parameters/AuditResourceTypeQuery"
+        - $ref: "#/components/parameters/AuditResourceIdQuery"
         - $ref: "#/components/parameters/AuditAdminOnlyQuery"
         - $ref: "#/components/parameters/AuditFromQuery"
         - $ref: "#/components/parameters/AuditToQuery"
@@ -6855,6 +6955,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/AuditEventTypeQuery"
         - $ref: "#/components/parameters/AuditUserIdQuery"
+        - $ref: "#/components/parameters/AuditResourceTypeQuery"
+        - $ref: "#/components/parameters/AuditResourceIdQuery"
         - $ref: "#/components/parameters/AuditAdminOnlyQuery"
         - $ref: "#/components/parameters/AuditFromQuery"
         - $ref: "#/components/parameters/AuditToQuery"
@@ -8510,6 +8612,14 @@ components:
       schema:
         type: string
         format: uuid
+    NetworkACLRuleID:
+      name: ruleId
+      in: path
+      required: true
+      description: The network ACL rule's id.
+      schema:
+        type: string
+        format: uuid
     LoadBalancerID:
       name: loadBalancerId
       in: path
@@ -8953,6 +9063,20 @@ components:
       schema:
         type: string
         format: uuid
+    AuditResourceTypeQuery:
+      name: resourceType
+      in: query
+      required: false
+      description: Return only events for this canonical resource type (for example, `vms`).
+      schema:
+        type: string
+    AuditResourceIdQuery:
+      name: resourceID
+      in: query
+      required: false
+      description: Return only events for this resource identifier. VM UUIDs are canonicalized.
+      schema:
+        type: string
     AuditAdminOnlyQuery:
       name: adminOnly
       in: query
@@ -11394,6 +11518,106 @@ components:
             resolver is off, its site cannot run one, or it has no address yet.
             Absent for a network with no attached zone, which has nothing to
             fail to deliver.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    NetworkACLRuleDirection:
+      type: string
+      description: Traffic direction at the logical network boundary.
+      enum: [ingress, egress]
+    NetworkACLRuleEthertype:
+      type: string
+      description: Address family the rule matches.
+      enum: [ipv4, ipv6]
+    NetworkACLRuleAction:
+      type: string
+      description: >-
+        Stateless network-layer verdict. An allow must still pass the
+        applicable NIC security groups.
+      enum: [allow, deny]
+    CreateNetworkACLRuleRequest:
+      type: object
+      required: [ruleNumber, direction, ethertype, action, remoteCIDR]
+      properties:
+        ruleNumber:
+          type: integer
+          minimum: 1
+          maximum: 32766
+          description: Evaluation order within the direction; lower numbers win.
+        direction:
+          $ref: "#/components/schemas/NetworkACLRuleDirection"
+        ethertype:
+          $ref: "#/components/schemas/NetworkACLRuleEthertype"
+        action:
+          $ref: "#/components/schemas/NetworkACLRuleAction"
+        protocolName:
+          type: string
+          description: tcp, udp, or icmp; absent matches any IP protocol.
+          enum: [tcp, udp, icmp]
+        portRangeMin:
+          type: integer
+          minimum: 0
+          maximum: 65535
+          description: >-
+            tcp/udp: first destination port. icmp: ICMP type, limited to 255.
+        portRangeMax:
+          type: integer
+          minimum: 0
+          maximum: 65535
+          description: >-
+            tcp/udp: last destination port. icmp: ICMP code, limited to 255.
+        remoteCIDR:
+          type: string
+          description: >-
+            Required source CIDR for ingress or destination CIDR for egress;
+            its address family must match ethertype.
+        description:
+          type: string
+          maxLength: 4096
+    NetworkACLRule:
+      allOf:
+        - $ref: "#/components/schemas/CreateNetworkACLRuleRequest"
+        - type: object
+          required: [id]
+          properties:
+            id:
+              type: string
+              format: uuid
+            createdAt:
+              type: string
+              format: date-time
+    NetworkACL:
+      type: object
+      description: >-
+        Ordered network-level policy. New traffic must satisfy this ACL and the
+        applicable NIC security groups. OVN does not re-evaluate return traffic already
+        tracked by a stateful security-group allow-related connection, so this
+        backend is not an exact AWS stateless return-path model.
+      required: [id, networkId, generation, rules]
+      properties:
+        id:
+          type: string
+          format: uuid
+        networkId:
+          type: string
+          format: uuid
+        generation:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Monotonic full-policy generation.
+        rules:
+          type: array
+          maxItems: 100
+          description: >-
+            Complete rule set, ordered by direction and ascending rule number.
+            Each direction has an implicit default deny.
+          items:
+            $ref: "#/components/schemas/NetworkACLRule"
         createdAt:
           type: string
           format: date-time

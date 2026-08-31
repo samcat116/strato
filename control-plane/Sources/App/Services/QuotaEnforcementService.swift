@@ -1,7 +1,6 @@
 import Foundation
 import Vapor
 import Fluent
-import SQLKit
 
 /// Enforces resource quotas across the VM, sandbox, volume and network lifecycle.
 /// Resolves the project/OU/org quotas that govern a workload (matching its
@@ -518,27 +517,22 @@ struct QuotaEnforcementService {
         projectID: UUID,
         on db: Database
     ) async throws {
-        try await lockAdvisoryKey("project-network:\(projectID.uuidString)", on: db)
+        try await AdvisoryLock.acquireTransactionLock(
+            .object(.projectNetwork, id: projectID), on: db)
     }
 
     /// Takes a transaction-scoped advisory lock on each quota so concurrent
     /// creates that share a quota serialize their check-then-reserve sequence.
     ///
-    /// Postgres only: `pg_advisory_xact_lock` is held until the enclosing
+    /// PostgreSQL-only: `pg_advisory_xact_lock` is held until the enclosing
     /// transaction ends, giving cross-replica serialization (every replica shares
-    /// the same Postgres) without a persisted lock row. Locks are taken in a stable
-    /// (sorted) id order so two creates touching an overlapping set of quotas can't
-    /// deadlock by acquiring them in opposite orders.
+    /// the same PostgreSQL database) without a persisted lock row. An active
+    /// transaction is required. Locks are taken in stable digest order so two
+    /// creates touching an overlapping set of quotas cannot deadlock by acquiring
+    /// them in opposite orders.
     private static func lockQuotas(_ quotas: [ResourceQuota], on db: Database) async throws {
-        let keys = quotas.compactMap { $0.id?.uuidString }.sorted()
-        for key in keys {
-            try await lockAdvisoryKey(key, on: db)
-        }
-    }
-
-    private static func lockAdvisoryKey(_ key: String, on db: Database) async throws {
-        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
-        try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: key)))").run()
+        try await AdvisoryLock.acquireTransactionLocks(
+            .quota, objectIDs: quotas.compactMap(\.id), on: db)
     }
 
     /// Sets a quota's reservation counters to the exact usage of the VMs,

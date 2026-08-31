@@ -316,6 +316,8 @@ services:
       # Optional so .env files generated before it existed keep working — the
       # control plane warns and stores plaintext when it's unset.
       STRATO_SECRET_ENCRYPTION_KEY: ${STRATO_SECRET_ENCRYPTION_KEY:-}
+      # Comma-separated decrypt-only keys used while rotating the primary.
+      STRATO_SECRET_ENCRYPTION_KEYS_PREVIOUS: ${STRATO_SECRET_ENCRYPTION_KEYS_PREVIOUS:-}
       WEBAUTHN_RELYING_PARTY_ID: ${WEBAUTHN_RELYING_PARTY_ID}
       WEBAUTHN_RELYING_PARTY_NAME: ${WEBAUTHN_RELYING_PARTY_NAME:-Strato}
       WEBAUTHN_RELYING_PARTY_ORIGIN: ${WEBAUTHN_RELYING_PARTY_ORIGIN}

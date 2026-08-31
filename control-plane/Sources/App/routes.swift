@@ -70,6 +70,7 @@ func routes(_ app: Application) throws {
 
     // Network management controller
     try app.register(collection: NetworkController())
+    try app.register(collection: NetworkACLController())
 
     // Floating IPs: external address pools + VM NIC attachments (issue #344)
     try app.register(collection: FloatingIPController())

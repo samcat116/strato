@@ -96,25 +96,46 @@ kubectl logs deployment/strato-strato-control-plane -n strato-test \
   -c strato-control-plane
 ```
 
-To exercise a multi-replica upgrade with a pending migration, upgrade from the
-previous release to an image that contains a known new migration and request at
-least two replicas:
+To exercise the STR-275 replacement boundary with multiple replicas, first run
+the previous image with at least two replicas. Apply the current chart while
+keeping that exact image pinned, then verify the strategy before changing the
+image:
 
 ```bash
 helm upgrade strato . -n strato-test -f staging-values.yaml \
-  --set replicaCount=2 --set image.tag=<new-version>
+  --set replicaCount=2 --set image.tag=<previous-version>
+kubectl get deployment/strato-strato-control-plane -n strato-test \
+  -o jsonpath='{.spec.strategy.type}{"\n"}'
+```
+
+In a second terminal, keep a pod watch running while the image changes:
+
+```bash
+kubectl get pods -n strato-test -w \
+  -l app.kubernetes.io/name=strato-control-plane
+```
+
+Then upgrade the image in the first terminal:
+
+```bash
+helm upgrade strato . -n strato-test -f staging-values.yaml \
+  --set replicaCount=2 --set image.tag=<new-version> --wait
 kubectl rollout status deployment/strato-strato-control-plane -n strato-test
 kubectl logs deployment/strato-strato-control-plane -n strato-test \
   -c strato-control-plane --prefix=true
 ```
 
-The pod logs should show one replica applying the pending batch under the
-advisory lock and the other observing an up-to-date schema. Helm hook status is
-not part of this flow.
+The strategy command must print `Recreate`. The pod watch must show every old
+pod terminate before Kubernetes creates a new pod; no old and new image may be
+running together. Once replacement begins, the logs should show one new replica
+applying any pending migration under the new advisory lock and the other
+observing an up-to-date schema. Helm hook status is not part of this flow.
 
 For the failure path, deploy a test-only image containing an intentionally
 failing migration. The new pod must remain unready, rollout status must fail,
-and the pod log must contain the migration error:
+and the pod log must contain the migration error. `Recreate` intentionally
+leaves no old serving pod in this case; terminate the failed new pods before
+rolling back to an old image:
 
 ```bash
 helm upgrade strato . -n strato-test -f staging-values.yaml \

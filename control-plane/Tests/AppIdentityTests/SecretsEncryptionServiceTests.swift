@@ -10,9 +10,16 @@ import AppTestSupport
 struct SecretsEncryptionServiceTests {
 
     private static let hexKey = String(repeating: "ab", count: 32)
+    private static let previousHexKey = String(repeating: "cd", count: 32)
 
     private func makeService() throws -> SecretsEncryptionService {
         SecretsEncryptionService(key: try SecretsEncryptionService.parseKey(Self.hexKey))
+    }
+
+    private func legacyV1(_ plaintext: String, key: SymmetricKey) throws -> String {
+        let sealed = try AES.GCM.seal(Data(plaintext.utf8), using: key)
+        return SecretsEncryptionService.legacyEncryptedPrefix
+            + (try #require(sealed.combined)).base64EncodedString()
     }
 
     // MARK: - Key parsing
@@ -44,6 +51,30 @@ struct SecretsEncryptionServiceTests {
         }
     }
 
+    @Test("Previous keys are strictly parsed and decrypt-only")
+    func previousKeysFromConfiguration() async throws {
+        let configuration = try await ControlPlaneConfiguration.load(
+            environmentVariables: [
+                "STRATO_SECRET_ENCRYPTION_KEY": Self.hexKey,
+                "STRATO_SECRET_ENCRYPTION_KEYS_PREVIOUS": "  \(Self.previousHexKey)  ",
+            ],
+            for: .testing)
+        let service = try SecretsEncryptionService.fromConfiguration(configuration)
+        let previous = SecretsEncryptionService(
+            key: try SecretsEncryptionService.parseKey(Self.previousHexKey))
+        #expect(try service.decrypt(previous.encrypt("old-secret")) == "old-secret")
+
+        let malformed = try await ControlPlaneConfiguration.load(
+            environmentVariables: [
+                "STRATO_SECRET_ENCRYPTION_KEY": Self.hexKey,
+                "STRATO_SECRET_ENCRYPTION_KEYS_PREVIOUS": "\(Self.previousHexKey),,bad",
+            ],
+            for: .testing)
+        #expect(throws: (any Error).self) {
+            try SecretsEncryptionService.fromConfiguration(malformed)
+        }
+    }
+
     // MARK: - Encrypt / decrypt
 
     @Test("Encrypt/decrypt roundtrip recovers the plaintext")
@@ -54,6 +85,11 @@ struct SecretsEncryptionServiceTests {
         #expect(!stored.contains("super-secret"))
         let recovered = try service.decrypt(stored)
         #expect(recovered == "super-secret-client-secret")
+        let components = stored.split(separator: ":", maxSplits: 3)
+        #expect(components.count == 4)
+        #expect(components[0] == "enc")
+        #expect(components[1] == "v2")
+        #expect(components[2].count == 16)
     }
 
     @Test("Encryption is randomized per call (fresh nonce)")
@@ -69,6 +105,7 @@ struct SecretsEncryptionServiceTests {
         let service = try makeService()
         let recovered = try service.decrypt("legacy-plaintext-secret")
         #expect(recovered == "legacy-plaintext-secret")
+        #expect(try service.decrypt("enc:customer-token") == "enc:customer-token")
     }
 
     @Test("Decrypt with the wrong key fails rather than returning garbage")
@@ -80,6 +117,16 @@ struct SecretsEncryptionServiceTests {
         #expect(throws: (any Error).self) {
             try otherService.decrypt(stored)
         }
+    }
+
+    @Test("Legacy v1 opens under a previous key")
+    func legacyV1OpensUnderPreviousKey() throws {
+        let primary = try SecretsEncryptionService.parseKey(Self.hexKey)
+        let previous = try SecretsEncryptionService.parseKey(Self.previousHexKey)
+        let service = SecretsEncryptionService(key: primary, previousKeys: [previous])
+        let stored = try legacyV1("legacy-secret", key: previous)
+
+        #expect(try service.decrypt(stored) == "legacy-secret")
     }
 
     @Test("Decrypt rejects a malformed encrypted value")
@@ -108,6 +155,21 @@ struct SecretsEncryptionServiceTests {
         let stored = try enabled.encrypt("secret")
         #expect(throws: (any Error).self) {
             try SecretsEncryptionService.disabled.decrypt(stored)
+        }
+    }
+
+    @Test("Unknown-key and malformed ciphertext are distinct failures")
+    func typedDecryptFailures() throws {
+        let service = try makeService()
+        let other = SecretsEncryptionService(
+            key: try SecretsEncryptionService.parseKey(Self.previousHexKey))
+        let unknown = try other.encrypt("secret")
+
+        #expect(throws: SecretsEncryptionError.unknownKey(keyID: String(unknown.split(separator: ":")[2]))) {
+            try service.decrypt(unknown)
+        }
+        #expect(throws: SecretsEncryptionError.self) {
+            try service.decrypt("enc:v2:not-a-key-id:not-base64")
         }
     }
 
@@ -216,6 +278,153 @@ struct SecretsEncryptionServiceTests {
             // The already-encrypted row must be untouched (not double-encrypted).
             let modern = try await SSFStream.find(encryptedStream.id, on: app.db)
             #expect(modern?.authToken == alreadyEncrypted)
+        }
+    }
+
+    @Test("Rotation rewraps all four stored-secret columns to the primary")
+    func rotationRewrapsAllTables() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(
+                username: "rotation", email: "rotation@example.com")
+            let org = try await builder.createOrganization(name: "Rotation Org")
+            let project = try await builder.createProject(
+                name: "Rotation Project", description: "", organization: org)
+            let oldKey = try SecretsEncryptionService.parseKey(Self.previousHexKey)
+            let primary = try SecretsEncryptionService.parseKey(Self.hexKey)
+            let service = SecretsEncryptionService(key: primary, previousKeys: [oldKey])
+
+            let provider = OIDCProvider(
+                organizationID: org.id!, name: "Legacy OIDC", clientID: "legacy",
+                clientSecret: try legacyV1("oidc-secret", key: oldKey),
+                authorizationEndpoint: "https://idp.example.com/authorize",
+                tokenEndpoint: "https://idp.example.com/token",
+                jwksURI: "https://idp.example.com/jwks")
+            try await provider.save(on: app.db)
+
+            let stream = SSFStream(
+                organizationID: org.id!, name: "Legacy SSF",
+                transmitterURL: "https://idp.example.com",
+                authToken: try legacyV1("ssf-secret", key: oldKey),
+                deliveryMethod: .poll, createdByID: user.id!)
+            try await stream.save(on: app.db)
+
+            let pullSecret = RegistryPullSecret(
+                projectID: project.id!, registry: "registry.example.com",
+                username: "robot", secret: try legacyV1("registry-secret", key: oldKey))
+            try await pullSecret.save(on: app.db)
+
+            let subscription = WebhookSubscription(
+                organizationID: org.id!, name: "Legacy webhook",
+                url: "https://hooks.example.com/strato", eventTypes: [],
+                signingSecret: try legacyV1("webhook-secret", key: oldKey),
+                createdByID: user.id!)
+            try await subscription.save(on: app.db)
+
+            let report = try await service.encryptStoredSecrets(
+                on: app.db, logger: app.logger)
+            #expect(report.totalRewrapped == 4)
+            #expect(report.totalUnopenable == 0)
+            #expect(report.tables.allSatisfy { $0.rewrapped == 1 && $0.unopenable == 0 })
+
+            let values = [
+                try #require(try await OIDCProvider.find(provider.id, on: app.db)?.clientSecret),
+                try #require(try await SSFStream.find(stream.id, on: app.db)?.authToken),
+                try #require(try await RegistryPullSecret.find(pullSecret.id, on: app.db)?.secret),
+                try #require(
+                    try await WebhookSubscription.find(subscription.id, on: app.db)?.signingSecret),
+            ]
+            #expect(values.allSatisfy { $0.hasPrefix(SecretsEncryptionService.encryptedPrefix) })
+            #expect(
+                try values.map { try service.decrypt($0) } == [
+                    "oidc-secret", "ssf-secret", "registry-secret", "webhook-secret",
+                ])
+
+            let second = try await service.encryptStoredSecrets(on: app.db, logger: app.logger)
+            #expect(second.totalRewrapped == 0)
+            #expect(second.totalUnopenable == 0)
+        }
+    }
+
+    @Test("Unknown-key rows are counted and left untouched")
+    func unknownRowsRemainUntouched() async throws {
+        try await withTestApp { app in
+            let org = Organization(name: "Unknown Key Org", description: "")
+            try await org.save(on: app.db)
+            let unknownService = SecretsEncryptionService(
+                key: try SecretsEncryptionService.parseKey(Self.previousHexKey))
+            let stored = try unknownService.encrypt("unavailable")
+            let provider = OIDCProvider(
+                organizationID: org.id!, name: "Unknown", clientID: "unknown",
+                clientSecret: stored,
+                authorizationEndpoint: "https://idp.example.com/authorize",
+                tokenEndpoint: "https://idp.example.com/token",
+                jwksURI: "https://idp.example.com/jwks")
+            try await provider.save(on: app.db)
+
+            let service = try makeService()
+            let report = try await service.encryptStoredSecrets(on: app.db, logger: app.logger)
+            #expect(report.totalRewrapped == 0)
+            #expect(report.totalUnopenable == 1)
+            #expect(service.degradation?.total == 1)
+            #expect(try await OIDCProvider.find(provider.id, on: app.db)?.clientSecret == stored)
+        }
+    }
+
+    @Test("Ciphertext without a key refuses boot audit and later plaintext writes")
+    func ciphertextWithoutKeyFailsClosed() async throws {
+        try await withTestApp { app in
+            let org = Organization(name: "No Key Org", description: "")
+            try await org.save(on: app.db)
+            let stored = try makeService().encrypt("unavailable")
+            let provider = OIDCProvider(
+                organizationID: org.id!, name: "No Key", clientID: "no-key",
+                clientSecret: stored,
+                authorizationEndpoint: "https://idp.example.com/authorize",
+                tokenEndpoint: "https://idp.example.com/token",
+                jwksURI: "https://idp.example.com/jwks")
+            try await provider.save(on: app.db)
+
+            let disabled = SecretsEncryptionService.disabled
+            do {
+                _ = try await disabled.encryptStoredSecrets(on: app.db, logger: app.logger)
+                Issue.record("Expected ciphertext without a key to fail the boot audit")
+            } catch let error as SecretsEncryptionError {
+                #expect(error.reason.contains("oidc_providers.client_secret=1"))
+                #expect(error.reason.contains("restore the key"))
+            }
+            #expect(throws: SecretsEncryptionError.plaintextWriteRefused) {
+                try disabled.encrypt("must-not-be-plaintext")
+            }
+        }
+    }
+
+    @Test("Concurrent rotation passes update a row only once")
+    func concurrentRotationIsCompareAndSwapSafe() async throws {
+        try await withTestApp { app in
+            let org = Organization(name: "Concurrent Rotation Org", description: "")
+            try await org.save(on: app.db)
+            let previous = try SecretsEncryptionService.parseKey(Self.previousHexKey)
+            let provider = OIDCProvider(
+                organizationID: org.id!, name: "Concurrent", clientID: "concurrent",
+                clientSecret: try legacyV1("secret", key: previous),
+                authorizationEndpoint: "https://idp.example.com/authorize",
+                tokenEndpoint: "https://idp.example.com/token",
+                jwksURI: "https://idp.example.com/jwks")
+            try await provider.save(on: app.db)
+            let service = SecretsEncryptionService(
+                key: try SecretsEncryptionService.parseKey(Self.hexKey),
+                previousKeys: [previous])
+
+            async let first = service.encryptStoredSecrets(on: app.db, logger: app.logger)
+            async let second = service.encryptStoredSecrets(on: app.db, logger: app.logger)
+            let (firstReport, secondReport) = try await (first, second)
+            #expect(firstReport.totalRewrapped + secondReport.totalRewrapped == 1)
+
+            let stored = try #require(
+                try await OIDCProvider.find(provider.id, on: app.db)?.clientSecret)
+            #expect(stored.hasPrefix(SecretsEncryptionService.encryptedPrefix))
+            #expect(try service.decrypt(stored) == "secret")
         }
     }
 }
