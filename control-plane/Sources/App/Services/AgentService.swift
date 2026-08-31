@@ -1145,13 +1145,12 @@ actor AgentService {
     /// budget, and the resource's own `conditions.degraded` replaces the
     /// verdict.
     ///
-    /// **Deliberately not a cluster singleton.** Clearing the expired deadline
-    /// atomically claims the terminal verdict, so exactly one replica resolves
-    /// the outstanding intent and emits its webhook. That claim also lets the
-    /// winner finalize a blocked failure whose current-generation error was
-    /// already saved for operator visibility. One less thing whose correctness
-    /// depends on Valkey, which is the point of ADR 0001's multi-replica
-    /// argument.
+    /// **Deliberately not a cluster singleton.** Each overdue verdict locks and
+    /// refreshes the resource row in the transaction that records the failure,
+    /// so exactly one replica resolves the outstanding intent and emits its
+    /// webhook. The same lock orders a racing successful agent report before or
+    /// after the verdict. One less thing whose correctness depends on Valkey,
+    /// which is the point of ADR 0001's multi-replica argument.
     ///
     /// Internal rather than private so tests can drive a pass directly.
     func sweepStuckConvergence() async {
@@ -1355,42 +1354,6 @@ actor AgentService {
 
         for resource in overdue {
             guard let id = resource.id else { continue }
-            // Claim the timeout before doing anything with it. Clearing the
-            // deadline is the claim, so of two replicas sweeping the same row
-            // exactly one proceeds — which is what lets this run everywhere
-            // without a lock while still emitting one completion webhook.
-            switch try await resource.claimConvergenceTimeout(on: db) {
-            case .claimed:
-                break
-            case .superseded(let actualGeneration):
-                Telemetry.desiredStateWriteConflict(
-                    resourceKind: R.operationResourceKind.rawValue, writer: "stuck_convergence")
-                app.logger.warning(
-                    "Dropped a convergence timeout after newer desired state superseded it",
-                    metadata: [
-                        "resourceKind": .string(R.operationResourceKind.rawValue),
-                        "resourceId": .string(id.uuidString),
-                        "expectedGeneration": .stringConvertible(resource.generation),
-                        "actualGeneration": .stringConvertible(actualGeneration),
-                    ])
-                continue
-            case .alreadyClaimed, .missing:
-                continue
-            }
-
-            // The deadline is a backstop, not the verdict: a resource that
-            // converged between the query and here (or whose deadline the
-            // applier has not cleared yet) is left alone — the claim above has
-            // already dropped the deadline, which is all that was owed. A
-            // terminating resource never reports converged — it is on its way
-            // out, not converging on anything — so a stuck delete falls through
-            // and degrades, which is what a delete blocked on a finalizer
-            // should look like.
-            // Nothing to save: the claim already cleared the deadline in SQL,
-            // and writing the whole row from a model read before the claim
-            // would put this sweep's stale snapshot over a concurrent report.
-            guard !resource.isConverged else { continue }
-
             // The mutation kind is read for one thing — whether a never-settled
             // `create` should escalate to `.error` — and comes from the audit
             // trail rather than a column on the resource, so overlapping
@@ -1406,20 +1369,12 @@ actor AgentService {
             let timeoutReason =
                 "Timed out: the agent did not converge to generation "
                 + "\(resource.generation) before the deadline"
-            // A blocked report deliberately saved its actionable reason and
-            // current-generation failure pair without settling the mutation.
-            // Once the deadline is claimed, preserve that remedy while forcing
-            // the terminal transition past the ordinary duplicate-report
-            // guard. Resources with no reported failure get the timeout text.
-            let reason =
-                resource.failedGeneration == resource.generation
-                ? resource.lastError ?? timeoutReason
-                : timeoutReason
-            let outcome = try await ResourceConvergence.recordFailure(
+            let outcome = try await ResourceConvergence.recordExpiredDeadline(
                 resource, mutation: mutation,
-                reason: reason,
-                telemetryReason: "stuck_convergence", context: .claimedDeadline, on: db)
+                now: now, timeoutReason: timeoutReason, on: db)
             if case .superseded(let actualGeneration) = outcome {
+                Telemetry.desiredStateWriteConflict(
+                    resourceKind: R.operationResourceKind.rawValue, writer: "stuck_convergence")
                 app.logger.warning(
                     "Dropped a convergence timeout after newer desired state superseded it",
                     metadata: [

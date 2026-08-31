@@ -342,10 +342,56 @@ enum ResourceConvergence {
         /// onto its in-memory model. The supplied generation is what the row
         /// carried before that report.
         case observedReport(previousFailureGeneration: Int64?)
-        /// The deadline sweep atomically claimed this generation's timeout. It
-        /// must settle even when a blocked report already exposed the same
-        /// generation as degraded.
-        case claimedDeadline
+        /// The deadline sweep locked and refreshed this generation while its
+        /// deadline remained expired. It must settle even when a blocked report
+        /// already exposed the same generation as degraded.
+        case expiredDeadline
+    }
+
+    /// Finalizes one model returned by the overdue-deadline query, if the same
+    /// generation is still overdue after locking and refreshing its row.
+    ///
+    /// The refresh and verdict share one transaction. A successful agent
+    /// report that commits first therefore clears the deadline and is observed
+    /// here; a report that arrives later waits behind this lock and sees the
+    /// terminal state. Splitting the deadline claim from `recordFailure` would
+    /// leave a gap where a success could commit before this stale model was
+    /// saved back over it.
+    @discardableResult
+    static func recordExpiredDeadline<R: ConvergingResource>(
+        _ resource: R,
+        mutation: VMOperationKind,
+        now: Date,
+        timeoutReason: String,
+        on db: any Database
+    ) async throws -> WriteOutcome {
+        let expectedGeneration = resource.generation
+        return try await db.transaction { tx -> WriteOutcome in
+            guard try await resource.lockAndRefresh(on: tx) else { return .missing }
+            guard resource.generation == expectedGeneration else {
+                return .superseded(actualGeneration: resource.generation)
+            }
+            guard let deadline = resource.convergenceDeadline, deadline <= now else {
+                return .alreadyRecorded
+            }
+
+            // Preserve the prior sweep behavior for a row that is already
+            // converged when locked: close its stale deadline without emitting
+            // a second convergence outcome.
+            if resource.isConverged {
+                resource.convergenceDeadline = nil
+                try await resource.save(on: tx)
+                return .alreadyRecorded
+            }
+
+            let reason =
+                resource.failedGeneration == resource.generation
+                ? resource.lastError ?? timeoutReason
+                : timeoutReason
+            return try await recordFailure(
+                resource, mutation: mutation, reason: reason,
+                telemetryReason: "stuck_convergence", context: .expiredDeadline, on: tx)
+        }
     }
 
     /// Marks a resource degraded for `reason` and resolves the in-flight state
@@ -375,18 +421,19 @@ enum ResourceConvergence {
     /// `context` distinguishes the three views callers can hold. The observed
     /// applier supplies the failure generation from before it mirrored the
     /// report, so that mirror cannot suppress the first terminal verdict. A
-    /// deadline claimant deliberately bypasses the failure-pair guard: a
-    /// blocked report exposes the remedy before the deadline but is not a
-    /// terminal verdict, and the claimed deadline must still resolve intent and
-    /// enqueue the failure webhook. Direct callers read the model as usual.
+    /// deadline sweep deliberately bypasses the failure-pair guard after it
+    /// locks and rechecks the expired deadline: a blocked report exposes the
+    /// remedy before the deadline but is not a terminal verdict, and the sweep
+    /// must still resolve intent and enqueue the failure webhook. Direct callers
+    /// read the model as usual.
     ///
     /// Note that the resolution *bumps the generation*: abandoning an
     /// unachieved intent is itself a desired-state change
     /// (`revertDesiredToObserved`), so `failedGeneration` ends one behind
     /// `generation`. That is the shape `ResourceConditions` documents — a
     /// failure that stands against a newer target — and it is why the
-    /// stuck-convergence sweep claims the deadline rather than relying on this
-    /// guard to stay true across passes.
+    /// stuck-convergence sweep locks and rechecks the deadline rather than
+    /// relying on this guard to stay true across passes.
     @discardableResult
     static func recordFailure<R: ConvergingResource>(
         _ resource: R,
@@ -403,7 +450,7 @@ enum ResourceConvergence {
             recorded = resource.failedGeneration
         case .observedReport(let previousFailureGeneration):
             recorded = previousFailureGeneration
-        case .claimedDeadline:
+        case .expiredDeadline:
             recorded = nil
         }
         if recorded == expectedGeneration {

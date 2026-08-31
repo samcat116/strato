@@ -183,6 +183,49 @@ final class ResourceConditionsTests {
         }
     }
 
+    @Test("A stale timeout snapshot cannot overwrite a committed success")
+    func timeoutSnapshotCannotOverwriteCommittedSuccess() async throws {
+        try await withTestApp { app, user, project in
+            try await self.subscribeToEverything(app: app)
+            let vm = try await TestDataBuilder(db: app.db).createVM(
+                name: "timeout-race-vm", project: project)
+            vm.setFixtureDesiredStatus(.running)
+            vm.setStatus(.shutdown)
+            vm.observedGeneration = 0
+            vm.lastError = "host capacity is temporarily exhausted"
+            vm.failedGeneration = vm.generation
+            vm.convergenceDeadline = Date().addingTimeInterval(-1)
+            try await vm.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .boot, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
+                actor: .user(try user.requireID()), on: app.db)
+
+            let staleTimeoutSnapshot = try #require(await VM.find(vm.id, on: app.db))
+            let successfulReport = try #require(await VM.find(vm.id, on: app.db))
+            successfulReport.setStatus(.running)
+            successfulReport.observedGeneration = successfulReport.generation
+            _ = successfulReport.recordTimestampedConvergence(
+                phase: nil, lastError: nil, failedGeneration: nil)
+            #expect(
+                try await ResourceConvergence.recordSuccess(successfulReport, on: app.db)
+                    == .recorded)
+
+            let timeoutOutcome = try await ResourceConvergence.recordExpiredDeadline(
+                staleTimeoutSnapshot, mutation: .boot,
+                now: Date(), timeoutReason: "Timed out while converging", on: app.db)
+
+            #expect(timeoutOutcome == .alreadyRecorded)
+            let final = try #require(await VM.find(vm.id, on: app.db))
+            #expect(final.desiredStatus == .running)
+            #expect(final.status == .running)
+            #expect(final.generation == 1)
+            #expect(final.observedGeneration == 1)
+            #expect(final.failedGeneration == nil)
+            #expect(final.lastError == nil)
+            #expect(try await self.mutationOutcomes(app: app) == ["operation.completed"])
+        }
+    }
+
     // MARK: - Derivation
 
     @Test("A VM whose agent has caught up and whose desired status is satisfied is converged")

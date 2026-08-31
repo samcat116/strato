@@ -333,13 +333,6 @@ where IDValue == UUID {
     func adoptReconciliationState(from committed: Self)
 }
 
-enum ConvergenceTimeoutClaimOutcome: Equatable, Sendable {
-    case claimed
-    case alreadyClaimed
-    case superseded(actualGeneration: Int64)
-    case missing
-}
-
 extension ConvergingResource {
     @discardableResult
     func advanceDesiredStateGeneration(
@@ -382,58 +375,12 @@ extension ConvergingResource {
         return true
     }
 
-    /// Claims the right to declare this resource's outstanding convergence
-    /// timed out, by clearing the deadline in a conditional `UPDATE`.
-    ///
-    /// This is what makes the stuck-convergence sweep safe to run on every
-    /// replica *and* exactly-once per deadline (STR-147). Marking degraded is
-    /// idempotent and convergent on its own — the state two replicas write is
-    /// the same — but the completion webhook is not, so the claim decides which
-    /// pass gets to emit it. `AND convergence_deadline IS NOT NULL` is
-    /// evaluated by PostgreSQL under the row lock, so of two racing sweeps
-    /// exactly one updates a row — the compare-and-swap the retired
-    /// stuck-operation sweep needed a cluster lock to approximate.
-    func claimConvergenceTimeout(on db: any Database) async throws
-        -> ConvergenceTimeoutClaimOutcome
-    {
-        guard let sql = db as? any SQLDatabase else {
-            throw ConvergenceWriteError.unsupportedDatabase
-        }
-        let claimed = try await sql.raw(
-            """
-            UPDATE \(ident: Self.schema)
-            SET convergence_deadline = NULL
-            WHERE id = \(bind: try requireID())
-              AND generation = \(bind: generation)
-              AND convergence_deadline IS NOT NULL
-            RETURNING id
-            """
-        ).all(decoding: ClaimedConvergenceRow.self)
-        if !claimed.isEmpty {
-            convergenceDeadline = nil
-            return .claimed
-        }
-
-        guard
-            let current = try await sql.raw(
-                "SELECT generation FROM \(ident: Self.schema) WHERE id = \(bind: try requireID())"
-            ).first(decoding: CurrentConvergenceGeneration.self)
-        else { return .missing }
-        guard current.generation == generation else {
-            return .superseded(actualGeneration: current.generation)
-        }
-        return .alreadyClaimed
-    }
 }
 
-/// `RETURNING id` from the claim above. A file-scope type because a generic
-/// function cannot nest one.
+/// The row identifier selected while locking a converging resource. A
+/// file-scope type because a generic function cannot nest one.
 private struct ClaimedConvergenceRow: Decodable {
     let id: UUID
-}
-
-private struct CurrentConvergenceGeneration: Decodable {
-    let generation: Int64
 }
 
 extension ConvergingResource {
