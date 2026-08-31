@@ -194,7 +194,14 @@ jobs:
           helm template strato-external helm/strato-control-plane/ \
             --set postgresql.enabled=false \
             --set externalDatabase.host=postgres.example.com \
+            --set externalDatabase.port=5544 \
+            --set externalDatabase.database=strato_external \
+            --set externalDatabase.username=strato_external_user \
             --set externalDatabase.password=external-db-password > /tmp/external-db-template.yaml
+          grep -A 1 'name: DATABASE_HOST' /tmp/external-db-template.yaml | grep -q 'value: "postgres.example.com"'
+          grep -A 1 'name: DATABASE_PORT' /tmp/external-db-template.yaml | grep -q 'value: "5544"'
+          grep -A 1 'name: DATABASE_NAME' /tmp/external-db-template.yaml | grep -q 'value: "strato_external"'
+          grep -A 1 'name: DATABASE_USERNAME' /tmp/external-db-template.yaml | grep -q 'value: "strato_external_user"'
           echo "External database template generated successfully"
 
       - name: Template with an external monitoring stack

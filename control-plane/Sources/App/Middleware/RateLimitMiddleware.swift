@@ -47,15 +47,15 @@ struct RateLimitConfig: Sendable {
             // On by default outside tests; the suite fires many requests from one
             // client and would otherwise trip the limiter. Opt in with
             // RATE_LIMIT_ENABLED=true, opt out with =false.
-            enabled: configuration.bool(.rateLimitEnabled)!,
-            authLimit: configuration.int(.rateLimitAuthMax)!,
-            authWindow: configuration.int(.rateLimitAuthWindow)!,
-            apiLimit: configuration.int(.rateLimitAPIMax)!,
-            apiWindow: configuration.int(.rateLimitAPIWindow)!,
-            failureThreshold: configuration.int(.rateLimitFailureThreshold)!,
-            failureBaseDelay: configuration.int(.rateLimitFailureBaseDelay)!,
-            failureMaxDelay: configuration.int(.rateLimitFailureMaxDelay)!,
-            failureWindow: configuration.int(.rateLimitFailureWindow)!,
+            enabled: configuration.bool(.rateLimitEnabled),
+            authLimit: configuration.int(.rateLimitAuthMax),
+            authWindow: configuration.int(.rateLimitAuthWindow),
+            apiLimit: configuration.int(.rateLimitAPIMax),
+            apiWindow: configuration.int(.rateLimitAPIWindow),
+            failureThreshold: configuration.int(.rateLimitFailureThreshold),
+            failureBaseDelay: configuration.int(.rateLimitFailureBaseDelay),
+            failureMaxDelay: configuration.int(.rateLimitFailureMaxDelay),
+            failureWindow: configuration.int(.rateLimitFailureWindow),
             proxyTrust: .fromConfiguration(configuration)
         )
     }

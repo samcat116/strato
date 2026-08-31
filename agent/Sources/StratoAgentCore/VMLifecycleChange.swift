@@ -6,10 +6,6 @@
 /// whose list semantics mean a partial answer would be worse than no answer.
 /// So `reason` — and the VM id in the `.vm` case — exist for the log line, and
 /// nothing keys behaviour on either.
-///
-/// Lives in `StratoAgentCore` rather than next to `HypervisorService` so the
-/// test target can construct one: `StratoAgentTests` depends on the core, not
-/// on the `StratoAgent` executable target.
 public enum VMLifecycleChange: Sendable, Equatable {
     /// One VM on this host changed. `reason` is the backend's own name for the
     /// transition (`LibvirtDomain.lifecycleEventLabel(forRawEvent:)` for

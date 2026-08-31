@@ -122,6 +122,7 @@ let package = Package(
             name: "AppTestSupport",
             dependencies: [
                 .target(name: "App"),
+                .product(name: "StratoShared", package: "shared"),
                 .product(name: "VaporTesting", package: "vapor"),
                 .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
             ],

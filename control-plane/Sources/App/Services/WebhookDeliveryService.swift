@@ -66,12 +66,12 @@ final class WebhookDeliveryService: Sendable {
     init(app: Application) {
         self.app = app
         self.logger = app.logger
-        self.sweepIntervalSeconds = app.controlPlaneConfiguration.int(.webhookDeliveryIntervalSeconds)!
-        self.autoDisableDays = app.controlPlaneConfiguration.int(.webhookAutoDisableDays)!
+        self.sweepIntervalSeconds = app.controlPlaneConfiguration.int(.webhookDeliveryIntervalSeconds)
+        self.autoDisableDays = app.controlPlaneConfiguration.int(.webhookAutoDisableDays)
     }
 
     private var sweepEnabled: Bool {
-        app.controlPlaneConfiguration.bool(.webhookDeliveryEnabled)!
+        app.controlPlaneConfiguration.bool(.webhookDeliveryEnabled)
     }
 
     /// Backoff before attempt `attempt + 1`, doubling from 30s and capped at

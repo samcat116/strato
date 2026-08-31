@@ -105,7 +105,7 @@ function SecurityGroupRules({
   const [form, setForm] = useState({
     direction: "ingress" as SecurityGroupRuleDirection,
     ethertype: "ipv4" as Ethertype,
-    protocol: "",
+    protocol: "" as "" | NonNullable<CreateSecurityGroupRuleRequest["protocolName"]>,
     portMin: "",
     portMax: "",
     peerType: "any" as "any" | "cidr" | "group",
@@ -313,7 +313,7 @@ function SecurityGroupRules({
                 onChange={(e) =>
                   setForm({
                     ...form,
-                    protocol: e.target.value,
+                    protocol: e.target.value as typeof form.protocol,
                     portMin: "",
                     portMax: "",
                   })

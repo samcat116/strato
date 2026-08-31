@@ -579,7 +579,7 @@ private func withRunningExecApp(
     includeAuditReads: Bool = false,
     _ test: (Application, Int) async throws -> Void
 ) async throws {
-    try await withApp { app in
+    try await withTestApp { app in
         if includeAuditReads {
             var config = AuditConfig.fromConfiguration(app.controlPlaneConfiguration)
             config.includeReads = true

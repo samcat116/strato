@@ -26,7 +26,7 @@ import { useOrganization } from "@/providers";
 import type {
   OrganizationHierarchy,
   FolderNode,
-  ResourceQuota,
+  HierarchyQuota,
 } from "@/types/api";
 import { toast } from "sonner";
 
@@ -36,7 +36,7 @@ interface QuotaScope {
   label: string;
   sublabel?: string;
   depth: number;
-  quotas: ResourceQuota[];
+  quotas: HierarchyQuota[];
   target: QuotaCreateTarget;
   environments?: string[];
 }
@@ -113,11 +113,11 @@ export default function QuotasPage() {
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogSeq, setDialogSeq] = useState(0);
-  const [editingQuota, setEditingQuota] = useState<ResourceQuota | undefined>();
+  const [editingQuota, setEditingQuota] = useState<HierarchyQuota | undefined>();
   const [createTarget, setCreateTarget] = useState<QuotaCreateTarget>();
   const [dialogScopeLabel, setDialogScopeLabel] = useState("");
   const [dialogEnvironments, setDialogEnvironments] = useState<string[]>();
-  const [pendingDelete, setPendingDelete] = useState<ResourceQuota>();
+  const [pendingDelete, setPendingDelete] = useState<HierarchyQuota>();
 
   const scopes = useMemo(
     () => (hierarchy && orgId ? collectScopes(hierarchy, orgId) : []),
@@ -133,7 +133,7 @@ export default function QuotasPage() {
     setDialogOpen(true);
   };
 
-  const openEdit = (scope: QuotaScope, quota: ResourceQuota) => {
+  const openEdit = (scope: QuotaScope, quota: HierarchyQuota) => {
     setEditingQuota(quota);
     setCreateTarget(scope.target);
     setDialogScopeLabel(scope.label);
@@ -143,7 +143,7 @@ export default function QuotasPage() {
   };
 
   const confirmDelete = async () => {
-    if (!pendingDelete) return;
+    if (!pendingDelete?.id) return;
     try {
       await deleteQuota.mutateAsync(pendingDelete.id);
       toast.success(`Quota "${pendingDelete.name}" deleted`);

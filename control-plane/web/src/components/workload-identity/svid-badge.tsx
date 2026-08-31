@@ -1,7 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import type { SVIDType } from "@/types/api";
-
-const config: Record<SVIDType, { label: string; className: string }> = {
+const config: Record<string, { label: string; className: string }> = {
   x509: {
     label: "x509",
     className: "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/25",
@@ -13,8 +11,11 @@ const config: Record<SVIDType, { label: string; className: string }> = {
 };
 
 /** A small monospace badge for an SVID kind (x509 / jwt). */
-export function SVIDBadge({ type }: { type: SVIDType }) {
-  const { label, className } = config[type];
+export function SVIDBadge({ type }: { type: string }) {
+  const { label, className } = config[type] ?? {
+    label: type,
+    className: "bg-muted text-muted-foreground border-border",
+  };
   return (
     <Badge
       variant="outline"

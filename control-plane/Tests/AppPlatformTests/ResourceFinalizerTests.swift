@@ -33,7 +33,6 @@ final class ResourceFinalizerTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -72,30 +71,17 @@ final class ResourceFinalizerTests {
         app: Application, vm: VM? = nil, sandbox: Sandbox? = nil,
         named agentName: String = "finalizer-agent"
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: agentName,
-            hostname: "test-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
-            protocolVersion: WireProtocol.currentVersion
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: agentName,
-            organizationScope: orgID.map { .organization($0) })
+        let agentID = try await TestDataBuilder(db: app.db).registerAgent(
+            on: app, named: agentName, hostname: "test-host")
         if let vm {
-            vm.hypervisorId = agentUUID.uuidString
+            vm.hypervisorId = agentID
             try await vm.save(on: app.db)
         }
         if let sandbox {
-            sandbox.hypervisorId = agentUUID.uuidString
+            sandbox.hypervisorId = agentID
             try await sandbox.save(on: app.db)
         }
-        return agentUUID.uuidString
+        return agentID
     }
 
     /// A full report that mentions neither VMs nor sandboxes: the agent holds
@@ -367,7 +353,7 @@ final class ResourceFinalizerTests {
             try await vm.save(on: app.db)
             try await self.backdate(VM.self, id: vmID, bySeconds: 600, on: app.db)
 
-            await app.agentService.sweepOrphanedTerminatingResources()
+            await app.agentMaintenance.sweepOrphanedTerminatingResources()
 
             #expect(try await VM.find(vmID, on: app.db) == nil)
         }
@@ -382,7 +368,7 @@ final class ResourceFinalizerTests {
             try await vm.save(on: app.db)
             try await self.backdate(VM.self, id: vmID, bySeconds: 600, on: app.db)
 
-            await app.agentService.sweepOrphanedTerminatingResources()
+            await app.agentMaintenance.sweepOrphanedTerminatingResources()
 
             let held = try #require(try await VM.find(vmID, on: app.db))
             #expect(held.finalizers == [Self.foreign.rawValue])
@@ -395,7 +381,7 @@ final class ResourceFinalizerTests {
             let vmID = try vm.requireID()
             try await self.backdate(VM.self, id: vmID, bySeconds: 600, on: app.db)
 
-            await app.agentService.sweepOrphanedTerminatingResources()
+            await app.agentMaintenance.sweepOrphanedTerminatingResources()
 
             #expect(try await VM.find(vmID, on: app.db) != nil)
         }
@@ -442,7 +428,7 @@ final class ResourceFinalizerTests {
             sandbox.createdAt = Date().addingTimeInterval(-120)
             try await sandbox.save(on: app.db)
 
-            await app.agentService.sweepExpiredSandboxes()
+            await app.agentMaintenance.sweepExpiredSandboxes()
 
             let terminating = try #require(try await Sandbox.find(sandboxID, on: app.db))
             #expect(terminating.desiredStatus == .absent)
