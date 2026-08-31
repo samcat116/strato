@@ -9,7 +9,7 @@ import Vapor
 
 @Suite("Current schema baseline", .serialized)
 struct CurrentSchemaBaselineTests {
-    private static let expectedCatalogMD5 = "e8e7f8ac62839a58de3ee45b6a0041d5"
+    private static let expectedCatalogMD5 = "6d105c4f1be7a125df5d28d36031971a"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -30,9 +30,9 @@ struct CurrentSchemaBaselineTests {
 
             let counts = try await catalogCounts(on: app.db)
             #expect(counts.tables == 64)
-            #expect(counts.columns == 842)
+            #expect(counts.columns == 846)
             #expect(counts.constraints == 292)
-            #expect(counts.indexes == 190)
+            #expect(counts.indexes == 194)
             #expect(counts.enums == 3)
             #expect(counts.triggers == 1)
             #expect(counts.functions == 1)
@@ -57,6 +57,64 @@ struct CurrentSchemaBaselineTests {
             try await migration.prepare(on: app.db)
             try await migration.prepare(on: app.db)
 
+            #expect(try await catalogMD5(on: app.db) == catalogBeforeUpgrade)
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
+    @Test("The webhook claim-lease upgrade is idempotent and restores its queue index")
+    func webhookClaimLeaseUpgradeIsIdempotentOnFreshSchema() async throws {
+        let app = try await Application.makeForBareDatabaseTesting()
+        do {
+            try await CurrentSchemaBaseline().prepare(on: app.db)
+            let sql = try #require(app.db as? any SQLDatabase)
+            let catalogBeforeUpgrade = try await catalogMD5(on: app.db)
+
+            let migration = AddWebhookDeliveryClaimLease()
+            try await migration.prepare(on: app.db)
+            try await migration.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == catalogBeforeUpgrade)
+
+            try await sql.raw(
+                """
+                UPDATE pg_index
+                SET indisvalid = false
+                WHERE indexrelid =
+                    'idx_webhook_deliveries_pending_subscription_due'::regclass
+                """
+            ).run()
+            let invalid = try await sql.raw(
+                """
+                SELECT indisvalid
+                FROM pg_index
+                WHERE indexrelid =
+                    'idx_webhook_deliveries_pending_subscription_due'::regclass
+                """
+            ).first(decodingColumn: "indisvalid", as: Bool.self)
+            #expect(invalid == false)
+
+            try await migration.prepare(on: app.db)
+            let repaired = try await sql.raw(
+                """
+                SELECT indisvalid
+                FROM pg_index
+                WHERE indexrelid =
+                    'idx_webhook_deliveries_pending_subscription_due'::regclass
+                """
+            ).first(decodingColumn: "indisvalid", as: Bool.self)
+            #expect(repaired == true)
+            #expect(try await catalogMD5(on: app.db) == catalogBeforeUpgrade)
+
+            try await sql.raw(
+                "DROP INDEX idx_webhook_deliveries_pending_subscription_due"
+            ).run()
+            #expect(try await catalogMD5(on: app.db) != catalogBeforeUpgrade)
+
+            try await migration.prepare(on: app.db)
+            try await migration.prepare(on: app.db)
             #expect(try await catalogMD5(on: app.db) == catalogBeforeUpgrade)
         } catch {
             try? await app.shutdownForTesting()

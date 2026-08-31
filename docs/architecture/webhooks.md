@@ -88,13 +88,50 @@ the state change that produced the event:
 The payload JSON is frozen at enqueue time, so what was true at the semantic
 moment is what gets delivered, regardless of later mutations.
 
+The enqueue transaction also enforces a ceiling of **10,000 pending rows** per
+subscription. In the same transaction that adds deliveries, it moves the
+subscription's oldest unclaimed overflow rows to the terminal `dropped` state;
+an active claim is never shed. Dropped rows remain visible in delivery history,
+contribute to the committed-history `strato_webhook_delivery_dropped` gauge,
+and can be manually redelivered. A capacity drop is not an endpoint failure and
+does not advance the subscription's auto-disable streak. The ceiling is a fixed
+safety invariant, not an operator-tunable setting.
+
+Only rows with no active explicit lease are eligible for shedding. A future
+retry schedule also receives one 120-second claim-lease grace period after its
+last update. During a rolling upgrade, an older worker claims by advancing the
+retry schedule and `updated_at` without writing the lease column, and it can
+leave any previous lease value untouched. The grace period therefore protects
+that mixed-version worker's active POST; afterwards an old scheduled retry can
+still be shed before its backoff expires. The ceiling can be temporarily soft
+during the grace period rather than risking in-flight work. New workers
+dual-write the legacy retry deadline while claiming, which prevents old workers
+from reclaiming their rows.
+
 ## Delivery sweep
 
 `WebhookDeliveryService` runs a periodic loop on every replica (armed by
-`WebhookDeliveryLifecycleHandler`, default every 15s), made cluster-singleton
-per pass by the `lock:sweep:webhook_delivery` Valkey lock — the same pattern
-as the audit-retention and SSF poll sweeps. Each pass drains due pending rows
-(oldest first, batched):
+`WebhookDeliveryLifecycleHandler`). Every replica contributes to the drain:
+each pass repeatedly claims batches of 16 due rows and starts no more than 8
+HTTP requests concurrently. Claim selection ranks each subscription's due rows
+by earliest scheduled attempt, then interleaves subscriptions and organizations
+so the first candidate from each tenant precedes that tenant's later candidates,
+with stable timestamp and ID tie-breakers. That keeps one tenant or subscription
+burst from filling every early concurrency window. Retries can intentionally
+reorder events because their next scheduled attempt is later.
+
+A pass keeps claiming until no work is due or its soft wall-clock budget
+expires (30 seconds by default). The deadline is checked between batches, so an
+already-claimed batch always finishes and may carry the pass past its nominal
+budget. If work remains after the budget, the worker yields and immediately
+starts another budgeted pass. It sleeps for
+`WEBHOOK_DELIVERY_INTERVAL_SECONDS` (15 seconds by default) when no currently
+due, unleased row is claimable, or before retrying a sweep-level database error.
+Future backoff rows and rows leased by other replicas can still exist. The
+interval is therefore healthy idle added latency and an error-retry delay, not
+a busy-backlog throughput limit.
+
+For every claimed delivery:
 
 - **Signing**: `X-Strato-Signature: t=<unix seconds>,v1=<hex hmac>` where the
   HMAC is SHA-256 over `"<t>.<body>"` with the subscription secret. Consumers
@@ -109,30 +146,53 @@ as the audit-retention and SSF poll sweeps. Each pass drains due pending rows
   deactivated with a `disabledReason` the UI surfaces; re-activating clears
   the bookkeeping.
 - **History**: terminal deliveries are kept 7 days as browsable per-
-  subscription history (status, attempts, last response code, frozen payload)
-  with manual redeliver and a "send test event" endpoint.
+  subscription history (`succeeded`, `dead`, or `dropped`, plus attempts, last
+  response code, and frozen payload) with manual redeliver and a "send test
+  event" endpoint.
 
 ## Multi-replica properties
 
 Reliability falls out of the same machinery as the rest of the control plane:
 PostgreSQL is the only source of truth (any replica can enqueue — it is just
-a row insert in the caller's transaction), and delivery is **at-least-once**
-— a crash between POST and the success write replays the delivery once the
-claim lease lapses. Consumers dedupe on the event id.
+a row insert in the caller's transaction). Once a row is claimed, its POST is
+**at-least-once** — a crash between POST and the success write replays the
+delivery once the claim lease lapses. Consumers dedupe on the event id. Rows
+explicitly shed at the per-subscription pending ceiling are the exception: they
+are recorded as `dropped`, counted, and receive no further POST attempt. A
+dropped retry retains its earlier failed-attempt history.
 
-Concurrent drainers are safe by construction, not by the sweep lock alone:
-each pass **claims** its batch with a single atomic
-`UPDATE … SET next_attempt_at = now() + lease … FOR UPDATE SKIP LOCKED …
-RETURNING`, so a pass that outlives the lock TTL and an overlapping tick on
-another replica claim disjoint rows. Within a pass, POSTs fan out with
-bounded concurrency so a few timing-out endpoints cannot head-of-line-block
-healthy ones. The sweep lock remains as an optimization that keeps idle
-replicas from running the claim query every tick.
+Concurrent drainers are safe by construction. Each pass **claims** its batch
+with one atomic `UPDATE … FOR UPDATE SKIP LOCKED … RETURNING`, writing an
+explicit lease deadline that is separate from retry scheduling. Concurrent
+replicas therefore claim disjoint rows without a cluster-wide sweep lock. A
+crashed drainer's rows become claimable again when their leases expire.
+Claims also advance the legacy `next_attempt_at` lease deadline so an older
+replica participating in a rolling deployment cannot reclaim new work.
+
+The effective drain ceiling is governed by replica count, eight concurrent
+requests per replica, endpoint latency (requests time out after 10 seconds), and
+database capacity. The 16-row claim batch and 30-second cooperative pass budget
+bound local work without pinning the whole deployment to 16 deliveries per
+interval. Fair selection prevents subscription-level head-of-line blocking;
+adding replicas increases delivery capacity.
+
+## Queue observability
+
+The delivery worker records cluster-wide queue depth, oldest-pending age,
+per-subscription depth, and retained dropped history, plus replica-local HTTP
+attempt and claimed-row result counters. Deleted subscriptions explicitly
+unregister their UUID-labelled gauge. Oldest-pending age is the primary
+delivery-latency alert. Because every replica snapshots the same PostgreSQL
+outbox, queue/history gauges must be aggregated with `max`, never `sum`; work
+counters are summed across replicas.
+The exact metric names, PromQL examples, and response steps are in
+[Observability: Metrics & Traces](/deployment/observability#webhook-delivery).
 
 ## Configuration
 
 | Variable | Default | Meaning |
 | -------- | ------- | ------- |
-| `WEBHOOK_DELIVERY_ENABLED` | `true` (off under tests) | Arm the delivery sweep |
-| `WEBHOOK_DELIVERY_INTERVAL_SECONDS` | `15` | Sweep cadence (worst-case added latency) |
+| `WEBHOOK_DELIVERY_ENABLED` | `true` (off under tests) | Enable outbound delivery; queue telemetry continues while disabled |
+| `WEBHOOK_DELIVERY_INTERVAL_SECONDS` | `15` | Delay after no claimable work or a sweep error |
+| `WEBHOOK_DELIVERY_PASS_BUDGET_SECONDS` | `30` | Soft per-pass budget, checked between claim batches (valid range 1–3600 seconds) |
 | `WEBHOOK_AUTO_DISABLE_DAYS` | `3` | Continuous-failure window before auto-disable |

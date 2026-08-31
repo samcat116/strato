@@ -127,5 +127,9 @@ extension Application {
         // identity/network value server-side when it is redeemed. Existing rows
         // stay on their issued bootstrap commands; no secret can be backfilled.
         migrations.add(AddAgentEnrollmentBootstrapTokens())
+
+        // STR-264: distinguish active claims from retry backoff and add the
+        // partial queue index used by fair claims and per-subscription shedding.
+        migrations.add(AddWebhookDeliveryClaimLease())
     }
 }

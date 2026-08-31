@@ -92,6 +92,7 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
     case iamDecisionLogMaxQueueDepth = "IAM_DECISION_LOG_MAX_QUEUE_DEPTH"
     case iamDecisionLogMaxBatchSize = "IAM_DECISION_LOG_MAX_BATCH_SIZE"
     case webhookDeliveryIntervalSeconds = "WEBHOOK_DELIVERY_INTERVAL_SECONDS"
+    case webhookDeliveryPassBudgetSeconds = "WEBHOOK_DELIVERY_PASS_BUDGET_SECONDS"
     case webhookAutoDisableDays = "WEBHOOK_AUTO_DISABLE_DAYS"
     case spireSVIDTTL = "SPIRE_SVID_TTL"
     case spireIssuanceWindowHours = "SPIRE_ISSUANCE_WINDOW_HOURS"
@@ -125,6 +126,7 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
         case .auditMaxBatchSize, .iamDecisionLogMaxBatchSize: 128
         case .iamDecisionLogRetentionDays: 30
         case .webhookDeliveryIntervalSeconds: 15
+        case .webhookDeliveryPassBudgetSeconds: 30
         case .webhookAutoDisableDays: 3
         case .spireSVIDTTL: 3600
         case .spireIssuanceWindowHours: 24
@@ -146,6 +148,8 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
             1...DatabaseStatementTimeout.maximumMilliseconds
         case .sessionTTLSeconds:
             ValkeySessionDriver.minimumTTL...Int.max
+        case .webhookDeliveryPassBudgetSeconds:
+            1...3_600
         case .rateLimitAuthMax, .rateLimitAuthWindow, .rateLimitAPIMax, .rateLimitAPIWindow,
             .rateLimitFailureThreshold, .rateLimitFailureBaseDelay, .rateLimitFailureMaxDelay,
             .rateLimitFailureWindow, .rateLimitTrustedProxyHops, .auditMaxQueueDepth,

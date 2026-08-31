@@ -129,6 +129,25 @@ pod begins serving. The value is in milliseconds and must be a positive integer
 no greater than 2147483647; an invalid value makes the control plane fail during
 startup rather than run with an unbounded query.
 
+#### Webhook Delivery
+
+Webhook delivery defaults work without chart-specific values. Settings that do
+not have dedicated chart values pass through `extraEnv`; for example, to change
+the soft wall-clock budget that each replica spends draining due work per pass:
+
+```yaml
+extraEnv:
+  - name: WEBHOOK_DELIVERY_PASS_BUDGET_SECONDS
+    value: "60"
+```
+
+The default is 30 seconds and valid values are from 1 through 3600. The idle
+interval and auto-disable window can be set the same way with
+`WEBHOOK_DELIVERY_INTERVAL_SECONDS` and `WEBHOOK_AUTO_DISABLE_DAYS`. The durable
+outbox has a fixed safety ceiling of 10,000 pending rows per subscription; it is
+not operator-configurable. See [Webhooks](../../docs/architecture/webhooks.md)
+for drain, fairness, and overflow semantics.
+
 ## Values Reference
 
 | Key | Type | Default | Description |
@@ -137,6 +156,7 @@ startup rather than run with an unbounded query.
 | `image.tag` | string | `"latest"` | Container image tag (falls back to chart appVersion when empty) |
 | `image.pullPolicy` | string | `"IfNotPresent"` | Image pull policy |
 | `replicaCount` | int | `1` | Number of replicas |
+| `extraEnv` | list | `[]` | Extra control-plane container environment entries, including `WEBHOOK_*` delivery settings without dedicated chart values |
 | `frontend.enabled` | bool | `true` | Deploy the standalone Next.js frontend |
 | `frontend.service.port` | int | `3000` | Frontend service port |
 | `frontend.env.STRATO_API_URL` | string | `""` | Server-side API proxy destination; empty derives the in-cluster control-plane service URL |

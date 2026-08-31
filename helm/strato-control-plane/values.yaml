@@ -251,7 +251,7 @@ affinity: {}
 # Extra environment variables for the control-plane container. Standard
 # container-env entries rendered through tpl. Use this for settings without a
 # dedicated chart value,
-# e.g. SSF_*, AUDIT_*, RATE_LIMIT_*, SCHEDULING_STRATEGY,
+# e.g. SSF_*, AUDIT_*, RATE_LIMIT_*, WEBHOOK_*, SCHEDULING_STRATEGY,
 # STRATO_DEFAULT_NETWORK_*, REQUEST_LOGGING. (Image storage has dedicated
 # values — see strato.imageStorage.)
 # extraEnv:

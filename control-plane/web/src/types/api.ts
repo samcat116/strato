@@ -1120,7 +1120,7 @@ export interface WebhookDelivery {
   subscriptionId: string;
   eventId: string;
   eventType: string;
-  status: "pending" | "succeeded" | "dead";
+  status: "pending" | "succeeded" | "dead" | "dropped";
   attempts: number;
   /** Only while pending. */
   nextAttemptAt?: string | null;
@@ -1130,7 +1130,7 @@ export interface WebhookDelivery {
   lastError?: string | null;
   deliveredAt?: string | null;
   createdAt?: string;
-  /** Frozen JSON body that was POSTed. */
+  /** Frozen JSON body prepared for delivery. */
   payload: string;
 }
 

@@ -201,6 +201,17 @@ add those to `.env` (or an override file) to change them:
 | `DATABASE_TLS` | `disable` | Postgres TLS mode — set `require` if you point the stack at an external database (not written by `setup.sh`). |
 | `DATABASE_STATEMENT_TIMEOUT_MS` | `300000` | Maximum duration of any control-plane Postgres statement, in milliseconds. Must be an integer from 1 through 2147483647; invalid values stop startup instead of leaving queries unbounded. |
 | `DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS` | `900000` | Longer timeout used only while SchemaMigrator owns its pinned connection; the serving value is restored afterward. Uses the same validation range. |
+| `WEBHOOK_DELIVERY_ENABLED` | `true` | Arm user-managed webhook delivery. Disabling it leaves pending outbox rows durable until delivery is re-enabled. |
+| `WEBHOOK_DELIVERY_INTERVAL_SECONDS` | `15` | Delay after no due, unleased work is claimable or a sweep error occurs. It is not a throughput limit while a healthy due backlog remains. |
+| `WEBHOOK_DELIVERY_PASS_BUDGET_SECONDS` | `30` | Soft wall-clock budget for one replica's drain pass, checked between claimed batches. Must be from 1 through 3600. |
+| `WEBHOOK_AUTO_DISABLE_DAYS` | `3` | Continuous delivery-failure window before a subscription is automatically disabled. |
+| `OTEL_METRICS_ENABLED` | `false` | Export control-plane metrics to `OTEL_EXPORTER_OTLP_ENDPOINT`. Compose has no bundled control-plane OTLP collector, so enable this only when you provide one. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | OTLP gRPC collector destination used when metric export is enabled. From the control-plane container, use a collector hostname that is reachable on the Compose network. |
+
+The webhook outbox has a fixed pending ceiling of 10,000 rows per subscription.
+When enqueueing would overflow it, the same transaction moves the oldest
+unclaimed overflow rows into visible `dropped` delivery history. This is a
+safety invariant rather than an operator-tunable setting.
 
 ## Splitting session storage
 

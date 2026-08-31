@@ -156,13 +156,20 @@ struct WebhookSubscriptionController: RouteCollection {
                 "message": .string("Test event from Strato"),
                 "subscriptionId": .string(try subscription.requireID().uuidString),
             ])
-        let delivery = WebhookDelivery(
-            subscriptionID: try subscription.requireID(),
-            eventID: event.id,
-            eventType: event.type,
-            payload: try event.encodedPayload())
-        try await delivery.save(on: req.db)
-        return WebhookDeliveryResponse(from: delivery)
+        let subscriptionID = try subscription.requireID()
+        let payload = try event.encodedPayload()
+        return try await req.db.transaction { tx in
+            let delivery = WebhookDelivery(
+                subscriptionID: subscriptionID,
+                eventID: event.id,
+                eventType: event.type,
+                payload: payload)
+            try await WebhookOutbox.enqueue([delivery], on: tx)
+            guard let persisted = try await WebhookDelivery.find(delivery.requireID(), on: tx) else {
+                throw Abort(.internalServerError, reason: "Enqueued webhook delivery disappeared")
+            }
+            return WebhookDeliveryResponse(from: persisted)
+        }
     }
 
     // MARK: - Delivery history
@@ -179,6 +186,10 @@ struct WebhookSubscriptionController: RouteCollection {
         let limit = try req.intQuery("limit", default: 50, in: 1...200)
         let deliveries = try await WebhookDelivery.query(on: req.db)
             .filter(\.$subscription.$id == subscription.requireID())
+            // A ceiling drop changes an old row. Sort by its latest transition
+            // so that verdict is visible within the bounded history page instead
+            // of remaining behind thousands of newer pending rows.
+            .sort(\.$updatedAt, .descending)
             .sort(\.$createdAt, .descending)
             .limit(limit)
             .all()
@@ -197,24 +208,43 @@ struct WebhookSubscriptionController: RouteCollection {
         else {
             throw Abort(.badRequest, reason: "Invalid delivery ID")
         }
-        guard
-            let delivery = try await WebhookDelivery.query(on: req.db)
-                .filter(\.$id == deliveryID)
-                .filter(\.$subscription.$id == subscription.requireID())
-                .first()
-        else {
-            throw Abort(.notFound, reason: "Delivery not found")
-        }
-        guard delivery.statusValue != .pending else {
-            throw Abort(.conflict, reason: "Delivery is already pending")
-        }
+        let subscriptionID = try subscription.requireID()
+        return try await req.db.transaction { tx in
+            try await WebhookOutbox.lockSubscriptions([subscriptionID], on: tx)
+            guard
+                let currentSubscription = try await WebhookSubscription.find(subscriptionID, on: tx),
+                currentSubscription.isActive
+            else {
+                throw Abort(.conflict, reason: "Subscription is disabled")
+            }
+            guard
+                let delivery = try await WebhookDelivery.query(on: tx)
+                    .filter(\.$id == deliveryID)
+                    .filter(\.$subscription.$id == subscriptionID)
+                    .first()
+            else {
+                throw Abort(.notFound, reason: "Delivery not found")
+            }
+            guard delivery.statusValue != .pending else {
+                throw Abort(.conflict, reason: "Delivery is already pending")
+            }
 
-        delivery.status = WebhookDeliveryStatus.pending.rawValue
-        delivery.attempts = 0
-        delivery.nextAttemptAt = Date()
-        delivery.lastError = nil
-        try await delivery.save(on: req.db)
-        return WebhookDeliveryResponse(from: delivery)
+            delivery.status = WebhookDeliveryStatus.pending.rawValue
+            delivery.attempts = 0
+            delivery.nextAttemptAt = Date()
+            delivery.claimedUntil = nil
+            delivery.lastAttemptAt = nil
+            delivery.responseStatus = nil
+            delivery.lastError = nil
+            delivery.deliveredAt = nil
+            try await delivery.save(on: tx)
+            try await WebhookOutbox.enforcePendingCeiling(
+                for: [subscriptionID], protecting: deliveryID, on: tx)
+            guard let persisted = try await WebhookDelivery.find(deliveryID, on: tx) else {
+                throw Abort(.internalServerError, reason: "Redelivered webhook delivery disappeared")
+            }
+            return WebhookDeliveryResponse(from: persisted)
+        }
     }
 
     // MARK: - Helpers
