@@ -633,7 +633,8 @@ actor AgentService {
         // terminal frame may already be in flight; their deadline is the safe
         // failure backstop.
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
-        app.guestExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
+        await app.guestExecSessionManager.closeAllSessions(
+            forAgent: agentKey, reason: "agent unregistered")
         presenceRefreshedAt.removeValue(forKey: agentKey)
         routeRefreshedAt.removeValue(forKey: agentKey)
         await app.coordination.clearAgentPresence(agentKey: agentKey)
@@ -678,7 +679,8 @@ actor AgentService {
         // gone. Captured commands keep waiting for a terminal frame or their
         // deadline.
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
-        app.guestExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
+        await app.guestExecSessionManager.closeAllSessions(
+            forAgent: agentKey, reason: "agent unregistered")
         // Drop both cluster-visible claims immediately. The route clear is a
         // compare-and-delete, so it cannot remove a successor connection.
         presenceRefreshedAt.removeValue(forKey: agentKey)

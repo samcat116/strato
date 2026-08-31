@@ -478,7 +478,7 @@ struct AgentWebSocketController: RouteCollection {
                 if !(await req.vmCommandExecutionService.handleStarted(
                     sessionId: message.sessionId, fromAgentKey: agentKey))
                 {
-                    req.guestExecSessionManager.handleStarted(
+                    await req.guestExecSessionManager.handleStarted(
                         sessionId: message.sessionId, fromAgentKey: agentKey)
                 }
 
@@ -501,7 +501,7 @@ struct AgentWebSocketController: RouteCollection {
                     sessionId: message.sessionId, fromAgentKey: agentKey,
                     exitCode: message.exitCode))
                 {
-                    req.guestExecSessionManager.handleExit(
+                    await req.guestExecSessionManager.handleExit(
                         sessionId: message.sessionId, fromAgentKey: agentKey,
                         exitCode: message.exitCode)
                 }
@@ -511,7 +511,7 @@ struct AgentWebSocketController: RouteCollection {
                 if !(await req.vmCommandExecutionService.handleClosed(
                     sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason))
                 {
-                    req.guestExecSessionManager.handleClosed(
+                    await req.guestExecSessionManager.handleClosed(
                         sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
                 }
 
@@ -664,7 +664,7 @@ struct AgentWebSocketController: RouteCollection {
 
                     req.application.consoleSessionManager.closeAllSessions(
                         forAgent: agentKey, reason: "agent disconnected")
-                    req.application.guestExecSessionManager.closeAllSessions(
+                    await req.application.guestExecSessionManager.closeAllSessions(
                         forAgent: agentKey, reason: "agent disconnected")
                     await req.agentService.removeAgent(agentKey)
                 }
@@ -690,7 +690,7 @@ struct AgentWebSocketController: RouteCollection {
                     else { return }
                     req.application.consoleSessionManager.closeAllSessions(
                         forAgent: agentKey, reason: "agent reconnected")
-                    req.application.guestExecSessionManager.closeAllSessions(
+                    await req.application.guestExecSessionManager.closeAllSessions(
                         forAgent: agentKey, reason: "agent reconnected")
                     self.activateMessageRouting(
                         req: req, ws: ws, state: state, agent: agent, processor: processor)

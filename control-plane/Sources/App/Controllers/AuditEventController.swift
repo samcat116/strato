@@ -18,6 +18,8 @@ struct AuditEventController: RouteCollection {
         var eventType: String?
         var userID: UUID?
         var organizationID: UUID?
+        var resourceType: String?
+        var resourceID: String?
         /// Only events served via the system-admin bypass.
         var adminOnly: Bool?
         /// ISO8601 timestamps (e.g. `2026-07-09T12:00:00Z`).
@@ -59,6 +61,19 @@ struct AuditEventController: RouteCollection {
         }
         if let userID = query.userID {
             dbQuery.filter(\.$userID == userID)
+        }
+        if let resourceType = query.resourceType {
+            dbQuery.filter(\.$resourceType == resourceType)
+        }
+        if let rawResourceID = query.resourceID {
+            // VM domain events store the canonical UUID spelling. Normalize a
+            // valid direct-API query so lowercase input matches the same row;
+            // malformed input remains an ordinary exact filter that finds none.
+            let resourceID =
+                query.resourceType == "vms"
+                ? UUID(uuidString: rawResourceID)?.uuidString ?? rawResourceID
+                : rawResourceID
+            dbQuery.filter(\.$resourceID == resourceID)
         }
         if query.adminOnly == true {
             dbQuery.filter(\.$adminBypass == true)

@@ -1,4 +1,5 @@
 import Fluent
+import Logging
 import NIOConcurrencyHelpers
 import Testing
 import Vapor
@@ -12,6 +13,27 @@ import AppTestSupport
 /// query API that reads the trail back.
 @Suite("Audit Logging Tests", .serialized)
 final class AuditLoggingTests {
+
+    /// Captures the structured metadata emitted by a `Logger` without touching
+    /// the process-wide logging bootstrap.
+    private struct RecordingLogHandler: LogHandler {
+        let entries: NIOLockedValueBox<[Logger.Metadata]>
+        var metadata: Logger.Metadata = [:]
+        var logLevel: Logger.Level = .trace
+
+        subscript(metadataKey key: String) -> Logger.Metadata.Value? {
+            get { metadata[key] }
+            set { metadata[key] = newValue }
+        }
+
+        func log(event: LogEvent) {
+            var combined = metadata
+            if let eventMetadata = event.metadata {
+                combined.merge(eventMetadata) { _, eventValue in eventValue }
+            }
+            entries.withLockedValue { $0.append(combined) }
+        }
+    }
 
     private func withApp(
         systemAdmin: Bool = false,
@@ -257,6 +279,51 @@ final class AuditLoggingTests {
         }
     }
 
+    @Test("Audit queries apply resource type and canonical VM ID together")
+    func resourceFiltersAreCombinedAndCanonicalized() async throws {
+        try await withApp(systemAdmin: true) { app, _, org, token in
+            let vmID = UUID()
+            let otherVMID = UUID()
+            try await AuditEvent(
+                from: AuditRecord(
+                    eventType: "test.vm", organizationID: org.id,
+                    resourceType: "vms", resourceID: vmID.uuidString)
+            ).save(on: app.db)
+            try await AuditEvent(
+                from: AuditRecord(
+                    eventType: "test.sandbox", organizationID: org.id,
+                    resourceType: "sandboxes", resourceID: vmID.uuidString)
+            ).save(on: app.db)
+            try await AuditEvent(
+                from: AuditRecord(
+                    eventType: "test.other-vm", organizationID: org.id,
+                    resourceType: "vms", resourceID: otherVMID.uuidString)
+            ).save(on: app.db)
+
+            let query = "resourceType=vms&resourceID=\(vmID.uuidString.lowercased())"
+            try await app.test(.GET, "/api/audit-events?\(query)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let decoded = try res.content.decode(AuditEventListResponse.self)
+                #expect(decoded.total == 1)
+                #expect(decoded.events.first?.eventType == "test.vm")
+            }
+
+            try await app.test(
+                .GET, "/api/organizations/\(org.id!)/audit-events?\(query)"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let decoded = try res.content.decode(AuditEventListResponse.self)
+                #expect(decoded.total == 1)
+                #expect(decoded.events.first?.resourceType == "vms")
+                #expect(decoded.events.first?.resourceID == vmID.uuidString)
+            }
+        }
+    }
+
     @Test("Org audit query is scoped to the organization and gated on org admin")
     func orgQueryScopedAndGated() async throws {
         try await withApp { app, _, org, token in
@@ -301,12 +368,12 @@ final class AuditLoggingTests {
         return AuditService(app: app, config: config)
     }
 
-    /// Persist an event and backdate its creation timestamp (Fluent stamps
-    /// `created_at` on insert, so the backdate needs a second save).
+    /// Persist an event with a backdated producer timestamp.
     private func saveEvent(type: String, ageDays: Double, on db: any Database) async throws {
-        let event = AuditEvent(from: AuditRecord(eventType: type))
-        try await event.save(on: db)
-        event.createdAt = Date().addingTimeInterval(-ageDays * 86_400)
+        let event = AuditEvent(
+            from: AuditRecord(
+                eventType: type,
+                timestamp: Date().addingTimeInterval(-ageDays * 86_400)))
         try await event.save(on: db)
     }
 
@@ -362,6 +429,68 @@ final class AuditLoggingTests {
 
     // MARK: - Background delivery (issue #694)
 
+    @Test("Log audit backend carries guest execution contract metadata")
+    func logBackendCarriesGuestExecutionMetadata() async throws {
+        let entries = NIOLockedValueBox<[Logger.Metadata]>([])
+        let logger = Logger(label: "test.audit") { _ in
+            RecordingLogHandler(entries: entries)
+        }
+        let backend = LogAuditBackend(logger: logger)
+        let apiKeyID = UUID()
+        let argvJSON = #"["/bin/echo","hello world"]"#
+        let producedAt = Date(timeIntervalSince1970: 1_000.25)
+
+        await backend.write(
+            AuditRecord(
+                eventType: AuditEventType.vmCommandRequested.rawValue,
+                timestamp: producedAt,
+                apiKeyID: apiKeyID,
+                resourceType: "vms",
+                resourceID: UUID().uuidString,
+                metadata: [
+                    "argv": argvJSON,
+                    "correlationID": "command-123",
+                    "outcome": "accepted",
+                ]
+            )
+        )
+
+        let recorded = try #require(entries.withLockedValue { $0.first })
+        #expect(recorded["timestamp"] == .string(String(producedAt.timeIntervalSince1970)))
+        #expect(recorded["apiKeyID"] == .string(apiKeyID.uuidString))
+        #expect(recorded["metadata.argv"] == .string(argvJSON))
+        #expect(recorded["metadata.correlationID"] == .string("command-123"))
+        #expect(recorded["metadata.outcome"] == .string("accepted"))
+        #expect(
+            Set(recorded.keys.filter { $0.hasPrefix("metadata.") })
+                == ["metadata.argv", "metadata.correlationID", "metadata.outcome"])
+    }
+
+    @Test("Log audit preserves producer timestamps under reversed delivery")
+    func logBackendPreservesProducerTimestamps() async throws {
+        let entries = NIOLockedValueBox<[Logger.Metadata]>([])
+        let logger = Logger(label: "test.audit.order") { _ in
+            RecordingLogHandler(entries: entries)
+        }
+        let backend = LogAuditBackend(logger: logger)
+        let timeoutAt = Date(timeIntervalSince1970: 2_000)
+        let correctionAt = Date(timeIntervalSince1970: 2_001)
+
+        await backend.write(
+            AuditRecord(eventType: "vm.command.completed", timestamp: correctionAt))
+        await backend.write(
+            AuditRecord(eventType: "vm.command.completed", timestamp: timeoutAt))
+
+        let timestamps = entries.withLockedValue {
+            $0.compactMap { metadata -> Double? in
+                guard case .string(let value) = metadata["timestamp"] else { return nil }
+                return Double(value)
+            }
+        }
+        #expect(timestamps == [correctionAt.timeIntervalSince1970, timeoutAt.timeIntervalSince1970])
+        #expect(timestamps.sorted() == [timeoutAt.timeIntervalSince1970, correctionAt.timeIntervalSince1970])
+    }
+
     /// A backend that records what it was handed, and can be made arbitrarily
     /// slow — standing in for the Loki/webhook POSTs whose five-second timeout
     /// used to be paid on the request path.
@@ -385,6 +514,36 @@ final class AuditLoggingTests {
         func write(_ records: [AuditRecord]) async {
             if let delay { try? await Task.sleep(for: delay) }
             state.withLockedValue { $0.append(records) }
+        }
+    }
+
+    private actor AuditDeliveryGate {
+        private var released = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        func wait() async {
+            guard !released else { return }
+            await withCheckedContinuation { waiters.append($0) }
+        }
+
+        func release() {
+            released = true
+            let pending = waiters
+            waiters.removeAll()
+            pending.forEach { $0.resume() }
+        }
+    }
+
+    private final class GatedAuditBackend: AuditBackend, Sendable {
+        let name = "gated"
+        private let gate: AuditDeliveryGate
+
+        init(gate: AuditDeliveryGate) {
+            self.gate = gate
+        }
+
+        func write(_ record: AuditRecord) async {
+            await gate.wait()
         }
     }
 
@@ -418,6 +577,90 @@ final class AuditLoggingTests {
         }
     }
 
+    @Test("Fail-open recording stays buffered when synchronous audit is configured")
+    func failOpenRecordingIgnoresSynchronousDelivery() async throws {
+        try await withApp { app, _, _, _ in
+            let slow = RecordingAuditBackend(delay: .seconds(3))
+            var config = AuditConfig.fromConfiguration(app.controlPlaneConfiguration)
+            config.synchronousWrites = true
+            let audit = AuditService(app: app, config: config, backends: [slow])
+
+            let clock = ContinuousClock()
+            let elapsed = await clock.measure {
+                await audit.recordFailOpen(AuditRecord(eventType: "vm.exec.started"))
+            }
+
+            #expect(elapsed < .seconds(1))
+            #expect(slow.records.isEmpty)
+            await audit.flush()
+            #expect(slow.records.map(\.eventType) == ["vm.exec.started"])
+        }
+    }
+
+    @Test("Malformed VM command attempts stay fail-open under synchronous audit")
+    func malformedVMCommandAuditDoesNotBlock() async throws {
+        try await withApp { app, _, _, token in
+            let slow = RecordingAuditBackend(delay: .seconds(3))
+            var config = AuditConfig.fromConfiguration(app.controlPlaneConfiguration)
+            config.synchronousWrites = true
+            app.audit = AuditService(app: app, config: config, backends: [slow])
+
+            let path = "/api/vms/not-a-uuid/actions/run"
+            let clock = ContinuousClock()
+            let elapsed = try await clock.measure {
+                try await app.test(.POST, path) { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        VMRunCommandRequest(
+                            command: ["/usr/bin/true"], env: nil, workingDir: nil))
+                } afterResponse: { response in
+                    #expect(response.status == .badRequest)
+                }
+            }
+
+            #expect(elapsed < .seconds(1))
+            await app.audit.flush()
+            let event = try #require(slow.records.first)
+            #expect(event.eventType == "api.request")
+            #expect(event.path == path)
+            #expect(event.status == 400)
+            #expect(event.metadata == nil)
+        }
+    }
+
+    @Test("Flush timeout reports an in-flight audit batch")
+    func flushTimeoutReportsInFlightBatch() async throws {
+        try await withApp { app, _, _, _ in
+            let entries = NIOLockedValueBox<[Logger.Metadata]>([])
+            app.logger = Logger(label: "test.audit.flush") { _ in
+                RecordingLogHandler(entries: entries)
+            }
+            let gate = AuditDeliveryGate()
+            var config = AuditConfig.fromConfiguration(app.controlPlaneConfiguration)
+            config.synchronousWrites = false
+            let audit = AuditService(
+                app: app, config: config, backends: [GatedAuditBackend(gate: gate)])
+            app.audit = audit
+
+            await audit.recordFailOpen(AuditRecord(eventType: "vm.exec.started"))
+            for _ in 0..<1_000 {
+                if await audit.queue.stats.inFlight > 0 { break }
+                await Task.yield()
+            }
+            #expect(await audit.queue.stats.inFlight == 1)
+
+            await audit.flush(waitingUpTo: .milliseconds(25))
+            let timeoutMetadata = entries.withLockedValue {
+                $0.first { $0["in_flight_batches"] != nil }
+            }
+            #expect(timeoutMetadata?["queued"] == .stringConvertible(0))
+            #expect(timeoutMetadata?["in_flight_batches"] == .stringConvertible(1))
+
+            await gate.release()
+            await audit.flush()
+        }
+    }
+
     @Test("Queued events reach the database when the request path never waited")
     func backgroundDeliveryPersistsAuditedMutations() async throws {
         try await withApp { app, user, _, token in
@@ -437,6 +680,40 @@ final class AuditLoggingTests {
             #expect(recorded.count == 1)
             #expect(recorded.first?.userID == user.id)
             #expect(recorded.first?.path == "/api/api-keys")
+        }
+    }
+
+    @Test("Database audit preserves producer order when delivery is reversed")
+    func databaseAuditPreservesProducerOrder() async throws {
+        try await withApp { app, _, _, _ in
+            let timeoutAt = Date(timeIntervalSince1970: 1_000)
+            let correctionAt = Date(timeIntervalSince1970: 1_001)
+            let backend = DatabaseAuditBackend(app: app)
+
+            // Model a later correction reaching the backend first because a
+            // live drain and a flush claimed different batches. Insert order
+            // must not replace the causal timestamps captured by producers.
+            await backend.write(
+                AuditRecord(
+                    eventType: "vm.command.completed",
+                    timestamp: correctionAt,
+                    metadata: ["outcome": "exited", "correctsOutcome": "timed_out"]))
+            await backend.write(
+                AuditRecord(
+                    eventType: "vm.command.completed",
+                    timestamp: timeoutAt,
+                    metadata: ["outcome": "timed_out"]))
+
+            let rows = try await AuditEvent.query(on: app.db)
+                .filter(\.$eventType == "vm.command.completed")
+                .sort(\.$createdAt, .descending)
+                .all()
+
+            #expect(rows.count == 2)
+            #expect(rows.first?.metadata?["outcome"] == "exited")
+            #expect(rows.first?.createdAt == correctionAt)
+            #expect(rows.last?.metadata?["outcome"] == "timed_out")
+            #expect(rows.last?.createdAt == timeoutAt)
         }
     }
 
@@ -473,8 +750,8 @@ final class AuditLoggingTests {
             let fourth = await audit.queue.enqueue(AuditRecord(eventType: "d"))
             #expect(first == .enqueued(startDrain: true))
             #expect(second == .enqueued(startDrain: false))
-            #expect(third == .shed(total: 1))
-            #expect(fourth == .shed(total: 2))
+            #expect(third == .shed(total: 1, reason: .countLimit))
+            #expect(fourth == .shed(total: 2, reason: .countLimit))
 
             let stats = await audit.queue.stats
             #expect(stats.queued == 2)
@@ -505,6 +782,39 @@ final class AuditLoggingTests {
         #expect(restarted == .enqueued(startDrain: true))
     }
 
+    @Test("Audit queue and batches are bounded by retained bytes")
+    func auditQueueIsByteBounded() async throws {
+        let record = AuditRecord(
+            eventType: "vm.command.requested",
+            metadata: ["argv": String(repeating: "x", count: 2_048)])
+        let bytes = record.estimatedQueueBytes
+        let queue = AuditEventQueue(
+            maxQueueDepth: 10,
+            maxQueueBytes: bytes * 2,
+            maxBatchSize: 10,
+            maxBatchBytes: bytes)
+
+        #expect(await queue.enqueue(record) == .enqueued(startDrain: true))
+        #expect(await queue.enqueue(record) == .enqueued(startDrain: false))
+        #expect(await queue.enqueue(record) == .shed(total: 1, reason: .byteLimit))
+
+        let firstBatch = await queue.nextBatch()
+        #expect(firstBatch?.count == 1)
+        await queue.finishBatch()
+        let secondBatch = await queue.nextBatch()
+        #expect(secondBatch?.count == 1)
+        await queue.finishBatch()
+
+        let oversized = AuditEventQueue(
+            maxQueueDepth: 10,
+            maxQueueBytes: bytes * 2,
+            maxBatchSize: 10,
+            maxBatchBytes: bytes - 1)
+        #expect(
+            await oversized.enqueue(record)
+                == .shed(total: 1, reason: .recordTooLarge))
+    }
+
     @Test("Batch size is clamped to what one multi-row insert can carry")
     func batchSizeIsClamped() async throws {
         // Postgres refuses a statement with more than 65535 bind parameters and
@@ -528,7 +838,7 @@ final class AuditLoggingTests {
         #expect(create == AuditResourceRef(type: "vms", id: nil, action: "create"))
 
         let vmID = UUID().uuidString
-        let start = parseResource(path: "/api/vms/\(vmID)/start", method: .POST)
+        let start = parseResource(path: "/api/vms/\(vmID.lowercased())/start", method: .POST)
         #expect(start == AuditResourceRef(type: "vms", id: vmID, action: "start"))
 
         let orgID = UUID()
@@ -546,5 +856,14 @@ final class AuditLoggingTests {
 
         let list = parseResource(path: "/api/api-keys", method: .GET)
         #expect(list == AuditResourceRef(type: "api-keys", id: nil, action: "read"))
+
+        #expect(isVMGuestExecutionAuditPath("/api/vms/\(vmID)/actions/run"))
+        #expect(isVMGuestExecutionAuditPath("/api/vms/not-a-uuid/actions/run"))
+        #expect(isVMGuestExecutionAuditPath("/api/vms/\(vmID)/exec"))
+        #expect(
+            isVMGuestExecutionAuditPath(
+                "/api/vms/\(vmID)/exec/\(UUID().uuidString)/attach"))
+        #expect(!isVMGuestExecutionAuditPath("/api/vms/\(vmID)/start"))
+        #expect(!isVMGuestExecutionAuditPath("/api/sandboxes/\(vmID)/exec"))
     }
 }

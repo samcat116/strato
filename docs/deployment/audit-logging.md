@@ -35,7 +35,36 @@ Event types:
 | `auth.passkey_added` / `auth.passkey_removed` | Self-service passkey enrollment / removal (`/api/users/me/passkeys`). Credential changes alter who can sign in, so they are audited alongside the login events. |
 | `iam.cross_org_grant` | A role granted to a principal (user or group) outside the resource's organization. Cross-org access is explicit-only and deliberately loud; the metadata names the principal and the role. |
 | `iam.cross_org_revoke` | A cross-org principal's role revoked — the visible end of external access. |
+| `vm.command.requested` | A durable captured command was accepted for dispatch. |
+| `vm.command.completed` | A captured command reached a terminal result. A late exit after a timeout appends a second event with `correctsOutcome=timed_out`; it does not replace the timeout fact. |
+| `vm.exec.requested` | An interactive VM exec session was accepted and minted. |
+| `vm.exec.started` | The owning agent confirmed that the guest process started. |
+| `vm.exec.ended` | An interactive session exited, was refused, timed out, disconnected, or was terminated by its operator. |
 | `ssf.*` | Actions taken by the [Shared Signals](/deployment/shared-signals) receiver: `ssf.event_received`, `ssf.sessions_revoked`, `ssf.api_keys_deactivated`, `ssf.user_disabled`, `ssf.user_enabled`, `ssf.stream_verified`, `ssf.stream_updated`, `ssf.event_ignored`, `ssf.event_error`, `ssf.subject_unmatched`. Security-relevant by construction — an IdP told Strato to revoke sessions or disable a user, and the trail shows what was done about it. |
+
+### Guest execution metadata
+
+Guest execution events use `resourceType=vms` and the VM's canonical UUID as
+`resourceID`. Their metadata is deliberately small and fixed:
+
+- `argv` is the command encoded as a JSON array, preserving argument
+  boundaries;
+- `correlationID` is the durable command UUID or interactive session ID;
+- `outcome` and `phase` describe the lifecycle transition;
+- `exitCode`, `reason`, and `correctsOutcome` appear only when applicable.
+
+`argv` is the exact accepted argument vector; the reason field is normalized
+and bounded. Audit metadata never contains an environment variable, working
+directory, stdin, stdout, stderr, captured command output, terminal frame, or
+interactive transcript. The durable command result API remains the only place
+captured output is returned.
+
+Authorization and validation refusals remain visible as `api.request` events.
+The VM-specific events add the accepted command/session correlation and the
+asynchronous outcome that HTTP middleware cannot know.
+Guest-execution refusal facts deliberately omit raw error text because request
+validation errors can echo caller-controlled environment variable names; the
+HTTP status and VM resource reference remain available for investigation.
 
 ## Configuration
 
@@ -47,9 +76,11 @@ Event types:
 | `AUDIT_WEBHOOK_URL` | — | Destination for the `webhook` backend (required when enabled). |
 | `LOKI_ENDPOINT` | — | Shared with VM console logs; required for the `loki` backend. |
 | `AUDIT_RETENTION_DAYS` | — | Delete `audit_events` rows older than this many days. Unset (or non-positive) keeps events forever. |
-| `AUDIT_SYNCHRONOUS` | `false` | Write events on the request path instead of in the background. Costs every mutation an insert (and any configured HTTP POST) of latency; intended for tests. |
+| `AUDIT_SYNCHRONOUS` | `false` | Write ordinary audit events on the request path instead of in the background. Costs every mutation an insert (and any configured HTTP POST) of latency; intended for tests. Guest-execution request and domain facts remain buffered and fail open. |
 | `AUDIT_MAX_QUEUE_DEPTH` | `2048` | Events that may await background delivery before the excess is shed. |
+| `AUDIT_MAX_QUEUE_BYTES` | `67108864` | Approximate retained bytes allowed in the background queue (64 MiB). |
 | `AUDIT_MAX_BATCH_SIZE` | `128` | Events one drain pass ships together; the `database` backend writes a batch as a single multi-row insert. Clamped to 1024 (see [Delivery](#delivery)). |
+| `AUDIT_MAX_BATCH_BYTES` | `8388608` | Approximate payload bytes one drain pass may claim (8 MiB). A single larger event is shed visibly rather than retried as an oversized batch. |
 
 ### Backends
 
@@ -81,16 +112,24 @@ and that case is logged.
 
 The trade is that an event is no longer durable the instant its response
 returns — a caller that reads `/api/audit-events` immediately after a mutation
-may not see the row yet. For compliance regimes that require the event
-committed before the client is told the mutation succeeded, set
-`AUDIT_SYNCHRONOUS=true` and accept the per-mutation latency.
+may not see the row yet. For compliance regimes that require an ordinary audit
+event committed before the client is told the mutation succeeded, set
+`AUDIT_SYNCHRONOUS=true` and accept the per-mutation latency. The generic
+`api.request` facts for VM guest-execution routes and the `vm.command.*` and
+`vm.exec.*` domain facts are the deliberate exception: STR-84 requires those
+producers to remain independent of audit availability, so they always use the
+bounded background queue.
 
-The buffer is bounded by `AUDIT_MAX_QUEUE_DEPTH`. If events arrive faster than
-the backends accept them for long enough to fill it, the excess is dropped and
-counted, and the control plane logs `Audit events shed under backpressure` with
-the running total (the first drop, then every hundredth). A trail with a gap in
-it says so out loud; sustained shedding means a backend needs attention or the
-queue needs raising.
+The buffer is bounded by both `AUDIT_MAX_QUEUE_DEPTH` and
+`AUDIT_MAX_QUEUE_BYTES`. Drained batches are likewise bounded by count and
+`AUDIT_MAX_BATCH_BYTES`, so a burst of large exact-argv events cannot turn one
+database insert or webhook drain into an unbounded allocation. If events arrive
+faster than the backends accept them for long enough to hit either limit, or a
+single record exceeds the batch byte limit, the excess is dropped and counted.
+The control plane logs `Audit events shed under backpressure` with the running
+total and limit reason (the first drop, then every hundredth). A trail with a
+gap in it says so out loud; sustained shedding means a backend needs attention
+or the queue limits need raising.
 
 `AUDIT_MAX_BATCH_SIZE` is clamped to 1024. A batch is written as one multi-row
 INSERT, and Postgres rejects a statement carrying more than 65535 bind
@@ -115,11 +154,19 @@ GET /api/audit-events?eventType=api.request&adminOnly=true&from=2026-07-01T00:00
 | `eventType` | Exact event type (`api.request`, `auth.login`, ...) |
 | `userID` | Filter to one actor |
 | `organizationID` | (Global endpoint only) filter to one organization |
+| `resourceType` / `resourceID` | Apply both predicates to one resource. For VM history, use `resourceType=vms` and the canonical VM UUID. |
 | `adminOnly` | `true` → only admin-bypassed events |
 | `from` / `to` | ISO 8601 timestamps (epoch seconds also accepted) |
 | `limit` / `offset` | Paging; limit defaults to 50, capped at 500 |
 
 The response is `{ events, total, limit, offset }`.
+
+The system-administrator audit page exposes the five guest execution event
+types. Paste a VM UUID into its VM filter, or select a VM resource cell in the
+table, to send both resource predicates. Execution rows show argv, outcome,
+exit code, phase, bounded reason, correlation, and correction metadata; missing
+or malformed historical metadata renders as unavailable rather than breaking
+the page.
 
 ## Retention
 
