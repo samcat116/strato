@@ -112,6 +112,11 @@ AGENT_USER="root"
 # regression fixed in 11.5. Ubuntu 24.04 ships 10.0.0 and is therefore not a
 # supported hypervisor host; 26.04 ships 12.0.0.
 LIBVIRT_MIN_VERSION="11.5.0"
+# Local QEMU disks retain the 11.5 floor above. Libvirt learned the
+# `pool/namespace/image` source name required by project-scoped RBD in 11.6;
+# the agent's Ceph dependency probe keeps that capability dark on a reachable
+# older daemon, while a host with no libvirt can still serve Firecracker/krbd.
+LIBVIRT_NAMESPACED_RBD_MIN_VERSION="11.6.0"
 LIBVIRT_QEMU_CONF=/etc/libvirt/qemu.conf
 
 # SPIRE / telemetry. Versions are pinned for reproducible installs: SPIRE
@@ -585,9 +590,12 @@ apt_packages() {
     qemu_system="qemu-system-x86"
     firmware="ovmf"
   fi
-  # Base: disk tooling (qemu-img), the qemu-system for this arch, UEFI firmware
-  # for disk-image boot, glib (QEMUKit links it), and socat.
-  local pkgs=(qemu-utils "$qemu_system" "$firmware" libglib2.0-0 socat ca-certificates)
+  # Base: local disk tooling (qemu-img), the Ceph RBD client used by external
+  # pool backends, the qemu-system for this arch, UEFI firmware for disk-image
+  # boot, glib (QEMUKit links it), and socat. ceph-common installs both `rbd`
+  # and the krbd userspace map/unmap frontend; it does not install or start a
+  # monitor, manager, or OSD.
+  local pkgs=(qemu-utils ceph-common "$qemu_system" "$firmware" libglib2.0-0 socat ca-certificates)
   # libvirtd is the second daemon the agent drives VMs through: the daemon
   # itself plus virsh, which both this script's preflight and the agent's use
   # to prove qemu:///system is reachable and new enough. swtpm backs guest
@@ -902,6 +910,9 @@ preflight() {
   PREFLIGHT_OK=1
   log "Host preflight:"
   check_present "qemu-img" "install qemu-utils" command -v qemu-img
+  check_present "rbd (Ceph client)" \
+    "install ceph-common; without it this host does not advertise Ceph-backed volumes" \
+    command -v rbd
   if [ "$OS" = "linux" ]; then
     check_present "/dev/kvm (hardware acceleration)" \
       "no KVM — hardware acceleration off; VMs fall back to slow emulation" check_kvm
@@ -920,6 +931,11 @@ preflight() {
       echo "           reliably from ${LIBVIRT_MIN_VERSION}. Ubuntu 24.04 ships 10.0.0 and is not a supported"
       echo "           hypervisor host; use Ubuntu 26.04 (libvirt 12.0.0) or another distro at ${LIBVIRT_MIN_VERSION}+."
       PREFLIGHT_OK=0
+    elif [ -n "$LIBVIRT_VERSION" ] \
+      && ! version_ge "$LIBVIRT_VERSION" "$LIBVIRT_NAMESPACED_RBD_MIN_VERSION"; then
+      echo "    [NOTE] libvirt ${LIBVIRT_VERSION} supports local QEMU disks, but namespaced RBD QEMU"
+      echo "           attachment needs ${LIBVIRT_NAMESPACED_RBD_MIN_VERSION}+; this agent keeps Ceph placement dark."
+      echo "           Firecracker/krbd-only Ceph hosts do not require libvirt."
     fi
     check_present "QEMU firmware descriptors (/usr/share/qemu/firmware)" \
       "install ovmf/qemu-efi-aarch64; without the JSON descriptors libvirt cannot autoselect UEFI firmware" \

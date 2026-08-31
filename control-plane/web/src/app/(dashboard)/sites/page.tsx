@@ -7,6 +7,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
   ChevronRight,
+  Database,
   Loader2,
   MoreHorizontal,
   Pencil,
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { KpiCard, reservedPercent } from "@/components/overview";
+import { CephStorageDialog } from "@/components/sites/ceph-storage-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -303,6 +305,7 @@ export default function SitesPage() {
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingSite, setEditingSite] = useState<Site | null>(null);
+  const [cephSite, setCephSite] = useState<Site | null>(null);
   const [form, setForm] = useState<SiteFormState>(EMPTY_FORM);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["sites"] });
@@ -744,6 +747,9 @@ export default function SitesPage() {
                             <DropdownMenuItem onClick={() => openEdit(site)}>
                               <Pencil className="mr-2 h-4 w-4" />Edit site
                             </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setCephSite(site)}>
+                              <Database className="mr-2 h-4 w-4" />Ceph storage
+                            </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem variant="destructive" onClick={() => handleDelete(site)}>
                               <Trash2 className="mr-2 h-4 w-4" />Delete site
@@ -769,6 +775,14 @@ export default function SitesPage() {
           </div>
         )}
       </section>
+
+      <CephStorageDialog
+        site={cephSite}
+        open={cephSite !== null}
+        onOpenChange={(open) => {
+          if (!open) setCephSite(null);
+        }}
+      />
 
       <Dialog open={dialogOpen} onOpenChange={(open) => (open ? setDialogOpen(true) : closeDialog())}>
         <DialogContent className="max-h-[90vh] overflow-y-auto bg-card sm:max-w-[620px]">

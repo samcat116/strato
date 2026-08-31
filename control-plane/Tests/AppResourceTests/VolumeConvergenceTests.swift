@@ -281,8 +281,11 @@ final class VolumeConvergenceTests {
             try await volume.save(on: app.db)
             let volumeID = try volume.requireID()
             let attachment = DiskAttachment.rbd(
-                pool: "volumes", image: volumeID.uuidString, user: "client.project",
-                monHosts: ["10.0.0.10:6789", "10.0.0.11:6789"])
+                pool: "volumes", image: volumeID.uuidString, namespace: "project",
+                user: "project",
+                monEndpoints: ["v2:10.0.0.10:3300", "v2:10.0.0.11:3300"],
+                clusterId: UUID(), credentialId: UUID(),
+                configPath: "/etc/ceph/strato-test.conf")
 
             _ = try await app.observedStateApplier.apply(
                 report(

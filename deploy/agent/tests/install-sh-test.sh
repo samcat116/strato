@@ -41,7 +41,11 @@ check() {
 }
 
 file_mode() {
-  stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"
+  if stat -c %a "$1" >/dev/null 2>&1; then
+    stat -c %a "$1"
+  else
+    stat -f %Lp "$1"
+  fi
 }
 
 extract_function() {
@@ -71,6 +75,7 @@ HARNESS="$WORK_DIR/harness.sh"
   extract_function set_qemu_conf_key
   extract_function version_ge
   extract_function render_spire_guest_identity_config
+  extract_function apt_packages
 } > "$HARNESS"
 # shellcheck source=/dev/null
 . "$HARNESS"
@@ -232,6 +237,20 @@ check "11.4.99 does not clear it"                  no  "$(ge 11.4.99 11.5.0)"
 check "9.10.0 compares numerically, not lexically" no  "$(ge 9.10.0 11.5.0)"
 check "a non-numeric version is refused"           no  "$(ge abc 11.5.0)"
 check "an empty version is refused"                no  "$(ge '' 11.5.0)"
+
+# --- apt_packages -----------------------------------------------------------
+# External Ceph is a client-only feature, but every installed host needs the
+# userspace `rbd` frontend before it can truthfully advertise that capability.
+
+echo "apt_packages: Ceph client tooling"
+ARCH=x86_64
+NETWORK_MODE=user
+INSTALL_TELEMETRY=0
+PACKAGES="$(apt_packages)"
+check "ceph-common is installed exactly once" 1 \
+  "$(printf '%s\n' "$PACKAGES" | grep -cx ceph-common)"
+check "namespaced RBD keeps its separate libvirt 11.6 floor" 1 \
+  "$(grep -c '^LIBVIRT_NAMESPACED_RBD_MIN_VERSION="11.6.0"$' "$INSTALL_SH")"
 
 # --- render_spire_guest_identity_config -------------------------------------
 # Enabling this widens the node's trust boundary, so absence is as important as

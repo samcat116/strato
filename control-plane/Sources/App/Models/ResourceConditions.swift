@@ -522,6 +522,9 @@ extension Volume: ConvergingResource {
     static var operationResourceKind: OperationResourceKind { .volume }
     var projectID: UUID { $project.id }
     func placementAgentIDs(on db: any Database) async throws -> [String] {
+        if try await VolumeService.pool(of: self, on: db)?.mode == .ceph {
+            return reconcilerAgentId.map { [$0] } ?? []
+        }
         if desiredStatus == .absent {
             return try await VolumeService.agentIDsWithPhysicalReplicas(of: self, on: db)
         }
@@ -551,6 +554,13 @@ extension Volume: ConvergingResource {
         convergenceDeadline = committed.convergenceDeadline
         observedSizeBytes = committed.observedSizeBytes
         finalizers = committed.finalizers
+        // Canonical RBD attachment and Ceph execution ownership are written
+        // by observed-state application and reachability failover. Every API
+        // mutation saves the whole Fluent model after taking this lock, so it
+        // must adopt both or a request snapshot can overwrite a racing report
+        // or move the reconciler back to an unavailable host.
+        diskAttachment = committed.diskAttachment
+        reconcilerAgentId = committed.reconcilerAgentId
         // The desired size, for the same read-modify-write reason as the
         // attachment below: `accept` saves the whole model, so an attach or a
         // throttle accepted while a resize commits would write its pre-request
