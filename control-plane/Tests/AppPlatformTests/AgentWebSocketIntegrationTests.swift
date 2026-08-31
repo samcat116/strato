@@ -68,6 +68,7 @@ struct AgentWebSocketIntegrationTests {
             let enrollment = AgentEnrollment(
                 agentName: agentName,
                 spiffeID: "spiffe://strato.local/agent/\(agentName)",
+                bootstrapTokenHash: AgentEnrollment.hashBootstrapToken("enroll_v1_test"),
                 expirationHours: 1,
                 siteID: try site.requireID(),
                 organizationScope: .organization(try org.requireID()))
@@ -89,11 +90,12 @@ struct AgentWebSocketIntegrationTests {
             #expect(agent.$organization.id == org.id)
             #expect(agent.$site.id == site.id)
 
-            // The enrollment is marked used, but survives: unlike a single-use
-            // token it is not consumed by being redeemed.
+            // The scope record survives, while registration consumes the
+            // bootstrap bearer by erasing its hash.
             let reloaded = try #require(try await AgentEnrollment.find(enrollment.id, on: app.db))
             #expect(reloaded.isUsed == true)
             #expect(reloaded.usedAt != nil)
+            #expect(reloaded.bootstrapTokenHash == nil)
 
             try await client.close()
         }

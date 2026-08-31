@@ -84,7 +84,7 @@ extension SandboxController {
                 guard let project = try await Project.find(current.$project.id, on: db) else {
                     throw Abort(.conflict, reason: "Snapshot's project no longer exists")
                 }
-                try await QuotaEnforcementService.reserveSandboxSnapshotExport(
+                try await QuotaEnforcementService.reserveSnapshotStorage(
                     for: project, environment: current.environment,
                     size: current.size ?? 0, on: db)
             }

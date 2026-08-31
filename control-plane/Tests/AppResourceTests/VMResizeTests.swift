@@ -17,9 +17,8 @@ final class VMResizeTests {
 
     /// Boots a configured test app with a user, org, project and one VM sized
     /// 2 vCPU / 2 GiB with hot-add headroom to 8 vCPU / 8 GiB, plus an online
-    /// agent that speaks the resize protocol version.
+    /// agent that can receive resize operations.
     private func withResizeTestApp(
-        agentWireVersion: Int = WireProtocol.currentVersion,
         agentArchitecture: CPUArchitecture = .x86_64,
         quotaVCPUs: Int = 32,
         quotaMemoryGB: Double = 64,
@@ -70,7 +69,6 @@ final class VMResizeTests {
                 architecture: agentArchitecture,
                 lastHeartbeat: Date()
             )
-            agent.wireProtocolVersion = agentWireVersion
             agent.$site.id = try await builder.placementSite(for: project).requireID()
             try await agent.save(on: app.db)
 
