@@ -2158,7 +2158,6 @@ actor Agent {
         if let client = websocketClient {
             try await client.sendMessage(message)
         }
-        logger.debug("Heartbeat sent", metadata: ["agentId": .string(effectiveAgentID)])
 
         // The beat is already on the wire before this bounded host probe runs,
         // so a slow lsblk cannot make the control plane mark the agent offline.
@@ -2533,12 +2532,6 @@ extension Agent {
     }
 
     func handleMessage(_ envelope: MessageEnvelope) async {
-        logger.debug(
-            "Handling message from control plane",
-            metadata: [
-                "type": .string(envelope.type.rawValue)
-            ])
-
         do {
             switch envelope.type {
             case .agentRegisterResponse:
@@ -2749,15 +2742,10 @@ extension Agent {
             // deleted at v32 as a read that was never an action (STR-149), and
             // both snapshot verbs became desired artifacts at v33 (STR-150).
             case .success:
-                // ACK to a control-plane-initiated request (incl. every heartbeat).
-                // Logged at debug so it stops surfacing as "unknown message type".
-                let message = try envelope.decode(as: SuccessMessage.self)
-                logger.debug(
-                    "Received success response from control plane",
-                    metadata: [
-                        "requestId": .string(message.requestId),
-                        "message": .string(message.message ?? ""),
-                    ])
+                // ACK to an agent-initiated request (including every heartbeat).
+                // It needs no action; the transport record already carries its
+                // type, request id and size without exposing `message`.
+                _ = try envelope.decode(as: SuccessMessage.self)
             case .error:
                 let message = try envelope.decode(as: ErrorMessage.self)
                 await handleErrorResponse(message)
@@ -2765,7 +2753,7 @@ extension Agent {
                 logger.warning("Received unknown message type: \(envelope.type)")
             }
         } catch {
-            logger.error("Failed to handle message: \(error)")
+            WireMessageLogger.logMessageHandlingFailure(envelope: envelope, logger: logger)
         }
     }
 
