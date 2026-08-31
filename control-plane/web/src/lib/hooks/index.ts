@@ -167,7 +167,15 @@ export {
   useRevokeProjectWorkload,
   projectMemberErrorMessage,
 } from "./use-project-members";
-export { useNetworks, useInvalidateNetworks } from "./use-networks";
+export {
+  useNetworks,
+  useInvalidateNetworks,
+  useNetworkACL,
+  useCreateNetworkACL,
+  useDeleteNetworkACL,
+  useCreateNetworkACLRule,
+  useDeleteNetworkACLRule,
+} from "./use-networks";
 export {
   useSecurityGroups,
   useInvalidateSecurityGroups,
