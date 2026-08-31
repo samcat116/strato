@@ -247,6 +247,41 @@ final class NetworkACLControllerTests {
         }
     }
 
+    @Test("CIDRs are canonicalized before persistence")
+    func cidrCanonicalization() async throws {
+        try await withACLTestApp { app, _, _, _, network, token in
+            let networkID = try network.requireID()
+            _ = try await self.createACL(app: app, networkID: networkID, token: token)
+
+            let cases: [(number: Int, ethertype: NetworkACLRule.Ethertype, input: String, expected: String)] = [
+                (1, .ipv4, "10.0.0.1/8/", "10.0.0.0/8"),
+                (2, .ipv6, "2001:0DB8::1//64", "2001:db8::/64"),
+            ]
+
+            for testCase in cases {
+                try await app.test(.POST, "/api/networks/\(networkID)/acl/rules") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        CreateNetworkACLRuleRequest(
+                            ruleNumber: testCase.number,
+                            direction: .ingress,
+                            ethertype: testCase.ethertype,
+                            action: .allow,
+                            remoteCIDR: testCase.input))
+                } afterResponse: { response in
+                    #expect(response.status == .ok)
+                    let body = try response.content.decode(NetworkACLRuleResponse.self)
+                    #expect(body.remoteCIDR == testCase.expected)
+                }
+            }
+
+            let stored = try await NetworkACLRule.query(on: app.db)
+                .sort(\.$ruleNumber)
+                .all()
+            #expect(stored.map(\.remoteCIDR) == cases.map(\.expected))
+        }
+    }
+
     @Test("Read and mutation authorization inherit the owning network")
     func authorization() async throws {
         try await withACLTestApp { app, _, organization, project, network, token in

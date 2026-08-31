@@ -97,7 +97,7 @@ struct NetworkACLController: RouteCollection {
         let network = try await authorizedNetwork(req: req, action: "network:update")
         let networkID = try network.requireID()
         let request = try req.content.decodeValidated(CreateNetworkACLRuleRequest.self)
-        let protocolName = try NetworkACLService.validateRule(request)
+        let validated = try NetworkACLService.validateRule(request)
 
         let rule: NetworkACLRule
         do {
@@ -124,10 +124,10 @@ struct NetworkACLController: RouteCollection {
                     direction: request.direction,
                     ethertype: request.ethertype,
                     action: request.action,
-                    protocolName: protocolName,
+                    protocolName: validated.protocolName,
                     portRangeMin: request.portRangeMin,
                     portRangeMax: request.portRangeMax,
-                    remoteCIDR: request.remoteCIDR,
+                    remoteCIDR: validated.remoteCIDR,
                     description: request.description)
                 try await rule.save(on: db)
                 try await NetworkACLService.bumpACLGeneration(aclID, on: db)

@@ -8,9 +8,11 @@ import Vapor
 /// logical-network row first and the ACL row second so concurrent rule edits,
 /// ACL deletion, and network deletion have one stable lock order.
 enum NetworkACLService {
-    /// Validate a rule and return the normalized protocol spelling stored on
-    /// the row and sent to agents.
-    static func validateRule(_ request: CreateNetworkACLRuleRequest) throws -> String? {
+    /// Validate a rule and return the normalized values stored on the row and
+    /// sent to agents.
+    static func validateRule(_ request: CreateNetworkACLRuleRequest) throws -> (
+        protocolName: String?, remoteCIDR: String
+    ) {
         guard (1...32_766).contains(request.ruleNumber) else {
             throw Abort(.badRequest, reason: "ruleNumber must be between 1 and 32766")
         }
@@ -56,22 +58,25 @@ enum NetworkACLService {
             }
         }
 
+        let remoteCIDR: String
         switch request.ethertype {
         case .ipv4:
-            guard IPv4CIDR(request.remoteCIDR) != nil else {
+            guard let cidr = IPv4CIDR(request.remoteCIDR) else {
                 throw Abort(
                     .badRequest,
                     reason: "remoteCIDR is not a valid IPv4 CIDR: \(request.remoteCIDR)")
             }
+            remoteCIDR = "\(cidr.networkAddress)/\(cidr.prefix)"
         case .ipv6:
-            guard IPv6CIDR(request.remoteCIDR) != nil else {
+            guard let cidr = IPv6CIDR(request.remoteCIDR) else {
                 throw Abort(
                     .badRequest,
                     reason: "remoteCIDR is not a valid IPv6 CIDR: \(request.remoteCIDR)")
             }
+            remoteCIDR = cidr.description
         }
 
-        return protocolName
+        return (protocolName, remoteCIDR)
     }
 
     /// Lock the owning network for the enclosing transaction. Every mutation
