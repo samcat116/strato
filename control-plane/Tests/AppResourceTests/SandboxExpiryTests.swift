@@ -150,7 +150,7 @@ final class SandboxExpiryTests {
             sandbox.ttlSeconds = 60
             try await backdateCreation(sandbox, bySeconds: 120, on: app.db)
 
-            await app.agentService.sweepExpiredSandboxes()
+            await app.agentMaintenance.sweepExpiredSandboxes()
 
             try await pollSandboxDeleted(sandboxID, on: app.db)
 
@@ -172,7 +172,7 @@ final class SandboxExpiryTests {
             sandbox.ttlSeconds = 3600
             try await backdateCreation(sandbox, bySeconds: 60, on: app.db)
 
-            await app.agentService.sweepExpiredSandboxes()
+            await app.agentMaintenance.sweepExpiredSandboxes()
 
             let refreshed = try #require(await Sandbox.find(sandboxID, on: app.db))
             #expect(refreshed.desiredStatus == .stopped)
@@ -186,7 +186,7 @@ final class SandboxExpiryTests {
             let sandboxID = try sandbox.requireID()
             try await backdateCreation(sandbox, bySeconds: 86400 * 30, on: app.db)
 
-            await app.agentService.sweepExpiredSandboxes()
+            await app.agentMaintenance.sweepExpiredSandboxes()
 
             let survivor = try await Sandbox.find(sandboxID, on: app.db)
             #expect(survivor != nil)
@@ -224,12 +224,12 @@ final class SandboxExpiryTests {
                 sandbox.ttlSeconds = 60
                 try await backdateCreation(sandbox, bySeconds: 120, on: app.db)
             } else {
-                let window = TimeInterval(AgentService.defaultSandboxRetentionHours) * 3600
+                let window = TimeInterval(AgentMaintenanceLoop.defaultSandboxRetentionHours) * 3600
                 sandbox.setStatus(.exited, at: Date().addingTimeInterval(-window - 60))
                 try await sandbox.save(on: app.db)
             }
 
-            await app.agentService.sweepExpiredSandboxes()
+            await app.agentMaintenance.sweepExpiredSandboxes()
 
             let source = try #require(await Sandbox.find(sandboxID, on: app.db))
             #expect(source.desiredStatus != .absent)
@@ -245,12 +245,12 @@ final class SandboxExpiryTests {
     func sweepReapsTerminalSandboxPastRetention(status: SandboxStatus) async throws {
         try await withSandboxTestApp { app, _, _, sandbox in
             let sandboxID = try sandbox.requireID()
-            let window = TimeInterval(AgentService.defaultSandboxRetentionHours) * 3600
+            let window = TimeInterval(AgentMaintenanceLoop.defaultSandboxRetentionHours) * 3600
             sandbox.setStatus(status, at: Date().addingTimeInterval(-window - 60))
             sandbox.exitCode = 0
             try await sandbox.save(on: app.db)
 
-            await app.agentService.sweepExpiredSandboxes()
+            await app.agentMaintenance.sweepExpiredSandboxes()
 
             try await pollSandboxDeleted(sandboxID, on: app.db)
             let events = try await deletionEvents(for: sandboxID, on: app.db)
@@ -267,7 +267,7 @@ final class SandboxExpiryTests {
             sandbox.exitCode = 137
             try await sandbox.save(on: app.db)
 
-            await app.agentService.sweepExpiredSandboxes()
+            await app.agentMaintenance.sweepExpiredSandboxes()
 
             // The whole point of the retention window: status and exit code
             // stay readable after the workload is gone.
@@ -290,7 +290,7 @@ final class SandboxExpiryTests {
             // window is a SQL predicate now, so this fallback branch is what
             // keeps those rows from being retained forever.
             let sql = try #require(app.db as? any SQLDatabase)
-            let window = TimeInterval(AgentService.defaultSandboxRetentionHours) * 3600
+            let window = TimeInterval(AgentMaintenanceLoop.defaultSandboxRetentionHours) * 3600
             let past = Date().addingTimeInterval(-window - 60)
             try await sql.raw(
                 """
@@ -299,7 +299,7 @@ final class SandboxExpiryTests {
                 """
             ).run()
 
-            await app.agentService.sweepExpiredSandboxes()
+            await app.agentMaintenance.sweepExpiredSandboxes()
 
             try await pollSandboxDeleted(sandboxID, on: app.db)
         }
@@ -312,7 +312,7 @@ final class SandboxExpiryTests {
             sandbox.setStatus(.running, at: Date().addingTimeInterval(-86400 * 30))
             try await sandbox.save(on: app.db)
 
-            await app.agentService.sweepExpiredSandboxes()
+            await app.agentMaintenance.sweepExpiredSandboxes()
 
             let survivor = try await Sandbox.find(sandboxID, on: app.db)
             #expect(survivor != nil)
@@ -342,7 +342,7 @@ final class SandboxExpiryTests {
             sandbox.ttlSeconds = 60
             try await backdateCreation(sandbox, bySeconds: 120, on: app.db)
 
-            await app.agentService.sweepExpiredSandboxes()
+            await app.agentMaintenance.sweepExpiredSandboxes()
             try await pollSandboxDeleted(sandboxID, on: app.db)
 
             let released = try #require(await ResourceQuota.find(quota.id, on: app.db))
@@ -365,7 +365,7 @@ final class SandboxExpiryTests {
             let acquired = await app.coordination.acquireSweepLock("sandbox_expiry")
             #expect(acquired)
 
-            await app.agentService.sweepExpiredSandboxes()
+            await app.agentMaintenance.sweepExpiredSandboxes()
 
             let survivor = try await Sandbox.find(sandboxID, on: app.db)
             #expect(survivor != nil)
@@ -392,7 +392,7 @@ final class SandboxExpiryTests {
                 createdByID: try user.requireID())
             try await snapshot.save(on: app.db)
 
-            await app.agentService.sweepExpiredSandboxes()
+            await app.agentMaintenance.sweepExpiredSandboxes()
 
             // The `409` that used to defer the expiry went with the lifecycle
             // operation row (STR-147), and is not missed: marking `.absent` is

@@ -43,7 +43,7 @@ extension FirecrackerSandboxRuntime {
                 guard identityMatches(response, sandboxId: sandboxId, expectedNonce: expectedNonce) else {
                     logger.warning(
                         "Ignoring sandbox control status from a mismatched guest identity",
-                        metadata: ["sandboxId": .string(sandboxId)])
+                        metadata: ["strato.sandbox.id": .string(sandboxId)])
                     return .unknown
                 }
                 switch state {

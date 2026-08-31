@@ -32,8 +32,8 @@ extension FirecrackerSandboxRuntime {
         logger.info(
             "Starting sandbox exec session",
             metadata: [
-                "sandboxId": .string(sandboxId),
-                "sessionId": .string(sessionId),
+                "strato.sandbox.id": .string(sandboxId),
+                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                 "tty": .stringConvertible(request.tty),
             ])
 
@@ -110,7 +110,10 @@ extension FirecrackerSandboxRuntime {
         guard let session = execSessions.removeValue(forKey: sessionId) else { return }
         logger.info(
             "Closing sandbox exec session",
-            metadata: ["sandboxId": .string(session.sandboxId), "sessionId": .string(sessionId)])
+            metadata: [
+                "strato.sandbox.id": .string(session.sandboxId), "strato.session.kind": .string("guest_exec"),
+                "strato.session.id": .string(sessionId),
+            ])
         // Closing the connection kills the exec process group guest-side and
         // unblocks the reader, whose end-of-session callback finds the session
         // already deregistered and stays silent — the closer needs no event.
@@ -141,8 +144,8 @@ extension FirecrackerSandboxRuntime {
         logger.info(
             "Sandbox exec session ended",
             metadata: [
-                "sandboxId": .string(session.sandboxId),
-                "sessionId": .string(sessionId),
+                "strato.sandbox.id": .string(session.sandboxId),
+                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                 "terminal": .string(String(describing: terminal)),
             ])
         session.events(terminal)
@@ -280,7 +283,7 @@ extension FirecrackerSandboxRuntime {
 
         logger.debug(
             "Starting sandbox log follow",
-            metadata: ["sandboxId": .string(sandboxId), "sinceSeq": .stringConvertible(follow.lastSeq + 1)])
+            metadata: ["strato.sandbox.id": .string(sandboxId), "sinceSeq": .stringConvertible(follow.lastSeq + 1)])
 
         follow.task = Task.detached { [weak self, logger] in
             await Self.runLogFollowLoop(
@@ -421,7 +424,7 @@ extension FirecrackerSandboxRuntime {
                     logger.debug(
                         "Sandbox log follow stream ended",
                         metadata: [
-                            "sandboxId": .string(sandboxId),
+                            "strato.sandbox.id": .string(sandboxId),
                             "error": .string(error.localizedDescription),
                         ])
                 }
@@ -436,7 +439,7 @@ extension FirecrackerSandboxRuntime {
                 logger.debug(
                     "Sandbox log follow connect failed",
                     metadata: [
-                        "sandboxId": .string(sandboxId),
+                        "strato.sandbox.id": .string(sandboxId),
                         "error": .string(error.localizedDescription),
                     ])
             }

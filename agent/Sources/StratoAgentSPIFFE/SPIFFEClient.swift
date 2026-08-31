@@ -124,7 +124,7 @@ public actor FileSPIFFEClient: SPIFFEClientProtocol {
         logger.info(
             "Loaded X.509 SVID",
             metadata: [
-                "spiffeID": .string(svid.spiffeID.uri),
+                "strato.agent.identity": .string(svid.spiffeID.uri),
                 "expiresAt": .string(svid.expiresAt.description),
             ])
 
@@ -232,7 +232,7 @@ public actor FileSPIFFEClient: SPIFFEClientProtocol {
                             logger.info(
                                 "SVID rotated, notified watchers",
                                 metadata: [
-                                    "spiffeID": .string(svid.spiffeID.uri)
+                                    "strato.agent.identity": .string(svid.spiffeID.uri)
                                 ])
                         }
                     }
@@ -281,75 +281,5 @@ public actor FileSPIFFEClient: SPIFFEClientProtocol {
         }
 
         return certificates
-    }
-}
-
-// MARK: - SPIFFE Client Factory
-
-/// Factory for creating SPIFFE clients
-public enum SPIFFEClientFactory {
-    /// Configuration for SPIFFE client
-    public struct Config: Sendable {
-        /// Source type for SVIDs
-        public enum Source: Sendable {
-            /// Read from files (works with spiffe-helper)
-            case files(certificate: String, privateKey: String, trustBundle: String)
-
-            /// Connect to SPIRE Workload API
-            case workloadAPI(socketPath: String)
-        }
-
-        public let source: Source
-        public let spiffeID: SPIFFEIdentity
-
-        public init(source: Source, spiffeID: SPIFFEIdentity) {
-            self.source = source
-            self.spiffeID = spiffeID
-        }
-
-        /// Default configuration using Workload API
-        public static func workloadAPI(
-            spiffeID: SPIFFEIdentity,
-            socketPath: String = WorkloadAPISPIFFEClient.defaultSocketPath
-        ) -> Config {
-            Config(source: .workloadAPI(socketPath: socketPath), spiffeID: spiffeID)
-        }
-
-        /// Configuration using file-based SVIDs
-        public static func files(
-            spiffeID: SPIFFEIdentity,
-            certificatePath: String,
-            privateKeyPath: String,
-            trustBundlePath: String
-        ) -> Config {
-            Config(
-                source: .files(
-                    certificate: certificatePath,
-                    privateKey: privateKeyPath,
-                    trustBundle: trustBundlePath
-                ),
-                spiffeID: spiffeID
-            )
-        }
-    }
-
-    /// Create a SPIFFE client from configuration
-    public static func create(config: Config, logger: Logger) -> any SPIFFEClientProtocol {
-        switch config.source {
-        case .files(let cert, let key, let bundle):
-            return FileSPIFFEClient(
-                certificatePath: cert,
-                privateKeyPath: key,
-                trustBundlePath: bundle,
-                spiffeID: config.spiffeID,
-                logger: logger
-            )
-
-        case .workloadAPI(let socketPath):
-            return WorkloadAPISPIFFEClient(
-                socketPath: socketPath,
-                logger: logger
-            )
-        }
     }
 }

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import { ResourceListControls, useResourceList } from "@/components/ui/resource-list-controls";
+import { ProjectRequiredState } from "@/components/ui/project-required-state";
 import {
   SecurityGroupTable,
   CreateSecurityGroupDialog,
@@ -22,7 +23,7 @@ export default function SecurityGroupsPage() {
   // The rules dialog tracks an id (not a group object) so rule mutations show
   // up immediately from the refreshed query data.
   const [rulesGroupId, setRulesGroupId] = useState<string | null>(null);
-  const { currentProject } = useProjectContext();
+  const { currentProject, isLoading: projectsLoading } = useProjectContext();
   const {
     data: groups = [],
     isLoading,
@@ -64,19 +65,29 @@ export default function SecurityGroupsPage() {
       <Card className="bg-card border-border">
         <CardHeader>
           <CardTitle className="text-lg font-semibold text-foreground">
-            {currentProject ? currentProject.name : "All"} Security Groups (
-            {groups.length})
+            {projectsLoading
+              ? "Loading project…"
+              : currentProject
+                ? `${currentProject.name} Security Groups (${groups.length})`
+                : "Security Groups"
+            }
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <ResourceListControls label="security groups" query={list.query} onQueryChange={list.setQuery} page={list.page} onPageChange={list.setPage} totalPages={list.totalPages} filteredCount={list.filteredCount} totalCount={list.totalCount} pageSize={list.pageSize} />
-          <SecurityGroupTable
-              groups={list.pageItems}
-              isLoading={isLoading}
-              onRefresh={invalidateSecurityGroups}
-              onEdit={setEditing}
-              onManageRules={(group) => setRulesGroupId(group.id)}
-            />
+          {!projectsLoading && !currentProject ? (
+            <ProjectRequiredState resource="Security groups" />
+          ) : (
+            <>
+              <ResourceListControls label="security groups" query={list.query} onQueryChange={list.setQuery} page={list.page} onPageChange={list.setPage} totalPages={list.totalPages} filteredCount={list.filteredCount} totalCount={list.totalCount} pageSize={list.pageSize} />
+              <SecurityGroupTable
+                groups={list.pageItems}
+                isLoading={isLoading || projectsLoading}
+                onRefresh={invalidateSecurityGroups}
+                onEdit={setEditing}
+                onManageRules={(group) => setRulesGroupId(group.id)}
+              />
+            </>
+          )}
         </CardContent>
       </Card>
 

@@ -11,8 +11,8 @@ import Metrics
 
 actor AgentService {
     let app: Application
-
-    var heartbeatTask: Task<Void, Never>?
+    nonisolated let maintenance: AgentMaintenanceLoop
+    nonisolated let placement: WorkloadPlacementService
 
     /// Last successful presence refresh per local socket. The wire sends both a
     /// heartbeat and an observed report every 20 seconds; refreshing on every
@@ -43,10 +43,6 @@ actor AgentService {
     /// subscribing (touching `app` storage) while the application tears down.
     var startupTask: Task<Void, Never>?
 
-    /// Interval between heartbeat-monitor ticks. Injectable so tests can
-    /// exercise the loop (and its shutdown race) without waiting 30s.
-    let heartbeatInterval: Duration
-
     /// Set at application shutdown. Guards against the init task arming the
     /// heartbeat monitor after `shutdown()` already ran.
     var isShutDown = false
@@ -72,7 +68,8 @@ actor AgentService {
 
     init(app: Application, heartbeatInterval: Duration = .seconds(30)) {
         self.app = app
-        self.heartbeatInterval = heartbeatInterval
+        self.maintenance = AgentMaintenanceLoop(app: app, interval: heartbeatInterval)
+        self.placement = WorkloadPlacementService(app: app)
         // Start heartbeat monitoring and the replica's pub/sub subscriptions
         // after initialization. The hop through an isolated method is
         // deliberate: a nonisolated init cannot store the task it spawns, and
@@ -92,9 +89,9 @@ actor AgentService {
     /// an armed heartbeat's first tick touches `app.db` after core teardown
     /// and dies with Vapor's "Core not configured" fatal error — the
     /// recurring CI crash.
-    func armBackgroundWork() {
+    func armBackgroundWork() async {
         guard !isShutDown, !app.didShutdown else { return }
-        startHeartbeatMonitoring()
+        await maintenance.start()
         startupTask = Task {
             await self.app.replicaBridge.start(delegate: self)
         }
@@ -117,17 +114,11 @@ actor AgentService {
         // it; its subscription tasks drain with the Valkey pools.
         await app.replicaBridgeIfCreated?.shutdown()
         startupTask?.cancel()
-        heartbeatTask?.cancel()
+        await maintenance.shutdown()
         if let startupTask {
             await startupTask.value
         }
         startupTask = nil
-        // `isShutDown` was set before the await, so the startup task cannot
-        // have armed the loop in the meantime — this reads the final value.
-        if let heartbeatTask {
-            await heartbeatTask.value
-        }
-        heartbeatTask = nil
     }
 }
 
@@ -172,6 +163,14 @@ extension Application {
     /// the very heartbeat task shutdown exists to cancel).
     var agentServiceIfCreated: AgentService? {
         storage[AgentServiceKey.self]
+    }
+
+    var agentMaintenance: AgentMaintenanceLoop {
+        agentService.maintenance
+    }
+
+    var workloadPlacement: WorkloadPlacementService {
+        agentService.placement
     }
 }
 

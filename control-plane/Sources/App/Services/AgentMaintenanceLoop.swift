@@ -1,32 +1,59 @@
 import Foundation
-import Vapor
-import StratoShared
-import NIOWebSocket
 import Fluent
-import NIOCore
-import NIOConcurrencyHelpers
-import SQLKit
-import Tracing
 import Metrics
+import SQLKit
+import StratoShared
+import Vapor
 
-/// Owns periodic fleet-health, convergence, retention, and finalization sweeps.
-extension AgentService {
+actor AgentMaintenanceLoop {
+    private let app: Application
+    private let interval: Duration
+    private var task: Task<Void, Never>?
+    private var isShutDown = false
+    private var autoUpdateTargetOverride: String?
+
+    init(app: Application, interval: Duration) {
+        self.app = app
+        self.interval = interval
+    }
+
+    func start() {
+        guard !isShutDown, task == nil, !app.didShutdown else { return }
+        startHeartbeatMonitoring()
+    }
+
+    func shutdown() async {
+        isShutDown = true
+        task?.cancel()
+        if let task { await task.value }
+        task = nil
+    }
+
+    func setAutoUpdateTargetForTesting(_ target: String?) {
+        autoUpdateTargetOverride = target
+    }
+
+    private var autoUpdateTarget: String? {
+        autoUpdateTargetOverride
+            ?? AgentVersionTarget.version(configuration: app.controlPlaneConfiguration)
+    }
+
     // MARK: - Heartbeat Monitoring
 
     /// Whether the heartbeat loop is currently armed. Test seam for verifying that
     /// the shutdown hook tears it down.
     var isHeartbeatActive: Bool {
-        heartbeatTask != nil
+        task != nil
     }
 
-    func startHeartbeatMonitoring() {
+    private func startHeartbeatMonitoring() {
         // Don't (re)arm the loop if shutdown already raced ahead of init.
         guard !isShutDown else { return }
-        heartbeatTask = Task {
+        task = Task {
             var tick = 0
             while !Task.isCancelled {
                 do {
-                    try await Task.sleep(for: heartbeatInterval)
+                    try await Task.sleep(for: interval)
                     tick &+= 1
 
                     // Shutdown cancels mid-tick and awaits the loop; checking
@@ -38,58 +65,54 @@ extension AgentService {
                     // error (not a throw) after core teardown.
                     try self.checkTickPreconditions()
 
-                    // Check for stale agents
                     await checkStaleAgents()
 
                     try self.checkTickPreconditions()
 
-                    // Probe (and re-arm if dead) this replica's pub/sub
-                    // subscriptions — a dropped Valkey connection loses them
-                    // silently and RediStack does not restore them.
                     await app.replicaBridge.verifySubscriptions()
 
                     try self.checkTickPreconditions()
 
-                    // Degrade workloads that missed their convergence deadline
-                    // (STR-147). Lock-free — see `sweepStuckConvergence`.
                     await sweepStuckConvergence()
 
                     try self.checkTickPreconditions()
 
-                    // Surface desired/observed divergence when no mutation is
-                    // outstanding (STR-123). Each row carries its own
-                    // compare-and-swap warning claim across replicas.
                     await sweepSteadyStateDivergence()
 
                     try self.checkTickPreconditions()
 
-                    // Release volumes still naming a VM that no longer exists
-                    // (STR-129).
                     await sweepStrandedVolumeAttachments()
 
                     try self.checkTickPreconditions()
 
-                    // Reap workloads whose finalizers all cleared but whose row
-                    // outlived the process that owed the removal (STR-144).
                     await sweepOrphanedTerminatingResources()
 
                     try self.checkTickPreconditions()
 
-                    // Delete sandboxes past their TTL, and reap terminal
-                    // sandbox records past the retention window (issue #424).
                     await sweepExpiredSandboxes()
 
                     try self.checkTickPreconditions()
 
-                    // Delete snapshot artifacts past their retention deadline
-                    // (STR-150) — the `ttlSecondsAfterFinished` answer durable
-                    // artifact objects need and fire-and-forget RPCs did not.
                     await SnapshotRetentionSweep.run(app: app)
 
                     try self.checkTickPreconditions()
 
-                    // Advance the agent auto-update rollout one agent at a
-                    // time (issue #434).
+                    // Prune expired idempotency keys every 120 ticks.
+                    if tick % 120 == 0 {
+                        do {
+                            let deleted = try await IdempotencyService.sweepExpired(on: app.db)
+                            if deleted > 0 {
+                                app.logger.info(
+                                    "Idempotency retention sweep pruned expired keys",
+                                    metadata: ["deleted": .stringConvertible(deleted)])
+                            }
+                        } catch {
+                            app.logger.error("Idempotency retention sweep failed: \(error)")
+                        }
+                    }
+
+                    try self.checkTickPreconditions()
+
                     await sweepAgentAutoUpdates()
                 } catch {
                     if !Task.isCancelled {
@@ -105,7 +128,7 @@ extension AgentService {
 
     /// Throws when the current tick must stop: the task was cancelled, the
     /// service shut down, or the application itself has been torn down.
-    func checkTickPreconditions() throws {
+    private func checkTickPreconditions() throws {
         try Task.checkCancellation()
         guard !isShutDown, !app.didShutdown else {
             throw CancellationError()
@@ -156,7 +179,7 @@ extension AgentService {
                 if await app.coordination.isAgentPresent(agentKey: agent.identity.key) == true {
                     app.logger.debug(
                         "Agent heartbeat is stale in the database but presence key is live; skipping",
-                        metadata: ["agentName": .string(agent.name)])
+                        metadata: ["strato.agent.name": .string(agent.name)])
                     continue
                 }
 
@@ -173,7 +196,7 @@ extension AgentService {
                     agent: agent, connected: false, reason: "stale", on: app.db, logger: app.logger)
                 app.logger.info(
                     "Agent heartbeat stale past threshold; marked offline",
-                    metadata: ["agentName": .string(agent.name)])
+                    metadata: ["strato.agent.name": .string(agent.name)])
                 await warnIfSiteNetworkController(agent)
             }
         } catch {
@@ -181,15 +204,8 @@ extension AgentService {
         }
     }
 
-    /// Raises the alarm when the node that just went quiet is some site's
-    /// designated network controller.
-    ///
-    /// This is the highest-value signal in the site-authority area: nothing
-    /// else in the site can author topology while it is gone, so *every* new
-    /// networked workload there is about to be refused, and already-running
-    /// ones keep running — which is exactly what makes the outage easy to miss
-    /// (issue #833). Best effort: a failure here must not abort the sweep.
-    func warnIfSiteNetworkController(_ agent: Agent) async {
+    /// Warns when a stale agent owns a site's shared network topology.
+    private func warnIfSiteNetworkController(_ agent: Agent) async {
         guard let agentID = agent.id else { return }
         let offlineGrace = app.controlPlaneConfiguration.double(
             .siteControllerOfflineGraceSeconds)
@@ -202,7 +218,7 @@ extension AgentService {
                 app.logger.warning(
                     "Site network controller went offline; nothing authors the site's network topology until it returns",
                     metadata: [
-                        "agentName": .string(agent.name),
+                        "strato.agent.name": .string(agent.name),
                         "site": .string(site.name),
                         "graceSeconds": .stringConvertible(offlineGrace),
                     ])
@@ -210,30 +226,12 @@ extension AgentService {
         } catch {
             app.logger.warning(
                 "Failed to check whether the stale agent is a site's network controller",
-                metadata: ["agentName": .string(agent.name), "error": .string("\(error)")])
+                metadata: ["strato.agent.name": .string(agent.name), "error": .string("\(error)")])
         }
     }
 
-    /// Marks a VM or sandbox `degraded` once its convergence deadline passes
-    /// with the outstanding mutations still unconverged (ADR 0001 stage 4,
-    /// STR-147).
-    ///
-    /// This is what the stuck-*operation* sweep was for lifecycle mutations,
-    /// now that they keep no operation row: the deadline every accepted
-    /// mutation stamps replaces the row's `created_at` plus its per-kind
-    /// budget, and the resource's own `conditions.degraded` replaces the
-    /// verdict.
-    ///
-    /// **Deliberately not a cluster singleton.** Marking degraded is idempotent
-    /// (`recordFailure` no-ops once `failedGeneration == generation`) and
-    /// commutative (every replica computes the same verdict from the same
-    /// row), so two replicas sweeping the same resource cost one wasted write
-    /// at worst — where the operation sweep genuinely needed the lock, because
-    /// its verdict was a state transition two writers could disagree about.
-    /// One less thing whose correctness depends on Valkey, which is the point
-    /// of ADR 0001's multi-replica argument.
-    ///
-    /// Internal rather than private so tests can drive a pass directly.
+    /// Marks overdue, unconverged resources as degraded. The claim is
+    /// idempotent, so every replica may run this without a singleton lock.
     func sweepStuckConvergence() async {
         guard !isShutDown, !app.didShutdown else { return }
 
@@ -243,11 +241,6 @@ extension AgentService {
         do {
             try await degradeOverdue(VM.self, now: now, on: db)
             try await degradeOverdue(Sandbox.self, now: now, on: db)
-            // Volumes joined the same backstop in STR-148, replacing the
-            // status-and-timestamp sweep that used to guess which transitional
-            // status had been abandoned. Snapshot artifacts followed in
-            // STR-150, replacing the RPC timeouts that used to decide a
-            // capture's fate.
             try await degradeOverdue(Volume.self, now: now, on: db)
             try await degradeOverdue(VolumeSnapshot.self, now: now, on: db)
             try await degradeOverdue(VMSnapshot.self, now: now, on: db)
@@ -258,9 +251,7 @@ extension AgentService {
         await app.vmCommandExecutionService.sweepStuck(now: now)
     }
 
-    /// Fixed grace before a resting desired/observed mismatch becomes
-    /// operationally divergent. Kept longer than ordinary report jitter and
-    /// short agent outages, while remaining alertable within one quarter-hour.
+    /// Grace before a resting desired/observed mismatch becomes divergent.
     static let steadyStateDivergenceGrace: TimeInterval = 15 * 60
 
     struct SteadyStateDivergenceCounts: Equatable, Sendable {
@@ -306,7 +297,7 @@ extension AgentService {
         }
     }
 
-    struct DivergedWorkloadRow: Decodable {
+    private struct DivergedWorkloadRow: Decodable {
         let id: UUID
         let name: String
         let desiredStatus: String
@@ -323,9 +314,9 @@ extension AgentService {
         }
     }
 
-    struct DivergenceClaim: Decodable { let id: UUID }
+    private struct DivergenceClaim: Decodable { let id: UUID }
 
-    func divergentVMRows(
+    private func divergentVMRows(
         before cutoff: Date, on sql: any SQLDatabase
     ) async throws -> [DivergedWorkloadRow] {
         try await sql.raw(
@@ -345,7 +336,7 @@ extension AgentService {
         ).all(decoding: DivergedWorkloadRow.self)
     }
 
-    func divergentSandboxRows(
+    private func divergentSandboxRows(
         before cutoff: Date, on sql: any SQLDatabase
     ) async throws -> [DivergedWorkloadRow] {
         try await sql.raw(
@@ -364,7 +355,7 @@ extension AgentService {
         ).all(decoding: DivergedWorkloadRow.self)
     }
 
-    func claimVMDivergence(
+    private func claimVMDivergence(
         _ id: UUID, at now: Date, before cutoff: Date, on sql: any SQLDatabase
     ) async throws -> Bool {
         let rows = try await sql.raw(
@@ -387,7 +378,7 @@ extension AgentService {
         return !rows.isEmpty
     }
 
-    func claimSandboxDivergence(
+    private func claimSandboxDivergence(
         _ id: UUID, at now: Date, before cutoff: Date, on sql: any SQLDatabase
     ) async throws -> Bool {
         let rows = try await sql.raw(
@@ -409,7 +400,7 @@ extension AgentService {
         return !rows.isEmpty
     }
 
-    func logDivergence(_ row: DivergedWorkloadRow, kind: String) {
+    private func logDivergence(_ row: DivergedWorkloadRow, kind: String) {
         var metadata: Logger.Metadata = [
             "kind": .string(kind),
             "workloadId": .string(row.id.uuidString),
@@ -425,10 +416,7 @@ extension AgentService {
             metadata: metadata)
     }
 
-    /// One workload kind's overdue rows. The deadline is the only column the
-    /// query filters on — no kind lookup, which is exactly what stamping a
-    /// deadline instead of a `lastMutationKind` bought.
-    func degradeOverdue<R: ConvergingResource>(
+    private func degradeOverdue<R: ConvergingResource>(
         _ type: R.Type, now: Date, on db: any Database
     ) async throws {
         let overdue = try await R.overdueForConvergence(at: now, on: db)
@@ -673,7 +661,7 @@ extension AgentService {
     /// The snapshot-artifact half of the orphan sweep. Separate from the
     /// workload half only because `desired_status` is a different enum type per
     /// family, which Fluent's field projection cannot be abstracted over.
-    func reapOrphanedTerminatingSnapshots<A: SnapshotArtifactResource>(
+    private func reapOrphanedTerminatingSnapshots<A: SnapshotArtifactResource>(
         _ type: A.Type, kind: String, on db: any Database
     ) async throws {
         let terminating = try await A.terminating(on: db).filter { $0.finalizers.isEmpty }
@@ -683,7 +671,7 @@ extension AgentService {
     /// Drives one kind's orphans through the ordinary clear path — clearing an
     /// already-cleared token on an empty list reaps — so the sweep shares the
     /// reap claim and per-kind teardown instead of re-spelling either.
-    func reapOrphanedTerminating<R: FinalizableResource>(
+    private func reapOrphanedTerminating<R: FinalizableResource>(
         _ resources: [R], kind: String, on db: any Database
     ) async {
         for resource in resources {
@@ -728,7 +716,7 @@ extension AgentService {
 
     /// Why the expiry sweep is deleting a sandbox. Both reasons end in the
     /// same deletion; they differ only in what started the clock.
-    enum SandboxExpiryReason {
+    private enum SandboxExpiryReason {
         /// The lifetime budget ran out (`ttl_seconds` from `createdAt`).
         case ttl(seconds: Int)
         /// A terminal sandbox outlived the retention window for its record.
@@ -821,11 +809,15 @@ extension AgentService {
     /// delete. Sharing the path is the point: quota release, reservation
     /// release, and the audit trail all come for free, and the `system` actor
     /// on the event makes the unattended deletion attributable.
-    func expireSandbox(_ sandbox: Sandbox, reason: SandboxExpiryReason, on db: Database) async {
+    private func expireSandbox(_ sandbox: Sandbox, reason: SandboxExpiryReason, on db: Database) async {
         guard let sandboxID = sandbox.id else { return }
 
         var onlineAgentID: String?
-        if let agentId = sandbox.hypervisorId, let agent = await getAgentInfo(agentId), agent.status == .online {
+        if let agentId = sandbox.hypervisorId,
+            let agentUUID = UUID(uuidString: agentId),
+            let agent = try? await Agent.find(agentUUID, on: app.db),
+            agent.status == .online
+        {
             onlineAgentID = agentId
         }
 
@@ -854,9 +846,9 @@ extension AgentService {
             app.logger.info(
                 "Expiring sandbox",
                 metadata: [
-                    "sandboxId": .string(sandboxID.uuidString),
+                    "strato.sandbox.id": .string(sandboxID.uuidString),
                     "reason": .string(reason.description),
-                    "mutationId": .string(accepted.mutationID.uuidString),
+                    "strato.operation.id": .string(accepted.mutationID.uuidString),
                 ])
         } catch {
             // The "operation already pending" `409` that used to defer an
@@ -869,7 +861,236 @@ extension AgentService {
             // so an expired sandbox is deferred rather than dropped.
             app.logger.debug(
                 "Skipping sandbox expiry: \(error)",
-                metadata: ["sandboxId": .string(sandboxID.uuidString)])
+                metadata: ["strato.sandbox.id": .string(sandboxID.uuidString)])
         }
     }
+
+    // MARK: - Agent auto-update rollout (issue #434)
+
+    /// How long an assigned agent has to either re-register at its target
+    /// version or report a blocker before the sweep treats the silence as a
+    /// failed update and halts the rollout. Generous on purpose: it spans the
+    /// artifact download, the restart, and re-registration.
+    static let autoUpdateHealthBudgetSeconds: TimeInterval = 600
+
+    /// Advances the fleet's declarative agent updates one agent at a time
+    /// (issue #434). Cluster-singleton via the sweep lock; all rollout state
+    /// lives on the agent rows, so any replica can pick up where another
+    /// stopped.
+    ///
+    /// Per tick, each *assigned* agent is classified — an operator's "update
+    /// now" writes the same assignment (STR-145), so it is tracked, budgeted,
+    /// and reported exactly like a rollout one, and an in-flight manual update
+    /// holds the fleet rollout for the same reason a rollout assignment does:
+    /// one agent restarts at a time.
+    /// - **converged** — re-registered at the target: assignment cleared.
+    /// - **stale** — a *rollout* assignment whose version the deployment target
+    ///   has moved past: reset, including failures, so an old halt never blocks
+    ///   a new target. Manual assignments are exempt — the operator named that
+    ///   version (possibly a one-off build) deliberately.
+    /// - **failed** — a recorded failure (agent-reported, or silence past the
+    ///   health budget, recorded here). A *rollout* failure halts the fleet
+    ///   until an operator intervenes or the target changes: the next agent
+    ///   would most likely hit the same bad artifact. A *manual* one does not —
+    ///   one operator action on one agent must not stop every other agent's
+    ///   auto-update, especially since the manual assignment's own escapes
+    ///   (converge, stale reset) are exactly what a terminal failure closes off.
+    ///   Cancelling the assignment is what clears it.
+    /// - **parked** — blocked past the health budget (e.g. running
+    ///   Firecracker VMs): the assignment stays, level-triggered, so the
+    ///   agent converges whenever its blocker clears — but advancement stops
+    ///   waiting on it. Parked is marked by a nil `updateAttemptedAt`.
+    /// - **waiting** — within budget: the rollout holds.
+    ///
+    /// Only when nothing is failed or waiting does the sweep assign the next
+    /// eligible *enrolled* agent (deterministic name order), after proving the
+    /// release actually publishes an artifact for that agent's platform.
+    func sweepAgentAutoUpdates() async {
+        guard !isShutDown, !app.didShutdown else { return }
+        guard await app.coordination.acquireSweepLock("agent_auto_update") else {
+            app.logger.debug("Skipping auto-update sweep; lock held by another control-plane instance")
+            return
+        }
+
+        let db = app.db
+        let now = Date()
+        // Nil on a dev build with no configured target: no *rollout* can run,
+        // but assignments an operator made by hand (which supply their own
+        // artifact, precisely for builds a release does not serve) still need
+        // their convergence bookkeeping, so classification runs regardless.
+        let target = autoUpdateTarget
+        let canonicalTarget = target.map(AgentVersionTarget.canonical)
+
+        do {
+            // Enrolled agents (candidates for the next assignment) plus anyone
+            // already carrying one — an operator's manual update assigns the
+            // same field without requiring enrollment (STR-145), and it needs
+            // the same convergence bookkeeping.
+            let candidates = try await Agent.query(on: db)
+                .group(.or) { group in
+                    group
+                        .filter(\.$autoUpdate == true)
+                        .filter(\.$updateDesiredVersion != nil)
+                }
+                .sort(\.$name)
+                .all()
+
+            var rolloutHalted = false
+            var waitingOnAgent = false
+
+            for agent in candidates {
+                guard let assigned = agent.updateDesiredVersion else { continue }
+
+                // The deployment target moved past this assignment
+                // (mid-rollout upgrade): reset everything, including a
+                // failure — the old target's halt must not block the new one.
+                // Only for rollout assignments: a manual one names a version
+                // the operator chose, which the deployment target has no
+                // opinion about.
+                guard
+                    agent.updateAssignmentSource == .manual
+                        || canonicalTarget == nil
+                        || AgentVersionTarget.canonical(assigned) == canonicalTarget
+                else {
+                    agent.clearUpdateAssignment()
+                    try await agent.save(on: db)
+                    continue
+                }
+
+                // Converged: the agent re-registered at the target (or was
+                // updated by hand, which counts just the same).
+                if !AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: assigned) {
+                    agent.clearUpdateAssignment()
+                    try await agent.save(on: db)
+                    Telemetry.agentAutoUpdateConverged()
+                    app.logger.notice(
+                        "Agent auto-update converged",
+                        metadata: [
+                            "strato.agent.name": .string(agent.name),
+                            "version": .string(agent.version),
+                        ])
+                    continue
+                }
+
+                if agent.updateFailureReason != nil {
+                    // A *rollout* failure halts the fleet until an operator
+                    // intervenes: the next agent would most likely hit the same
+                    // bad artifact. A manual one does not. It is one operator's
+                    // action on one agent — possibly not even an enrolled one —
+                    // and letting it stop every other agent's auto-update means
+                    // a single failed "update now" wedges the fleet with no
+                    // automatic way out (the assignment is exempt from the
+                    // stale reset by design, and the agent that would clear it
+                    // by converging is the one that just died). Cancelling the
+                    // assignment is the operator's escape; until then this
+                    // agent simply holds its own failure.
+                    if agent.updateAssignmentSource != .manual {
+                        rolloutHalted = true
+                    }
+                    continue
+                }
+
+                // Parked earlier (nil clock, see below): the assignment keeps
+                // riding the syncs, but the rollout no longer waits on it.
+                guard let attemptedAt = agent.updateAttemptedAt else { continue }
+                let age = now.timeIntervalSince(attemptedAt)
+
+                if agent.updateBlockedReason != nil {
+                    if age > Self.autoUpdateHealthBudgetSeconds {
+                        agent.updateAttemptedAt = nil
+                        try await agent.save(on: db)
+                        Telemetry.agentAutoUpdateParked()
+                        app.logger.notice(
+                            "Agent auto-update parked: blocked past the health budget; rollout advances without it",
+                            metadata: [
+                                "strato.agent.name": .string(agent.name),
+                                "targetVersion": .string(assigned),
+                                "blockedReason": .string(agent.updateBlockedReason ?? ""),
+                            ])
+                    } else {
+                        waitingOnAgent = true
+                    }
+                    continue
+                }
+
+                if age > Self.autoUpdateHealthBudgetSeconds {
+                    // Silence past the budget: the agent neither converged
+                    // nor explained itself — most likely it attempted the
+                    // update and never came back.
+                    let manual = agent.updateAssignmentSource == .manual
+                    agent.recordUpdateFailure(
+                        "did not re-register at \(assigned) within \(Int(Self.autoUpdateHealthBudgetSeconds))s of assignment"
+                    )
+                    try await agent.save(on: db)
+                    Telemetry.agentAutoUpdateFailed(reason: "health_budget")
+                    app.logger.error(
+                        manual
+                            ? "Agent update failed: agent went silent past the health budget"
+                            : "Agent auto-update failed: agent went silent past the health budget; rollout halted",
+                        metadata: [
+                            "strato.agent.name": .string(agent.name),
+                            "targetVersion": .string(assigned),
+                        ])
+                    rolloutHalted = rolloutHalted || !manual
+                } else {
+                    waitingOnAgent = true
+                }
+            }
+
+            guard !rolloutHalted && !waitingOnAgent else { return }
+            // Bookkeeping is done; advancing the fleet needs a target version.
+            guard let target else { return }
+
+            // Nothing in flight and nothing failed: assign the next agent.
+            // Eligibility mirrors the update endpoint's checks, minus the
+            // hosted-workload guard — that precondition is evaluated live on
+            // the agent, which is the only side that actually knows.
+            let next = candidates.first { agent in
+                agent.autoUpdate
+                    && agent.updateDesiredVersion == nil
+                    && AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: target)
+                    && agent.isOnline
+                    && agent.hostOperatingSystem != nil
+                    && agent.cpuArchitecture != nil
+            }
+            guard let next, let nextId = next.id else { return }
+
+            // Prove the release serves this agent's platform before assigning
+            // — an unresolvable artifact would leave the agent silently
+            // unconverged until the budget halted the whole rollout.
+            do {
+                _ = try await app.agentArtifactResolver.resolve(
+                    version: target,
+                    operatingSystem: next.hostOperatingSystem ?? .linux,
+                    architecture: next.cpuArchitecture ?? .arm64
+                )
+            } catch {
+                app.logger.warning(
+                    "Agent auto-update artifact unresolvable; not assigning (retries next sweep)",
+                    metadata: [
+                        "strato.agent.name": .string(next.name),
+                        "targetVersion": .string(target),
+                        "error": .string(String(describing: error)),
+                    ])
+                return
+            }
+
+            next.assignUpdate(version: target, source: .rollout, at: now)
+            try await next.save(on: db)
+            Telemetry.agentAutoUpdateAssigned()
+            app.logger.notice(
+                "Agent auto-update assigned",
+                metadata: [
+                    "strato.agent.name": .string(next.name),
+                    "currentVersion": .string(next.version),
+                    "targetVersion": .string(target),
+                ])
+            // Ring now for low latency; the agent's unconditional refetch is
+            // the correctness backstop.
+            await app.agentService.syncDesiredState(agentId: nextId.uuidString)
+        } catch {
+            app.logger.error("Agent auto-update sweep failed: \(error)")
+        }
+    }
+
 }

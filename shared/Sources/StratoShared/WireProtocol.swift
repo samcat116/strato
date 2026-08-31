@@ -11,15 +11,16 @@ import Foundation
 /// one pinned date representation. The current encoder emits Foundation numeric
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
-    /// The only wire/schema version this build accepts. Version 52 adds the
-    /// agent's complete optional whole-disk inventory (STR-156). Version 51 replaces
+    /// The only wire/schema version this build accepts. Version 53 adds ordered,
+    /// network-scoped ACL desired state (STR-33). Version 52 adds the agent's
+    /// complete optional whole-disk inventory (STR-156). Version 51 replaces
     /// file-only volume paths with file, block-device, or RBD disk attachments
     /// (STR-154). Version 50 preserves stdout/stderr identity on guest-exec
     /// output for captured VM commands (STR-79). Version 49 added the agent metadata-service capability used
     /// to place IMDS-backed VMs safely (STR-64), after v48's guest-bootstrap source and v47's dependency health
     /// contract (STR-237), and v46's authoritative native-OVN load-balancer
     /// state and observations (STR-28).
-    public static let currentVersion = 52
+    public static let currentVersion = 53
 
     /// The JSON encoder for all wire messages. Dates are pinned explicitly to
     /// Foundation's `deferredToDate` numeric form.

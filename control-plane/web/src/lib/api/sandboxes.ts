@@ -13,7 +13,7 @@ import type {
   AcceptedMutation,
   SandboxSnapshot,
   CreateSandboxSnapshotRequest,
-} from "@/types/api";
+} from "@/types/api-contracts";
 
 // Like VMs, sandbox lifecycle mutations are asynchronous: the server responds
 // 202 Accepted with the sandbox, the generation it has to converge on, and the
@@ -34,24 +34,34 @@ export const sandboxesApi = {
     return api.get<Sandbox>(`/api/sandboxes/${id}`, undefined, signal);
   },
 
-  create(data: CreateSandboxRequest): Promise<AcceptedMutation<Sandbox>> {
-    return api.post<AcceptedMutation<Sandbox>>("/api/sandboxes", data);
+  create(data: CreateSandboxRequest, idempotencyKey?: string): Promise<AcceptedMutation<Sandbox>> {
+    return api.post<AcceptedMutation<Sandbox>>(
+      "/api/sandboxes", data, undefined, idempotencyKey
+    );
   },
 
-  delete(id: string): Promise<AcceptedMutation<Sandbox>> {
-    return api.delete<AcceptedMutation<Sandbox>>(`/api/sandboxes/${id}`);
+  delete(id: string, idempotencyKey?: string): Promise<AcceptedMutation<Sandbox>> {
+    return api.delete<AcceptedMutation<Sandbox>>(
+      `/api/sandboxes/${id}`, undefined, idempotencyKey
+    );
   },
 
-  start(id: string): Promise<AcceptedMutation<Sandbox>> {
-    return api.post<AcceptedMutation<Sandbox>>(`/api/sandboxes/${id}/start`);
+  start(id: string, idempotencyKey?: string): Promise<AcceptedMutation<Sandbox>> {
+    return api.post<AcceptedMutation<Sandbox>>(
+      `/api/sandboxes/${id}/start`, undefined, undefined, idempotencyKey
+    );
   },
 
-  stop(id: string): Promise<AcceptedMutation<Sandbox>> {
-    return api.post<AcceptedMutation<Sandbox>>(`/api/sandboxes/${id}/stop`);
+  stop(id: string, idempotencyKey?: string): Promise<AcceptedMutation<Sandbox>> {
+    return api.post<AcceptedMutation<Sandbox>>(
+      `/api/sandboxes/${id}/stop`, undefined, undefined, idempotencyKey
+    );
   },
 
-  restart(id: string): Promise<AcceptedMutation<Sandbox>> {
-    return api.post<AcceptedMutation<Sandbox>>(`/api/sandboxes/${id}/restart`);
+  restart(id: string, idempotencyKey?: string): Promise<AcceptedMutation<Sandbox>> {
+    return api.post<AcceptedMutation<Sandbox>>(
+      `/api/sandboxes/${id}/restart`, undefined, undefined, idempotencyKey
+    );
   },
 
   listSnapshots(id: string, signal?: AbortSignal): Promise<SandboxSnapshot[]> {
@@ -60,20 +70,24 @@ export const sandboxesApi = {
 
   createSnapshot(
     id: string,
-    data?: CreateSandboxSnapshotRequest
+    data?: CreateSandboxSnapshotRequest,
+    idempotencyKey?: string
   ): Promise<AcceptedMutation<SandboxSnapshot>> {
     return api.post<AcceptedMutation<SandboxSnapshot>>(
       `/api/sandboxes/${id}/snapshots`,
-      data ?? {}
+      data ?? {},
+      undefined,
+      idempotencyKey
     );
   },
 
   deleteSnapshot(
     id: string,
-    snapshotId: string
+    snapshotId: string,
+    idempotencyKey?: string
   ): Promise<AcceptedMutation<SandboxSnapshot>> {
     return api.delete<AcceptedMutation<SandboxSnapshot>>(
-      `/api/sandboxes/${id}/snapshots/${snapshotId}`
+      `/api/sandboxes/${id}/snapshots/${snapshotId}`, undefined, idempotencyKey
     );
   },
 
@@ -84,10 +98,14 @@ export const sandboxesApi = {
   // snapshot stays unconverged until every artifact has landed.
   exportSnapshot(
     id: string,
-    snapshotId: string
+    snapshotId: string,
+    idempotencyKey?: string
   ): Promise<AcceptedMutation<SandboxSnapshot>> {
     return api.post<AcceptedMutation<SandboxSnapshot>>(
-      `/api/sandboxes/${id}/snapshots/${snapshotId}/export`
+      `/api/sandboxes/${id}/snapshots/${snapshotId}/export`,
+      undefined,
+      undefined,
+      idempotencyKey
     );
   },
 

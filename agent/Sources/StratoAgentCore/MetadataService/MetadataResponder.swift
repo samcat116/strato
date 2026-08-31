@@ -156,7 +156,7 @@ public actor MetadataResponder {
                 "Refusing metadata: the service is switched off for this instance",
                 metadata: [
                     "networkId": .string(snapshot.networkId.uuidString),
-                    "vmId": .string(vmId.uuidString),
+                    "strato.vm.id": .string(vmId.uuidString),
                 ])
             // Again `.unknown`'s answer. A guest learning that the service is
             // *deliberately* off for it learns which of its neighbours are
@@ -257,7 +257,7 @@ public actor MetadataResponder {
                     "Could not mint a guest identity",
                     metadata: [
                         "networkId": .string(snapshot.networkId.uuidString),
-                        "vmId": .string(vmId.uuidString),
+                        "strato.vm.id": .string(vmId.uuidString),
                         "audience": .string(audience),
                         "error": .string("\(error)"),
                     ])

@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
@@ -149,9 +151,9 @@ export default function SitesPage() {
       toast.error(error instanceof Error ? error.message : "Failed to delete site"),
   });
 
-  const handleDelete = (site: Site) => {
+  const handleDelete = async (site: Site) => {
     if (
-      window.confirm(
+      await confirmAction(
         `Delete site "${site.name}"? This cannot be undone, and sites with agents cannot be deleted.`
       )
     ) {

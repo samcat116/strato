@@ -5,9 +5,9 @@ import { makeResourceQueryHooks } from "./use-resource-queries";
 const hooks = makeResourceQueryHooks({
   queryKey: "sandboxes",
   scopeKey: "orgId",
-  list: (organizationId) => sandboxesApi.list(organizationId),
-  get: (id) => sandboxesApi.get(id),
-  listSnapshots: (id) => sandboxesApi.listSnapshots(id),
+  list: (organizationId, signal) => sandboxesApi.list(organizationId, signal),
+  get: (id, signal) => sandboxesApi.get(id, signal),
+  listSnapshots: (id, signal) => sandboxesApi.listSnapshots(id, signal),
   listRefetchInterval: 5000, // Poll every 5 seconds
 });
 

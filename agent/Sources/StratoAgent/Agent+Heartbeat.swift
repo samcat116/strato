@@ -141,8 +141,6 @@ extension Agent {
         if let client = websocketClient {
             try await client.sendMessage(message)
         }
-        logger.debug("Heartbeat sent", metadata: ["agentId": .string(effectiveAgentID)])
-
         // The beat is already on the wire before this bounded host probe runs,
         // so a slow lsblk cannot make the control plane mark the agent offline.
         _ = await storageDeviceInventory.refreshForHeartbeat()

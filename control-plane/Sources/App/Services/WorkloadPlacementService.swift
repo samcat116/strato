@@ -1,29 +1,20 @@
 import Foundation
-import Vapor
-import StratoShared
-import NIOWebSocket
 import Fluent
-import NIOCore
 import NIOConcurrencyHelpers
 import SQLKit
-import Tracing
-import Metrics
+import StratoShared
+import Vapor
 
-/// Owns workload placement, agent selection, and point-to-agent message delivery.
-extension AgentService {
+actor WorkloadPlacementService {
+    private let app: Application
+
+    init(app: Application) {
+        self.app = app
+    }
+
     // MARK: - VM Operations
 
-    /// Places a VM on an agent selected by the scheduler, persists the
-    /// placement, and rings the agent's desired-state doorbell. The pending
-    /// create operation completes from the agent's observed-state reports,
-    /// with the stuck-operation sweep as the budget backstop. The placement
-    /// reservation self-releases once the agent's reports account for the VM
-    /// (or by TTL on failure).
-    /// - Parameters:
-    ///   - vm: The VM to create
-    ///   - db: Database connection
-    ///   - strategy: Optional scheduling strategy override
-    ///   - image: Optional source image (its architecture constrains placement)
+    /// Selects an agent, persists the VM placement, and triggers desired-state sync.
     func createVM(
         vm: VM,
         db: Database,
@@ -139,32 +130,15 @@ extension AgentService {
         app.logger.info(
             "VM creation dispatched via desired-state doorbell",
             metadata: [
-                "vmId": .string(vmId),
-                "agentId": .string(agentId),
+                "strato.vm.id": .string(vmId),
+                "strato.agent.id": .string(agentId),
             ])
 
-        await syncDesiredState(agentId: agentId)
+        await app.agentService.syncDesiredState(agentId: agentId)
     }
 
-    /// Places a sandbox on a Firecracker-capable agent, persists the
-    /// placement, and rings the agent's desired-state doorbell — the sandbox
-    /// half of `createVM`. The pending create operation completes from the
-    /// agent's observed-state reports, with the stuck-operation sweep as the
-    /// budget backstop.
-    ///
-    /// Placement requires Firecracker support and the explicit sandbox-runtime
-    /// capability (`AgentRegisterMessage.sandboxCapable` folded with a v5+
-    /// wire protocol into `supportsSandboxWorkloads`, issue #415). There is no
-    /// architecture constraint until tag→digest resolution can read the
-    /// image's platform (issue #414); forks inherit the snapshot's recorded
-    /// architecture and pinned agent. Sandboxes reserve no disk.
-    ///
-    /// A sandbox that has a NIC adds three constraints the VM path derives
-    /// separately (STR-103): the sandbox-networking capability, overlay
-    /// networking, and — when its network is pinned to a site — that site. The
-    /// first is refused rather than degraded, because the alternative is a
-    /// sandbox that boots with no interface while the API keeps reporting the
-    /// address IPAM reserved for it.
+    /// Places a sandbox on a compatible Firecracker agent. Networked sandboxes
+    /// additionally require overlay support, sandbox networking, and the NIC's site.
     func createSandbox(sandbox: Sandbox, db: Database) async throws {
         var schedulableAgents = await schedulableAgentsFromDatabase()
         let sandboxId = sandbox.id?.uuidString ?? ""
@@ -197,9 +171,8 @@ extension AgentService {
 
             // Candidates (issue #428): the snapshot's own agent restores from
             // local artifacts; once exported, any agent that satisfies the
-            // recorded compatibility constraints (wire v13, same architecture,
-            // same Firecracker version, CPU template or identical CPU model)
-            // can stage the archive from object storage instead.
+            // recorded architecture, Firecracker, and CPU compatibility
+            // constraints can stage the archive from object storage instead.
             //
             // A *networked* fork adds one more, and it applies to the pinned
             // agent too (STR-104): remapping the checkpointed network device
@@ -322,11 +295,11 @@ extension AgentService {
             app.logger.info(
                 "Sandbox creation dispatched via desired-state doorbell",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
-                    "agentId": .string(agentId),
+                    "strato.sandbox.id": .string(sandboxId),
+                    "strato.agent.id": .string(agentId),
                 ])
 
-            await syncDesiredState(agentId: agentId)
+            await app.agentService.syncDesiredState(agentId: agentId)
         } catch {
             // The placement never became desired state, so nothing will ever
             // account for the reservation — release it rather than pinning
@@ -336,25 +309,8 @@ extension AgentService {
         }
     }
 
-    /// Refuses a placement the network path could never complete.
-    ///
-    /// The scheduler only asks whether a host has room. When it lands a
-    /// workload on an OVN agent whose site designates no network controller,
-    /// nothing will ever realize that workload's logical switch: the agent
-    /// parks it indefinitely and the create operation hangs until the stuck
-    /// sweep fails it with a timeout that names no cause (issue #743). Fail
-    /// the placement instead, carrying the fix in the operation's error —
-    /// releasing the reservation, as a dispatch failure does, since the
-    /// placement never becomes desired state.
-    ///
-    /// The same refusal covers a site whose designated controller is offline
-    /// past the grace window or came back unable to author topology (issue
-    /// #833) — the workload would park on a switch nobody writes either way.
-    ///
-    /// Site-less agents (legacy self-authored NB) and non-overlay
-    /// (user-mode/SLIRP) agents realize their networking without a site
-    /// controller and are unaffected.
-    func requireNetworkAuthority(
+    /// Refuses overlay placement when the selected site's controller cannot author topology.
+    private func requireNetworkAuthority(
         forAgentId agentId: String, workloadId: String, consequence: String, on db: Database
     ) async throws {
         guard let agentUUID = UUID(uuidString: agentId),
@@ -373,12 +329,8 @@ extension AgentService {
         throw AgentServiceError.schedulingFailed(reason)
     }
 
-    /// The site a VM's placement is pinned to, derived from its NICs'
-    /// networks: attaching a site-pinned network confines the VM to that
-    /// site's agents. NICs are persisted before placement runs, so the rows
-    /// are authoritative here. Networks pinned to different sites cannot
-    /// coexist on one VM — no host is in both sites.
-    func pinnedSiteID(for vm: VM, on db: Database) async throws -> UUID? {
+    /// Returns the site required by the VM's attached networks.
+    private func pinnedSiteID(for vm: VM, on db: Database) async throws -> UUID? {
         guard let vmID = vm.id else { return nil }
         let nics = try await VMNetworkInterface.query(on: db)
             .filter(\.$vm.$id == vmID)
@@ -386,11 +338,8 @@ extension AgentService {
         return try await pinnedSiteID(forNetworkIDs: nics.map(\.logicalNetworkID), on: db)
     }
 
-    /// The site a set of a workload's attached networks pins it to, or nil when
-    /// none of them is site-pinned. Shared by the VM and sandbox paths (STR-103)
-    /// — a sandbox carries at most one NIC, so the multi-site conflict can only
-    /// arise for a VM, but the rule is a property of the networks either way.
-    func pinnedSiteID(forNetworkIDs ids: [UUID], on db: Database) async throws -> UUID? {
+    /// Rejects workloads whose networks belong to different sites.
+    private func pinnedSiteID(forNetworkIDs ids: [UUID], on db: Database) async throws -> UUID? {
         let networkIDs = Set(ids)
         guard !networkIDs.isEmpty else { return nil }
 
@@ -404,11 +353,6 @@ extension AgentService {
         }
         return siteIDs.first
     }
-
-    // `performVMOperationAwaitingResponse` went with `vm_reboot` at wire v34
-    // (ADR 0001 stage 9, STR-151). It was the last VM-shaped correlated
-    // request/response on a durable resource; what remains of this apparatus
-    // serves console, exec and log streams, which stay imperative by design.
 
     // MARK: - Agent Selection
 
@@ -466,7 +410,7 @@ extension AgentService {
     }
 
     /// Count placed VMs per agent without hydrating every VM in the cluster.
-    func runningVMCountsFromDatabase() async throws -> [String: Int] {
+    private func runningVMCountsFromDatabase() async throws -> [String: Int] {
         guard let sql = app.db as? SQLDatabase else {
             throw Abort(.internalServerError, reason: "Scheduler placement requires an SQL database")
         }
@@ -488,32 +432,4 @@ extension AgentService {
         return Dictionary(uniqueKeysWithValues: rows.map { ($0.hypervisor_id, $0.count) })
     }
 
-    // MARK: - Message Sending
-
-    // There is no request/response path here any more (ADR 0001 stage 11,
-    // STR-152). `sendMessageToAgentWithResponse` and the continuation
-    // bookkeeping behind it — pending map, per-request timeout tasks,
-    // disconnect cleanup, the `requestId` ownership check — served the
-    // imperative verbs, and the last of those became desired state at wire v34.
-    // Console and exec are streams with their own session managers and their
-    // own `sessionId` correlation; nothing else ever asked an agent a question.
-
-    // MARK: - Agent Status
-
-    /// Every agent known to the cluster, from the shared registry. Rows are
-    /// written by whichever replica hears from an agent, so this view is the
-    /// same on all replicas.
-    func getAgentList() async -> [Agent] {
-        do {
-            return try await Agent.query(on: app.db).all()
-        } catch {
-            app.logger.error("Failed to load agent list from database: \(error)")
-            return []
-        }
-    }
-
-    func getAgentInfo(_ agentId: String) async -> Agent? {
-        guard let agentUUID = UUID(uuidString: agentId) else { return nil }
-        return try? await Agent.find(agentUUID, on: app.db)
-    }
 }

@@ -61,15 +61,16 @@ extension AgentService {
             let agent = try? await Agent.find(agentUUID, on: app.db)
         else {
             app.logger.warning(
-                "Observed-state report from unknown agent", metadata: ["agentId": .string(report.agentId)])
+                "Observed-state report from unknown agent",
+                metadata: ["strato.agent.claimed.id": .string(report.agentId)])
             return
         }
         guard agent.identity.key == agentKey else {
             app.logger.warning(
                 "Observed-state report claims an agentId not owned by the authenticated connection; ignoring",
                 metadata: [
-                    "claimedAgentId": .string(report.agentId),
-                    "connectionAgentKey": .string(agentKey),
+                    "strato.agent.claimed.id": .string(report.agentId),
+                    "strato.agent.connection.identity": .string(agentKey),
                 ])
             return
         }
@@ -102,7 +103,7 @@ extension AgentService {
             } catch {
                 app.logger.warning(
                     "Failed to persist agent resources from observed-state report: \(error)",
-                    metadata: ["agentId": .string(report.agentId)])
+                    metadata: ["strato.agent.id": .string(report.agentId)])
             }
         }
 
@@ -122,7 +123,7 @@ extension AgentService {
             } catch {
                 app.logger.error(
                     "Failed to apply storage-device inventory: \(error)",
-                    metadata: ["agentId": .string(report.agentId)])
+                    metadata: ["strato.agent.id": .string(report.agentId)])
             }
         }
 
@@ -144,7 +145,7 @@ extension AgentService {
         } catch {
             app.logger.error(
                 "Failed to apply observed-state report: \(error)",
-                metadata: ["agentId": .string(report.agentId)])
+                metadata: ["strato.agent.id": .string(report.agentId)])
         }
     }
 
@@ -187,7 +188,7 @@ extension AgentService {
         app.logger.error(
             "Agent refused a sync's workload teardowns",
             metadata: [
-                "agentName": .string(agent.name),
+                "strato.agent.name": .string(agent.name),
                 "syncId": .string(refusal.syncId),
                 "requestedTeardowns": .stringConvertible(refusal.requestedTeardowns),
                 "presentWorkloads": .stringConvertible(refusal.presentWorkloads),
@@ -225,7 +226,7 @@ extension AgentService {
             else { return false }
             app.logger.notice(
                 "Agent's workload manifest is healthy again",
-                metadata: ["agentName": .string(agent.name)])
+                metadata: ["strato.agent.name": .string(agent.name)])
             agent.manifestStatusReason = nil
             agent.manifestStatusAt = nil
             agent.manifestInventoryComplete = nil
@@ -245,7 +246,7 @@ extension AgentService {
                 ? "Agent is holding workloads its build cannot route"
                 : "Agent cannot read its workload manifest; it is quarantined and placing nothing",
             metadata: [
-                "agentName": .string(agent.name),
+                "strato.agent.name": .string(agent.name),
                 "quarantinedEntries": .stringConvertible(status.quarantinedEntries),
                 "reason": .string(status.reason),
             ])
@@ -283,7 +284,7 @@ extension AgentService {
                 app.logger.error(
                     "Agent reported its assigned update failed",
                     metadata: [
-                        "agentName": .string(agent.name),
+                        "strato.agent.name": .string(agent.name),
                         "targetVersion": .string(status.targetVersion),
                         "reason": .string(status.reason),
                     ])
@@ -297,7 +298,7 @@ extension AgentService {
                 app.logger.info(
                     "Agent reported its assigned update as blocked",
                     metadata: [
-                        "agentName": .string(agent.name),
+                        "strato.agent.name": .string(agent.name),
                         "targetVersion": .string(status.targetVersion),
                         "reason": .string(status.reason),
                     ])

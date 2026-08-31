@@ -308,7 +308,7 @@ extension NetworkServiceLinux {
             "Creating TAP interface",
             metadata: [
                 "tapName": .string(tapName),
-                "vmId": .string(vmId),
+                "strato.vm.id": .string(vmId),
             ])
 
         // Idempotent: reuse the device if it already exists (crash recovery, re-attach).
@@ -404,7 +404,7 @@ extension NetworkServiceLinux {
         logger.info(
             "Sandbox NIC attached into namespace",
             metadata: [
-                "sandboxId": .string(sandboxId),
+                "strato.sandbox.id": .string(sandboxId),
                 "nicIndex": .stringConvertible(nicIndex),
                 "netns": .string(netnsName),
                 "portName": .string(portName),
@@ -482,7 +482,7 @@ extension NetworkServiceLinux {
             logger.warning(
                 "Failed to remove OVS port",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
+                    "strato.sandbox.id": .string(sandboxId),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -496,7 +496,7 @@ extension NetworkServiceLinux {
                 logger.warning(
                     "Failed to tear down sandbox NIC device",
                     metadata: [
-                        "sandboxId": .string(sandboxId),
+                        "strato.sandbox.id": .string(sandboxId),
                         "command": .string(command.arguments.joined(separator: " ")),
                         "error": .string(error.localizedDescription),
                         // Without an absolute path this ran through `PATH`, which

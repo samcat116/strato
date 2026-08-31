@@ -112,7 +112,7 @@ extension AgentService {
                     app.logger.notice(
                         "Agent auto-update converged",
                         metadata: [
-                            "agentName": .string(agent.name),
+                            "strato.agent.name": .string(agent.name),
                             "version": .string(agent.version),
                         ])
                     continue
@@ -149,7 +149,7 @@ extension AgentService {
                         app.logger.notice(
                             "Agent auto-update parked: blocked past the health budget; rollout advances without it",
                             metadata: [
-                                "agentName": .string(agent.name),
+                                "strato.agent.name": .string(agent.name),
                                 "targetVersion": .string(assigned),
                                 "blockedReason": .string(agent.updateBlockedReason ?? ""),
                             ])
@@ -174,7 +174,7 @@ extension AgentService {
                             ? "Agent update failed: agent went silent past the health budget"
                             : "Agent auto-update failed: agent went silent past the health budget; rollout halted",
                         metadata: [
-                            "agentName": .string(agent.name),
+                            "strato.agent.name": .string(agent.name),
                             "targetVersion": .string(assigned),
                         ])
                     rolloutHalted = rolloutHalted || !manual
@@ -214,7 +214,7 @@ extension AgentService {
                 app.logger.warning(
                     "Agent auto-update artifact unresolvable; not assigning (retries next sweep)",
                     metadata: [
-                        "agentName": .string(next.name),
+                        "strato.agent.name": .string(next.name),
                         "targetVersion": .string(target),
                         "error": .string(String(describing: error)),
                     ])
@@ -227,7 +227,7 @@ extension AgentService {
             app.logger.notice(
                 "Agent auto-update assigned",
                 metadata: [
-                    "agentName": .string(next.name),
+                    "strato.agent.name": .string(next.name),
                     "currentVersion": .string(next.version),
                     "targetVersion": .string(target),
                 ])

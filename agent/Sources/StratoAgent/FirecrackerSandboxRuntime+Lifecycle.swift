@@ -33,7 +33,7 @@ extension FirecrackerSandboxRuntime {
 
         logger.info(
             "Creating sandbox",
-            metadata: ["sandboxId": .string(sandboxId), "image": .string(spec.image)])
+            metadata: ["strato.sandbox.id": .string(sandboxId), "image": .string(spec.image)])
 
         // Once per agent life: clear template debris a crash mid-build left
         // behind (templates are invisible to manifest-driven orphan
@@ -106,7 +106,7 @@ extension FirecrackerSandboxRuntime {
             logger.debug(
                 "Firecracker predates snapshot network remapping, so this networked sandbox is cold-provisioned",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
+                    "strato.sandbox.id": .string(sandboxId),
                     "minimumFirecracker": .string(
                         FirecrackerSnapshotFeatures.networkOverridesMinimumVersion),
                 ])
@@ -137,7 +137,7 @@ extension FirecrackerSandboxRuntime {
                 logger.info(
                     "Sandbox created from warm snapshot",
                     metadata: [
-                        "sandboxId": .string(sandboxId),
+                        "strato.sandbox.id": .string(sandboxId),
                         "warmKey": .string(warmKey.directoryName),
                     ])
                 return
@@ -148,7 +148,7 @@ extension FirecrackerSandboxRuntime {
                 logger.warning(
                     "Warm-start provisioning failed; invalidating the cache entry and cold-booting",
                     metadata: [
-                        "sandboxId": .string(sandboxId),
+                        "strato.sandbox.id": .string(sandboxId),
                         "warmKey": .string(warmKey.directoryName),
                         "error": .string(error.localizedDescription),
                     ])
@@ -309,7 +309,7 @@ extension FirecrackerSandboxRuntime {
         logger.info(
             "Sandbox created",
             metadata: [
-                "sandboxId": .string(sandboxId),
+                "strato.sandbox.id": .string(sandboxId),
                 "jailed": .stringConvertible(vm.jail != nil),
             ])
     }
@@ -470,7 +470,7 @@ extension FirecrackerSandboxRuntime {
                 logger.warning(
                     "Firecracker did not accept the optional entropy device",
                     metadata: [
-                        "sandboxId": .string(vmId),
+                        "strato.sandbox.id": .string(vmId),
                         "error": .string(error.localizedDescription),
                     ])
             }
@@ -767,8 +767,8 @@ extension FirecrackerSandboxRuntime {
             logger.info(
                 "Sandbox fork restored and re-identified",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
-                    "sourceSandboxId": .string(sourceSandboxId),
+                    "strato.sandbox.id": .string(sandboxId),
+                    "strato.sandbox.source.id": .string(sourceSandboxId),
                     "snapshotId": .string(snapshotId),
                 ])
         } catch {
@@ -824,10 +824,10 @@ extension FirecrackerSandboxRuntime {
         case .running:
             break  // already running — idempotent
         case .notStarted:
-            logger.info("Booting sandbox", metadata: ["sandboxId": .string(sandboxId)])
+            logger.info("Booting sandbox", metadata: ["strato.sandbox.id": .string(sandboxId)])
             try await managed.manager.start()
         case .paused:
-            logger.info("Resuming sandbox", metadata: ["sandboxId": .string(sandboxId)])
+            logger.info("Resuming sandbox", metadata: ["strato.sandbox.id": .string(sandboxId)])
             try await managed.manager.resume()
         }
 
@@ -893,7 +893,7 @@ extension FirecrackerSandboxRuntime {
                 logger.warning(
                     "Warm launch failed; demoting the sandbox to a cold boot",
                     metadata: [
-                        "sandboxId": .string(sandboxId),
+                        "strato.sandbox.id": .string(sandboxId),
                         "error": .string(error.localizedDescription),
                     ])
                 try await demoteWarmSandboxToCold(sandboxId)
@@ -921,7 +921,7 @@ extension FirecrackerSandboxRuntime {
         logger.info(
             "Sandbox guest agent healthy",
             metadata: [
-                "sandboxId": .string(sandboxId),
+                "strato.sandbox.id": .string(sandboxId),
                 "bootPath": .string(bootPath),
                 "bootMillis": .stringConvertible(Int(Date().timeIntervalSince(bootStarted) * 1000)),
             ])
@@ -1059,7 +1059,7 @@ extension FirecrackerSandboxRuntime {
             logger.warning(
                 "Guest did not accept clock resync (older guest image?)",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
+                    "strato.sandbox.id": .string(sandboxId),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -1084,7 +1084,7 @@ extension FirecrackerSandboxRuntime {
         // already-paused sandbox is idempotently satisfied.
         let info = try await managed.manager.getInstanceInfo()
         if info.state == .running {
-            logger.info("Stopping sandbox", metadata: ["sandboxId": .string(sandboxId)])
+            logger.info("Stopping sandbox", metadata: ["strato.sandbox.id": .string(sandboxId)])
             try await managed.manager.pause()
         }
     }
@@ -1098,7 +1098,7 @@ extension FirecrackerSandboxRuntime {
         guard !checkpointing.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
-        logger.info("Deleting sandbox", metadata: ["sandboxId": .string(sandboxId)])
+        logger.info("Deleting sandbox", metadata: ["strato.sandbox.id": .string(sandboxId)])
         // End interactive/log streams first: the guest is about to disappear,
         // and their control-plane sessions must learn why. Deleting is the
         // true end-of-stream for the workload's logs, so flush any partial
@@ -1186,7 +1186,7 @@ extension FirecrackerSandboxRuntime {
             logger.info(
                 "Re-adopting orphaned sandbox",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
+                    "strato.sandbox.id": .string(sandboxId),
                     "socket": .string(candidate.socketPath),
                     "jailed": .stringConvertible(candidate.jailPlan != nil),
                 ])
@@ -1254,7 +1254,7 @@ extension FirecrackerSandboxRuntime {
         }
         logger.info(
             "Sandbox re-adopted",
-            metadata: ["sandboxId": .string(sandboxId), "status": .string(status.rawValue)])
+            metadata: ["strato.sandbox.id": .string(sandboxId), "status": .string(status.rawValue)])
         return status
     }
 

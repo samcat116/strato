@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import {
   CircleHelp,
   Fingerprint,
@@ -81,7 +83,7 @@ export function VMIdentityCard({ vm }: VMIdentityCardProps) {
 
   const handleRevoke = async () => {
     if (!vm.instanceIdentityPrincipalId || !grant) return;
-    if (!window.confirm(`Revoke ${vm.name}'s ${grant.roleDisplayName} role?`)) {
+    if (!await confirmAction(`Revoke ${vm.name}'s ${grant.roleDisplayName} role?`)) {
       return;
     }
     try {

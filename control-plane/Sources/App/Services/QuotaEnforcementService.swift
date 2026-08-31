@@ -1,7 +1,6 @@
 import Foundation
 import Vapor
 import Fluent
-import SQLKit
 
 /// Enforces resource quotas across the VM, sandbox, volume and network lifecycle.
 /// Resolves the project/OU/org quotas that govern a workload (matching its
@@ -186,50 +185,9 @@ struct QuotaEnforcementService {
         }
     }
 
-    /// Sandbox-snapshot counterpart (issue #426): snapshots persist real bytes
-    /// in the shared storage pool, so admission checks `size` — the guest
-    /// memory as an estimate, later replaced by the agent's actual figures —
-    /// against every applicable quota's storage limit. Call inside the same
-    /// transaction as the snapshot insert.
-    static func reserveSandboxSnapshot(
-        for project: Project,
-        environment: String,
-        size: Int64,
-        on db: Database
-    ) async throws {
-        try await reserveWorkload(for: project, environment: environment, on: db) { quota in
-            let check = quota.canAccommodateStorage(size, for: "the snapshot")
-            guard check.allowed else { return check }
-            try quota.reserveStorage(size, for: "the snapshot")
-            return check
-        }
-    }
-
-    /// Admission for a snapshot *export* (issue #428). The exported copy is a
-    /// second physical copy of the same archive, so it draws its own `size`
-    /// from the storage pool — without this, export was the one path that
-    /// wrote unbounded bytes with no quota at all. Call inside the same
-    /// transaction that opens the export operation.
-    static func reserveSandboxSnapshotExport(
-        for project: Project,
-        environment: String,
-        size: Int64,
-        on db: Database
-    ) async throws {
-        try await reserveWorkload(for: project, environment: environment, on: db) { quota in
-            let check = quota.canAccommodateStorage(size, for: "the snapshot")
-            guard check.allowed else { return check }
-            try quota.reserveStorage(size, for: "the snapshot")
-            return check
-        }
-    }
-
-    /// Admission for a full-VM checkpoint (issue #564). The machine state a
-    /// checkpoint writes draws from the shared storage pool, so admission
-    /// checks `size` — the VM's memory grant as an estimate, later replaced by
-    /// what the agent actually wrote — against every applicable quota's
-    /// storage limit. Call inside the same transaction as the snapshot insert.
-    static func reserveVMSnapshot(
+    /// Admission for snapshot storage. Call inside the same transaction as the
+    /// operation that creates or exports the snapshot.
+    static func reserveSnapshotStorage(
         for project: Project,
         environment: String,
         size: Int64,
@@ -367,30 +325,6 @@ struct QuotaEnforcementService {
             let check = quota.canAccommodateStorage(sizeDelta, for: reason)
             guard check.allowed else { return check }
             try quota.reserveStorage(sizeDelta, for: reason)
-            return check
-        }
-    }
-
-    /// Admission for a volume snapshot (STR-181). Call inside the same
-    /// transaction as the snapshot insert.
-    ///
-    /// `size` is the **parent volume's whole size**, not a guess at how big the
-    /// overlay will get, and that is the enforcement point for the whole family:
-    /// an overlay grows toward its parent as the volume diverges, with no API
-    /// call to refuse along the way, so a snapshot is admitted only when the pool
-    /// could absorb it fully grown. That bound remains reserved for the lifetime
-    /// of the snapshot; the agent's live footprint is reported separately for
-    /// observability and billing rather than releasing admission capacity.
-    static func reserveVolumeSnapshot(
-        for project: Project,
-        environment: String,
-        size: Int64,
-        on db: Database
-    ) async throws {
-        try await reserveWorkload(for: project, environment: environment, on: db) { quota in
-            let check = quota.canAccommodateStorage(size, for: "the snapshot")
-            guard check.allowed else { return check }
-            try quota.reserveStorage(size, for: "the snapshot")
             return check
         }
     }
@@ -583,27 +517,22 @@ struct QuotaEnforcementService {
         projectID: UUID,
         on db: Database
     ) async throws {
-        try await lockAdvisoryKey("project-network:\(projectID.uuidString)", on: db)
+        try await AdvisoryLock.acquireTransactionLock(
+            .object(.projectNetwork, id: projectID), on: db)
     }
 
     /// Takes a transaction-scoped advisory lock on each quota so concurrent
     /// creates that share a quota serialize their check-then-reserve sequence.
     ///
-    /// Postgres only: `pg_advisory_xact_lock` is held until the enclosing
+    /// PostgreSQL-only: `pg_advisory_xact_lock` is held until the enclosing
     /// transaction ends, giving cross-replica serialization (every replica shares
-    /// the same Postgres) without a persisted lock row. Locks are taken in a stable
-    /// (sorted) id order so two creates touching an overlapping set of quotas can't
-    /// deadlock by acquiring them in opposite orders.
+    /// the same PostgreSQL database) without a persisted lock row. An active
+    /// transaction is required. Locks are taken in stable digest order so two
+    /// creates touching an overlapping set of quotas cannot deadlock by acquiring
+    /// them in opposite orders.
     private static func lockQuotas(_ quotas: [ResourceQuota], on db: Database) async throws {
-        let keys = quotas.compactMap { $0.id?.uuidString }.sorted()
-        for key in keys {
-            try await lockAdvisoryKey(key, on: db)
-        }
-    }
-
-    private static func lockAdvisoryKey(_ key: String, on db: Database) async throws {
-        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
-        try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: key)))").run()
+        try await AdvisoryLock.acquireTransactionLocks(
+            .quota, objectIDs: quotas.compactMap(\.id), on: db)
     }
 
     /// Sets a quota's reservation counters to the exact usage of the VMs,

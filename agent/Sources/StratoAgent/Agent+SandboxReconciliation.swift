@@ -228,7 +228,7 @@ extension Agent {
                     placement: sandboxTeardownPlacement(sandboxId: item.id))
                 logger.warning(
                     "Deleted orphaned sandbox from manifest; any surviving process must be cleaned up manually",
-                    metadata: ["sandboxId": .string(item.id)])
+                    metadata: ["strato.sandbox.id": .string(item.id)])
                 return
             }
         }

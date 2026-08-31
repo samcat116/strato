@@ -551,7 +551,7 @@ extension Agent {
         guard let service = getHypervisorServiceForVM(vmId: vmId), await service.hasLiveSession(vmId: vmId) else {
             logger.info(
                 "Recorded volume attachment for a VM with no live session; it lands at its next boot",
-                metadata: ["volumeId": .string(item.id), "vmId": .string(vmId)])
+                metadata: ["volumeId": .string(item.id), "strato.vm.id": .string(vmId)])
             return
         }
         try await service.attachDisk(
@@ -972,7 +972,7 @@ extension Agent {
                 level: adoption == .processGone ? .info : .warning,
                 "Could not re-adopt an orphaned VM to delete it",
                 metadata: [
-                    "vmId": .string(vmId),
+                    "strato.vm.id": .string(vmId),
                     "adoption": .string(String(describing: adoption)),
                     "error": .string(error.localizedDescription),
                 ])
@@ -1007,7 +1007,7 @@ extension Agent {
                 } else {
                     logger.warning(
                         "Deleting an orphaned VM this agent could not re-adopt; any surviving hypervisor process and the VM's files must be cleaned up manually",
-                        metadata: ["vmId": .string(item.id)])
+                        metadata: ["strato.vm.id": .string(item.id)])
                 }
 
                 orphanedVMs.removeValue(forKey: item.id)

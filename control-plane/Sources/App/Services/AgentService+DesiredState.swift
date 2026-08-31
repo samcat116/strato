@@ -67,7 +67,7 @@ extension AgentService {
         guard let agentKey = await agentKey(forId: agentId) else {
             app.logger.warning(
                 "Cannot ring the desired-state doorbell for an unknown agent",
-                metadata: ["agentId": .string(agentId)])
+                metadata: ["strato.agent.id": .string(agentId)])
             return
         }
         await applyDoorbell(agentKey: agentKey)

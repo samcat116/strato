@@ -29,8 +29,6 @@ enum ResolverAddressAllocator {
     /// the thing being kept unique is global. Held only across the scan and the
     /// write, and resolver allocation happens on network create or on flipping
     /// the flag — not on any hot path.
-    private static let lockKey = "resolver-index"
-
     /// Allocates the lowest free index, or returns the one this network already
     /// holds.
     ///
@@ -102,9 +100,11 @@ enum ResolverAddressAllocator {
         return nil
     }
 
-    /// Postgres only, and transaction-scoped, matching `IPAMService`.
+    /// PostgreSQL-only and transaction-scoped, matching `IPAMService`.
+    /// Unsupported database dialects fail rather than silently skipping the
+    /// cross-replica uniqueness invariant.
     static func lock(on db: any Database) async throws {
-        guard let sql = db as? any SQLDatabase, sql.dialect.name == "postgresql" else { return }
-        try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: lockKey)))").run()
+        try await AdvisoryLock.acquireTransactionLock(
+            .singleton(.resolverIndex), on: db)
     }
 }

@@ -100,8 +100,8 @@ actor Agent {
     // `inboundContinuation` in arrival order; `messageConsumerTask` drains the stream and
     // routes each frame onto a per-resource serial lane in `messageQueue`, so operations on
     // the same VM/volume are applied in the order the control plane sent them (issue #179).
-    nonisolated let inboundMessages: AsyncStream<MessageEnvelope>
-    nonisolated let inboundContinuation: AsyncStream<MessageEnvelope>.Continuation
+    nonisolated let inboundMessages: AsyncStream<InboundWebSocketFrame>
+    nonisolated let inboundContinuation: AsyncStream<InboundWebSocketFrame>.Continuation
     let messageQueue = SerialTaskQueue()
     var messageConsumerTask: Task<Void, Never>?
 
@@ -512,7 +512,7 @@ actor Agent {
         self.metadataHopLimit = metadataHopLimit
         self.vmExecSessionManager = VMExecSessionManager(logger: logger)
 
-        let (stream, continuation) = AsyncStream.makeStream(of: MessageEnvelope.self)
+        let (stream, continuation) = AsyncStream.makeStream(of: InboundWebSocketFrame.self)
         self.inboundMessages = stream
         self.inboundContinuation = continuation
 

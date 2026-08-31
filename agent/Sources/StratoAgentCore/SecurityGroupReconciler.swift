@@ -62,6 +62,18 @@ extension OVNNaming {
 
 // MARK: - ACL construction
 
+/// Strato's ordered OVN ACL layers. A terminal verdict in an earlier tier
+/// prevents every later tier from running; `pass` advances to the next tier.
+public enum StratoACLTier {
+    /// Chassis/network services that policy must not strand (DHCP, ND/MLD,
+    /// metadata and the per-network resolver), plus the metadata kill switch.
+    public static let system = 0
+    /// Stateless, ordered network ACLs attached directly to logical switches.
+    public static let network = 1
+    /// Stateful NIC security groups attached through port groups.
+    public static let securityGroup = 2
+}
+
 /// One OVN ACL row the plan wants on a port group. Pure data; the actuator
 /// maps it onto `OVNACL`.
 public struct ACLSpec: Equatable, Sendable {
@@ -69,9 +81,10 @@ public struct ACLSpec: Equatable, Sendable {
     /// or "from-lport" (traffic sent by a port — egress).
     public let direction: String
     public let priority: Int
+    public let tier: Int
     public let match: String
-    /// "allow-related" for stateful rule allows, "allow" for infra carve-outs,
-    /// "drop" for the default deny.
+    /// "allow-related" for stateful rule/system allows, "pass" for a network
+    /// ACL allow that must still satisfy security groups, and "drop" for deny.
     public let action: String
     /// Whether OVN should log every packet this ACL matches (STR-34). Off for
     /// everything except rules whose control-plane row asked for it.
@@ -88,6 +101,7 @@ public struct ACLSpec: Equatable, Sendable {
     public init(
         direction: String,
         priority: Int,
+        tier: Int,
         match: String,
         action: String,
         log: Bool = false,
@@ -97,6 +111,7 @@ public struct ACLSpec: Equatable, Sendable {
     ) {
         self.direction = direction
         self.priority = priority
+        self.tier = tier
         self.match = match
         self.action = action
         self.log = log
@@ -110,8 +125,8 @@ public struct ACLSpec: Equatable, Sendable {
 /// exhaustively unit-tested, because a malformed match either fails the NB
 /// transaction or (worse) silently matches nothing.
 public enum SecurityGroupACLBuilder {
-    /// Rule allows sit above the drop-group denies; both are far below the
-    /// reserved OVN internal priorities. Neutron's proven values.
+    /// Rule allows sit above the drop-group denies within the security-group
+    /// tier; both are far below the reserved OVN internal priorities.
     public static let allowPriority = 1002
     public static let dropPriority = 1001
 
@@ -163,7 +178,9 @@ public enum SecurityGroupACLBuilder {
     /// didn't move. Without it, a builder fix would sit unapplied until some
     /// unrelated rule edit happened to bump each group.
     /// 2: per-rule `log`/`severity`/`name` columns (STR-34).
-    public static let aclSchemaRevision: Int64 = 2
+    /// 3: infrastructure ACLs moved to tier 0 and security-group ACLs to tier
+    /// 2, reserving tier 1 for switch-attached network ACLs (STR-33).
+    public static let aclSchemaRevision: Int64 = 3
 
     /// Severity for logged ACLs. Not an API surface: the control plane's rule
     /// carries a boolean, and every logged rule lands at the same level.
@@ -247,6 +264,7 @@ public enum SecurityGroupACLBuilder {
         return ACLSpec(
             direction: rule.direction == "ingress" ? "to-lport" : "from-lport",
             priority: allowPriority,
+            tier: StratoACLTier.securityGroup,
             match: clauses.joined(separator: " && "),
             action: "allow-related",
             log: logged,
@@ -332,12 +350,14 @@ public enum SecurityGroupACLBuilder {
         return [
             ACLSpec(
                 direction: "from-lport", priority: metadataAllowPriority,
+                tier: StratoACLTier.system,
                 match:
                     "inport == @\(pg) && ip4 && ip4.dst == \(InstanceMetadataEndpoint.address) "
                     + "&& tcp && tcp.dst == \(port)",
                 action: "allow-related", externalIDs: ids),
             ACLSpec(
                 direction: "from-lport", priority: metadataAllowPriority,
+                tier: StratoACLTier.system,
                 match:
                     "inport == @\(pg) && ip6 && ip6.dst == \(InstanceMetadataEndpoint.addressV6) "
                     + "&& tcp && tcp.dst == \(port)",
@@ -380,10 +400,12 @@ public enum SecurityGroupACLBuilder {
         return [
             ACLSpec(
                 direction: "from-lport", priority: metadataDenyPriority,
+                tier: StratoACLTier.system,
                 match: "inport == @\(pg) && ip4 && ip4.dst == \(InstanceMetadataEndpoint.address)",
                 action: "drop", externalIDs: ids),
             ACLSpec(
                 direction: "from-lport", priority: metadataDenyPriority,
+                tier: StratoACLTier.system,
                 match: "inport == @\(pg) && ip6 && ip6.dst == \(InstanceMetadataEndpoint.addressV6)",
                 action: "drop", externalIDs: ids),
         ]
@@ -427,6 +449,7 @@ public enum SecurityGroupACLBuilder {
                 acls.append(
                     ACLSpec(
                         direction: "from-lport", priority: metadataAllowPriority,
+                        tier: StratoACLTier.system,
                         match:
                             "inport == @\(pg) && \(family) && \(family).dst == \(space) "
                             + "&& \(proto) && \(proto).dst == \(port)",
@@ -455,28 +478,34 @@ public enum SecurityGroupACLBuilder {
             // DHCPv4/v6: the guest's requests out, the server's replies in.
             ACLSpec(
                 direction: "from-lport", priority: allowPriority,
+                tier: StratoACLTier.system,
                 match: "inport == @\(pg) && udp && udp.dst == 67", action: "allow-related",
                 externalIDs: ids),
             ACLSpec(
                 direction: "from-lport", priority: allowPriority,
+                tier: StratoACLTier.system,
                 match: "inport == @\(pg) && udp && udp.dst == 547", action: "allow-related",
                 externalIDs: ids),
             ACLSpec(
                 direction: "to-lport", priority: allowPriority,
+                tier: StratoACLTier.system,
                 match: "outport == @\(pg) && udp && udp.src == 67", action: "allow",
                 externalIDs: ids),
             ACLSpec(
                 direction: "to-lport", priority: allowPriority,
+                tier: StratoACLTier.system,
                 match: "outport == @\(pg) && udp && udp.src == 547", action: "allow",
                 externalIDs: ids),
             // IPv6 ND (NS/NA), router solicitations and advertisements: ICMPv6
             // is `ip`, so the default drop would otherwise break IPv6 entirely.
             ACLSpec(
                 direction: "from-lport", priority: allowPriority,
+                tier: StratoACLTier.system,
                 match: "inport == @\(pg) && (nd || nd_rs || nd_ra)", action: "allow",
                 externalIDs: ids),
             ACLSpec(
                 direction: "to-lport", priority: allowPriority,
+                tier: StratoACLTier.system,
                 match: "outport == @\(pg) && (nd || nd_rs || nd_ra)", action: "allow",
                 externalIDs: ids),
             // MLD both ways, but not the same types each way: a guest sends
@@ -486,19 +515,23 @@ public enum SecurityGroupACLBuilder {
             // `mldEgressMatch`).
             ACLSpec(
                 direction: "from-lport", priority: allowPriority,
+                tier: StratoACLTier.system,
                 match: "inport == @\(pg) && \(mldEgressMatch)", action: "allow",
                 externalIDs: ids),
             ACLSpec(
                 direction: "to-lport", priority: allowPriority,
+                tier: StratoACLTier.system,
                 match: "outport == @\(pg) && \(mldIngressMatch)", action: "allow",
                 externalIDs: ids),
             // The default deny that makes membership meaningful.
             ACLSpec(
                 direction: "from-lport", priority: dropPriority,
+                tier: StratoACLTier.securityGroup,
                 match: "inport == @\(pg) && ip", action: "drop",
                 externalIDs: ids),
             ACLSpec(
                 direction: "to-lport", priority: dropPriority,
+                tier: StratoACLTier.securityGroup,
                 match: "outport == @\(pg) && ip", action: "drop",
                 externalIDs: ids),
         ]
@@ -641,8 +674,9 @@ public enum SecurityGroupReconciler {
                     ids["strato-sg-id"] = group.id.uuidString.lowercased()
                     acls.append(
                         ACLSpec(
-                            direction: acl.direction, priority: acl.priority, match: acl.match,
-                            action: acl.action, log: acl.log, severity: acl.severity, name: acl.name,
+                            direction: acl.direction, priority: acl.priority, tier: acl.tier,
+                            match: acl.match, action: acl.action, log: acl.log,
+                            severity: acl.severity, name: acl.name,
                             externalIDs: ids))
                 } else {
                     unexpressed.append(rule.id)
@@ -679,6 +713,24 @@ public enum SecurityGroupReconciler {
         if observedBuilderRevision != SecurityGroupACLBuilder.aclSchemaRevision { return true }
         return planned > observed
     }
+
+    /// Whether it is safe to introduce tier-1 switch ACLs. Every planned group
+    /// must exist at its requested (or a newer) generation, and every managed
+    /// group still present must have been rewritten by the tier-aware builder.
+    /// A leftover tier-0 `allow-related` ACL would otherwise terminate policy
+    /// evaluation before the network ACL tier and silently bypass the NACL.
+    public static func isNetworkACLTierReady(
+        planned: [PortGroupPlan], observed: [ObservedPortGroup]
+    ) -> Bool {
+        guard observed.allSatisfy({ $0.builderRevision == SecurityGroupACLBuilder.aclSchemaRevision })
+        else { return false }
+
+        let byName = Dictionary(uniqueKeysWithValues: observed.map { ($0.name, $0) })
+        return planned.allSatisfy { plan in
+            guard let row = byName[plan.name], let generation = row.generation else { return false }
+            return generation >= plan.generation
+        }
+    }
 }
 
 // MARK: - Actuator
@@ -691,7 +743,11 @@ public protocol SecurityGroupActuator: Sendable {
     func observeSecurityGroups() async throws -> [ObservedPortGroup]
     /// Create the port group if missing and converge its ACL set to the plan
     /// when `needsACLRewrite` says so. Must never write the `ports` column.
-    func ensurePortGroup(_ plan: PortGroupPlan) async throws
+    /// Returns true only when the group is known to use this build's ACL
+    /// schema. A stale desired generation can correctly leave a newer group
+    /// untouched while still returning false if that group predates the tier
+    /// migration.
+    func ensurePortGroup(_ plan: PortGroupPlan) async throws -> Bool
     /// Delete a managed port group (its ACLs die with it; member port
     /// references are weak).
     func removePortGroup(named name: String) async throws
@@ -706,12 +762,14 @@ extension SecurityGroupReconciler {
     /// then tear down managed groups the plan no longer wants. Best-effort
     /// per object (a failing group is retried by the next level-triggered
     /// sync); throws only when the NB snapshot itself can't be read.
+    @discardableResult
     public static func reconcile(
         securityGroups: [DesiredSecurityGroup],
         actuator: any SecurityGroupActuator,
         logger: Logger
-    ) async throws {
+    ) async throws -> Bool {
         let (plans, unexpressed) = plan(securityGroups: securityGroups)
+        var fullyConverged = true
         if !unexpressed.isEmpty {
             logger.error(
                 "Security-group rules from a newer control plane could not be expressed as ACLs; they are NOT enforced",
@@ -720,8 +778,11 @@ extension SecurityGroupReconciler {
 
         for plan in plans {
             do {
-                try await actuator.ensurePortGroup(plan)
+                if try await !actuator.ensurePortGroup(plan) {
+                    fullyConverged = false
+                }
             } catch {
+                fullyConverged = false
                 logger.error(
                     "Failed to converge security-group port group",
                     metadata: [
@@ -736,11 +797,18 @@ extension SecurityGroupReconciler {
             do {
                 try await actuator.removePortGroup(named: name)
             } catch {
+                fullyConverged = false
                 logger.error(
                     "Failed to tear down security-group port group",
                     metadata: ["portGroup": .string(name), "error": .string(error.localizedDescription)])
             }
         }
+        // Re-observe after both ensure and teardown. Best-effort calls alone do
+        // not prove readiness: a missing planned group or an old tier-0 group
+        // left behind after a failed teardown must hold the NACL rollout back.
+        let finalObserved = try await actuator.observeSecurityGroups()
+        return fullyConverged
+            && isNetworkACLTierReady(planned: plans, observed: finalObserved)
     }
 
     /// How early a port group is joined: the two site-singleton groups whose

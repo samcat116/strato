@@ -89,7 +89,7 @@ struct JWTSVIDAuthenticator {
             // had, on an identity whose SVID is minted on every hypervisor node.
             request.logger.warning(
                 "Refused a JWT-SVID for an agent identity",
-                metadata: ["spiffeID": .string(verified.spiffeID.uri)])
+                metadata: ["strato.agent.identity": .string(verified.spiffeID.uri)])
             throw Abort(
                 .forbidden,
                 reason: "Agent identities authenticate with mTLS and cannot be used as API credentials")

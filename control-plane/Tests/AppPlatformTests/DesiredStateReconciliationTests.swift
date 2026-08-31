@@ -347,7 +347,7 @@ final class DesiredStateReconciliationTests {
             try await network.save(on: app.db)
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: try network.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress())
+                macAddress: MACAllocator.generateCandidate().description)
             try await nic.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
@@ -385,18 +385,18 @@ final class DesiredStateReconciliationTests {
             let networkID = try network.requireID()
             let net0 = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: networkID,
-                macAddress: VMNetworkInterface.generateMACAddress(),
+                macAddress: MACAllocator.generateCandidate().description,
                 deviceName: "net0", orderIndex: 0)
             try await net0.save(on: app.db)
             let net1 = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: networkID,
-                macAddress: VMNetworkInterface.generateMACAddress(),
+                macAddress: MACAllocator.generateCandidate().description,
                 deviceName: "net1", orderIndex: 1)
             net1.detachGeneration = vm.generation
             try await net1.save(on: app.db)
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: networkID,
-                macAddress: VMNetworkInterface.generateMACAddress(),
+                macAddress: MACAllocator.generateCandidate().description,
                 deviceName: "net2", orderIndex: 2)
             try await nic.save(on: app.db)
             try await VMInterfaceAddress(
@@ -763,7 +763,7 @@ final class DesiredStateReconciliationTests {
                 .delete, resourceKind: .virtualMachine, resourceID: vm.id!,
                 actor: .user(user.id!), on: app.db)
 
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
 
             // The delete is marked degraded, but the deletion intent survives
             // it (issue #734) — reverting desired to `.running` here would have

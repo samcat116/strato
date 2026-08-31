@@ -9,6 +9,12 @@ metadata:
     {{- include "strato-control-plane.labels" . | nindent 4 }}
     app.kubernetes.io/component: control-plane
 spec:
+  # STR-275 moves control-plane advisory locks from the legacy one-bigint
+  # keyspace to PostgreSQL's disjoint two-int keyspace. Old and new binaries
+  # therefore cannot safely serve together. Recreate waits for every old pod to
+  # terminate (and its database sessions to close) before starting the new set.
+  strategy:
+    type: Recreate
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
@@ -117,12 +123,14 @@ spec:
               protocol: TCP
           env:
             # Build identity, surfaced on /health/* so a given response can be
-            # traced back to an exact version/commit. gitSHA defaults to the image
-            # tag when not set explicitly via .Values.strato.gitSHA.
+            # traced back to an exact version/commit. The published image bakes
+            # in its full SHA; only override it when the operator supplies one.
             - name: STRATO_VERSION
               value: "{{ .Values.image.tag | default .Chart.AppVersion }}"
+            {{- with .Values.strato.gitSHA }}
             - name: STRATO_GIT_SHA
-              value: "{{ .Values.strato.gitSHA | default (.Values.image.tag | default .Chart.AppVersion) }}"
+              value: {{ . | quote }}
+            {{- end }}
             - name: LOG_LEVEL
               value: "{{ .Values.strato.logLevel }}"
             # Image storage. `filesystem` writes to the pod's ephemeral disk —
@@ -191,12 +199,20 @@ spec:
               value: "/etc/strato/db-tls/ca.crt"
             {{- end }}
             {{- if .Values.strato.secretEncryption.existingSecret }}
-            # At-rest encryption key for stored secrets (OIDC client secrets).
+            # Primary at-rest encryption key for recoverable stored secrets.
             - name: STRATO_SECRET_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
                   name: "{{ .Values.strato.secretEncryption.existingSecret }}"
                   key: "{{ .Values.strato.secretEncryption.key }}"
+            {{- if .Values.strato.secretEncryption.previousKeysKey }}
+            # Comma-separated decrypt-only keys used during rotation.
+            - name: STRATO_SECRET_ENCRYPTION_KEYS_PREVIOUS
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ .Values.strato.secretEncryption.existingSecret }}"
+                  key: "{{ .Values.strato.secretEncryption.previousKeysKey }}"
+            {{- end }}
             {{- end }}
             - name: WEBAUTHN_RELYING_PARTY_ID
               value: "{{ include "strato-control-plane.webauthnRelyingPartyId" . }}"

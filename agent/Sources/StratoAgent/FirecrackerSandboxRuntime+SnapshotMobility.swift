@@ -56,7 +56,7 @@ extension FirecrackerSandboxRuntime {
         }
         logger.info(
             "Sandbox snapshot exported to object storage",
-            metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
+            metadata: ["strato.sandbox.id": .string(sandboxId), "snapshotId": .string(snapshotId)])
     }
 
     /// Resolve a snapshot's archive directory for restore/fork: the
@@ -199,14 +199,14 @@ extension FirecrackerSandboxRuntime {
     func resumeAfterFailedPause(managed: Managed, sandboxId: String) async {
         logger.warning(
             "Sandbox pause reported failure; resuming every vCPU defensively",
-            metadata: ["sandboxId": .string(sandboxId)])
+            metadata: ["strato.sandbox.id": .string(sandboxId)])
         do {
             try await managed.manager.recoverFromFailedPause()
         } catch {
             logger.error(
                 "Could not confirm recovery from a failed sandbox pause",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
+                    "strato.sandbox.id": .string(sandboxId),
                     "error": .string(error.localizedDescription),
                 ])
         }

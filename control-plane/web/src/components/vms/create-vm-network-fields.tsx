@@ -6,24 +6,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  createNetworkInterfaceDraft,
+  type VMNetworkInterfaceDraft,
+} from "@/lib/vm-create-form";
+import {
   MAX_SECURITY_GROUPS_PER_NIC,
   type Network,
   type SecurityGroup,
 } from "@/types/api";
 
-export interface NICRow {
-  key: string;
-  networkId: string;
-  securityGroupIds: string[];
-  mtu: string;
-}
-
-export const initialNIC = (): NICRow => ({
-  key: "nic-0",
-  networkId: "",
-  securityGroupIds: [],
-  mtu: "",
-});
+export type NICRow = VMNetworkInterfaceDraft;
+export const initialNIC = createNetworkInterfaceDraft;
 
 interface VMNetworkInterfacesFieldsProps {
   isLoading: boolean;

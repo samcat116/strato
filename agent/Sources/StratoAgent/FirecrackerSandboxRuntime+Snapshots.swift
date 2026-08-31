@@ -84,7 +84,7 @@ extension FirecrackerSandboxRuntime {
         logger.info(
             "Checkpointing sandbox",
             metadata: [
-                "sandboxId": .string(sandboxId),
+                "strato.sandbox.id": .string(sandboxId),
                 "snapshotId": .string(snapshotId),
                 "mode": .string(mode.rawValue),
             ])
@@ -168,7 +168,7 @@ extension FirecrackerSandboxRuntime {
         logger.info(
             "Sandbox checkpoint complete",
             metadata: [
-                "sandboxId": .string(sandboxId),
+                "strato.sandbox.id": .string(sandboxId),
                 "snapshotId": .string(snapshotId),
                 "totalBytes": .stringConvertible(result.totalSizeBytes),
             ])
@@ -227,7 +227,7 @@ extension FirecrackerSandboxRuntime {
 
         logger.info(
             "Restoring sandbox from snapshot",
-            metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
+            metadata: ["strato.sandbox.id": .string(sandboxId), "snapshotId": .string(snapshotId)])
 
         // The current guest is about to be replaced wholesale.
         await closeExecSessions(sandboxId: sandboxId, reason: "sandbox restore")
@@ -319,7 +319,7 @@ extension FirecrackerSandboxRuntime {
         startLogFollow(sandboxId: sandboxId)
         logger.info(
             "Sandbox restored from snapshot",
-            metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
+            metadata: ["strato.sandbox.id": .string(sandboxId), "snapshotId": .string(snapshotId)])
     }
 
     func deleteSandboxSnapshot(sandboxId: String, snapshotId: String) async throws {
@@ -345,7 +345,7 @@ extension FirecrackerSandboxRuntime {
         try? FileManager.default.removeItem(atPath: snapshotImportDirectory(snapshotId))
         logger.info(
             "Sandbox snapshot deleted",
-            metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
+            metadata: ["strato.sandbox.id": .string(sandboxId), "snapshotId": .string(snapshotId)])
     }
 }
 

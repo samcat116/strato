@@ -1,0 +1,285 @@
+"use client";
+
+import Link from "next/link";
+import {
+  ArrowLeft,
+  Cpu,
+  HardDrive,
+  MemoryStick,
+  Clock,
+  Activity,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
+import { DetailQueryError } from "@/components/ui/detail-query-error";
+import { AgentUpdateAction } from "@/components/agents/agent-update-action";
+import { AgentAutoUpdateCard } from "@/components/agents/agent-auto-update";
+import { AgentWorkloadSafetyCard } from "@/components/agents/agent-workload-safety";
+import { AgentHostInfoCard } from "@/components/agents/agent-host-info-card";
+import { AgentForceOfflineAction } from "@/components/agents/agent-force-offline-action";
+import { formatCapacity } from "@/lib/format-bytes";
+import { useAgent, useVMs } from "@/lib/hooks";
+
+export function AgentDetailPage({ agentId: id }: { agentId: string }) {
+  const { data: agent, isLoading, error, refetch } = useAgent(id);
+  // Guest-reported memory usage (virtio-balloon, issue #567), aggregated over
+  // this agent's VMs that are visible in the current org and reporting stats.
+  const { data: vms } = useVMs();
+  const agentVMs = (vms ?? []).filter((vm) => vm.hypervisorId === id);
+  const reportingVMs = agentVMs.filter(
+    (vm) => vm.guestMemoryUsedBytes != null
+  );
+  const guestUsedBytes = reportingVMs.reduce(
+    (sum, vm) => sum + (vm.guestMemoryUsedBytes ?? 0),
+    0
+  );
+  const capabilityLabels = [
+    ...agent?.hypervisors
+      .filter((hypervisor) => hypervisor.available)
+      .flatMap((hypervisor) => [
+        hypervisor.type === "qemu" ? "QEMU" : "Firecracker",
+        ...(hypervisor.capabilities.supportsSnapshots
+          ? [hypervisor.type === "qemu" ? "QEMU snapshots" : "Firecracker snapshots"]
+          : []),
+      ]) ?? [],
+    ...(agent?.networkCapability === "overlay"
+      ? ["Overlay networking"]
+      : agent?.networkCapability === "user_mode"
+        ? ["User-mode networking"]
+        : []),
+    ...(agent?.sandboxCapable ? ["Sandbox runtime"] : []),
+    ...(agent?.sandboxNetworkingCapable ? ["Sandbox networking"] : []),
+    ...(agent?.tpmCapable ? ["vTPM"] : []),
+    ...(agent?.resolverCapable ? ["DNS resolver"] : []),
+    ...(agent?.metadataServiceCapable ? ["Instance metadata"] : []),
+  ];
+
+  if (!id) {
+    return (
+      <div className="max-w-4xl mx-auto">
+        <div className="text-center py-12">
+          <p className="text-muted-foreground mb-4">No Agent ID provided</p>
+          <Button asChild variant="outline" className="border-input">
+            <Link href="/agents">
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Back to Agents
+            </Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-6">
+        <Skeleton className="h-8 w-48 bg-muted" />
+        <Skeleton className="h-64 w-full bg-muted" />
+      </div>
+    );
+  }
+
+  if (error || !agent) {
+    return (
+      <DetailQueryError
+        resourceName="Agent"
+        backHref="/agents"
+        backLabel="Back to Agents"
+        error={error}
+        onRetry={() => void refetch()}
+      />
+    );
+  }
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6">
+      {/* Header */}
+      <div className="flex items-start justify-between">
+        <div>
+          <Link
+            href="/agents"
+            className="text-sm text-muted-foreground hover:text-foreground flex items-center mb-2"
+          >
+            <ArrowLeft className="h-4 w-4 mr-1" />
+            Back to Agents
+          </Link>
+          <div className="flex items-center gap-3">
+            <h2 className="text-2xl font-semibold text-foreground">{agent.name}</h2>
+            <Badge
+              variant={agent.isOnline ? "default" : "secondary"}
+              className={agent.isOnline ? "bg-green-600" : "bg-muted"}
+            >
+              {agent.isOnline ? "Online" : "Offline"}
+            </Badge>
+          </div>
+          <p className="text-muted-foreground mt-1">{agent.hostname}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <AgentForceOfflineAction agent={agent} />
+          <AgentUpdateAction agent={agent} />
+        </div>
+      </div>
+
+      {/* Resources */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <Cpu className="h-4 w-4" />
+              CPU
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-xl font-bold text-foreground">
+              {agent.resources.availableCPU} / {agent.resources.totalCPU}
+            </div>
+            <p className="text-sm text-muted-foreground">cores available</p>
+          </CardContent>
+        </Card>
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <MemoryStick className="h-4 w-4" />
+              Memory
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-xl font-bold text-foreground">
+              {formatCapacity(agent.resources.availableMemory)}
+            </div>
+            <p className="text-sm text-muted-foreground">
+              of {formatCapacity(agent.resources.totalMemory)} available
+            </p>
+            <p className="text-sm text-muted-foreground">
+              {formatCapacity(
+                agent.resources.totalMemory - agent.resources.availableMemory
+              )}{" "}
+              committed to VMs
+            </p>
+            {reportingVMs.length > 0 && (
+              <p className="text-sm text-muted-foreground">
+                {formatCapacity(guestUsedBytes)} used in guests (
+                {reportingVMs.length}/{agentVMs.length} VMs reporting)
+              </p>
+            )}
+          </CardContent>
+        </Card>
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <HardDrive className="h-4 w-4" />
+              Disk
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-xl font-bold text-foreground">
+              {formatCapacity(agent.resources.availableDisk)}
+            </div>
+            <p className="text-sm text-muted-foreground">
+              of {formatCapacity(agent.resources.totalDisk)} available
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <Clock className="h-4 w-4" />
+              Last Heartbeat
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-sm font-medium text-foreground">
+              {agent.lastHeartbeat
+                ? new Date(agent.lastHeartbeat).toLocaleDateString()
+                : "Never"}
+            </div>
+            <p className="text-sm text-muted-foreground">
+              {agent.lastHeartbeat
+                ? new Date(agent.lastHeartbeat).toLocaleTimeString()
+                : "-"}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Details */}
+      <Card className="bg-card border-border">
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold text-foreground">
+            Details
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <p className="text-muted-foreground">ID</p>
+              <p className="text-foreground font-mono">{agent.id}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Version</p>
+              <p className="text-foreground flex items-center gap-2">
+                {agent.version}
+                {agent.updateAvailable && (
+                  <Badge
+                    variant="outline"
+                    className="border-amber-500/50 text-amber-600 dark:text-amber-400"
+                  >
+                    {agent.targetVersion
+                      ? `Update available: ${agent.targetVersion}`
+                      : "Update available"}
+                  </Badge>
+                )}
+              </p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Hostname</p>
+              <p className="text-foreground">{agent.hostname}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Registered</p>
+              <p className="text-foreground">
+                {new Date(agent.createdAt).toLocaleString()}
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Workloads held or teardowns refused (STR-98); renders nothing normally */}
+      <AgentWorkloadSafetyCard agent={agent} />
+
+      {/* Host hardware / platform / OS details */}
+      <AgentHostInfoCard agent={agent} />
+
+      {/* Auto-update (issue #434) */}
+      <AgentAutoUpdateCard agent={agent} />
+
+      {/* Typed capabilities */}
+      {capabilityLabels.length > 0 && (
+        <Card className="bg-card border-border">
+          <CardHeader>
+            <CardTitle className="text-lg font-semibold text-foreground flex items-center gap-2">
+              <Activity className="h-5 w-5" />
+              Capabilities
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {capabilityLabels.map((capability) => (
+                <Badge
+                  key={capability}
+                  variant="outline"
+                  className="border-input text-foreground/80"
+                >
+                  {capability}
+                </Badge>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}

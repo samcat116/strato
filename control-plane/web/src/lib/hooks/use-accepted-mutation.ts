@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
+import { ApiError } from "@/lib/api/client";
 import { friendlyErrorMessage } from "@/lib/errors";
 import {
   acceptedMutation,
@@ -31,8 +32,10 @@ export interface AcceptedMutationWatch {
 }
 
 export interface RunAcceptedMutationOptions<Resource extends { id?: string }> {
+  /** Stable fingerprint of the HTTP method, target, and request body. */
+  intentKey: string;
   /** The 202-returning API call. */
-  request: () => Promise<AcceptedMutation<Resource>>;
+  request: (idempotencyKey: string) => Promise<AcceptedMutation<Resource>>;
   /** The entry MutationWatcher follows to a terminal state. */
   watch: AcceptedMutationWatch;
   /** Fallback error-toast text, for failures that carry no message. */
@@ -53,6 +56,32 @@ export interface RunAcceptedMutationOptions<Resource extends { id?: string }> {
   busyKey?: string;
 }
 
+function newIdempotencyKey(): string {
+  if (typeof crypto.randomUUID === "function") {
+    try {
+      return crypto.randomUUID();
+    } catch {
+      // Some browsers expose the method on plaintext origins but reject the
+      // call. Fall through to the Web Crypto primitive allowed there.
+    }
+  }
+
+  // `randomUUID` is secure-context-only, but `getRandomValues` remains
+  // available on Strato's supported plaintext HTTP deployments. Build an
+  // RFC 4122 version-4 UUID from those random bytes there.
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"));
+  return [
+    hex.slice(0, 4).join(""),
+    hex.slice(4, 6).join(""),
+    hex.slice(6, 8).join(""),
+    hex.slice(8, 10).join(""),
+    hex.slice(10).join(""),
+  ].join("-");
+}
+
 /**
  * The shared accepted-mutation flow (backend STR-147): fire a lifecycle call
  * that answers 202, hand the result to MutationWatcher — which follows it to a
@@ -68,33 +97,64 @@ export function useAcceptedMutation() {
   const watch = useMutationsStore((state) => state.watch);
   const [isLoading, setIsLoading] = useState(false);
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  const inFlight = useRef<Promise<void> | null>(null);
+  const ambiguousAttempt = useRef<{
+    intentKey: string;
+    idempotencyKey: string;
+  } | null>(null);
 
-  async function run<Resource extends { id?: string }>(
+  function run<Resource extends { id?: string }>(
     options: RunAcceptedMutationOptions<Resource>
   ): Promise<void> {
-    setIsLoading(true);
-    setBusyKey(options.busyKey ?? null);
-    try {
-      const accepted = await options.request();
-      const { snapshot, ...watchOptions } = options.watch;
-      watch(
-        snapshot
-          ? acceptedSnapshotMutation(accepted, watchOptions)
-          : acceptedMutation(accepted, watchOptions)
-      );
-      if (options.successMessage) {
-        toast.success(options.successMessage);
+    // React state does not update soon enough to stop two submit events in the
+    // same tick. Share the actual promise so a double click remains one form
+    // submission and therefore one idempotency key.
+    if (inFlight.current) return inFlight.current;
+
+    const promise = (async () => {
+      setIsLoading(true);
+      setBusyKey(options.busyKey ?? null);
+      const previous = ambiguousAttempt.current;
+      const idempotencyKey =
+        previous?.intentKey === options.intentKey
+          ? previous.idempotencyKey
+          : newIdempotencyKey();
+      ambiguousAttempt.current = { intentKey: options.intentKey, idempotencyKey };
+      try {
+        const accepted = await options.request(idempotencyKey);
+        // A decoded response is definitive. The next submission is a new
+        // intent even if its fields happen to be identical.
+        ambiguousAttempt.current = null;
+        const { snapshot, ...watchOptions } = options.watch;
+        watch(
+          snapshot
+            ? acceptedSnapshotMutation(accepted, watchOptions)
+            : acceptedMutation(accepted, watchOptions)
+        );
+        if (options.successMessage) {
+          toast.success(options.successMessage);
+        }
+        options.onSuccess?.(accepted);
+      } catch (error) {
+        // A 4xx response definitively rejected this delivery, so another
+        // submission is a new attempt. Transport failures and 5xx responses
+        // are ambiguous: a gateway may have lost the upstream response, and
+        // the control plane can fail while recording a committed response.
+        if (error instanceof ApiError && error.status < 500) {
+          ambiguousAttempt.current = null;
+        }
+        const message = friendlyErrorMessage(error, options.errorMessage);
+        if (!options.onError?.(message)) {
+          toast.error(message);
+        }
+      } finally {
+        setIsLoading(false);
+        setBusyKey(null);
+        inFlight.current = null;
       }
-      options.onSuccess?.(accepted);
-    } catch (error) {
-      const message = friendlyErrorMessage(error, options.errorMessage);
-      if (!options.onError?.(message)) {
-        toast.error(message);
-      }
-    } finally {
-      setIsLoading(false);
-      setBusyKey(null);
-    }
+    })();
+    inFlight.current = promise;
+    return promise;
   }
 
   return { isLoading, busyKey, run };

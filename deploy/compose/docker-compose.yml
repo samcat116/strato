@@ -316,6 +316,8 @@ services:
       # Optional so .env files generated before it existed keep working — the
       # control plane warns and stores plaintext when it's unset.
       STRATO_SECRET_ENCRYPTION_KEY: ${STRATO_SECRET_ENCRYPTION_KEY:-}
+      # Comma-separated decrypt-only keys used while rotating the primary.
+      STRATO_SECRET_ENCRYPTION_KEYS_PREVIOUS: ${STRATO_SECRET_ENCRYPTION_KEYS_PREVIOUS:-}
       WEBAUTHN_RELYING_PARTY_ID: ${WEBAUTHN_RELYING_PARTY_ID}
       WEBAUTHN_RELYING_PARTY_NAME: ${WEBAUTHN_RELYING_PARTY_NAME:-Strato}
       WEBAUTHN_RELYING_PARTY_ORIGIN: ${WEBAUTHN_RELYING_PARTY_ORIGIN}
@@ -484,6 +486,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
+      # Request-time rendering fetches the session and initial organization /
+      # project scope directly instead of making the browser discover them in
+      # sequence after hydration. Browser API calls still travel through nginx.
+      STRATO_API_URL: http://control-plane:8080
       # Gravatar profile pictures. Enabled here sends a hash of each user's email
       # to gravatar.com; set STRATO_GRAVATAR_ENABLED=false in .env to keep the UI
       # free of third-party requests and show initials instead.

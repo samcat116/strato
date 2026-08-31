@@ -110,7 +110,8 @@ export function SandboxActions({
     // state and toasts the outcome.
     run({
       busyKey: action,
-      request: () => sandboxesApi[action](sandbox.id),
+      intentKey: JSON.stringify(["POST", `/api/sandboxes/${sandbox.id}/${action}`, null]),
+      request: (idempotencyKey) => sandboxesApi[action](sandbox.id, idempotencyKey),
       watch: {
         kind: actionToKind[action],
         resourceKind: "sandbox",

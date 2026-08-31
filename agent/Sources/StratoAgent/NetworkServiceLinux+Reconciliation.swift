@@ -150,14 +150,41 @@ extension NetworkServiceLinux {
         // for this pre-v20-registered agent — impossible here, but the
         // contract stands): touch nothing, exactly like the `networks` list's
         // absence semantics.
+        var securityGroupTiersReady = false
         if let securityGroups {
             do {
-                try await SecurityGroupReconciler.reconcile(
+                securityGroupTiersReady = try await SecurityGroupReconciler.reconcile(
                     securityGroups: securityGroups, actuator: self, logger: logger)
             } catch {
                 logger.error(
                     "Security-group reconciliation could not complete",
                     metadata: ["error": .string(error.localizedDescription)])
+            }
+        }
+
+        // Network ACLs (authority side) run only after every managed security-
+        // group port group has migrated to tier 2. An old tier-0
+        // `allow-related` ACL is terminal and would bypass the tier-1 NACL.
+        // Per-network nil remains no opinion; an explicit [] tears the policy
+        // down. Stale networks are protected from the global observed-minus-
+        // desired reap just like their topology is above.
+        if current.contains(where: { $0.networkACLs != nil }) {
+            if securityGroupTiersReady {
+                do {
+                    try await NetworkACLReconciler.reconcile(
+                        networks: current,
+                        protectedSwitchNames: Set(
+                            stale.map { OVNNaming.switchName(networkId: $0.networkId) }),
+                        actuator: self,
+                        logger: logger)
+                } catch {
+                    logger.error(
+                        "Network ACL reconciliation could not complete",
+                        metadata: ["error": .string(error.localizedDescription)])
+                }
+            } else {
+                logger.warning(
+                    "Network ACL reconciliation deferred until every managed security group uses the tiered ACL schema")
             }
         }
         await SecurityGroupReconciler.reconcileMembership(

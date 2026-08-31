@@ -17,9 +17,8 @@ enum SandboxCreationWorkflow {
             /// Ready sandbox snapshot to restore into a new identity (issue
             /// #427). Mutually exclusive with image/machine/process fields.
             let restoreFrom: UUID?
-            /// Required: there is no default project (issue #1059). Optional here so
-            /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
-            /// rather than a `Codable` decode failure that names neither.
+            /// Required by project resolution; optional at decode time so the API can
+            /// return a useful error.
             let projectId: UUID?
             let environment: String?
             let cpus: Int?
@@ -380,6 +379,8 @@ enum SandboxCreationWorkflow {
                 sandbox.$id.exists = false
                 sandbox.generation = initialGeneration
                 return try await req.db.transaction { db -> ResourceMutation.Accepted in
+                    try await IdempotencyService.reserve(
+                        req.idempotencyContext, actor: .user(userID), on: db)
                     if let restoreSnapshotID {
                         try await SandboxController.requireSnapshotAvailableForFork(
                             restoreSnapshotID, on: db)
@@ -457,8 +458,16 @@ enum SandboxCreationWorkflow {
                         on: db
                     )
 
-                    return ResourceMutation.Accepted(
+                    let accepted = ResourceMutation.Accepted(
                         mutationID: try event.requireID(), targetGeneration: sandbox.generation)
+                    try await IdempotencyService.complete(
+                        req.idempotencyContext,
+                        actor: .user(userID),
+                        resourceKind: .sandbox,
+                        resourceID: sandboxID,
+                        accepted: accepted,
+                        on: db)
+                    return accepted
                 }
             }
         } catch let error as IPAMService.IPAMError {
@@ -477,7 +486,7 @@ enum SandboxCreationWorkflow {
             .create, resourceType: Sandbox.self, resourceID: sandboxID,
             targetGeneration: accepted.targetGeneration, agentIDs: [],
             strategy: .placement { @Sendable [app = req.application] db in
-                try await app.agentService.createSandbox(sandbox: sandbox, db: db)
+                try await app.workloadPlacement.createSandbox(sandbox: sandbox, db: db)
             }, app: req.application)
 
         req.logger.info(

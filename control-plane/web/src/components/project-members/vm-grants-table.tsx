@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import Link from "next/link";
 import { useState } from "react";
 import { Loader2, Trash2 } from "lucide-react";
@@ -83,7 +85,7 @@ export function VMGrantsTable({
     vm: ProjectVMPrincipal,
     grant: ProjectWorkloadGrant
   ) => {
-    if (!window.confirm(`Revoke ${vm.name}'s ${grant.roleDisplayName} role?`)) {
+    if (!await confirmAction(`Revoke ${vm.name}'s ${grant.roleDisplayName} role?`)) {
       return;
     }
     setPendingId(grant.registrationId);

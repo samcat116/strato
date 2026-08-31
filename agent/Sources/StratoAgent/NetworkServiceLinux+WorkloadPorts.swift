@@ -21,13 +21,22 @@ extension NetworkServiceLinux {
 
         logger.info(
             "Creating VM network",
-            metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
+            metadata: ["strato.vm.id": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
 
         // Create logical switch port for the workload's NIC. Everything down to
         // the TAP/veth step below is identical for VMs and sandboxes — only the
         // port's namespace and how the device is realized differ.
         let portName = Self.portName(workloadId: vmId, nicIndex: nicIndex, placement: placement)
-        var macAddress = config.macAddress ?? generateMACAddress()
+        var macAddress: String
+        if let configuredMAC = config.macAddress {
+            guard let parsedMAC = MACAddress(configuredMAC) else {
+                throw NetworkError.invalidConfiguration(
+                    "MAC address '\(configuredMAC)' is not a six-octet unicast address")
+            }
+            macAddress = parsedMAC.description
+        } else {
+            macAddress = generateMACAddress()
+        }
         // The control plane owns IPAM; an absent IP means the port is bound by
         // MAC only. The old fake allocation (random 192.168.1.x) is gone.
         var ipAddress = config.ipAddress
@@ -194,7 +203,7 @@ extension NetworkServiceLinux {
         logger.info(
             "VM network created successfully",
             metadata: [
-                "vmId": .string(vmId),
+                "strato.vm.id": .string(vmId),
                 "portName": .string(portName),
                 "tapInterface": .string(tapInterface),
             ])
@@ -202,7 +211,7 @@ extension NetworkServiceLinux {
         return networkInfo
         #else
         // Development mode
-        logger.info("Creating mock VM network (development mode)", metadata: ["vmId": .string(vmId)])
+        logger.info("Creating mock VM network (development mode)", metadata: ["strato.vm.id": .string(vmId)])
 
         return VMNetworkInfo(
             vmId: vmId,
@@ -224,7 +233,7 @@ extension NetworkServiceLinux {
 
         logger.info(
             "Detaching VM from network",
-            metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
+            metadata: ["strato.vm.id": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
 
         let portName = Self.portName(workloadId: vmId, nicIndex: nicIndex, placement: placement)
 
@@ -271,10 +280,10 @@ extension NetworkServiceLinux {
                 sandboxId: vmId, nicIndex: nicIndex, netnsName: netnsName, portName: portName)
         }
 
-        logger.info("VM detached from network successfully", metadata: ["vmId": .string(vmId)])
+        logger.info("VM detached from network successfully", metadata: ["strato.vm.id": .string(vmId)])
         #else
         // Development mode
-        logger.info("Detaching mock VM from network (development mode)", metadata: ["vmId": .string(vmId)])
+        logger.info("Detaching mock VM from network (development mode)", metadata: ["strato.vm.id": .string(vmId)])
         #endif
     }
 }

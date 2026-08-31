@@ -57,7 +57,6 @@ final class AgentUpdateEndpointTests {
         org: Organization,
         online: Bool = true,
         version: String = "1.0.0",
-        wireProtocolVersion: Int = WireProtocol.currentVersion,
         operatingSystem: String? = "linux"
     ) async throws -> Agent {
         let agent = Agent(
@@ -73,7 +72,6 @@ final class AgentUpdateEndpointTests {
             architecture: .x86_64,
             lastHeartbeat: online ? Date() : Date(timeIntervalSinceNow: -3600)
         )
-        agent.wireProtocolVersion = wireProtocolVersion
         agent.operatingSystem = operatingSystem
         agent.organizationScope = .organization(try org.requireID())
         try await agent.save(on: app.db)

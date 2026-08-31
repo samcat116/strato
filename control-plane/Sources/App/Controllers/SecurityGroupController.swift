@@ -140,7 +140,7 @@ struct SecurityGroupController: RouteCollection {
             metadata: [
                 "securityGroupId": .string(group.id!.uuidString),
                 "name": .string(name),
-                "projectId": .string(projectId.uuidString),
+                "strato.project.id": .string(projectId.uuidString),
             ])
         // A fresh group has no rules and no attachments.
         return try SecurityGroupResponse(from: loadedEmpty(group), attachmentCount: 0)
@@ -317,18 +317,8 @@ struct SecurityGroupController: RouteCollection {
     /// generation guard sees "already applied"). `generation = generation + 1`
     /// makes the row's lock serialize the increments instead.
     private static func bumpGeneration(of groupId: UUID, on db: Database) async throws {
-        switch try await DesiredStateGenerationWriter.advance(
-            schema: SecurityGroup.schema, id: groupId, on: db)
-        {
-        case .applied:
-            return
-        case .missing:
-            throw Abort(.notFound, reason: "Security group no longer exists")
-        case .superseded:
-            // No expected generation was supplied, so an existing row always
-            // advances. Keep the impossible case loud.
-            throw Abort(.internalServerError, reason: "Security-group generation did not advance")
-        }
+        try await DesiredStateGenerationWriter.advanceOrThrow(
+            schema: SecurityGroup.schema, id: groupId, resource: "Security group", on: db)
     }
 
     // MARK: - Attach / detach
@@ -386,10 +376,10 @@ struct SecurityGroupController: RouteCollection {
                 return true
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
-            // Backstop only: the lock above already serializes duplicates, and
-            // a non-Postgres database (where the advisory lock is a no-op)
-            // still lands on the unique pair index. Either way a duplicate
-            // attach is a no-op, not an error.
+            // Backstop only: the lock above already serializes duplicate
+            // requests, while the unique pair index also protects against
+            // corrupted or legacy writers. Either way a duplicate attach is a
+            // no-op, not an error.
             return .noContent
         }
         guard changed else { return .noContent }

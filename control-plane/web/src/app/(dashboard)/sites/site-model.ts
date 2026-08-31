@@ -1,5 +1,16 @@
-import { reservedPercent } from "@/components/overview";
-import type { Agent, Site, SiteStatus, VM } from "@/types/api";
+import type { SiteStatus } from "@/types/api";
+
+export {
+  agentsAtSite as siteMembers,
+  instancesAtSite as siteInstances,
+  siteDisplayStatus as displayStatus,
+  siteReservedCapacity as siteCapacity,
+  SITE_STATUS_STYLES as STATUS_STYLES,
+} from "@/lib/site-presentation";
+export type {
+  SiteDisplayStatus as DisplayStatus,
+  SiteStatusFilter as StatusFilter,
+} from "@/lib/site-presentation";
 
 export const SITE_STATUSES: SiteStatus[] = [
   "active",
@@ -7,15 +18,6 @@ export const SITE_STATUSES: SiteStatus[] = [
   "maintenance",
   "decommissioned",
 ];
-
-export type DisplayStatus = "healthy" | "degraded" | "provisioning";
-export type StatusFilter = "all" | DisplayStatus;
-
-export const STATUS_STYLES: Record<DisplayStatus, { label: string; dot: string }> = {
-  healthy: { label: "Healthy", dot: "#16a34a" },
-  degraded: { label: "Degraded", dot: "#d97706" },
-  provisioning: { label: "Provisioning", dot: "#94a3b8" },
-};
 
 export interface SiteFormState {
   name: string;
@@ -40,47 +42,3 @@ export const EMPTY_FORM: SiteFormState = {
   labels: [],
   networkControllerAgentId: "",
 };
-
-export function displayStatus(
-  site: Site,
-  members: Agent[],
-  agentsKnown: boolean
-): DisplayStatus {
-  if (agentsKnown && members.length === 0 && site.status === "active") {
-    return "provisioning";
-  }
-  if (
-    site.status === "active" &&
-    site.networkControllerAgentId &&
-    !site.networkControllerIssue &&
-    (!site.networkControllerStatus || site.networkControllerStatus === "online")
-  ) {
-    return "healthy";
-  }
-  return "degraded";
-}
-
-export function siteMembers(siteId: string, agents: Agent[]): Agent[] {
-  return agents.filter((agent) => agent.siteId === siteId);
-}
-
-export function siteInstances(siteId: string, agents: Agent[], vms: VM[]): VM[] {
-  const agentIds = new Set(
-    agents
-      .filter((agent) => agent.siteId === siteId)
-      .map((agent) => agent.id.toLowerCase())
-  );
-  return vms.filter(
-    (vm) => vm.hypervisorId && agentIds.has(vm.hypervisorId.toLowerCase())
-  );
-}
-
-export function siteCapacity(members: Agent[]): number {
-  const online = members.filter((agent) => agent.isOnline);
-  const total = online.reduce((sum, agent) => sum + agent.resources.totalCPU, 0);
-  const available = online.reduce(
-    (sum, agent) => sum + agent.resources.availableCPU,
-    0
-  );
-  return reservedPercent(total, available);
-}

@@ -46,7 +46,7 @@ extension Agent {
             logger.warning(
                 "Unable to refresh Firecracker MMDS snapshot",
                 metadata: [
-                    "vmId": .string(vmId),
+                    "strato.vm.id": .string(vmId),
                     "error": .string(error.localizedDescription),
                 ])
         }

@@ -377,6 +377,8 @@ enum VMCreationWorkflow {
                 vm.$id.exists = false
                 vm.generation = initialGeneration
                 return try await req.db.transaction { db in
+                    try await IdempotencyService.reserve(
+                        req.idempotencyContext, actor: .user(userID), on: db)
                     // Enforce and reserve applicable project/OU/org quotas before the VM row
                     // exists. Throws Abort(.forbidden) naming the quota if it would be exceeded.
                     try await QuotaEnforcementService.reserve(
@@ -549,19 +551,24 @@ enum VMCreationWorkflow {
                     // still share this outer retrying transaction, so any IPAM
                     // race rolls back the whole VM rather than leaving a partial
                     // interface set.
+                    try await IPAMService.lockNetworkAllocations(
+                        resolvedInterfaces.map(\.networkID), on: db)
                     for (orderIndex, resolved) in resolvedInterfaces.enumerated() {
                         let allocation = try await IPAMService.allocateIP(for: resolved.network, on: db)
                         let allocation6 = try await IPAMService.allocateIPv6(for: resolved.network, on: db)
+                        let interfaceID = UUID()
+                        let macAddress = try await MACAllocator.allocate(
+                            for: .vmInterface, ownerID: interfaceID, on: db)
                         let networkInterface = VMNetworkInterface(
+                            id: interfaceID,
                             vmID: vmID,
                             logicalNetworkID: resolved.networkID,
-                            macAddress: VMNetworkInterface.generateMACAddress(),
+                            macAddress: macAddress.description,
                             mtu: resolved.request.mtu,
                             deviceName: "net\(orderIndex)",
                             orderIndex: orderIndex)
                         networkInterface.attachGeneration = vm.generation
                         try await networkInterface.save(on: db)
-                        let interfaceID = try networkInterface.requireID()
 
                         let groupIDs: [UUID]
                         if resolved.securityGroupIDs.isEmpty {
@@ -668,8 +675,16 @@ enum VMCreationWorkflow {
                         on: db
                     )
 
-                    return ResourceMutation.Accepted(
+                    let accepted = ResourceMutation.Accepted(
                         mutationID: try event.requireID(), targetGeneration: vm.generation)
+                    try await IdempotencyService.complete(
+                        req.idempotencyContext,
+                        actor: .user(userID),
+                        resourceKind: .virtualMachine,
+                        resourceID: vmID,
+                        accepted: accepted,
+                        on: db)
+                    return accepted
                 }
             }
         } catch let error as IPAMService.IPAMError {
@@ -691,7 +706,7 @@ enum VMCreationWorkflow {
             req.logger.warning(
                 "VM create exhausted its retries on a constraint failure",
                 metadata: [
-                    "project_id": .string(projectId.uuidString),
+                    "strato.project.id": .string(projectId.uuidString),
                     "error": .string(String(describing: error)),
                 ])
             throw Abort(
@@ -712,14 +727,14 @@ enum VMCreationWorkflow {
             .create, resourceType: VM.self, resourceID: vmID,
             targetGeneration: accepted.targetGeneration, agentIDs: [],
             strategy: .placement { @Sendable [app = req.application] db in
-                try await app.agentService.createVM(vm: vm, db: db, image: image)
+                try await app.workloadPlacement.createVM(vm: vm, db: db, image: image)
             }, app: req.application)
 
         req.logger.info(
             "VM creation accepted",
             metadata: [
-                "vm_id": .string(vmID.uuidString),
-                "mutation_id": .string(accepted.mutationID.uuidString),
+                "strato.vm.id": .string(vmID.uuidString),
+                "strato.operation.id": .string(accepted.mutationID.uuidString),
                 "created_from": .string("image"),
             ])
 

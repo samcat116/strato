@@ -76,7 +76,7 @@ public struct CloudInitProvisioner {
                     logger.warning(
                         "Desired hostname is not a valid DNS label; booting under a derived name instead",
                         metadata: [
-                            "vmId": .string(vmId),
+                            "strato.vm.id": .string(vmId),
                             "hostname": .string(hostname.debugDescription),
                             "localHostname": .string(localHostname),
                         ])

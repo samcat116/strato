@@ -275,16 +275,19 @@ struct VMController: RouteCollection {
                 // is therefore stable here and is the generation at which the
                 // agent must report this interface as applied.
                 let targetGeneration = vm.generation + 1
+                let interfaceID = UUID()
+                let macAddress = try await MACAllocator.allocate(
+                    for: .vmInterface, ownerID: interfaceID, on: db)
                 let interface = VMNetworkInterface(
+                    id: interfaceID,
                     vmID: vmID,
                     logicalNetworkID: networkID,
-                    macAddress: VMNetworkInterface.generateMACAddress(),
+                    macAddress: macAddress.description,
                     mtu: request.mtu,
                     deviceName: "net\(orderIndex)",
                     orderIndex: orderIndex)
                 interface.attachGeneration = targetGeneration
                 try await interface.save(on: db)
-                let interfaceID = try interface.requireID()
 
                 let groupIDs: [UUID]
                 if requestedGroups.isEmpty {
@@ -569,6 +572,8 @@ struct VMController: RouteCollection {
     func update(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Mutating a VM")
         let existingVM = try await fetchVMWithAction(req: req, action: "vm:update")
+        let existingVMID = try existingVM.requireID()
+        let actor = MutationActor.user(try user.requireID())
 
         // Decodable rather than Content: `balloonTarget` needs to tell an
         // absent key from an explicit null, which needs a hand-written decode,
@@ -657,12 +662,21 @@ struct VMController: RouteCollection {
         let balloonChanged = newBalloonTarget != existingVM.balloonTarget
         guard newCPU != existingVM.cpu || newMemory != existingVM.memory || balloonChanged else {
             let metadataEnabledChanged = try await req.db.transaction { db in
+                try await IdempotencyService.reserve(
+                    req.idempotencyContext, actor: actor, on: db)
                 guard try await existingVM.lockAndRefresh(on: db) else {
                     throw Abort(.notFound, reason: "VM no longer exists")
                 }
                 let changed = try await Self.applyMetadataUpdate(
                     updateRequest.metadataEnabled, to: existingVM, on: db)
                 try await existingVM.save(on: db)
+                try await IdempotencyService.completeSynchronousResponse(
+                    req.idempotencyContext,
+                    actor: actor,
+                    resourceKind: .virtualMachine,
+                    resourceID: existingVMID,
+                    responseStatus: .ok,
+                    on: db)
                 return changed
             }
             await Self.nudgeAfterMetadataOrHostnameUpdate(
@@ -708,9 +722,6 @@ struct VMController: RouteCollection {
         guard let project = try await Project.find(existingVM.$project.id, on: req.db) else {
             throw Abort(.internalServerError, reason: "VM's project no longer exists")
         }
-        let cpuDelta = newCPU - existingVM.cpu
-        let memoryDelta = newMemory - existingVM.memory
-
         // A resting VM can apply the new sizing without live-unplug support.
         // QEMU/libvirt still has a persistent definition to update, so this
         // generation must reach the placed agent before it is converged.
@@ -725,14 +736,19 @@ struct VMController: RouteCollection {
             try await Self.requirePlacedResizeCapacity(
                 vm: existingVM, newCPU: newCPU, newMemory: newMemory, on: req)
             try await req.db.transaction { db in
+                try await IdempotencyService.reserve(
+                    req.idempotencyContext, actor: actor, on: db)
                 guard try await existingVM.lockAndRefresh(on: db) else {
                     throw Abort(.notFound, reason: "VM no longer exists")
                 }
+                let committed = try await Self.committedVMSizing(existingVMID, on: db)
                 _ = try await Self.applyMetadataUpdate(
                     updateRequest.metadataEnabled, to: existingVM, on: db)
                 try await QuotaEnforcementService.reserveVMResize(
                     for: project, environment: existingVM.environment,
-                    vcpuDelta: cpuDelta, memoryDelta: memoryDelta, on: db)
+                    vcpuDelta: newCPU - committed.cpu,
+                    memoryDelta: newMemory - committed.memory,
+                    on: db)
                 existingVM.cpu = newCPU
                 existingVM.memory = newMemory
                 existingVM.balloonTarget = newBalloonTarget
@@ -750,6 +766,13 @@ struct VMController: RouteCollection {
                         reason: "Failed to advance the locked VM generation")
                 }
                 try await existingVM.save(on: db)
+                try await IdempotencyService.completeSynchronousResponse(
+                    req.idempotencyContext,
+                    actor: actor,
+                    resourceKind: .virtualMachine,
+                    resourceID: existingVMID,
+                    responseStatus: .ok,
+                    on: db)
             }
             if let placedAgentId = existingVM.hypervisorId {
                 await req.application.agentService.syncDesiredState(agentId: placedAgentId)
@@ -798,10 +821,8 @@ struct VMController: RouteCollection {
         }
         try await Self.requirePlacedResizeCapacity(
             vm: existingVM, newCPU: newCPU, newMemory: newMemory, on: req)
-        let existingVMID = try existingVM.requireID()
-        let userID = try user.requireID()
         let accepted = try await req.resourceMutation.accept(
-            .resize, on: existingVM, actor: .user(userID), dispatch: .stateSync,
+            .resize, on: existingVM, actor: actor, dispatch: .stateSync,
             on: req.db, app: req.application
         ) { @Sendable db in
             // `accept` took and refreshed the row lock before entering this
@@ -1054,7 +1075,7 @@ struct VMController: RouteCollection {
     /// The VM detail DTO with its NIC children loaded. The DTO, not the model:
     /// the raw `VM` encoding would expose fields that must stay server-side
     /// (cloud-init user_data can carry secrets).
-    private static func detailResponse(for vm: VM, on req: Request) async throws -> Response {
+    static func detailResponse(for vm: VM, on req: Request) async throws -> Response {
         try await detail(for: vm, on: req).encodeResponse(for: req)
     }
 
@@ -1062,18 +1083,22 @@ struct VMController: RouteCollection {
     ///   security groups are actually enforced. That answer costs its own
     ///   queries and means nothing for a VM being torn down, so the delete path
     ///   skips it and reports `nil` — "unknown", which is the truth there.
-    private static func detail(
-        for vm: VM, on req: Request, resolvingEnforcement: Bool = true
+    static func detail(
+        for vm: VM,
+        on req: Request,
+        resolvingEnforcement: Bool = true,
+        database: (any Database)? = nil
     ) async throws -> VMDetailResponse {
-        try await loadInterfaces(for: vm, on: req.db)
-        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
+        let database = database ?? req.db
+        try await loadInterfaces(for: vm, on: database)
+        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: database)
         let enforcement =
             resolvingEnforcement
             ? try await SecurityGroupService.enforcement(
                 for: vm,
                 offlineGrace: req.controlPlaneConfiguration.double(
                     .siteControllerOfflineGraceSeconds),
-                on: req.db) : nil
+                on: database) : nil
         return VMDetailResponse(
             from: vm,
             securityGroupsEnforced: enforcement,
@@ -1138,15 +1163,29 @@ struct VMController: RouteCollection {
                 reason: "Agent '\(agent.name)' does not support VM guest exec for \(vm.hypervisorType.rawValue)")
         }
 
+        let executionID = UUID()
+        let auditContext = VMGuestExecutionAudit.makeContext(
+            vmID: vmID,
+            projectID: vm.$project.id,
+            correlationID: executionID.uuidString,
+            argv: run.command,
+            on: req)
         let execution = VMCommandExecution(
+            id: executionID,
             vmID: vmID,
             actorID: try user.requireID(),
             agentKey: agent.identity.key,
-            deadline: Date().addingTimeInterval(VMCommandExecutionService.completionBudget))
+            deadline: Date().addingTimeInterval(VMCommandExecutionService.completionBudget),
+            actorUsername: auditContext.username,
+            apiKeyID: auditContext.apiKeyID,
+            organizationID: auditContext.organizationID,
+            sourceIP: auditContext.sourceIP,
+            adminBypass: auditContext.adminBypass)
         try await req.db.transaction { db in
             try await execution.create(command: run.command, on: db)
         }
-        let executionID = try execution.requireID()
+        let requestedAuditRecord = VMGuestExecutionAudit.makeCommandRequestedRecord(auditContext)
+        await req.audit.recordFailOpen(requestedAuditRecord)
 
         do {
             try await req.application.replicaBridge.deliver(
@@ -1164,7 +1203,7 @@ struct VMController: RouteCollection {
                 "VM command delivery outcome is unknown; leaving operation pending",
                 metadata: [
                     "executionId": .string(executionID.uuidString),
-                    "agentKey": .string(agent.identity.key),
+                    "strato.agent.identity": .string(agent.identity.key),
                     "error": .string(error.localizedDescription),
                 ])
         } catch {
@@ -1238,7 +1277,15 @@ struct VMController: RouteCollection {
             )
         }
 
+        let sessionId = UUID().uuidString
+        let auditContext = VMGuestExecutionAudit.makeContext(
+            vmID: vmID,
+            projectID: vm.$project.id,
+            correlationID: sessionId,
+            argv: execRequest.command,
+            on: req)
         let session = req.guestExecSessionManager.createPendingSession(
+            sessionId: sessionId,
             resourceKind: .virtualMachine,
             resourceId: vmID.uuidString,
             agentKey: agent.identity.key,
@@ -1249,8 +1296,11 @@ struct VMController: RouteCollection {
             tty: execRequest.tty ?? false,
             rows: execRequest.rows,
             cols: execRequest.cols,
-            outputMode: execRequest.outputMode ?? .raw
+            outputMode: execRequest.outputMode ?? .raw,
+            auditContext: auditContext
         )
+        let requestedAuditRecord = VMGuestExecutionAudit.makeExecRequestedRecord(auditContext)
+        await req.audit.recordFailOpen(requestedAuditRecord)
 
         let response = Response(status: .created)
         try response.content.encode(
@@ -1297,14 +1347,12 @@ struct VMController: RouteCollection {
                 if vm.hypervisorId != nil {
                     app.logger.warning(
                         "Deleting VM record without agent teardown; agent is offline",
-                        metadata: ["vm_id": .string(vmID.uuidString)])
+                        metadata: ["strato.vm.id": .string(vmID.uuidString)])
                 }
                 let outcome: ResourceFinalizerService.ClearOutcome
                 do {
-                    try await ResourceFinalizerService.abandonBootVolumeForOfflineVM(
+                    outcome = try await ResourceFinalizerService.abandonOfflineVM(
                         vmID: vmID, on: db, app: app)
-                    outcome = try await ResourceFinalizerService.clear(
-                        .agentAbsent, from: vm, on: db, app: app)
                 } catch {
                     throw ResourceMutation.WorkError(
                         "Failed to delete VM record: \(error.localizedDescription)")
@@ -1316,7 +1364,7 @@ struct VMController: RouteCollection {
                     app.logger.info(
                         "VM delete is waiting on finalizers other than the agent's",
                         metadata: [
-                            "vm_id": .string(vmID.uuidString),
+                            "strato.vm.id": .string(vmID.uuidString),
                             "finalizers": .string(remaining.joined(separator: ",")),
                         ])
                 }
@@ -1325,7 +1373,14 @@ struct VMController: RouteCollection {
 
         let accepted = try await req.resourceMutation.accept(
             .delete, on: vm, actor: .user(userID), dispatch: strategy,
-            on: req.db, app: app
+            on: req.db, app: app,
+            idempotencyResponseBody: { @Sendable vm, accepted, db in
+                try await AcceptedMutation(
+                    Self.detail(
+                        for: vm, on: req, resolvingEnforcement: false, database: db),
+                    accepted
+                ).encodedBody()
+            }
         ) { @Sendable db in
             // Stamp before the mark: `stampForDeletion` reads whether the VM
             // is already terminating, and re-stamping a second DELETE would

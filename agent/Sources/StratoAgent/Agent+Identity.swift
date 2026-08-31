@@ -39,7 +39,7 @@ extension Agent {
                 "Using file-based SPIFFE client",
                 metadata: [
                     "certificatePath": .string(certPath),
-                    "spiffeID": .string(spiffeID.uri),
+                    "strato.agent.identity": .string(spiffeID.uri),
                 ])
 
             return FileSPIFFEClient(
@@ -57,7 +57,7 @@ extension Agent {
                 "Using Workload API SPIFFE client",
                 metadata: [
                     "socketPath": .string(socketPath),
-                    "spiffeID": .string(spiffeID.uri),
+                    "strato.agent.identity": .string(spiffeID.uri),
                 ])
 
             return WorkloadAPISPIFFEClient(
@@ -520,7 +520,7 @@ extension Agent {
         logger.error(
             "Control plane reported an error: \(message.error)\(detailSuffix)",
             metadata: [
-                "requestId": .string(message.requestId)
+                "strato.request.id": .string(message.requestId)
             ])
     }
 

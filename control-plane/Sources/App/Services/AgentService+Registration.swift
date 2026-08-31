@@ -95,7 +95,7 @@ extension AgentService {
                 app.logger.notice(
                     "Agent re-registered with a new version",
                     metadata: [
-                        "agentName": .string(agentName),
+                        "strato.agent.name": .string(agentName),
                         "previousVersion": .string(existingAgent.version),
                         "version": .string(message.version),
                     ])
@@ -185,16 +185,11 @@ extension AgentService {
             if let refusalReason {
                 app.logger.error(
                     "Ignoring enrollment organization assignment: \(refusalReason)",
-                    metadata: ["agentKey": .string(agentKey)])
+                    metadata: ["strato.agent.identity": .string(agentKey)])
             } else {
                 agent.organizationScope = organizationScope
             }
         }
-
-        // Persisted so sync assembly (which may run on any replica, from
-        // Postgres alone) can key version-dependent shapes on what this agent
-        // actually speaks — see `networkAssemblyScope`.
-        agent.wireProtocolVersion = protocolVersion
 
         if let siteID, agent.$site.id != siteID {
             // A token-driven site change must honor the same invariants as the
@@ -248,7 +243,7 @@ extension AgentService {
             if let refusalReason {
                 app.logger.error(
                     "Ignoring enrollment site assignment: \(refusalReason)",
-                    metadata: ["agentKey": .string(agentKey), "requestedSite": .string(siteID.uuidString)])
+                    metadata: ["strato.agent.identity": .string(agentKey), "requestedSite": .string(siteID.uuidString)])
             } else {
                 agent.$site.id = siteID
             }
@@ -276,9 +271,11 @@ extension AgentService {
         await SiteNetworkAuthority.designateIfUnset(
             agent: agent, siteID: persistedSiteID, on: db, logger: app.logger)
 
-        // Record that the node completed its first registration. Informational
-        // only — an enrollment is not consumed by being redeemed — so a failure
-        // here must not fail a registration that has already persisted.
+        // Record that the node completed its first registration. Bootstrap
+        // redemption already erased the token hash atomically before minting
+        // the node credential, so this informational save cannot reopen the
+        // credential even if it fails. The enrollment row remains as the
+        // durable scope record.
         if let enrollment = newAgentEnrollment, !enrollment.isUsed {
             enrollment.markAsUsed()
             do {
@@ -286,7 +283,7 @@ extension AgentService {
             } catch {
                 app.logger.warning(
                     "Failed to mark agent enrollment as used",
-                    metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
+                    metadata: ["strato.agent.identity": .string(agentKey), "error": .string("\(error)")])
             }
         }
 
@@ -320,8 +317,8 @@ extension AgentService {
         app.logger.info(
             "Agent registered",
             metadata: [
-                "agentId": .string(agentUUID.uuidString),
-                "agentKey": .string(agentKey),
+                "strato.agent.id": .string(agentUUID.uuidString),
+                "strato.agent.identity": .string(agentKey),
                 "hostname": .string(message.hostname),
                 "version": .string(message.version),
             ])
@@ -399,7 +396,8 @@ extension AgentService {
             let agent = try await Agent.find(agentUUID, on: db)
         else {
             app.logger.warning(
-                "Unregister for unknown agent; ignoring", metadata: ["agentId": .string(agentId)])
+                "Unregister for unknown agent; ignoring",
+                metadata: ["strato.agent.claimed.id": .string(agentId)])
             return
         }
 
@@ -407,9 +405,9 @@ extension AgentService {
             app.logger.warning(
                 "Unregister claims an agentId not owned by the authenticated connection; ignoring",
                 metadata: [
-                    "claimedAgentId": .string(agentId),
-                    "claimedAgentKey": .string(agent.identity.key),
-                    "connectionAgentKey": .string(connectionAgentKey),
+                    "strato.agent.claimed.id": .string(agentId),
+                    "strato.agent.claimed.identity": .string(agent.identity.key),
+                    "strato.agent.connection.identity": .string(connectionAgentKey),
                 ])
             return
         }
@@ -426,7 +424,8 @@ extension AgentService {
         // terminal frame may already be in flight; their deadline is the safe
         // failure backstop.
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
-        app.guestExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
+        await app.guestExecSessionManager.closeAllSessions(
+            forAgent: agentKey, reason: "agent unregistered")
         presenceRefreshedAt.removeValue(forKey: agentKey)
         routeRefreshedAt.removeValue(forKey: agentKey)
         await app.coordination.clearAgentPresence(agentKey: agentKey)
@@ -438,7 +437,7 @@ extension AgentService {
             agentName: agent.name, observations: agent.dependencyObservations)
         await WebhookEvents.emitAgentPresence(
             agent: agent, connected: false, reason: "unregistered", on: db, logger: app.logger)
-        app.logger.info("Agent unregistered", metadata: ["agentId": .string(agentId)])
+        app.logger.info("Agent unregistered", metadata: ["strato.agent.id": .string(agentId)])
     }
 
     /// Tear down an agent's in-memory state from an operator action
@@ -453,7 +452,8 @@ extension AgentService {
         let agentKey = identity.key
         guard let agentId = await agentId(forKey: agentKey) else {
             app.logger.warning(
-                "Cannot force unregister: agent not found by identity key", metadata: ["agentKey": .string(agentKey)])
+                "Cannot force unregister: agent not found by identity key",
+                metadata: ["strato.agent.identity": .string(agentKey)])
             return
         }
 
@@ -470,7 +470,8 @@ extension AgentService {
         // gone. Captured commands keep waiting for a terminal frame or their
         // deadline.
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
-        app.guestExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
+        await app.guestExecSessionManager.closeAllSessions(
+            forAgent: agentKey, reason: "agent unregistered")
         // Drop both cluster-visible claims immediately. The route clear is a
         // compare-and-delete, so it cannot remove a successor connection.
         presenceRefreshedAt.removeValue(forKey: agentKey)
@@ -480,7 +481,7 @@ extension AgentService {
 
         app.logger.info(
             "Agent force unregistered",
-            metadata: ["agentId": .string(agentId), "agentKey": .string(agentKey)])
+            metadata: ["strato.agent.id": .string(agentId), "strato.agent.identity": .string(agentKey)])
     }
 
     /// Socket-close cleanup. Only reached when this socket was still the
@@ -558,7 +559,9 @@ extension AgentService {
         guard let agentUUID = UUID(uuidString: message.agentId),
             let agent = try await Agent.find(agentUUID, on: db)
         else {
-            app.logger.warning("Received heartbeat from unknown agent", metadata: ["agentId": .string(message.agentId)])
+            app.logger.warning(
+                "Received heartbeat from unknown agent",
+                metadata: ["strato.agent.claimed.id": .string(message.agentId)])
             return
         }
 
@@ -566,9 +569,9 @@ extension AgentService {
             app.logger.warning(
                 "Heartbeat claims an agentId not owned by the authenticated connection; ignoring",
                 metadata: [
-                    "claimedAgentId": .string(message.agentId),
-                    "claimedAgentKey": .string(agent.identity.key),
-                    "connectionAgentKey": .string(agentKey),
+                    "strato.agent.claimed.id": .string(message.agentId),
+                    "strato.agent.claimed.identity": .string(agent.identity.key),
+                    "strato.agent.connection.identity": .string(agentKey),
                 ])
             return
         }
@@ -589,7 +592,7 @@ extension AgentService {
         // cluster-wide, not just to the process holding this socket.
         await refreshAgentPresenceIfNeeded(agentKey: agentKey)
 
-        app.logger.debug("Agent heartbeat updated", metadata: ["agentId": .string(message.agentId)])
+        app.logger.debug("Agent heartbeat updated", metadata: ["strato.agent.id": .string(message.agentId)])
     }
 
     /// Apply the mutable fields from a periodic agent report. A real state
@@ -625,7 +628,7 @@ extension AgentService {
                         level: observation.functionalState == .unhealthy ? .error : .info,
                         "Agent dependency state changed",
                         metadata: [
-                            "agent": .string(agent.name),
+                            "strato.agent.name": .string(agent.name),
                             "dependency": .string(observation.id.rawValue),
                             "state": .string(observation.functionalState.rawValue),
                             "reasonCode": .string(observation.reason?.code.rawValue ?? "none"),
@@ -669,7 +672,7 @@ extension AgentService {
         app.logger.warning(
             "Agent reported duplicate dependency observations; retaining the freshest sample",
             metadata: [
-                "agent": .string(agentName),
+                "strato.agent.name": .string(agentName),
                 "dependencyIds": .array(duplicateIDs.map { .string($0) }),
             ])
         return normalized
@@ -719,5 +722,26 @@ extension AgentService {
         {
             routeRefreshedAt[agentKey] = now
         }
+    }
+}
+
+extension AgentService {
+    // MARK: - Agent Status
+
+    /// Every agent known to the cluster, from the shared registry. Rows are
+    /// written by whichever replica hears from an agent, so this view is the
+    /// same on all replicas.
+    func getAgentList() async -> [Agent] {
+        do {
+            return try await Agent.query(on: app.db).all()
+        } catch {
+            app.logger.error("Failed to load agent list from database: \(error)")
+            return []
+        }
+    }
+
+    func getAgentInfo(_ agentId: String) async -> Agent? {
+        guard let agentUUID = UUID(uuidString: agentId) else { return nil }
+        return try? await Agent.find(agentUUID, on: app.db)
     }
 }

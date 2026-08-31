@@ -122,7 +122,7 @@ final class SiteTests {
         try await vm.save(on: app.db)
         let nic = VMNetworkInterface(
             vmID: vm.id!, logicalNetworkID: try network.requireID(),
-            macAddress: VMNetworkInterface.generateMACAddress())
+            macAddress: MACAllocator.generateCandidate().description)
         try await nic.save(on: app.db)
     }
 
@@ -956,11 +956,11 @@ final class SiteTests {
             let vm = try await builder.createVM(name: "unplaceable-vm", project: project)
             let nic = VMNetworkInterface(
                 vmID: try vm.requireID(), logicalNetworkID: try pinned.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress())
+                macAddress: MACAllocator.generateCandidate().description)
             try await nic.save(on: app.db)
 
             await #expect(throws: AgentServiceError.self) {
-                try await app.agentService.createVM(vm: vm, db: app.db)
+                try await app.workloadPlacement.createVM(vm: vm, db: app.db)
             }
             let unplaced = try #require(try await VM.find(vm.id, on: app.db))
             #expect(unplaced.hypervisorId == nil)
@@ -968,7 +968,7 @@ final class SiteTests {
             // With a controller designated the same placement succeeds.
             site.$networkControllerAgent.id = UUID(uuidString: agentId)
             try await site.save(on: app.db)
-            try await app.agentService.createVM(vm: vm, db: app.db)
+            try await app.workloadPlacement.createVM(vm: vm, db: app.db)
             let placed = try #require(try await VM.find(vm.id, on: app.db))
             #expect(placed.hypervisorId == agentId)
         }
@@ -1139,15 +1139,15 @@ final class SiteTests {
             let pending = try await builder.createVM(name: "guard-unplaceable", project: project)
             try await VMNetworkInterface(
                 vmID: try pending.requireID(), logicalNetworkID: try pinned.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress()
+                macAddress: MACAllocator.generateCandidate().description
             ).save(on: app.db)
             await #expect(throws: AgentServiceError.self) {
-                try await app.agentService.createVM(vm: pending, db: app.db)
+                try await app.workloadPlacement.createVM(vm: pending, db: app.db)
             }
 
             // A fresh heartbeat from the controller unblocks all of it.
             try await self.backdateHeartbeat(app: app, agentId: controllerId, bySeconds: 0)
-            try await app.agentService.createVM(vm: pending, db: app.db)
+            try await app.workloadPlacement.createVM(vm: pending, db: app.db)
             #expect(try await VM.find(pending.id, on: app.db)?.hypervisorId != nil)
         }
     }

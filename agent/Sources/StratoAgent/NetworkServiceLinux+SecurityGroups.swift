@@ -38,7 +38,7 @@ extension NetworkServiceLinux: SecurityGroupActuator {
         #endif
     }
 
-    func ensurePortGroup(_ plan: PortGroupPlan) async throws {
+    func ensurePortGroup(_ plan: PortGroupPlan) async throws -> Bool {
         #if os(Linux)
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
@@ -53,7 +53,10 @@ extension NetworkServiceLinux: SecurityGroupActuator {
                     observed: existing.external_ids?[Self.generationKey].flatMap(Int64.init),
                     observedBuilderRevision: existing.external_ids?[Self.builderRevisionKey]
                         .flatMap(Int64.init))
-            else { return }
+            else {
+                return existing.external_ids?[Self.builderRevisionKey]
+                    .flatMap(Int64.init) == SecurityGroupACLBuilder.aclSchemaRevision
+            }
             guard let uuid = existing.uuid else {
                 throw NetworkError.ovnError("Port group \(plan.name) has no UUID")
             }
@@ -89,7 +92,8 @@ extension NetworkServiceLinux: SecurityGroupActuator {
                     log: acl.log,
                     severity: acl.severity,
                     name: acl.name,
-                    external_ids: acl.externalIDs),
+                    external_ids: acl.externalIDs,
+                    tier: acl.tier),
                 onPortGroup: plan.name)
         }
         for aclUUID in supersededACLs {
@@ -114,6 +118,11 @@ extension NetworkServiceLinux: SecurityGroupActuator {
                 "generation": .stringConvertible(plan.generation),
                 "acls": .stringConvertible(plan.acls.count),
             ])
+        return true
+        #endif
+
+        #if !os(Linux)
+        return false
         #endif
     }
 

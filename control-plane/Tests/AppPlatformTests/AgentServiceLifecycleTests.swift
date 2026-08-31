@@ -58,7 +58,7 @@ final class AgentServiceLifecycleTests {
                 [("agent", agent.name), ("dependency", NodeDependencyID.libvirt.rawValue)])
             #expect(availability.lastValue == 1)
 
-            await app.agentService.checkStaleAgents(dependencyMetricsFactory: metrics)
+            await app.agentMaintenance.checkStaleAgents(dependencyMetricsFactory: metrics)
 
             let persisted = try #require(try await Agent.find(agent.id, on: app.db))
             #expect(persisted.status == .offline)
@@ -81,10 +81,10 @@ final class AgentServiceLifecycleTests {
 
             // The loop is armed from AgentService.init's detached task; give it a
             // moment to run so the assertion isn't racing initialization.
-            for _ in 0..<50 where await !service.isHeartbeatActive {
+            for _ in 0..<50 where await !service.maintenance.isHeartbeatActive {
                 try await Task.sleep(for: .milliseconds(10))
             }
-            #expect(await service.isHeartbeatActive)
+            #expect(await service.maintenance.isHeartbeatActive)
 
         } catch {
             try await app.shutdownForTesting()
@@ -95,7 +95,7 @@ final class AgentServiceLifecycleTests {
         // cancel the loop before `app.core` is torn down.
         try await app.shutdownForTesting()
 
-        #expect(await !service.isHeartbeatActive)
+        #expect(await !service.maintenance.isHeartbeatActive)
     }
 
     /// Cancellation alone is not enough: a tick that already woke from its sleep
@@ -117,15 +117,15 @@ final class AgentServiceLifecycleTests {
 
             // Let the startup task arm the loop and run a few ticks so shutdown
             // lands mid-tick, not before the first one.
-            for _ in 0..<50 where await !service.isHeartbeatActive {
+            for _ in 0..<50 where await !service.maintenance.isHeartbeatActive {
                 try await Task.sleep(for: .milliseconds(10))
             }
-            #expect(await service.isHeartbeatActive)
+            #expect(await service.maintenance.isHeartbeatActive)
             try await Task.sleep(for: .milliseconds(50))
 
             // Must not return until the loop has fully exited.
             await service.shutdown()
-            #expect(await !service.isHeartbeatActive)
+            #expect(await !service.maintenance.isHeartbeatActive)
         } catch {
             try await app.shutdownForTesting()
             throw error
@@ -162,6 +162,6 @@ final class AgentServiceLifecycleTests {
         // Give the init's arming task ample time to run; the guard must have
         // kept the loop disarmed.
         try await Task.sleep(for: .milliseconds(200))
-        #expect(await !resurrected.isHeartbeatActive)
+        #expect(await !resurrected.maintenance.isHeartbeatActive)
     }
 }

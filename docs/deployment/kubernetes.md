@@ -146,7 +146,7 @@ strato:
 | --- | --- |
 | `externalDatabase.*` | Use an external PostgreSQL (`postgresql.enabled: false`). `existingSecret` sources the password from a pre-provisioned Secret; `strato.database.tls` defaults to `require` for external databases. |
 | `externalValkey.*` | Use an external Valkey (`valkey.enabled: false`) — Valkey is required either way. |
-| `strato.secretEncryption` | Points `existingSecret` at a Secret holding the 32-byte key (`openssl rand -hex 32`) that encrypts stored secrets — OIDC client secrets, SSF stream tokens, registry pull secrets, webhook signing secrets — at rest. Without it the control plane warns and stores them unencrypted. |
+| `strato.secretEncryption` | Points `existingSecret` at a Secret holding the primary 32-byte key (`openssl rand -hex 32`) that encrypts recoverable stored secrets. During rotation, `previousKeysKey` names a comma-separated decrypt-only entry in the same Secret. Upgrade every replica to fallback-capable code first, without creating or rotating recoverable secrets during that compatibility rollout. Next stage the future key as previous while keeping the old primary, update the Secret, and explicitly restart and finish every replica. Only then promote the future key to primary while retaining the old key as previous and explicitly restart again. After that promotion rollout finishes, restart every replica once more with the same key configuration; this unchanged convergence rollout ensures no old-primary replica could have written after another replica's promotion audit. Remove the old key only after all four sealing summaries from the unchanged rollout report `rewrapped=0` and `unopenable=0`. External Secret changes do not change the pod template, so explicitly restart the control-plane rollout after every Secret update. |
 
 Further hardening options (network policies, pod disruption budgets,
 resource limits) are documented in the
@@ -223,12 +223,52 @@ domain:
   enrollment (join tokens, entry revocation) and the Workload Identity view.
   The plaintext admin socket never crosses the network.
 
-## Rollouts
+## Upgrades
 
-The chart ships startup/liveness/readiness probes and a `preStop` drain delay
-tuned for zero-downtime rollouts. See
-[Health checks & zero-downtime deploys](/deployment/health-checks) for what each
-probe promises and which knobs to raise for a slow database or a slow ingress.
+The control-plane Deployment uses Kubernetes' `Recreate` strategy. STR-275 moved
+advisory locks from the legacy one-argument PostgreSQL keyspace to the disjoint
+two-argument keyspace, so old and new control-plane processes do not serialize
+each other. Kubernetes must terminate every old pod and close its database
+sessions before it creates the replacement set. Expect a brief API and
+agent-channel outage while the old pods drain and the new pods boot. PostgreSQL
+keeps durable state, and agents reconnect and converge after the new pods become
+ready.
+
+For the first upgrade from a build before STR-275, make the strategy change its
+own Helm revision while the old image is still pinned:
+
+```bash
+# 1. Apply the new chart without changing the running binary.
+helm upgrade strato . -f my-values.yaml \
+  --set-string image.tag=<current-immutable-image-tag> --wait
+
+kubectl get deployment strato-strato-control-plane \
+  -o jsonpath='{.spec.strategy.type}{"\n"}'
+# Recreate
+
+# 2. Cross the keyspace boundary only after Recreate is recorded.
+helm upgrade strato . -f my-values.yaml \
+  --set-string image.tag=<str-275-image-tag> --wait
+```
+
+The first step makes rollback non-overlapping too: the immediately preceding
+Helm revision contains the old image and `Recreate`. If the chart was not staged
+this way, do not use `--atomic` for the keyspace-changing upgrade. On failure,
+stop any HPA that can rescale the Deployment, scale the control plane to zero,
+wait for every new pod to terminate, and only then run `helm rollback`. Never
+start an old control-plane image while a new one is still connected to the same
+database.
+
+`Recreate` covers only pods owned by this Deployment. Before crossing the
+boundary, stop any blue/green Deployment, second Helm release, one-off command,
+or manually launched control-plane process that shares PostgreSQL. A
+PodDisruptionBudget does not turn this replacement into a rolling deployment;
+the outage is intentional.
+
+The chart still ships startup/liveness/readiness probes and a `preStop` drain
+delay so old requests and agent WebSockets receive the configured shutdown
+budget. See [Health checks & controlled deploys](/deployment/health-checks) for
+what each probe promises and which knobs to raise for a slow database or ingress.
 
 ## Adding hypervisors
 

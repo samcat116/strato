@@ -29,9 +29,10 @@ Everything lives under `control-plane/web/src/`:
 
 Two conventions worth knowing:
 
-- Detail pages use a static `/detail` segment reading the ID from query params
-  (`vms/detail?id=...`), not dynamic routes; `projects/[projectId]` is the
-  only dynamic segment.
+- Resource details use dynamic segments (`vms/[id]`, `sandboxes/[id]`,
+  `agents/[id]`, and `images/[projectId]/[id]`). The former `/detail?...`
+  URLs remain as server-side compatibility redirects, not duplicate page
+  implementations.
 - The nav is data-driven: `components/layout/nav.ts` defines a two-level
   `navTree` with `adminOnly` gating and active-state helpers. Frontend routes
   must not live under `/organizations` — the deploy proxy routes that prefix
@@ -45,18 +46,18 @@ no tokens are stored in JS. It parses Vapor `{reason}`/`{error}` bodies into
 an `ApiError`, hard-redirects to `/login` on 401 (except on auth endpoints),
 and rewrites generic 403s into a permissions message. Per-resource endpoint
 modules (`lib/api/vms.ts`, `sandboxes.ts`, `agents.ts`, `images.ts`,
-`networks.ts`, `quotas.ts`, `workload-identity.ts`, ...) carry the types, in
-two regimes: `bun run generate:api-types` (openapi-typescript) generates
+`networks.ts`, `quotas.ts`, `workload-identity.ts`, ...) carry the types.
+`bun run generate:api-types` (openapi-typescript) generates
 `src/types/openapi.ts` from the control plane's OpenAPI document — the same
 one its handlers are generated from, so the types cannot drift from the
-server, and CI fails when the committed file is stale — and
-`lib/api/projects.ts` is the first module typed against it (issue #583). The
-remaining ~28 modules are still typed against the hand-maintained DTO
-definitions in `types/api.ts`, migrating surface by surface.
+server, and CI fails when the committed file is stale. API modules import
+`types/api-contracts.ts`, which binds their request and response shapes to the
+generated schema while retaining the UI compatibility guarantees in
+`types/api.ts`; feature components do not import raw wire schemas directly.
 Domain-specific error prettifying lives in `lib/errors.ts`.
 
 **Server state — TanStack Query** (`providers/query-provider.tsx`; defaults:
-60s stale time, no window-focus refetch, one retry). Hooks live one file per
+60s stale time, stale-query window-focus refetch, one retry). Hooks live one file per
 resource under `lib/hooks/`:
 
 - Query keys are arrays led by the resource name — `["vms", { orgId }]`,
@@ -146,7 +147,10 @@ The most involved pieces:
 
 ## Authentication flow
 
-`providers/auth-provider.tsx` probes `GET /auth/session` on mount and exposes
+The root server layout loads session, organization, and project bootstrap data
+at request time and seeds the provider/query caches. If a server-side API URL
+is unavailable, `providers/auth-provider.tsx` falls back to probing
+`GET /auth/session` on mount. It exposes
 `user` / `login` / `register` / `logout`. WebAuthn ceremonies live in
 `lib/webauthn/client.ts`, which implements all three passkey flows
 (register, login, claim) against the `/auth/*` endpoints, handling
@@ -163,12 +167,13 @@ environment, development included, goes through the same passkey flows.
 - `next.config.ts` sets `output: "standalone"` and bakes build identity into
   the bundle (`NEXT_PUBLIC_APP_VERSION`, `NEXT_PUBLIC_GIT_SHA`, rendered in
   the sidebar via `lib/version.ts`). Security headers are set here; HSTS is
-  added at runtime by `src/middleware.ts`, gated on `X-Forwarded-Proto`.
+  added at runtime by `src/proxy.ts`, gated on `X-Forwarded-Proto`.
 - Anything an operator must be able to change **without rebuilding** cannot live
   in `next.config.ts` — `NEXT_PUBLIC_*` values are inlined into the bundle at
   build time, and deployments run a prebuilt image. Such settings are read per
-  request in `src/middleware.ts` instead: `STRATO_API_URL` for same-origin API
-  proxying, and `STRATO_GRAVATAR_ENABLED` (default on), which middleware
+  request in `src/proxy.ts` instead: `STRATO_API_URL` for same-origin API
+  proxying and server bootstrap, and `STRATO_GRAVATAR_ENABLED` (default on),
+  which the proxy
   publishes to the browser on a non-`httpOnly` `strato_gravatar` cookie that
   `components/ui/user-avatar.tsx` reads. Disabling it stops the UI from sending
   any email hash to gravatar.com and falls back to initials avatars.
@@ -190,5 +195,8 @@ environment, development included, goes through the same passkey flows.
 ## Linting and testing
 
 ESLint 9 flat config extends `eslint-config-next` (`bun run lint`);
-TypeScript is strict with the `@/*` path alias. There is currently no
-frontend test suite — CI enforces `lint` and `build` only.
+TypeScript is strict with the `@/*` path alias. Vitest and Testing Library
+cover hooks, providers, routing helpers, and components (`bun run test`).
+Playwright exercises critical browser navigation against a deterministic mock
+control plane (`bun run test:e2e`). CI enforces unit tests, browser smoke tests,
+lint, and the production build.

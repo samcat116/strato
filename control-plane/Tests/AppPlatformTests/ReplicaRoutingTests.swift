@@ -269,7 +269,7 @@ final class ReplicaRoutingAgentServiceTests {
         try await withApp { app, _, _ in
             let agentId = try await self.registerAgent(app: app)
 
-            let schedulable = await app.agentService.schedulableAgentsFromDatabase()
+            let schedulable = await app.workloadPlacement.schedulableAgentsFromDatabase()
             #expect(schedulable.count == 1)
             let entry = try #require(schedulable.first)
             #expect(entry.id == agentId)

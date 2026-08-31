@@ -160,7 +160,7 @@ extension Agent: ReconcileActuator {
             // power-state steps from `.created`.
             logger.warning(
                 "Orphaned VM has no live process; re-creating it from the manifest spec",
-                metadata: ["vmId": .string(item.id), "reason": .string(reason)])
+                metadata: ["strato.vm.id": .string(item.id), "reason": .string(reason)])
             try await reconcileCreate(item)
             return .created
         }
@@ -231,7 +231,7 @@ extension Agent: ReconcileActuator {
         logger.info(
             "Orphaned VM re-adopted and managed again",
             metadata: [
-                "vmId": .string(item.id),
+                "strato.vm.id": .string(item.id),
                 "status": .string(status.rawValue),
             ])
         await sendVMLog(
@@ -290,7 +290,7 @@ extension Agent: ReconcileActuator {
             guard item.desiredSandbox != nil else { throw SandboxRuntimeError.sandboxNotFound(item.id) }
             logger.warning(
                 "Orphaned sandbox has no live process; re-creating it from the desired entry",
-                metadata: ["sandboxId": .string(item.id), "reason": .string(reason)])
+                metadata: ["strato.sandbox.id": .string(item.id), "reason": .string(reason)])
             try await sandboxReconcileCreate(item)
             return .stopped
         }
@@ -301,7 +301,7 @@ extension Agent: ReconcileActuator {
         logger.info(
             "Orphaned sandbox re-adopted and managed again",
             metadata: [
-                "sandboxId": .string(item.id),
+                "strato.sandbox.id": .string(item.id),
                 "status": .string(status.rawValue),
             ])
         return status
@@ -384,7 +384,7 @@ extension Agent: ReconcileActuator {
             recoveredManifest = true
             logger.warning(
                 "Recovered historical path-only VM manifest with managed volume identities",
-                metadata: ["vmId": .string(vmId)])
+                metadata: ["strato.vm.id": .string(vmId)])
         }
         if recoveredManifest { persistManifest() }
 
@@ -416,7 +416,7 @@ extension Agent: ReconcileActuator {
                     logger.error(
                         "Failed to adopt historical VM disk as a managed volume",
                         metadata: [
-                            "vmId": .string(desiredVM.vmId.uuidString),
+                            "strato.vm.id": .string(desiredVM.vmId.uuidString),
                             "volumeId": .string(volumeId),
                             "path": .string(existingPath),
                             "error": .string(error.localizedDescription),
@@ -656,7 +656,7 @@ extension Agent: ReconcileActuator {
                     hot-plug slots and size ceilings it already had
                     """,
                     metadata: [
-                        "vmId": .string(item.id), "error": .string(error.localizedDescription),
+                        "strato.vm.id": .string(item.id), "error": .string(error.localizedDescription),
                     ])
             }
         }

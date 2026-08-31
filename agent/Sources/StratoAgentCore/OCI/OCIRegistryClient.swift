@@ -451,7 +451,7 @@ public actor OCIRegistryClient {
             do {
                 let result = try await operation()
                 let status = statusOf(result)
-                if Self.isRetryableStatus(status) {
+                if RetryClassification.isRetryableStatus(status) {
                     lastError = .transferFailed(detail: "HTTP \(status) from \(url.absoluteString)")
                     continue
                 }
@@ -521,10 +521,6 @@ public actor OCIRegistryClient {
 
     private static func isRedirect(_ status: Int) -> Bool {
         status == 301 || status == 302 || status == 303 || status == 307 || status == 308
-    }
-
-    private static func isRetryableStatus(_ status: Int) -> Bool {
-        status >= 500 || status == 408 || status == 429
     }
 
     // MARK: - Hashing

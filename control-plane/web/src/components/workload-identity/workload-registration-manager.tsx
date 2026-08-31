@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
@@ -74,9 +76,9 @@ export function WorkloadRegistrationManager() {
                 size="icon"
                 aria-label={`Delete registration ${registration.spiffeId}`}
                 disabled={remove.isPending}
-                onClick={() => {
+                onClick={async () => {
                   if (
-                    window.confirm(
+                    await confirmAction(
                       workloadRegistrationDeletionMessage(registration)
                     )
                   ) {
