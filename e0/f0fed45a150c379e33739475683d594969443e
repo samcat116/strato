@@ -1,0 +1,27 @@
+control-plane/Tests/AppPlatformTests/ResourceConditionsTests.swift
+  s_b46e1e8521f8aa::t_40674b9e8fac1f 186-212,214,216-228
+  s_b46e1e8521f8aa::t_656d1da111f864 213,215
+control-plane/Sources/App/Services/ResourceMutation.swift
+  s_b46e1e8521f8aa::t_656d1da111f864 348-394,453
+  s_b46e1e8521f8aa::t_18bcfd69c42d56 345-347,424-428,435-436
+control-plane/Sources/App/Models/ResourceConditions.swift
+  s_b46e1e8521f8aa::t_18bcfd69c42d56 380-381
+control-plane/Sources/App/Services/AgentService.swift
+  s_b46e1e8521f8aa::t_656d1da111f864 1148-1153,1372,1374,1376-1377
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "e0f0fed45a150c379e33739475683d594969443e",
+  "prompts": {},
+  "sessions": {
+    "s_b46e1e8521f8aa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414e-5729-7bc0-95bd-59e771c733f9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
