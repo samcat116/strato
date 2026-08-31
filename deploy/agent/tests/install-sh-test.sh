@@ -243,8 +243,11 @@ check "an empty version is refused"                no  "$(ge '' 11.5.0)"
 # userspace `rbd` frontend before it can truthfully advertise that capability.
 
 echo "apt_packages: Ceph client tooling"
+# shellcheck disable=SC2034  # read by apt_packages, sourced from install.sh
 ARCH=x86_64
+# shellcheck disable=SC2034  # read by apt_packages, sourced from install.sh
 NETWORK_MODE=user
+# shellcheck disable=SC2034  # read by apt_packages, sourced from install.sh
 INSTALL_TELEMETRY=0
 PACKAGES="$(apt_packages)"
 check "ceph-common is installed exactly once" 1 \
