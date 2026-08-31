@@ -9,6 +9,65 @@ extension Request {
     var adminBypassUsed: Bool {
         iamAuthState.adminPolicyUsed.withLockedValue { $0 }
     }
+
+    /// Append the generic request fact shared by ordinary HTTP middleware and
+    /// handlers that discover a refusal only after a WebSocket upgrade.
+    ///
+    /// `force` bypasses the normal successful-read suppression. This is used
+    /// for 401/403 outcomes: authorization refusals must remain visible even
+    /// when the upgraded route began as a GET and read auditing is disabled.
+    func recordAPIRequestAudit(
+        status: HTTPResponseStatus,
+        error: (any Error)? = nil,
+        force: Bool = false,
+        failOpen: Bool = false,
+        redactErrorDetails: Bool = false
+    ) async {
+        let isRead: Bool
+        switch method {
+        case .GET, .HEAD, .OPTIONS:
+            isRead = true
+        default:
+            isRead = false
+        }
+        guard force || !isRead || audit.config.includeReads || adminBypassUsed else {
+            return
+        }
+
+        let user = auth.get(User.self)
+        let resource = parseResource(path: url.path, method: method)
+
+        var metadata: [String: String]? = nil
+        if let error, !redactErrorDetails {
+            metadata = ["error": "\(error)"]
+        }
+
+        let record = AuditRecord(
+            eventType: AuditEventType.apiRequest.rawValue,
+            userID: user?.id,
+            // A JWT-SVID request has no user record, so `user_id` stays
+            // nil — but the row must still name who acted. The verified
+            // SPIFFE ID goes in `username`, which is free text, rather
+            // than inventing a user id for a machine principal (#495).
+            // Without this, workload requests would audit as nobody.
+            username: user?.username ?? authenticatedWorkload?.spiffeID.uri,
+            apiKeyID: apiKey?.id,
+            organizationID: resource.organizationID ?? user?.currentOrganizationId,
+            method: method.rawValue,
+            path: url.path,
+            status: Int(status.code),
+            resourceType: resource.type,
+            resourceID: resource.id,
+            action: resource.action,
+            sourceIP: auditClientIP,
+            adminBypass: adminBypassUsed,
+            metadata: metadata)
+        if failOpen {
+            await audit.recordFailOpen(record)
+        } else {
+            await audit.record(record)
+        }
+    }
 }
 
 /// Records an audit event for API requests (issue #39):
@@ -28,62 +87,42 @@ struct AuditMiddleware: AsyncMiddleware {
             return try await next.respond(to: request)
         }
 
+        let guestExecution = isVMGuestExecutionAuditPath(request.url.path)
         do {
             let response = try await next.respond(to: request)
-            await recordIfNeeded(request: request, status: response.status)
+            await request.recordAPIRequestAudit(
+                status: response.status,
+                failOpen: guestExecution,
+                redactErrorDetails: guestExecution)
             return response
         } catch {
             let status = (error as? any AbortError)?.status ?? .internalServerError
-            await recordIfNeeded(request: request, status: status, error: error)
+            await request.recordAPIRequestAudit(
+                status: status,
+                error: error,
+                force: guestExecution || status == .unauthorized || status == .forbidden,
+                failOpen: guestExecution,
+                redactErrorDetails: guestExecution)
             throw error
         }
     }
+}
 
-    private func recordIfNeeded(
-        request: Request, status: HTTPResponseStatus, error: (any Error)? = nil
-    ) async {
-        let isRead: Bool
-        switch request.method {
-        case .GET, .HEAD, .OPTIONS:
-            isRead = true
-        default:
-            isRead = false
-        }
-        guard !isRead || request.audit.config.includeReads || request.adminBypassUsed else {
-            return
-        }
+/// Guest execution request and attach facts remain buffered even when ordinary
+/// request auditing is configured synchronously. This keeps both accepted and
+/// refused execution attempts independent of database or SIEM availability.
+func isVMGuestExecutionAuditPath(_ path: String) -> Bool {
+    let components = path.split(separator: "/").map(String.init)
+    guard components.count >= 4,
+        components[0] == "api",
+        components[1] == "vms"
+    else { return false }
 
-        let user = request.auth.get(User.self)
-        let resource = parseResource(path: request.url.path, method: request.method)
-
-        var metadata: [String: String]? = nil
-        if let error {
-            metadata = ["error": "\(error)"]
-        }
-
-        await request.audit.record(
-            AuditRecord(
-                eventType: AuditEventType.apiRequest.rawValue,
-                userID: user?.id,
-                // A JWT-SVID request has no user record, so `user_id` stays
-                // nil — but the row must still name who acted. The verified
-                // SPIFFE ID goes in `username`, which is free text, rather
-                // than inventing a user id for a machine principal (#495).
-                // Without this, workload requests would audit as nobody.
-                username: user?.username ?? request.authenticatedWorkload?.spiffeID.uri,
-                apiKeyID: request.apiKey?.id,
-                organizationID: resource.organizationID ?? user?.currentOrganizationId,
-                method: request.method.rawValue,
-                path: request.url.path,
-                status: Int(status.code),
-                resourceType: resource.type,
-                resourceID: resource.id,
-                action: resource.action,
-                sourceIP: request.auditClientIP,
-                adminBypass: request.adminBypassUsed,
-                metadata: metadata
-            ))
+    let suffix = Array(components.dropFirst(3))
+    if suffix == ["actions", "run"] || suffix == ["exec"] {
+        return true
     }
+    return suffix.count == 3 && suffix[0] == "exec" && suffix[2] == "attach"
 }
 
 struct AuditResourceRef: Equatable {
@@ -115,7 +154,11 @@ func parseResource(path: String, method: HTTPMethod) -> AuditResourceRef {
     guard !components.isEmpty else { return ref }
     ref.type = components[0]
     if components.count > 1 {
-        ref.id = components[1]
+        let rawID = components[1]
+        // VM domain events and VM-filtered audit queries use UUID.uuidString.
+        // Normalize the generic request fact too, so a denied request cannot
+        // disappear merely because its route parameter used lowercase hex.
+        ref.id = ref.type == "vms" ? UUID(uuidString: rawID)?.uuidString ?? rawID : rawID
     }
 
     // Trailing path component after the id (e.g. `start`, `stop`, `members`):

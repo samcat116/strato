@@ -422,6 +422,10 @@ public func configure(
     // STR-79: durable captured VM command state with cold output payloads.
     app.migrations.add(CreateVMCommandExecutions())
 
+    // STR-84: immutable request attribution for asynchronous guest-command
+    // audit facts and the composite VM audit-history query path.
+    app.migrations.add(AddVMGuestExecutionAudit())
+
     // STR-154: preserve the attachment case and its coordinates instead of
     // interpreting every agent-owned storage reference as a host path.
     app.migrations.add(ReplaceVolumeReplicaDatasetPath())

@@ -10121,6 +10121,10 @@ export interface components {
         AuditUserIdQuery: string;
         /** @description Return only events scoped to this organization. */
         AuditOrganizationIdQuery: string;
+        /** @description Return only events for this canonical resource type (for example, `vms`). */
+        AuditResourceTypeQuery: string;
+        /** @description Return only events for this resource identifier. VM UUIDs are canonicalized. */
+        AuditResourceIdQuery: string;
         /** @description Return only events served via the system-admin bypass. */
         AuditAdminOnlyQuery: boolean;
         /** @description Lower bound on `createdAt`. ISO8601 (with or without fractional seconds) or epoch seconds; an unparseable value is treated as unbounded rather than matching nothing. */
@@ -18117,6 +18121,10 @@ export interface operations {
                 userID?: components["parameters"]["AuditUserIdQuery"];
                 /** @description Return only events scoped to this organization. */
                 organizationID?: components["parameters"]["AuditOrganizationIdQuery"];
+                /** @description Return only events for this canonical resource type (for example, `vms`). */
+                resourceType?: components["parameters"]["AuditResourceTypeQuery"];
+                /** @description Return only events for this resource identifier. VM UUIDs are canonicalized. */
+                resourceID?: components["parameters"]["AuditResourceIdQuery"];
                 /** @description Return only events served via the system-admin bypass. */
                 adminOnly?: components["parameters"]["AuditAdminOnlyQuery"];
                 /** @description Lower bound on `createdAt`. ISO8601 (with or without fractional seconds) or epoch seconds; an unparseable value is treated as unbounded rather than matching nothing. */
@@ -18154,6 +18162,10 @@ export interface operations {
                 eventType?: components["parameters"]["AuditEventTypeQuery"];
                 /** @description Return only events attributed to this user. */
                 userID?: components["parameters"]["AuditUserIdQuery"];
+                /** @description Return only events for this canonical resource type (for example, `vms`). */
+                resourceType?: components["parameters"]["AuditResourceTypeQuery"];
+                /** @description Return only events for this resource identifier. VM UUIDs are canonicalized. */
+                resourceID?: components["parameters"]["AuditResourceIdQuery"];
                 /** @description Return only events served via the system-admin bypass. */
                 adminOnly?: components["parameters"]["AuditAdminOnlyQuery"];
                 /** @description Lower bound on `createdAt`. ISO8601 (with or without fractional seconds) or epoch seconds; an unparseable value is treated as unbounded rather than matching nothing. */

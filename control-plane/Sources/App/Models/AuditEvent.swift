@@ -61,13 +61,23 @@ final class AuditEvent: Model, @unchecked Sendable {
     @OptionalField(key: "metadata")
     var metadataJSON: String?
 
-    @Timestamp(key: "created_at", on: .create)
+    /// Producer time, supplied by `AuditRecord`. This is an ordinary field,
+    /// not Fluent's create timestamp: `@Timestamp(on: .create)` overwrites a
+    /// caller-provided value at insertion time and would destroy causal order
+    /// when fail-open batches are delivered concurrently.
+    @OptionalField(key: "created_at")
     var createdAt: Date?
 
     init() {}
 
     init(from record: AuditRecord) {
         self.eventType = record.eventType
+        // Preserve when the fact was produced, not when an asynchronous audit
+        // backend happened to insert it. A drain racing a shutdown flush may
+        // deliver batches out of order; regenerating this timestamp at insert
+        // time could therefore make a timeout correction appear to precede
+        // the timeout it corrects.
+        self.createdAt = record.timestamp
         self.userID = record.userID
         self.username = record.username
         self.apiKeyID = record.apiKeyID

@@ -2,7 +2,7 @@
 
 **Issue:** STR-84
 
-**Status:** Approved for implementation planning
+**Status:** Implemented
 
 ## Purpose
 
@@ -51,11 +51,11 @@ turn them into audit events.
 
 | Event type | When emitted | Outcomes |
 | --- | --- | --- |
-| `vm.command.requested` | A `POST /api/vms/:id/actions/run` request completes or throws | `accepted`, `refused`, `error` |
+| `vm.command.requested` | A durable command is accepted for dispatch | `accepted` |
 | `vm.command.completed` | A durable command state transition reaches a terminal fact | `exited`, `failed`, `timed_out` |
-| `vm.exec.requested` | A `POST /api/vms/:id/exec` request completes or throws, or a WebSocket attach is refused after upgrade | `accepted`, `refused`, `error` |
+| `vm.exec.requested` | An interactive session is accepted and minted | `accepted` |
 | `vm.exec.started` | The owning agent sends the first valid `guest_exec_started` frame | `started` |
-| `vm.exec.ended` | An attached session reaches its first terminal transition | `exited`, `start_failed`, `browser_disconnected`, `agent_disconnected`, `agent_reconnected`, `closed` |
+| `vm.exec.ended` | An attached session reaches its first terminal transition | `exited`, `refused`, `timed_out`, `disconnected`, `terminated` |
 
 The existing generic `api.request` record remains. The domain events provide
 the execution-specific security facts and do not replace generic request
@@ -85,12 +85,10 @@ inventing an identity.
 
 Metadata remains a string-to-string object. The defined keys are:
 
-- `argv`: the exact argv encoded as a JSON array string. If a refused request
-  contains no decodable string array, this is JSON `null` and `argvError`
-  describes `missing`, `malformed`, or `not_string_array`.
+- `argv`: the exact accepted argv encoded as a JSON array string.
 - `outcome`: one of the event-specific values above.
 - `correlationID`: command execution UUID or interactive session ID.
-- `phase`: `mint` or `attach` for `vm.exec.requested` when needed.
+- `phase`: the lifecycle phase (`requested`, `completed`, `started`, or `ended`).
 - `exitCode`: decimal process exit code when the agent reports one.
 - `reason`: bounded normalized terminal or refusal reason when available.
 - `correctsOutcome`: the earlier outcome corrected by a late terminal fact.
@@ -103,10 +101,12 @@ transcript. Output recording is outside STR-84 and remains off.
 
 ### Event construction
 
-A focused `VMGuestExecutionAudit` component centralizes route recognition,
-metadata encoding, outcome naming, reason bounding, and `AuditRecord`
-construction. It does not own command or session state. Callers decide that a
-lifecycle transition happened and pass an immutable snapshot to the component.
+A focused `VMGuestExecutionAudit` component centralizes metadata encoding,
+outcome naming, reason bounding, and `AuditRecord` construction. The audit
+middleware separately recognizes guest-execution route shapes so their generic
+request facts can use the same fail-open delivery policy. Neither boundary owns
+command or session state. Callers decide that a lifecycle transition happened
+and pass an immutable snapshot to the component.
 
 Central construction prevents middleware, command services, and the session
 manager from drifting on event names or privacy exclusions. It also gives tests
@@ -114,29 +114,18 @@ one boundary at which to prove that prohibited fields cannot enter metadata.
 
 ### Request events
 
-`AuditMiddleware` continues to run outside authorization. After a response or
-thrown error, it recognizes the two exact VM execution POST routes and emits
-the matching request event in addition to `api.request`.
+`AuditMiddleware` continues to run outside authorization and remains the
+authoritative record for rejected or invalid API requests. The two domain
+request facts are accepted-only because that is the point at which a durable
+command ID or interactive session ID exists. They add exact argv, canonical VM
+identity, and correlation that generic middleware cannot know without copying
+execution-domain parsing into the authorization boundary.
 
-The helper decodes only the `command` property from the buffered body. It does
-not retain or serialize the full request. It resolves the VM's organization
-independently of controller success so a cross-organization refusal is scoped
-to the target VM. Missing VMs and database lookup failures leave the
-organization absent but still retain the VM ID from the route.
-
-HTTP outcome mapping is:
-
-- successful 2xx response: `accepted`;
-- 4xx response or `AbortError`: `refused`;
-- 5xx response or unexpected error: `error`.
-
-The WebSocket attach handler performs authorization after the HTTP upgrade, so
-middleware sees a successful upgrade even when the handler later refuses
-access. `validateExecAccess` therefore emits an additional
-`vm.exec.requested` event with `phase=attach` and `outcome=refused`. It uses a
-non-consuming pending-session snapshot when available to recover argv and the
-original correlation ID. Looking up that snapshot must not alter the response
-or reveal whether the session ID exists.
+The command controller emits `vm.command.requested` after the execution and
+payload transaction commits and before dispatch. The exec controller emits
+`vm.exec.requested` after the pending session is minted. Both use the bounded
+`recordFailOpen` queue. Audit delivery remains outside both acceptance
+transitions and cannot roll either one back.
 
 ### Captured command lifecycle
 
@@ -164,6 +153,15 @@ changed durable state:
 Audit delivery happens after the command transaction commits. A transition is
 not rolled back when an audit backend fails.
 
+Guest-execution generic request facts and domain facts always enter the bounded
+background queue, even when the deployment enables synchronous delivery for
+ordinary audit events. This keeps database and SIEM availability outside
+command dispatch and session teardown. Generic refusal facts omit raw
+validation error text because it can echo prohibited request fields. The
+database backend persists each fact's durable transition timestamp, so
+concurrent queue drains cannot reorder a timeout and its later correction by
+insert time.
+
 The current command model permits a late exit to replace a timeout failure with
 the actual result. That produces another `vm.command.completed` event with
 `correctsOutcome=timed_out`. This is the sole normal exception to the one
@@ -187,9 +185,10 @@ occurs after releasing it:
 - a frame from a non-owning agent cannot change state or produce an event.
 
 Normal exit includes the exit code. Start delivery failure, abnormal agent
-close, browser disconnect, agent disconnect, and same-agent reconnect cleanup
-use normalized end outcomes. An accepted pending session that expires without
-attachment has no start or end event because no process was sent to the guest.
+close, browser/operator termination, agent disconnect, and same-agent reconnect
+cleanup use the normalized end outcomes above. An accepted pending session that
+expires without attachment has no start or end event because no process was
+sent to the guest.
 
 Interactive state remains in memory. An abrupt control-plane process loss can
 therefore leave a start event without a later end event; fail-open delivery and
@@ -234,12 +233,12 @@ of throwing. No output field exists for the UI to reveal.
 
 ## Failure Handling
 
-The feature uses `AuditService.record`, including its current configuration and
-delivery semantics:
+The feature uses `AuditService.recordFailOpen`, including its bounded queue and
+best-effort backend semantics:
 
 - disabled audit or omitted backends do not block execution;
-- queue saturation may shed an event and increments the existing observable
-  shed counter;
+- count or byte saturation may shed an event and logs the running shed total
+  and reason;
 - database, Loki, log, or webhook failures do not change an HTTP response,
   command status, or session lifecycle;
 - audit errors never cause a lifecycle retry that could execute a command
@@ -256,13 +255,10 @@ Implementation follows red-green-refactor cycles at each boundary.
 
 ### Control-plane request tests
 
-- An authenticated authorization refusal for each POST route records actor,
-  VM, exact argv, action, status, and `outcome=refused`.
-- Successful command and exec requests record `outcome=accepted`.
-- Invalid and malformed commands record a truthful argv-unavailable marker
-  without copying the complete body.
-- An attach authorization refusal records `phase=attach` without consuming or
-  revealing a pending session.
+- Authorization and validation refusals remain visible as generic
+  `api.request` events and do not produce an accepted domain request fact.
+- Successful command and exec requests record `outcome=accepted` with exact
+  argv and their command/session correlation ID.
 - VM organization attribution comes from the target VM.
 
 ### Captured command tests
