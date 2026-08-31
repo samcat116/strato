@@ -148,6 +148,9 @@ startup rather than run with an unbounded query.
 | `resources.requests.memory` | string | `"512Mi"` | Memory request |
 | `strato.logLevel` | string | `"info"` | Log level (debug, info, warn, error) |
 | `strato.database.statementTimeoutMs` | int | `300000` | Maximum duration in milliseconds for statements on normal pooled control-plane connections |
+| `strato.secretEncryption.existingSecret` | string | `""` | Secret containing the primary and optional previous stored-secret encryption keys |
+| `strato.secretEncryption.key` | string | `"encryption-key"` | Secret entry containing the primary 32-byte hex/base64 key |
+| `strato.secretEncryption.previousKeysKey` | string | `""` | Optional Secret entry containing comma-separated decrypt-only keys during rotation |
 | `strato.webauthn.relyingPartyId` | string | `""` | WebAuthn relying party identifier; empty derives it from the Gateway hostname (falling back to `localhost`) |
 | `strato.webauthn.relyingPartyName` | string | `"Strato"` | WebAuthn relying party name |
 | `strato.webauthn.relyingPartyOrigin` | string | `""` | WebAuthn relying party origin; empty derives it from the Gateway settings (falling back to `http://localhost:8080`) |

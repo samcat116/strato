@@ -75,11 +75,6 @@ public enum NetworkResolverEndpoint {
         "fd00:ec2:1::\(String(index, radix: 16))"
     }
 
-    /// `address` as a host CIDR, the form the agent assigns to its interface.
-    public static func cidr(forIndex index: Int) -> String { "\(address(forIndex: index))/32" }
-    /// `addressV6` as a host CIDR.
-    public static func cidrV6(forIndex index: Int) -> String { "\(addressV6(forIndex: index))/128" }
-
     /// The whole v4 space these addresses are drawn from.
     ///
     /// The security-group carve-out matches this rather than each network's

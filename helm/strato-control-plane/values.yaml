@@ -364,14 +364,16 @@ strato:
   # who could invite anyone — so this is safe to disable from the start.
   selfRegistrationEnabled: true
 
-  # At-rest encryption of stored secrets (OIDC client secrets, SSF stream
-  # auth tokens) — STRATO_SECRET_ENCRYPTION_KEY. Optional: when unset the
-  # control plane warns and stores them unencrypted. Point existingSecret at
-  # a Secret holding a 32-byte key (hex or base64; `openssl rand -hex 32`).
-  # Losing the key makes stored secrets unreadable (re-enter them to recover).
+  # At-rest encryption of recoverable stored secrets. Point existingSecret at
+  # a Secret whose `key` entry holds the primary 32-byte hex/base64 key. During
+  # rotation, set `previousKeysKey` to an entry containing comma-separated
+  # decrypt-only keys. Remove that entry only after every table reports
+  # rewrapped=0 and unopenable=0. External Secret data changes do not restart
+  # pods; trigger and complete a control-plane rollout after each change.
   secretEncryption:
     existingSecret: ""
     key: "encryption-key"
+    previousKeysKey: ""
 
   # External hostname for agent WebSocket connections. When Gateway API is
   # enabled, this also supplies the default web, agents, and SPIRE SNI hosts;
