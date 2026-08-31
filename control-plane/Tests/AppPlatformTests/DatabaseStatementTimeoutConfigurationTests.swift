@@ -98,53 +98,44 @@ struct DatabaseStatementTimeoutIntegrationTests {
 
         let attempt: StatementTimeoutAttempt
         do {
-            attempt = try await holder.db.withConnection { heldConnection in
-                let heldSQL = try #require(heldConnection as? any SQLDatabase)
-                let lockName = "strato:statement-timeout:\(UUID().uuidString)"
-                try await heldSQL.raw(
-                    "SELECT pg_advisory_lock(hashtext(\(bind: lockName)))"
-                ).run()
+            attempt = try await holder.db.transaction { heldTransaction in
+                let key = AdvisoryLockKey.object(.dnsZone, id: UUID())
+                try await AdvisoryLock.acquireTransactionLock(key, on: heldTransaction)
+
+                let configuredValue = try await timed.db.withConnection { timedConnection in
+                    let timedSQL = try #require(timedConnection as? any SQLDatabase)
+                    return try await timedSQL.raw(
+                        "SELECT current_setting('statement_timeout') AS value"
+                    ).first(decodingColumn: "value", as: String.self)
+                }
+                let clock = ContinuousClock()
+                let started = clock.now
+                var errorDescription: String?
 
                 do {
-                    let result = try await timed.db.withConnection { timedConnection in
-                        let timedSQL = try #require(timedConnection as? any SQLDatabase)
-                        let configuredValue = try await timedSQL.raw(
-                            "SELECT current_setting('statement_timeout') AS value"
-                        ).first(decodingColumn: "value", as: String.self)
-                        let clock = ContinuousClock()
-                        let started = clock.now
-                        var errorDescription: String?
-
-                        do {
-                            try await timedSQL.raw(
-                                "SELECT pg_advisory_lock(hashtext(\(bind: lockName)))"
-                            ).run()
-                        } catch {
-                            // SQLKit redacts `description`; its reflective form
-                            // carries the PostgreSQL SQLSTATE and server message.
-                            errorDescription = String(reflecting: error)
-                        }
-
-                        let elapsed = started.duration(to: clock.now)
-                        let probe = try await timedSQL.raw("SELECT 1 AS value")
-                            .first(decodingColumn: "value", as: Int.self)
-                        return StatementTimeoutAttempt(
-                            errorDescription: errorDescription,
-                            elapsed: elapsed,
-                            connectionProbe: probe,
-                            configuredValue: configuredValue
-                        )
+                    try await timed.db.transaction { timedTransaction in
+                        try await AdvisoryLock.acquireTransactionLock(key, on: timedTransaction)
                     }
-                    try await heldSQL.raw(
-                        "SELECT pg_advisory_unlock(hashtext(\(bind: lockName)))"
-                    ).run()
-                    return result
                 } catch {
-                    try? await heldSQL.raw(
-                        "SELECT pg_advisory_unlock(hashtext(\(bind: lockName)))"
-                    ).run()
-                    throw error
+                    // SQLKit redacts `description`; its reflective form carries
+                    // the PostgreSQL SQLSTATE and server message. Letting the
+                    // error escape the transaction also completes its rollback
+                    // before the pooled connection is checked below.
+                    errorDescription = String(reflecting: error)
                 }
+
+                let elapsed = started.duration(to: clock.now)
+                let probe = try await timed.db.withConnection { connection in
+                    let sql = try #require(connection as? any SQLDatabase)
+                    return try await sql.raw("SELECT 1 AS value")
+                        .first(decodingColumn: "value", as: Int.self)
+                }
+                return StatementTimeoutAttempt(
+                    errorDescription: errorDescription,
+                    elapsed: elapsed,
+                    connectionProbe: probe,
+                    configuredValue: configuredValue
+                )
             }
         } catch {
             try? await holder.asyncShutdown()

@@ -223,12 +223,52 @@ domain:
   enrollment (join tokens, entry revocation) and the Workload Identity view.
   The plaintext admin socket never crosses the network.
 
-## Rollouts
+## Upgrades
 
-The chart ships startup/liveness/readiness probes and a `preStop` drain delay
-tuned for zero-downtime rollouts. See
-[Health checks & zero-downtime deploys](/deployment/health-checks) for what each
-probe promises and which knobs to raise for a slow database or a slow ingress.
+The control-plane Deployment uses Kubernetes' `Recreate` strategy. STR-275 moved
+advisory locks from the legacy one-argument PostgreSQL keyspace to the disjoint
+two-argument keyspace, so old and new control-plane processes do not serialize
+each other. Kubernetes must terminate every old pod and close its database
+sessions before it creates the replacement set. Expect a brief API and
+agent-channel outage while the old pods drain and the new pods boot. PostgreSQL
+keeps durable state, and agents reconnect and converge after the new pods become
+ready.
+
+For the first upgrade from a build before STR-275, make the strategy change its
+own Helm revision while the old image is still pinned:
+
+```bash
+# 1. Apply the new chart without changing the running binary.
+helm upgrade strato . -f my-values.yaml \
+  --set-string image.tag=<current-immutable-image-tag> --wait
+
+kubectl get deployment strato-strato-control-plane \
+  -o jsonpath='{.spec.strategy.type}{"\n"}'
+# Recreate
+
+# 2. Cross the keyspace boundary only after Recreate is recorded.
+helm upgrade strato . -f my-values.yaml \
+  --set-string image.tag=<str-275-image-tag> --wait
+```
+
+The first step makes rollback non-overlapping too: the immediately preceding
+Helm revision contains the old image and `Recreate`. If the chart was not staged
+this way, do not use `--atomic` for the keyspace-changing upgrade. On failure,
+stop any HPA that can rescale the Deployment, scale the control plane to zero,
+wait for every new pod to terminate, and only then run `helm rollback`. Never
+start an old control-plane image while a new one is still connected to the same
+database.
+
+`Recreate` covers only pods owned by this Deployment. Before crossing the
+boundary, stop any blue/green Deployment, second Helm release, one-off command,
+or manually launched control-plane process that shares PostgreSQL. A
+PodDisruptionBudget does not turn this replacement into a rolling deployment;
+the outage is intentional.
+
+The chart still ships startup/liveness/readiness probes and a `preStop` drain
+delay so old requests and agent WebSockets receive the configured shutdown
+budget. See [Health checks & controlled deploys](/deployment/health-checks) for
+what each probe promises and which knobs to raise for a slow database or ingress.
 
 ## Adding hypervisors
 
