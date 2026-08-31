@@ -22,7 +22,6 @@ final class ResourceConditionsTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -56,30 +55,16 @@ final class ResourceConditionsTests {
         named agentName: String,
         hypervisorType: HypervisorType
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: agentName,
+        try await TestDataBuilder(db: app.db).registerAgent(
+            on: app,
+            named: agentName,
             hostname: "test-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
             hypervisors: [
                 HypervisorSupport(
                     type: hypervisorType, available: true, accelerated: true,
                     capabilities: .capabilities(for: hypervisorType))
             ],
-            protocolVersion: WireProtocol.currentVersion,
-            sandboxCapable: hypervisorType == .firecracker
-        )
-        let project = try #require(await Project.query(on: app.db).sort(\.$createdAt).first())
-        let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: agentName, siteID: siteID,
-            organizationScope: orgID.map { .organization($0) })
-        return agentUUID.uuidString
+            sandboxCapable: hypervisorType == .firecracker)
     }
 
     private func report(
@@ -169,7 +154,7 @@ final class ResourceConditionsTests {
 
             refreshed.convergenceDeadline = Date().addingTimeInterval(-1)
             try await refreshed.save(on: app.db)
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
 
             let finalized = try #require(await VM.find(vm.id, on: app.db))
             #expect(finalized.desiredStatus == .shutdown)
@@ -178,7 +163,7 @@ final class ResourceConditionsTests {
             #expect(finalized.conditions.degraded?.reason == reason)
             #expect(try await self.mutationOutcomes(app: app) == ["operation.failed"])
 
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
             #expect(try await self.mutationOutcomes(app: app) == ["operation.failed"])
         }
     }

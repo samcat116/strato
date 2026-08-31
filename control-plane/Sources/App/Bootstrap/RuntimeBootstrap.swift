@@ -4,9 +4,7 @@ extension Application {
     /// Installs runtime modules whose construction depends on the migrated and
     /// reconciled database state.
     func bootstrapRuntimeModules() async throws {
-        // Configure the scheduler service from the startup-resolved strategy.
-        let schedulingStrategy = SchedulingStrategy(
-            rawValue: controlPlaneConfiguration.string(.schedulingStrategy)!)!
+        let schedulingStrategy = controlPlaneConfiguration.schedulingStrategy
         useScheduler(SchedulerService(logger: logger, defaultStrategy: schedulingStrategy))
         logger.info("Scheduler service initialized with strategy: \(schedulingStrategy.rawValue)")
 

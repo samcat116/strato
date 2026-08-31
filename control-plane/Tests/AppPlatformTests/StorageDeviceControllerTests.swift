@@ -87,6 +87,7 @@ struct StorageDeviceControllerTests {
             name: "agent",
             hostname: "agent.example",
             version: "1.0.0",
+            siteID: UUID(),
             status: .online,
             resources: AgentResources(
                 totalCPU: 8, availableCPU: 8,

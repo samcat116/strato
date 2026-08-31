@@ -37,7 +37,6 @@ final class VMOperationTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -103,31 +102,16 @@ final class VMOperationTests {
     /// Registers an agent and places `vm` on it, converged and running.
     @discardableResult
     private func placeOnAgent(app: Application, vm: VM) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: "reboot-agent",
-            hostname: "test-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40),
-            protocolVersion: WireProtocol.currentVersion)
-        let organization = try #require(
-            try await Organization.query(on: app.db).sort(\.$createdAt).first())
-        let orgID = try organization.requireID()
-        let site = Site(name: "VM Operation Site", organizationScope: .organization(orgID))
-        try await site.save(on: app.db)
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: "reboot-agent", siteID: try site.requireID(),
-            organizationScope: .organization(orgID))
+        let agentID = try await TestDataBuilder(db: app.db).registerAgent(
+            on: app, named: "reboot-agent", hostname: "test-host")
 
-        vm.hypervisorId = agentUUID.uuidString
+        vm.hypervisorId = agentID
         vm.setStatus(.running)
         vm.desiredStatus = .running
         vm.generation = 1
         vm.observedGeneration = 1
         try await vm.save(on: app.db)
-        return agentUUID.uuidString
+        return agentID
     }
 
     @Test("VM interface attach uses the lowest free stable slot and returns a 202 mutation")
@@ -850,7 +834,7 @@ final class VMOperationTests {
 
             // The teardown outran its budget — a large disk, or a finalizer
             // participant waiting on something — so the sweep degrades the VM.
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
             let degraded = try #require(try await VM.find(vmID, on: app.db))
             #expect(degraded.conditions.degraded != nil)
 
@@ -923,7 +907,7 @@ final class VMOperationTests {
             try await vm.save(on: app.db)
             _ = try await record(.boot, on: vm, by: user, on: app.db)
 
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
 
             let swept = try #require(try await VM.find(vm.id, on: app.db))
             #expect(swept.conditions.degraded?.reason.contains("Timed out") == true)
@@ -946,14 +930,14 @@ final class VMOperationTests {
             try await vm.save(on: app.db)
             _ = try await record(.boot, on: vm, by: user, on: app.db)
 
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
             let first = try #require(try await VM.find(vm.id, on: app.db))
             let generation = first.generation
             let reason = first.lastError
 
             // A second pass — the other replica's, or the next tick's — finds
             // the deadline already claimed and changes nothing.
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
 
             let second = try #require(try await VM.find(vm.id, on: app.db))
             #expect(second.generation == generation)
@@ -977,7 +961,7 @@ final class VMOperationTests {
             _ = try await record(.resize, on: vm, by: user, on: app.db)
             let generation = vm.generation
 
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
 
             let swept = try #require(try await VM.find(vm.id, on: app.db))
             #expect(swept.lastError == "resize failed: no space left on device")
@@ -994,7 +978,7 @@ final class VMOperationTests {
             vm.convergenceDeadline = Date().addingTimeInterval(-1)
             try await vm.save(on: app.db)
 
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
 
             let swept = try #require(try await VM.find(vm.id, on: app.db))
             #expect(swept.conditions.degraded == nil)
@@ -1011,7 +995,7 @@ final class VMOperationTests {
             try await vm.save(on: app.db)
             _ = try await record(.delete, on: vm, by: user, on: app.db)
 
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
 
             let swept = try #require(try await VM.find(vm.id, on: app.db))
             #expect(swept.conditions.degraded != nil)

@@ -3,14 +3,9 @@ import Foundation
 import StratoShared
 import Vapor
 
-/// The lifecycle mutations shared by all three snapshot-artifact families
-/// (ADR 0001 stage 8, STR-150).
-///
-/// Three controllers used to hand-roll the same sequence three times — reserve
-/// quota, insert the row, dispatch an RPC, hope, then patch the row from the
-/// reply and record a verdict. What is left after the conversion is small
-/// enough to be written once: apply the desired state, let `ResourceMutation`
-/// record and dispatch it, and let the agent's report close the loop.
+/// Lifecycle mutations shared by all three snapshot-artifact families. Applies
+/// desired state, records and dispatches through `ResourceMutation`, then lets
+/// the agent's report close the loop.
 enum SnapshotArtifactMutation {
 
     /// Appends the capture's attribution event and completes its idempotency
@@ -65,11 +60,9 @@ enum SnapshotArtifactMutation {
     /// Accepts a delete: desired `.absent`, the finalizers its teardown owes,
     /// and the attribution event, in one transaction.
     ///
-    /// The row outlives this call. It goes only once the owning agent's
-    /// observed report stops listing the artifact — which is what makes a
-    /// delete durable across a control-plane restart, and what the old path
-    /// could not offer at all: an RPC whose reply was lost left a row marked
-    /// `.deleting` with nothing left to retry it.
+    /// The row outlives this call and is removed only after the owning agent's
+    /// observed report stops listing it, making deletion durable across a
+    /// control-plane restart.
     @discardableResult
     static func delete<A: SnapshotArtifactResource>(
         _ artifact: A,
@@ -85,11 +78,8 @@ enum SnapshotArtifactMutation {
     ) async throws -> ResourceMutation.Accepted {
         let artifactID = try artifact.requireID()
 
-        // Unplaced, or placed on an agent that is offline or too old to speak
-        // snapshot sync: nothing will ever confirm the teardown, so clear the
-        // agent's finalizer here. A dead or un-upgraded agent must not make its
-        // artifacts undeletable — the same rough edge the volume cutover names,
-        // and the same answer.
+        // An unplaced artifact or one whose agent is unavailable cannot confirm
+        // teardown, so clear the agent finalizer rather than make it undeletable.
         let agentCanConverge = await agentConvergesSnapshots(artifact.agentId, app: app)
         let strategy: ResourceMutation.Dispatch =
             agentCanConverge

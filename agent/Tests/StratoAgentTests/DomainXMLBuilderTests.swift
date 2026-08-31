@@ -681,7 +681,7 @@ struct DomainXMLBuilderTests {
     }
 
     private static func hotplugBytes(_ input: DomainXMLInput) -> Int64 {
-        MemoryHotplugPlan.alignedHotplugBytes(
+        QEMUMemoryReservation.alignedHotplugBytes(
             spec: input.spec, architecture: input.architecture)
     }
 
@@ -896,21 +896,21 @@ struct DomainXMLBuilderTests {
 
     @Test("virtio-mem block size follows the guest architecture")
     func blockSizes() {
-        #expect(MemoryHotplugPlan.blockBytes(architecture: .x86_64) == 2 * 1024 * 1024)
-        #expect(MemoryHotplugPlan.blockBytes(architecture: .arm64) == 512 * 1024 * 1024)
+        #expect(QEMUMemoryReservation.blockBytes(architecture: .x86_64) == 2 * 1024 * 1024)
+        #expect(QEMUMemoryReservation.blockBytes(architecture: .arm64) == 512 * 1024 * 1024)
 
         let spec = Self.spec(
             memoryBytes: 1024 * 1024 * 1024, maxMemoryBytes: 1024 * 1024 * 1024 + 700 * 1024 * 1024)
         // 700 MiB floors to a single 512 MiB block on arm64 and to 700 MiB
         // exactly on x86, where the block is 2 MiB.
         #expect(
-            MemoryHotplugPlan.alignedHotplugBytes(spec: spec, architecture: .arm64)
+            QEMUMemoryReservation.alignedHotplugBytes(spec: spec, architecture: .arm64)
                 == 512 * 1024 * 1024)
         #expect(
-            MemoryHotplugPlan.alignedHotplugBytes(spec: spec, architecture: .x86_64)
+            QEMUMemoryReservation.alignedHotplugBytes(spec: spec, architecture: .x86_64)
                 == 700 * 1024 * 1024)
         #expect(
-            MemoryHotplugPlan.alignedHotplugBytes(spec: Self.spec(), architecture: .x86_64) == 0)
+            QEMUMemoryReservation.alignedHotplugBytes(spec: Self.spec(), architecture: .x86_64) == 0)
     }
 
     /// The domain document and the agent's own socket clients derive these

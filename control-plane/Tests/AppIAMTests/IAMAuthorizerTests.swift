@@ -17,7 +17,6 @@ final class IAMAuthorizerTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             // Enable decision-row recording (off by default under .testing).
             // After configure — which resets the config from the environment —
             // and before the recorder is lazily built with it at boot.
@@ -408,7 +407,6 @@ final class IAMAuthorizerBackstopTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             app.iamDecisionLogConfig.recordDecisions = true
             try await test(app)
         } catch {

@@ -36,6 +36,7 @@ export type CreateSandboxSnapshotRequest = Request<"CreateSandboxSnapshotRequest
 export type Image = Response<"Image", Legacy.Image>;
 export type ArtifactKind = Schema<"ArtifactKind"> & Legacy.ArtifactKind;
 export type CreateImageRequest = Request<"CreateImageRequest", Legacy.CreateImageRequest>;
+export type ImageUploadForm = Schema<"ImageUploadForm">;
 export type UpdateImageRequest = Request<"UpdateImageRequest", Legacy.UpdateImageRequest>;
 
 export type Volume = Response<"Volume", Legacy.Volume>;

@@ -10,10 +10,6 @@ public typealias IPv4Address = StratoShared.IPv4Address
 /// configuration (QEMU netdev arguments, Firecracker API calls) and reject
 /// kinds their backend cannot realize — Firecracker, for example, only
 /// supports `.tap`.
-///
-/// This replaces the old `tapInterface: String` field whose `"n/a"` sentinel
-/// every driver had to know about. New backends (vmnet on macOS, vhost-user)
-/// become new cases here rather than new sentinels.
 public enum NetworkAttachment: Codable, Sendable, Equatable {
     /// A kernel TAP device (created and bridged by the network service) the
     /// hypervisor should open by name.

@@ -11,7 +11,7 @@ final class ConsoleSessionManagerTests: BaseTestCase {
 
     @Test("Session lifecycle: create, look up, remove, and per-VM index")
     func sessionLifecycle() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let manager = app.consoleSessionManager
             let sessionId = UUID().uuidString
             let vmId = UUID().uuidString
@@ -41,7 +41,7 @@ final class ConsoleSessionManagerTests: BaseTestCase {
 
     @Test("Agent disconnect tears down that agent's console sessions")
     func agentDisconnectClosesSessions() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let manager = app.consoleSessionManager
 
             // Two sessions on the disconnecting agent — one of them a second
@@ -94,7 +94,7 @@ final class ConsoleSessionManagerTests: BaseTestCase {
 
     @Test("A minted graphics session attaches once and records its stream")
     func vncSessionMintAndAttach() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let manager = app.consoleSessionManager
             let vmId = UUID().uuidString
             let userId = UUID().uuidString
@@ -127,7 +127,7 @@ final class ConsoleSessionManagerTests: BaseTestCase {
     /// must not let a different user — or a different VM's tab — attach.
     @Test("A graphics session rejects the wrong VM, the wrong user, and expiry")
     func vncSessionRejectsMismatchAndExpiry() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let manager = app.consoleSessionManager
             let vmId = UUID().uuidString
             let userId = UUID().uuidString
@@ -167,7 +167,7 @@ final class ConsoleSessionManagerTests: BaseTestCase {
     /// back where it started: a blank "Disconnected".
     @Test("An error control frame stays valid JSON for reasons with awkward characters")
     func errorControlFrameSurvivesAwkwardReasons() async throws {
-        try await withApp { _ in
+        try await withTestApp { _ in
             let reason = "VM \"x\" has no display:\n\tuse a \\qemu\\ image"
             let frame = ConsoleSessionManager.errorControlFrame(reason)
 
@@ -185,7 +185,7 @@ final class ConsoleSessionManagerTests: BaseTestCase {
     /// would fail after the upgrade, where explaining why is hardest.
     @Test("Agent disconnect drops that agent's unattached graphics sessions")
     func agentDisconnectDropsPendingVNCSessions() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let manager = app.consoleSessionManager
             let vmId = UUID().uuidString
             let userId = UUID().uuidString

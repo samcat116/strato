@@ -24,7 +24,6 @@ final class VolumeStuckSweepTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -92,7 +91,7 @@ final class VolumeStuckSweepTests {
             let volume = try await makeVolume(
                 deadlineOverdueBy: 60, on: app, user: user, project: project)
 
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
 
             let swept = try await #require(try await Volume.find(volume.id, on: app.db))
             #expect(swept.conditions.degraded != nil)
@@ -108,7 +107,7 @@ final class VolumeStuckSweepTests {
             let volume = try await makeVolume(
                 deadlineOverdueBy: -300, on: app, user: user, project: project)
 
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
 
             let swept = try await #require(try await Volume.find(volume.id, on: app.db))
             #expect(swept.conditions.degraded == nil)
@@ -126,7 +125,7 @@ final class VolumeStuckSweepTests {
                 deadlineOverdueBy: nil, status: .available, observedGeneration: 1,
                 on: app, user: user, project: project)
 
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
 
             let swept = try await #require(try await Volume.find(volume.id, on: app.db))
             #expect(swept.conditions.degraded == nil)
@@ -144,7 +143,7 @@ final class VolumeStuckSweepTests {
                 deadlineOverdueBy: 60, status: .available, generation: 1, observedGeneration: 1,
                 on: app, user: user, project: project)
 
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
 
             let swept = try await #require(try await Volume.find(volume.id, on: app.db))
             #expect(swept.conditions.degraded == nil)
@@ -164,7 +163,7 @@ final class VolumeStuckSweepTests {
             volume.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
             try await volume.save(on: app.db)
 
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
 
             let swept = try await #require(try await Volume.find(volume.id, on: app.db))
             #expect(swept.conditions.degraded != nil)
@@ -187,7 +186,7 @@ final class VolumeStuckSweepTests {
             volume.failedGeneration = 3
             try await volume.save(on: app.db)
 
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
 
             let swept = try await #require(try await Volume.find(volume.id, on: app.db))
             // The agent's reason survives — not overwritten with "Timed out…".
@@ -214,7 +213,7 @@ final class VolumeStuckSweepTests {
             try await sql.raw("UPDATE volumes SET updated_at = \(bind: past) WHERE id = \(bind: volumeID)")
                 .run()
 
-            await app.agentService.sweepOrphanedTerminatingResources()
+            await app.agentMaintenance.sweepOrphanedTerminatingResources()
 
             #expect(try await Volume.find(volumeID, on: app.db) == nil)
         }
@@ -236,7 +235,7 @@ final class VolumeStuckSweepTests {
             try await sql.raw("UPDATE volumes SET updated_at = \(bind: past) WHERE id = \(bind: volumeID)")
                 .run()
 
-            await app.agentService.sweepOrphanedTerminatingResources()
+            await app.agentMaintenance.sweepOrphanedTerminatingResources()
 
             #expect(try await Volume.find(volumeID, on: app.db) != nil)
         }

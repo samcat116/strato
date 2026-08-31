@@ -22,14 +22,14 @@ struct AgentMetadataServiceCapabilityTests {
         let implicit = Agent.from(
             registration: AgentRegisterMessage(
                 agentId: "implicit", hostname: "implicit", version: "1", resources: resources),
-            name: "implicit")
+            name: "implicit", siteID: UUID())
         #expect(!implicit.metadataServiceCapable)
 
         let capable = Agent.from(
             registration: AgentRegisterMessage(
                 agentId: "capable", hostname: "capable", version: "1", resources: resources,
                 metadataServiceCapable: true),
-            name: "capable")
+            name: "capable", siteID: UUID())
         #expect(capable.metadataServiceCapable)
     }
 

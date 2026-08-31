@@ -118,9 +118,9 @@ enum ObservabilityBootstrap {
 
     static func plan(for configuration: ControlPlaneConfiguration) -> ObservabilitySignalPlan {
         ObservabilitySignalPlan(
-            metricsEnabled: configuration.bool(.otelMetricsEnabled)!,
-            logsEnabled: configuration.bool(.otelLogsEnabled)!,
-            tracesEnabled: configuration.bool(.otelTracesEnabled)!)
+            metricsEnabled: configuration.bool(.otelMetricsEnabled),
+            logsEnabled: configuration.bool(.otelLogsEnabled),
+            tracesEnabled: configuration.bool(.otelTracesEnabled))
     }
 
     static func composeLogHandlers(

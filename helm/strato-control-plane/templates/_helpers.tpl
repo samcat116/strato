@@ -1,13 +1,7 @@
-{{/*
-Expand the name of the chart.
-*/}}
 {{- define "strato-control-plane.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{/*
-Create a default fully qualified app name.
-*/}}
 {{- define "strato-control-plane.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
@@ -21,16 +15,10 @@ Create a default fully qualified app name.
 {{- end }}
 {{- end }}
 
-{{/*
-Create chart name and version as used by the chart label.
-*/}}
 {{- define "strato-control-plane.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{/*
-Common labels
-*/}}
 {{- define "strato-control-plane.labels" -}}
 helm.sh/chart: {{ include "strato-control-plane.chart" . }}
 {{ include "strato-control-plane.selectorLabels" . }}
@@ -40,17 +28,11 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
-{{/*
-Selector labels
-*/}}
 {{- define "strato-control-plane.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "strato-control-plane.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
-{{/*
-Create the name of the service account to use
-*/}}
 {{- define "strato-control-plane.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
 {{- default (include "strato-control-plane.fullname" .) .Values.serviceAccount.name }}
@@ -59,9 +41,6 @@ Create the name of the service account to use
 {{- end }}
 {{- end }}
 
-{{/*
-Get the database host
-*/}}
 {{- define "strato-control-plane.databaseHost" -}}
 {{- if .Values.postgresql.enabled }}
 {{- printf "%s-postgresql" .Release.Name }}
@@ -102,14 +81,27 @@ See issue #56.
 {{- end }}
 {{- end }}
 
-{{/*
-Get the database port
-*/}}
 {{- define "strato-control-plane.databasePort" -}}
 {{- if .Values.postgresql.enabled }}
 {{- .Values.strato.database.port }}
 {{- else }}
 {{- .Values.externalDatabase.port }}
+{{- end }}
+{{- end }}
+
+{{- define "strato-control-plane.databaseName" -}}
+{{- if .Values.postgresql.enabled }}
+{{- .Values.strato.database.name }}
+{{- else }}
+{{- .Values.externalDatabase.database }}
+{{- end }}
+{{- end }}
+
+{{- define "strato-control-plane.databaseUsername" -}}
+{{- if .Values.postgresql.enabled }}
+{{- .Values.strato.database.username }}
+{{- else }}
+{{- .Values.externalDatabase.username }}
 {{- end }}
 {{- end }}
 
@@ -129,9 +121,6 @@ auth.existingSecret so there is a single source of truth.
 {{- end }}
 {{- end }}
 
-{{/*
-Get the database password secret key
-*/}}
 {{- define "strato-control-plane.databaseSecretKey" -}}
 {{- if and (not .Values.postgresql.enabled) .Values.externalDatabase.existingSecret }}
 {{- .Values.externalDatabase.existingSecretPasswordKey | default "password" }}
@@ -182,16 +171,10 @@ namespace when gateway.namespace is unset.
 {{- default .Release.Namespace .Values.gateway.namespace -}}
 {{- end }}
 
-{{/*
-Secret holding the terminated web listener's certificate.
-*/}}
 {{- define "strato-control-plane.gateway.tlsSecretName" -}}
 {{- default (printf "%s-gateway-tls" (include "strato-control-plane.fullname" .)) .Values.gateway.tls.secretName -}}
 {{- end }}
 
-{{/*
-Get the primary hostname
-*/}}
 {{- define "strato-control-plane.hostname" -}}
 {{- if .Values.gateway.enabled }}
 {{- include "strato-control-plane.gateway.webHost" . }}
@@ -200,9 +183,6 @@ Get the primary hostname
 {{- end }}
 {{- end }}
 
-{{/*
-Get the WebAuthn relying party ID (domain without protocol/port)
-*/}}
 {{- define "strato-control-plane.webauthnRelyingPartyId" -}}
 {{- if .Values.strato.webauthn.relyingPartyId }}
 {{- .Values.strato.webauthn.relyingPartyId }}
@@ -211,9 +191,6 @@ Get the WebAuthn relying party ID (domain without protocol/port)
 {{- end }}
 {{- end }}
 
-{{/*
-Get the WebAuthn origin URL (protocol + domain + port)
-*/}}
 {{- define "strato-control-plane.webauthnOrigin" -}}
 {{- if .Values.strato.webauthn.relyingPartyOrigin }}
 {{- .Values.strato.webauthn.relyingPartyOrigin }}
@@ -241,9 +218,6 @@ An explicit strato.httpTlsEnabled overrides the default.
 {{- end }}
 {{- end }}
 
-{{/*
-Get the Valkey host
-*/}}
 {{- define "strato-control-plane.valkeyHost" -}}
 {{- if .Values.valkey.enabled }}
 {{- printf "%s-valkey-master" .Release.Name }}
@@ -252,9 +226,6 @@ Get the Valkey host
 {{- end }}
 {{- end }}
 
-{{/*
-Get the Valkey port
-*/}}
 {{- define "strato-control-plane.valkeyPort" -}}
 {{- if .Values.valkey.enabled }}
 {{- 6379 }}
@@ -263,9 +234,6 @@ Get the Valkey port
 {{- end }}
 {{- end }}
 
-{{/*
-Get the Valkey password secret name
-*/}}
 {{- define "strato-control-plane.valkeySecretName" -}}
 {{- if .Values.valkey.enabled }}
 {{- if .Values.valkey.auth.existingSecret }}
@@ -278,9 +246,6 @@ Get the Valkey password secret name
 {{- end }}
 {{- end }}
 
-{{/*
-Get the Valkey password secret key
-*/}}
 {{- define "strato-control-plane.valkeySecretKey" -}}
 {{- if .Values.valkey.enabled }}
 {{- .Values.valkey.auth.existingSecretPasswordKey | default "redis-password" }}
@@ -305,30 +270,18 @@ valid default, unlike the coordination endpoint which the control plane needs.
 {{- .Values.sessionValkey.host }}
 {{- end }}
 
-{{/*
-Get the session Valkey port
-*/}}
 {{- define "strato-control-plane.sessionValkeyPort" -}}
 {{- .Values.sessionValkey.port | default 6379 }}
 {{- end }}
 
-{{/*
-Get the session Valkey password secret name
-*/}}
 {{- define "strato-control-plane.sessionValkeySecretName" -}}
 {{- printf "%s-session-valkey" (include "strato-control-plane.fullname" .) }}
 {{- end }}
 
-{{/*
-Get the session Valkey password secret key
-*/}}
 {{- define "strato-control-plane.sessionValkeySecretKey" -}}
 {{- "session-valkey-password" }}
 {{- end }}
 
-{{/*
-Valkey labels
-*/}}
 {{- define "strato-control-plane.valkey.labels" -}}
 helm.sh/chart: {{ include "strato-control-plane.chart" . }}
 app.kubernetes.io/name: {{ include "strato-control-plane.name" . }}-valkey

@@ -219,8 +219,6 @@ final class ImageControllerTests {
             // Inject mock ImageFetchService to prevent real HTTP requests
             app.imageFetchService = MockImageFetchService()
 
-            try await app.autoMigrate()
-
             // Create test user
             let testUser = User(
                 username: "imageuser",

@@ -60,28 +60,28 @@ export default function DNSZonesPage() {
       {
         key: `create:${zone.id}`,
         action: "dns:create",
-        node: { type: "dns_zone", id: zone.id },
+        node: { type: "dns_zone" as const, id: zone.id },
       },
       {
         key: `attach:${zone.id}`,
         action: "dns:attach",
-        node: { type: "dns_zone", id: zone.id },
+        node: { type: "dns_zone" as const, id: zone.id },
       },
       {
         key: `detach:${zone.id}`,
         action: "dns:detach",
-        node: { type: "dns_zone", id: zone.id },
+        node: { type: "dns_zone" as const, id: zone.id },
       },
       {
         key: `delete:${zone.id}`,
         action: "dns:delete",
-        node: { type: "dns_zone", id: zone.id },
+        node: { type: "dns_zone" as const, id: zone.id },
       },
     ]),
     ...(recordsQuery.data ?? []).map((record) => ({
       key: `delete-record:${record.id}`,
       action: "dns:delete",
-      node: { type: "dns_record", id: record.id },
+      node: { type: "dns_record" as const, id: record.id },
     })),
   ]);
 

@@ -77,7 +77,7 @@ final class SCIMFilterTests: BaseTestCase {
 
     @Test("User co (contains) is case-insensitive")
     func testUserContainsCaseInsensitive() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Org A")
             try await createUser(builder, username: "Alice", displayName: "Alice Anderson", org: org)
@@ -94,7 +94,7 @@ final class SCIMFilterTests: BaseTestCase {
 
     @Test("User sw (startsWith) is case-insensitive")
     func testUserStartsWithCaseInsensitive() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Org A")
             try await createUser(builder, username: "Alice", displayName: "Alice Anderson", org: org)
@@ -111,7 +111,7 @@ final class SCIMFilterTests: BaseTestCase {
 
     @Test("User ew (endsWith) is case-insensitive")
     func testUserEndsWithCaseInsensitive() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Org A")
             try await createUser(builder, username: "Alice", displayName: "Alice Anderson", org: org)
@@ -126,7 +126,7 @@ final class SCIMFilterTests: BaseTestCase {
 
     @Test("User eq (equal) matches exactly")
     func testUserEqualExact() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Org A")
             try await createUser(builder, username: "Alice", displayName: "Alice Anderson", org: org)
@@ -141,7 +141,7 @@ final class SCIMFilterTests: BaseTestCase {
 
     @Test("User displayName co/sw/ew are case-insensitive")
     func testUserDisplayNameFilters() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Org A")
             try await createUser(builder, username: "alice", displayName: "Alice Anderson", org: org)
@@ -164,7 +164,7 @@ final class SCIMFilterTests: BaseTestCase {
 
     @Test("User co escapes LIKE wildcards so they match literally")
     func testUserContainsEscapesWildcards() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Org A")
             try await createUser(builder, username: "tenPercent", displayName: "No Symbol", org: org)
@@ -180,7 +180,7 @@ final class SCIMFilterTests: BaseTestCase {
 
     @Test("User filter is scoped to the organization")
     func testUserFilterRespectsOrganizationScope() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let builder = TestDataBuilder(db: app.db)
             let orgA = try await builder.createOrganization(name: "Org A")
             let orgB = try await builder.createOrganization(name: "Org B")
@@ -202,7 +202,7 @@ final class SCIMFilterTests: BaseTestCase {
 
     @Test("Group displayName co/sw/ew/eq behave correctly and case-insensitively")
     func testGroupDisplayNameFilters() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Org A")
             _ = try await builder.createGroup(name: "Platform", description: "", organization: org)
@@ -230,7 +230,7 @@ final class SCIMFilterTests: BaseTestCase {
 
     @Test("Group filter is scoped to the organization")
     func testGroupFilterRespectsOrganizationScope() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let builder = TestDataBuilder(db: app.db)
             let orgA = try await builder.createOrganization(name: "Org A")
             let orgB = try await builder.createOrganization(name: "Org B")

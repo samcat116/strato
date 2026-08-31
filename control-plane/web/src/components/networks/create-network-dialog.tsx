@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,7 +13,15 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { networksApi } from "@/lib/api/networks";
+import { useSites } from "@/lib/hooks/use-sites";
 import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
 import { toast } from "sonner";
 import {
@@ -53,16 +61,24 @@ export function CreateNetworkDialog({
   const [dhcp, setDhcp] = useState<DhcpFormState>(emptyDhcpForm);
   const [metadataEnabled, setMetadataEnabled] = useState(true);
   const [resolverEnabled, setResolverEnabled] = useState(true);
+  const [siteId, setSiteId] = useState("");
+  const { data: sites, isLoading: sitesLoading } = useSites();
 
   // The network is created in the project selected in the header switcher.
   const { currentProject } = useProjectContext();
   const projectId = currentProject?.id;
+
+  useEffect(() => {
+    if (!siteId && sites?.length === 1) setSiteId(sites[0].id);
+  }, [siteId, sites]);
 
   const resetForm = () => {
     setFormData({ name: "", subnet: "", gateway: "", subnet6: "" });
     setIpv6Enabled(true);
     setDhcp(emptyDhcpForm);
     setMetadataEnabled(true);
+    setResolverEnabled(true);
+    setSiteId("");
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -73,6 +89,10 @@ export function CreateNetworkDialog({
     // JSON.stringify and come back a 400 the user cannot act on.
     if (!projectId) {
       toast.error("Select a project first");
+      return;
+    }
+    if (!siteId) {
+      toast.error("Select the site that will realize this network");
       return;
     }
 
@@ -104,6 +124,7 @@ export function CreateNetworkDialog({
         subnet6: ipv6Enabled && subnet6 ? subnet6 : undefined,
         ipv6Enabled: ipv6Enabled ? undefined : false,
         projectId,
+        siteId,
         ...parseDhcpForm(dhcp),
         metadataEnabled,
         resolverEnabled,
@@ -149,6 +170,30 @@ export function CreateNetworkDialog({
                 disabled={isLoading}
                 autoFocus
               />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="networkSite" className="text-foreground">
+                Site
+              </Label>
+              <Select
+                value={siteId}
+                onValueChange={setSiteId}
+                disabled={isLoading || sitesLoading}
+              >
+                <SelectTrigger
+                  id="networkSite"
+                  className="bg-background border-border text-foreground"
+                >
+                  <SelectValue placeholder={sitesLoading ? "Loading sites…" : "Select a site"} />
+                </SelectTrigger>
+                <SelectContent className="bg-card border-border">
+                  {sites?.map((site) => (
+                    <SelectItem key={site.id} value={site.id}>
+                      {site.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label htmlFor="networkSubnet" className="text-foreground">
@@ -251,7 +296,7 @@ export function CreateNetworkDialog({
             <Button
               type="submit"
               className="bg-primary hover:bg-primary/90"
-              disabled={isLoading || !projectId}
+              disabled={isLoading || sitesLoading || !projectId || !siteId}
             >
               {isLoading ? (
                 <>

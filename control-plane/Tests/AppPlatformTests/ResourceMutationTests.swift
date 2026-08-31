@@ -9,10 +9,6 @@ import AppTestSupport
 /// Fake `AgentDispatch` for driving a mutation through `ResourceMutation`'s own
 /// interface — no HTTP round-trip, no agent socket, no `forTesting` back-doors.
 /// Records what the mutation asked the agent to do.
-///
-/// Inherited from `ResourceOperationCoordinatorTests`, which went with the
-/// coordinator in STR-152; it lost its `response` field at the same time,
-/// because a dispatch has no reply to canned any more.
 actor FakeAgentDispatch: AgentDispatch {
     var online: Bool
     private(set) var syncedAgentIds: [String] = []
@@ -45,20 +41,14 @@ actor DispatchFailureGate {
     }
 }
 
-/// `ResourceMutation` — the accept path that replaced the operation row for
-/// generation-backed lifecycle mutations (ADR 0001 stage 4, STR-147).
-///
-/// Covers what the coordinator's state-sync / placement / direct-resolution
-/// tests used to, restated against the resource's own `conditions`, plus the
-/// two things that are new: the convergence deadline's `max` composition, and
-/// the absence of the "operation already pending" mutex.
+/// Exercises state-sync, placement, direct-resolution, convergence-deadline
+/// composition, and overlapping mutations through `ResourceMutation`.
 @Suite("Resource Mutation", .serialized)
 final class ResourceMutationTests {
     private func withVM(_ test: (Application, VM) async throws -> Void) async throws {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Mutation Org")
@@ -78,7 +68,6 @@ final class ResourceMutationTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Mutation Org")

@@ -74,9 +74,9 @@ public struct SPIREIssuanceMetricsConfig: Sendable, Equatable {
 
         return SPIREIssuanceMetricsConfig(
             prometheusBaseURL: baseURL.trimmingCharacters(in: .whitespaces),
-            x509SVIDMetric: configuration.string(.spireMetricsX509SVIDMetric)!,
-            jwtSVIDMetric: configuration.string(.spireMetricsJWTSVIDMetric)!,
-            windowHours: configuration.int(.spireIssuanceWindowHours)!
+            x509SVIDMetric: configuration.requiredString(.spireMetricsX509SVIDMetric),
+            jwtSVIDMetric: configuration.requiredString(.spireMetricsJWTSVIDMetric),
+            windowHours: configuration.int(.spireIssuanceWindowHours)
         )
     }
 }

@@ -3,6 +3,7 @@ import { imagesApi } from "@/lib/api/images";
 import type {
   ArtifactKind,
   CreateImageRequest,
+  ImageUploadForm,
   UpdateImageRequest,
 } from "@/types/api";
 
@@ -60,7 +61,7 @@ export function useUploadImage(projectId: string) {
       onProgress,
     }: {
       file: File;
-      metadata: Omit<CreateImageRequest, "sourceURL">;
+      metadata: Omit<ImageUploadForm, "file" | "name"> & { name: string };
       onProgress?: (progress: number) => void;
     }) => imagesApi.upload(projectId, file, metadata, onProgress),
     onSuccess: () => {

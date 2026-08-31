@@ -63,7 +63,6 @@ final class DesiredStateReconciliationTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -104,25 +103,17 @@ final class DesiredStateReconciliationTests {
         protocolVersion: Int,
         placeVM: Bool = true
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: agentName,
-            hostname: "test-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
-            networkCapability: .overlay,
-            protocolVersion: protocolVersion,
-            dependencyObservations: [Self.healthyOverlayObservation()]
-        )
         let project = try #require(try await Project.find(vm.$project.id, on: app.db))
         let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: agentName, siteID: siteID,
-            organizationScope: orgID.map { .organization($0) })
+        let registeredID = try await TestDataBuilder(db: app.db).registerAgent(
+            on: app,
+            named: agentName,
+            hostname: "test-host",
+            networkCapability: .overlay,
+            protocolVersion: protocolVersion,
+            dependencyObservations: [Self.healthyOverlayObservation()],
+            siteID: siteID)
+        let agentUUID = try #require(UUID(uuidString: registeredID))
         let site = try #require(try await Site.find(siteID, on: app.db))
         if site.$networkControllerAgent.id == nil {
             site.$networkControllerAgent.id = agentUUID
@@ -132,7 +123,7 @@ final class DesiredStateReconciliationTests {
             vm.hypervisorId = agentUUID.uuidString
             try await vm.save(on: app.db)
         }
-        return agentUUID.uuidString
+        return registeredID
     }
 
     private func attachBootVolume(app: Application, vm: VM, agentID: String) async throws {
@@ -785,7 +776,7 @@ final class DesiredStateReconciliationTests {
                 .delete, resourceKind: .virtualMachine, resourceID: vm.id!,
                 actor: .user(user.id!), on: app.db)
 
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
 
             // The delete is marked degraded, but the deletion intent survives
             // it (issue #734) — reverting desired to `.running` here would have
