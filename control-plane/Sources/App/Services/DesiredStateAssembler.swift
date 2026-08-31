@@ -1,5 +1,7 @@
 import Fluent
 import Foundation
+import Metrics
+import SQLKit
 import StratoShared
 import Vapor
 
@@ -12,11 +14,18 @@ import Vapor
 /// sync reaches an agent on another replica all stay with the socket owner
 /// (`AgentService`); tests exercise the assembly through this interface
 /// without an agent socket in sight. The one write the otherwise read-only
-/// assembly performs is recording image-download grants (issue #562) — done
-/// here, at the single point where a sync's download URLs are produced, so
-/// the grant can never be tighter or later than what the agent is handed.
+/// assembly performs are recording image-download grants (issue #562) and a
+/// VM-local assembly failure (STR-287). Both belong here: this is the single
+/// point that knows what was handed to the agent and which one entry could not
+/// be projected without withholding unrelated workloads.
 struct DesiredStateAssembler {
     let app: Application
+    private let metricsFactory: (any MetricsFactory)?
+
+    init(app: Application, metricsFactory: (any MetricsFactory)? = nil) {
+        self.app = app
+        self.metricsFactory = metricsFactory
+    }
 
     private struct NetworkAssemblyScope {
         let networkIDs: Set<UUID>
@@ -160,16 +169,28 @@ struct DesiredStateAssembler {
             // consumer — which would read as two NICs having gone missing.
             let resolvedInterfaces = VMSpecBuilder.resolvedInterfaces(
                 from: vm.networkInterfaces, networks: networksByID, logger: app.logger)
-            let spec = try VMSpecBuilder.buildVMSpec(
-                from: vm,
-                image: image,
-                volumes: vm.volumes,
-                diskAttachmentsByVolumeID: volumeDiskAttachments,
-                resolvedInterfaces: resolvedInterfaces,
-                securityGroupsByInterface: securityGroupsByInterface,
-                sendsMetadataPort: true,
-                siteResolverCapable: siteResolverCapable
-            )
+            let spec: VMSpec
+            do {
+                spec = try VMSpecBuilder.buildVMSpec(
+                    from: vm,
+                    image: image,
+                    volumes: vm.volumes,
+                    diskAttachmentsByVolumeID: volumeDiskAttachments,
+                    resolvedInterfaces: resolvedInterfaces,
+                    securityGroupsByInterface: securityGroupsByInterface,
+                    sendsMetadataPort: true,
+                    siteResolverCapable: siteResolverCapable
+                )
+            } catch {
+                await recordVMAssemblyFailure(vm: vm, vmId: vmId, error: error, on: db)
+                continue
+            }
+            // A repair is visible as soon as this VM can be projected again;
+            // it does not have to wait for the agent's next observed-state
+            // heartbeat to clear a control-plane-owned condition.
+            if vm.desiredStateAssemblyError != nil {
+                await clearVMAssemblyFailure(vm: vm, vmId: vmId, on: db)
+            }
 
             // Image download info lets the agent materialize a VM it doesn't
             // have yet. Best effort: a VM whose image is missing/not-ready can
@@ -499,6 +520,102 @@ struct DesiredStateAssembler {
             dnsZones: dnsZones)
     }
 
+    /// Omit one bad VM while making the omission visible on that VM. The
+    /// condition write is deliberately fail-open: an unavailable telemetry
+    /// write must not recreate the host-wide assembly failure this path exists
+    /// to prevent. The generation guard keeps an assembly of stale rows from
+    /// attaching its failure to newer desired state.
+    private func recordVMAssemblyFailure(
+        vm: VM, vmId: UUID, error: any Error, on db: any Database
+    ) async {
+        let assemblyError = error as? VMSpecBuilder.AssemblyError
+        let reasonCode = assemblyError?.code ?? "unexpected"
+        let detail = error.localizedDescription
+        let conditionReason = "VM desired state cannot be assembled: \(detail)"
+
+        app.logger.error(
+            "Omitting an unassemblable VM from desired state",
+            metadata: [
+                "vmId": .string(vmId.uuidString),
+                "reason": .string(reasonCode),
+                "error": .string(detail),
+            ])
+        Telemetry.desiredStateAssemblyFailed(
+            kind: "vm", reason: reasonCode, factory: metricsFactory)
+
+        // The counter records every failed projection, but an unchanged poison
+        // row must not also generate an UPDATE on every long poll.
+        guard
+            vm.desiredStateAssemblyError != conditionReason
+                || vm.desiredStateAssemblyErrorGeneration != vm.generation
+                || vm.desiredStateAssemblyErrorAt == nil
+        else { return }
+
+        guard let sql = db as? any SQLDatabase else {
+            app.logger.error(
+                "Could not record the VM desired-state assembly failure: SQL database required",
+                metadata: ["vmId": .string(vmId.uuidString)])
+            return
+        }
+        do {
+            let now = Date()
+            try await sql.raw(
+                """
+                UPDATE vms
+                SET desired_state_assembly_error = \(bind: conditionReason),
+                    desired_state_assembly_error_generation = \(bind: vm.generation),
+                    desired_state_assembly_error_at = CASE
+                        WHEN desired_state_assembly_error IS DISTINCT FROM \(bind: conditionReason)
+                          OR desired_state_assembly_error_generation IS DISTINCT FROM \(bind: vm.generation)
+                          OR desired_state_assembly_error_at IS NULL
+                        THEN \(bind: now)
+                        ELSE desired_state_assembly_error_at
+                    END
+                WHERE id = \(bind: vmId)
+                  AND generation = \(bind: vm.generation)
+                  AND (
+                    desired_state_assembly_error IS DISTINCT FROM \(bind: conditionReason)
+                    OR desired_state_assembly_error_generation IS DISTINCT FROM \(bind: vm.generation)
+                    OR desired_state_assembly_error_at IS NULL
+                  )
+                """
+            ).run()
+        } catch {
+            app.logger.error(
+                "Could not record the VM desired-state assembly failure",
+                metadata: [
+                    "vmId": .string(vmId.uuidString),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
+
+    private func clearVMAssemblyFailure(vm: VM, vmId: UUID, on db: any Database) async {
+        guard let sql = db as? any SQLDatabase else { return }
+        do {
+            try await sql.raw(
+                """
+                UPDATE vms
+                SET desired_state_assembly_error = NULL,
+                    desired_state_assembly_error_generation = NULL,
+                    desired_state_assembly_error_at = NULL
+                WHERE id = \(bind: vmId)
+                  AND generation = \(bind: vm.generation)
+                  AND desired_state_assembly_error IS NOT NULL
+                """
+            ).run()
+        } catch {
+            // The VM is safe to send; retaining a stale diagnostic is less
+            // severe than withholding the whole host's desired state.
+            app.logger.error(
+                "Could not clear a repaired VM desired-state assembly failure",
+                metadata: [
+                    "vmId": .string(vmId.uuidString),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
+
     /// The DNS zones this sync's topology authority should realize (STR-39):
     /// every zone attached to a network whose topology the receiving agent
     /// authors, with the zone's full effective contents.
@@ -783,13 +900,14 @@ struct DesiredStateAssembler {
             // A name outside `VolumeDeviceName`'s charset cannot be stored (the
             // API validates it and the schema's check constraint plus unique
             // index hold the column to it), so the failed initializer below is
-            // unreachable. Where `VMSpecBuilder.volumeSpecs` answers the same
-            // impossible case by omitting the volume, this cannot: a desired
-            // entry with no attachment reads as *detach*, and dropping the
-            // entry entirely reads as a volume this agent should not hold. An
-            // attachment the agent would refuse is the worse of the three, so
-            // it is the one not sent — loudly, because a row that reached this
-            // state is a broken invariant, not a routine skip.
+            // unreachable. `VMSpecBuilder.volumeSpecs` fails that VM's entry in
+            // the same impossible case; here the volume lane must instead keep
+            // the volume entry and omit only its attachment. An entry with no
+            // attachment reads as *detach*, while dropping the entry entirely
+            // reads as a volume this agent should not hold. An attachment the
+            // agent would refuse is the worse of the three, so it is the one
+            // not sent — loudly, because a row that reached this state is a
+            // broken invariant, not a routine skip.
             var attachment: DesiredVolumeAttachment?
             if let vmID = volume.$vm.id,
                 attachmentVMs[vmID]?.agentId == agentId,

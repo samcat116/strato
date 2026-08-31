@@ -779,24 +779,18 @@ export interface AgentUpdateResult {
   message?: string;
 }
 
-// Returned only from the create endpoint — the SPIRE join token embedded in
-// `bootstrapCommand` is shown exactly once and never re-exposed.
+// Returned only from the create endpoint — the short-lived bootstrap token is
+// shown exactly once and never re-exposed. It carries no configuration; the
+// installer exchanges it for server-selected values and a SPIRE join token.
 export interface AgentEnrollment {
   id: string;
   agentName: string;
   spiffeId: string;
   expiresAt: string;
-  spire: SPIREProvisioning;
-  bootstrapCommand: string;
-}
-
-export interface SPIREProvisioning {
-  joinToken: string;
-  joinTokenExpiresAt: string;
-  spiffeId: string;
-  nodeId: string;
   trustDomain: string;
-  serverAddress: string;
+  spireServerAddress: string;
+  bootstrapToken: string;
+  bootstrapCommand: string;
 }
 
 // Returned when listing enrollments — the join token is intentionally absent.
