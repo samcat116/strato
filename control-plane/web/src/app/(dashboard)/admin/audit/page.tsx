@@ -16,6 +16,10 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AuditEventTable } from "@/components/audit/audit-event-table";
+import {
+  auditResultsAreCurrent,
+  canonicalVMFilter,
+} from "@/components/audit/audit-event-model";
 import { auditErrorMessage, useAuditEvents } from "@/lib/hooks/use-audit-events";
 import { useAuth } from "@/providers";
 
@@ -30,6 +34,11 @@ const EVENT_TYPES = [
   { value: "auth.register", label: "Registration" },
   { value: "auth.oidc_login", label: "OIDC login" },
   { value: "auth.oidc_login_failed", label: "OIDC login failed" },
+  { value: "vm.command.requested", label: "VM command requested" },
+  { value: "vm.command.completed", label: "VM command completed" },
+  { value: "vm.exec.requested", label: "VM exec requested" },
+  { value: "vm.exec.started", label: "VM exec started" },
+  { value: "vm.exec.ended", label: "VM exec ended" },
 ];
 
 const ALL_EVENT_TYPES = "all";
@@ -50,7 +59,11 @@ export default function AdminAuditPage() {
   const [fromLocal, setFromLocal] = useState("");
   const [toLocal, setToLocal] = useState("");
   const [userID, setUserID] = useState<string | undefined>(undefined);
+  const [vmID, setVMID] = useState("");
   const [offset, setOffset] = useState(0);
+
+  const canonicalVMID = canonicalVMFilter(vmID);
+  const hasInvalidVMFilter = vmID.trim().length > 0 && !canonicalVMID;
 
   const filters = useMemo(
     () => ({
@@ -59,21 +72,34 @@ export default function AdminAuditPage() {
       from: toISO(fromLocal),
       to: toISO(toLocal),
       userID,
+      resourceType: canonicalVMID ? "vms" : undefined,
+      resourceID: canonicalVMID,
       limit: PAGE_SIZE,
       offset,
     }),
-    [eventType, adminOnly, fromLocal, toLocal, userID, offset]
+    [eventType, adminOnly, fromLocal, toLocal, userID, canonicalVMID, offset]
   );
 
   const { data, isLoading, isPlaceholderData, error } = useAuditEvents(
     filters,
-    isSystemAdmin
+    isSystemAdmin && !hasInvalidVMFilter
   );
 
-  const events = data?.events ?? [];
-  const total = data?.total ?? 0;
+  // Never present cached rows from an earlier VM/page as though they matched
+  // the filter and pagination state already visible to the operator.
+  const resultsAreCurrent = auditResultsAreCurrent(
+    hasInvalidVMFilter,
+    isPlaceholderData
+  );
+  const events = resultsAreCurrent ? (data?.events ?? []) : [];
+  const total = resultsAreCurrent ? (data?.total ?? 0) : 0;
   const hasFilters =
-    eventType !== ALL_EVENT_TYPES || adminOnly || !!fromLocal || !!toLocal || !!userID;
+    eventType !== ALL_EVENT_TYPES ||
+    adminOnly ||
+    !!fromLocal ||
+    !!toLocal ||
+    !!userID ||
+    !!vmID;
 
   const clearFilters = () => {
     setEventType(ALL_EVENT_TYPES);
@@ -81,6 +107,7 @@ export default function AdminAuditPage() {
     setFromLocal("");
     setToLocal("");
     setUserID(undefined);
+    setVMID("");
     setOffset(0);
   };
 
@@ -163,6 +190,26 @@ export default function AdminAuditPage() {
             </div>
 
             <div className="space-y-1.5">
+              <Label htmlFor="auditVM" className="text-muted-foreground">
+                VM UUID
+              </Label>
+              <Input
+                id="auditVM"
+                value={vmID}
+                placeholder="Paste a VM UUID"
+                aria-invalid={hasInvalidVMFilter}
+                onChange={(e) => {
+                  setVMID(e.target.value);
+                  setOffset(0);
+                }}
+                className="w-72 bg-background border-border text-foreground font-mono"
+              />
+              {hasInvalidVMFilter && (
+                <p className="text-xs text-amber-700">Enter a complete VM UUID.</p>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
               <Label htmlFor="auditFrom" className="text-muted-foreground">
                 From
               </Label>
@@ -226,6 +273,26 @@ export default function AdminAuditPage() {
               </Badge>
             )}
 
+            {canonicalVMID && (
+              <Badge
+                variant="secondary"
+                className="h-9 px-3 bg-muted text-foreground/80 gap-1.5"
+              >
+                VM: {canonicalVMID.slice(0, 8)}…
+                <button
+                  type="button"
+                  aria-label="Clear VM filter"
+                  onClick={() => {
+                    setVMID("");
+                    setOffset(0);
+                  }}
+                  className="hover:text-foreground"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </Badge>
+            )}
+
             {hasFilters && (
               <Button
                 variant="ghost"
@@ -244,9 +311,13 @@ export default function AdminAuditPage() {
           ) : (
             <AuditEventTable
               events={events}
-              isLoading={isLoading}
+              isLoading={isLoading || isPlaceholderData}
               onFilterByUser={(id) => {
                 setUserID(id);
+                setOffset(0);
+              }}
+              onFilterByVM={(id) => {
+                setVMID(id);
                 setOffset(0);
               }}
             />
