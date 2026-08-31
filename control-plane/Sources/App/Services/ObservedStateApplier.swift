@@ -909,7 +909,8 @@ struct ObservedStateApplier {
 
             let outcome = try await ResourceConvergence.recordFailure(
                 vm, mutation: mutation, reason: lastError,
-                telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+                telemetryReason: "convergence_failed",
+                context: .observedReport(previousFailureGeneration: failedBefore), on: db)
             if outcome == .alreadyRecorded, changed {
                 // A repeat of an already-recorded failure: nothing was
                 // persisted by the call above, so this report's own changes
@@ -1288,7 +1289,8 @@ struct ObservedStateApplier {
             }
             let outcome = try await ResourceConvergence.recordFailure(
                 sandbox, mutation: mutation, reason: lastError,
-                telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+                telemetryReason: "convergence_failed",
+                context: .observedReport(previousFailureGeneration: failedBefore), on: db)
             if outcome == .alreadyRecorded, changed {
                 try await sandbox.save(on: db)
             }
@@ -1593,7 +1595,8 @@ struct ObservedStateApplier {
                 )?.mutation ?? .create
             let outcome = try await ResourceConvergence.recordFailure(
                 volume, mutation: mutation, reason: lastError,
-                telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+                telemetryReason: "convergence_failed",
+                context: .observedReport(previousFailureGeneration: failedBefore), on: db)
             if outcome == .alreadyRecorded, changed {
                 try await volume.save(on: db)
             }
@@ -1745,7 +1748,8 @@ struct ObservedStateApplier {
                 )?.mutation ?? .create
             let outcome = try await ResourceConvergence.recordFailure(
                 artifact, mutation: mutation, reason: lastError,
-                telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+                telemetryReason: "convergence_failed",
+                context: .observedReport(previousFailureGeneration: failedBefore), on: db)
             if outcome == .alreadyRecorded, changed {
                 try await artifact.save(on: db)
             }

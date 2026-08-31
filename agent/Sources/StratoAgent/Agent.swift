@@ -4340,7 +4340,7 @@ extension Agent: ReconcileActuator {
         try capacityAdmissionLedger.validateExistingReservation(
             currentReservation, snapshot: raw, agentName: initialAgentID)
         let claim = try capacityAdmissionLedger.claim(
-            growth, currentWorkloadReservation: currentReservation,
+            growth, desiredWorkloadReservation: desiredReservation,
             snapshot: raw, agentName: initialAgentID)
 
         if !item.steps.contains(.create), !item.steps.contains(.restore), let spec = item.desired?.spec {
@@ -5083,7 +5083,7 @@ extension Agent: ReconcileActuator {
         let raw = await rawHostCapacitySnapshot()
         let claim = try capacityAdmissionLedger.claim(
             .positiveDelta(from: currentReservation, to: desiredReservation),
-            currentWorkloadReservation: currentReservation,
+            desiredWorkloadReservation: desiredReservation,
             snapshot: raw, agentName: initialAgentID)
         defer { capacityAdmissionLedger.release(claim) }
 
@@ -5206,7 +5206,7 @@ extension Agent: ReconcileActuator {
             let raw = await rawHostCapacitySnapshot()
             claim = try capacityAdmissionLedger.claim(
                 .positiveDelta(from: currentReservation, to: desiredReservation),
-                currentWorkloadReservation: currentReservation,
+                desiredWorkloadReservation: desiredReservation,
                 snapshot: raw, agentName: initialAgentID)
         }
         defer { capacityAdmissionLedger.release(claim) }
@@ -5598,7 +5598,7 @@ extension Agent: ReconcileActuator {
         let raw = await rawHostCapacitySnapshot()
         let claim = try capacityAdmissionLedger.claim(
             .positiveDelta(from: currentReservation, to: desiredReservation),
-            currentWorkloadReservation: currentReservation,
+            desiredWorkloadReservation: desiredReservation,
             snapshot: raw, agentName: initialAgentID)
         defer { capacityAdmissionLedger.release(claim) }
 
@@ -5655,7 +5655,7 @@ extension Agent: ReconcileActuator {
             SandboxHostReservation.forSpec(currentSpec),
             snapshot: raw, agentName: initialAgentID)
         let claim = try capacityAdmissionLedger.claim(
-            growth, currentWorkloadReservation: SandboxHostReservation.forSpec(currentSpec),
+            growth, desiredWorkloadReservation: SandboxHostReservation.forSpec(desired.spec),
             snapshot: raw, agentName: initialAgentID)
         defer { capacityAdmissionLedger.release(claim) }
 

@@ -175,13 +175,10 @@ final class VolumeStuckSweepTests {
         }
     }
 
-    /// `degradeOverdue` skips a converged resource. Since STR-191 a volume
-    /// already degraded at its current generation is no longer converged, so it
-    /// falls through — and lands on `recordFailure`'s own
-    /// `failedGeneration == generation` guard, which is the same condition. The
-    /// deadline claim still happens; nothing else does.
-    @Test("A volume already degraded at its current generation is not degraded twice")
-    func alreadyDegradedVolumeIsNotDegradedAgain() async throws {
+    /// A blocked volume report is already degraded for operator visibility.
+    /// The deadline still finalizes its mutation, without replacing the remedy.
+    @Test("A blocked volume deadline preserves the reported reason")
+    func blockedVolumeDeadlinePreservesReason() async throws {
         try await withVolumeTestApp { app, user, project in
             let volume = try await makeVolume(
                 deadlineOverdueBy: 60, status: .available, generation: 3, observedGeneration: 3,

@@ -334,6 +334,20 @@ enum ResourceConvergence {
         case missing
     }
 
+    enum FailureRecordingContext: Sendable {
+        /// A direct dispatch failure, or any caller whose model still reflects
+        /// the durable resource row.
+        case resourceState
+        /// The observed-state applier has already mirrored the agent's failure
+        /// onto its in-memory model. The supplied generation is what the row
+        /// carried before that report.
+        case observedReport(previousFailureGeneration: Int64?)
+        /// The deadline sweep atomically claimed this generation's timeout. It
+        /// must settle even when a blocked report already exposed the same
+        /// generation as degraded.
+        case claimedDeadline
+    }
+
     /// Marks a resource degraded for `reason` and resolves the in-flight state
     /// the failed mutation left, saving the row and enqueuing the
     /// `operation.failed` webhook **in one transaction**.
@@ -358,12 +372,13 @@ enum ResourceConvergence {
     /// error on every heartbeat — does nothing. Returns whether this call
     /// recorded it.
     ///
-    /// `alreadyRecordedAt` is the failure generation the resource carried
-    /// *before* the caller touched it, for the one caller that has already
-    /// mirrored the agent's own `failedGeneration` onto the in-memory model by
-    /// this point (`ObservedStateApplier`). Without it, that mirror would trip
-    /// the guard on the very first report of a failure and nothing would ever
-    /// be recorded. Everyone else leaves it nil and the guard reads the model.
+    /// `context` distinguishes the three views callers can hold. The observed
+    /// applier supplies the failure generation from before it mirrored the
+    /// report, so that mirror cannot suppress the first terminal verdict. A
+    /// deadline claimant deliberately bypasses the failure-pair guard: a
+    /// blocked report exposes the remedy before the deadline but is not a
+    /// terminal verdict, and the claimed deadline must still resolve intent and
+    /// enqueue the failure webhook. Direct callers read the model as usual.
     ///
     /// Note that the resolution *bumps the generation*: abandoning an
     /// unachieved intent is itself a desired-state change
@@ -378,11 +393,19 @@ enum ResourceConvergence {
         mutation: VMOperationKind,
         reason: String,
         telemetryReason: String,
-        alreadyRecordedAt: Int64?? = nil,
+        context: FailureRecordingContext = .resourceState,
         on db: any Database
     ) async throws -> WriteOutcome {
         let expectedGeneration = resource.generation
-        let recorded = alreadyRecordedAt ?? resource.failedGeneration
+        let recorded: Int64?
+        switch context {
+        case .resourceState:
+            recorded = resource.failedGeneration
+        case .observedReport(let previousFailureGeneration):
+            recorded = previousFailureGeneration
+        case .claimedDeadline:
+            recorded = nil
+        }
         if recorded == expectedGeneration {
             let outcome = try await db.transaction { tx -> WriteOutcome in
                 switch try await DesiredStateGenerationWriter.lockCurrent(

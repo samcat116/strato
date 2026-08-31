@@ -178,7 +178,7 @@ public struct HostCapacityAdmissionLedger: Sendable {
 
     public mutating func claim(
         _ requested: HostReservation,
-        currentWorkloadReservation: HostReservation,
+        desiredWorkloadReservation: HostReservation,
         snapshot: HostCapacitySnapshot,
         agentName: String
     ) throws -> HostCapacityClaim? {
@@ -189,19 +189,19 @@ public struct HostCapacityAdmissionLedger: Sendable {
         }
 
         // Capacity released by neighbours can never make this workload fit if
-        // its own realized reservation plus the requested growth exceeds the
-        // physical host. Keep that request terminal instead of retrying it on
-        // every level-triggered sync forever.
-        let irreducible = currentWorkloadReservation.addingSaturating(requested)
-        if irreducible.cpus > snapshot.total.cpus {
+        // its desired post-operation footprint exceeds the physical host. Use
+        // the desired footprint directly: adding positive growth to the current
+        // reservation would retain old values in dimensions this same resize
+        // shrinks, and could make a corrective mixed resize look impossible.
+        if desiredWorkloadReservation.cpus > snapshot.total.cpus {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .cpu, available: snapshot.total,
-                required: irreducible, failureClassification: .permanent)
+                required: desiredWorkloadReservation, failureClassification: .permanent)
         }
-        if irreducible.memoryBytes > snapshot.total.memoryBytes {
+        if desiredWorkloadReservation.memoryBytes > snapshot.total.memoryBytes {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .memory, available: snapshot.total,
-                required: irreducible, failureClassification: .permanent)
+                required: desiredWorkloadReservation, failureClassification: .permanent)
         }
 
         let committedAndProvisional = snapshot.reserved.addingSaturating(provisionalReservation)

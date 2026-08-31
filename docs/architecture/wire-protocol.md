@@ -340,7 +340,9 @@ the current generation, which prevents attributing a stale error to a newer
 change. `failureClassification` carries the agent's retry category. A
 `.blocked` report retains desired state and its convergence deadline while
 surfacing the remedy; a later success can therefore settle the same generation.
-The field is optional so reports from older agents retain the historical
+If the deadline expires first, the stuck-convergence sweep preserves that remedy
+while terminally resolving the mutation and emitting its failure outcome. The
+field is optional so reports from older agents retain the historical
 terminal-failure behavior.
 
 ### One transport: the long-poll (STR-146)

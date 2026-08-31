@@ -1145,14 +1145,13 @@ actor AgentService {
     /// budget, and the resource's own `conditions.degraded` replaces the
     /// verdict.
     ///
-    /// **Deliberately not a cluster singleton.** Marking degraded is idempotent
-    /// (`recordFailure` no-ops once `failedGeneration == generation`) and
-    /// commutative (every replica computes the same verdict from the same
-    /// row), so two replicas sweeping the same resource cost one wasted write
-    /// at worst — where the operation sweep genuinely needed the lock, because
-    /// its verdict was a state transition two writers could disagree about.
-    /// One less thing whose correctness depends on Valkey, which is the point
-    /// of ADR 0001's multi-replica argument.
+    /// **Deliberately not a cluster singleton.** Clearing the expired deadline
+    /// atomically claims the terminal verdict, so exactly one replica resolves
+    /// the outstanding intent and emits its webhook. That claim also lets the
+    /// winner finalize a blocked failure whose current-generation error was
+    /// already saved for operator visibility. One less thing whose correctness
+    /// depends on Valkey, which is the point of ADR 0001's multi-replica
+    /// argument.
     ///
     /// Internal rather than private so tests can drive a pass directly.
     func sweepStuckConvergence() async {
@@ -1404,11 +1403,22 @@ actor AgentService {
                     .requested, resourceKind: R.operationResourceKind, resourceID: id, on: db
                 )?.mutation ?? .boot
 
+            let timeoutReason =
+                "Timed out: the agent did not converge to generation "
+                + "\(resource.generation) before the deadline"
+            // A blocked report deliberately saved its actionable reason and
+            // current-generation failure pair without settling the mutation.
+            // Once the deadline is claimed, preserve that remedy while forcing
+            // the terminal transition past the ordinary duplicate-report
+            // guard. Resources with no reported failure get the timeout text.
+            let reason =
+                resource.failedGeneration == resource.generation
+                ? resource.lastError ?? timeoutReason
+                : timeoutReason
             let outcome = try await ResourceConvergence.recordFailure(
                 resource, mutation: mutation,
-                reason: "Timed out: the agent did not converge to generation "
-                    + "\(resource.generation) before the deadline",
-                telemetryReason: "stuck_convergence", on: db)
+                reason: reason,
+                telemetryReason: "stuck_convergence", context: .claimedDeadline, on: db)
             if case .superseded(let actualGeneration) = outcome {
                 app.logger.warning(
                     "Dropped a convergence timeout after newer desired state superseded it",
