@@ -248,6 +248,8 @@ struct DesiredStateAssembler {
             on: db)
         let loadBalancersByNetwork = try await desiredLoadBalancers(
             networkIDs: scope.networkIDs, on: db)
+        let networkACLsByNetwork = try await desiredNetworkACLs(
+            networkIDs: scope.networkIDs, on: db)
         // Sorted by id: names are no longer unique, so only the id gives the
         // topology list a stable, total order.
         let networkStates =
@@ -274,7 +276,11 @@ struct DesiredStateAssembler {
                         siteCapable: siteResolverCapable),
                     generation: Int64(network.generation),
                     floatingIPs: floatingIPsByNetwork[networkId] ?? [],
-                    loadBalancers: loadBalancersByNetwork[networkId] ?? []
+                    loadBalancers: loadBalancersByNetwork[networkId] ?? [],
+                    // The current lockstep wire always carries an
+                    // authoritative opinion: [] tears down managed switch
+                    // ACLs, while the schema limits this list to one entry.
+                    networkACLs: networkACLsByNetwork[networkId].map { [$0] } ?? []
                 )
             }
 
@@ -997,6 +1003,49 @@ struct DesiredStateAssembler {
                 .filter(\.$id ~~ Array(ids))
                 .all()
                 .compactMap { network in network.id.map { ($0, network) } })
+    }
+
+    /// The optional ACL attached to each authoritative logical network. One
+    /// bounded eager load avoids a rule query per switch, and both the outer
+    /// index and each rule list are made deterministic before they reach the
+    /// desired-state digest.
+    private func desiredNetworkACLs(
+        networkIDs: Set<UUID>, on db: any Database
+    ) async throws -> [UUID: DesiredNetworkACL] {
+        guard !networkIDs.isEmpty else { return [:] }
+        let rows = try await NetworkACL.query(on: db)
+            .filter(\.$logicalNetwork.$id ~~ Array(networkIDs))
+            .with(\.$rules)
+            .all()
+
+        var byNetwork: [UUID: DesiredNetworkACL] = [:]
+        for acl in rows {
+            guard let aclID = acl.id else { continue }
+            let rules = acl.rules
+                .compactMap { rule -> DesiredNetworkACLRule? in
+                    guard let ruleID = rule.id else { return nil }
+                    return DesiredNetworkACLRule(
+                        id: ruleID,
+                        ruleNumber: rule.ruleNumber,
+                        direction: rule.direction.rawValue,
+                        ethertype: rule.ethertype.rawValue,
+                        action: rule.action.rawValue,
+                        protocolName: rule.protocolName,
+                        portRangeMin: rule.portRangeMin,
+                        portRangeMax: rule.portRangeMax,
+                        remoteCIDR: rule.remoteCIDR)
+                }
+                .sorted { lhs, rhs in
+                    let lhsDirection = lhs.direction == "ingress" ? 0 : 1
+                    let rhsDirection = rhs.direction == "ingress" ? 0 : 1
+                    if lhsDirection != rhsDirection { return lhsDirection < rhsDirection }
+                    if lhs.ruleNumber != rhs.ruleNumber { return lhs.ruleNumber < rhs.ruleNumber }
+                    return lhs.id.uuidString < rhs.id.uuidString
+                }
+            byNetwork[acl.$logicalNetwork.id] = DesiredNetworkACL(
+                id: aclID, generation: acl.generation, rules: rules)
+        }
+        return byNetwork
     }
 
     /// Per-sandbox registry work at sync assembly (issue #414): pins an

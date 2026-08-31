@@ -135,6 +135,10 @@ extension Application {
         // this migration fail closed with their interface ids.
         migrations.add(CreateMACAddressLedger())
 
+        // STR-33: optional one-per-network stateless ACLs with ordered ingress and
+        // egress rules. Existing logical networks intentionally keep no ACL row.
+        migrations.add(CreateNetworkACLs())
+
         // STR-287: keep a per-VM assembly failure visible even though the agent's
         // heartbeat still reports convergence for its last successfully received
         // sync and owns the ordinary convergence-error columns.

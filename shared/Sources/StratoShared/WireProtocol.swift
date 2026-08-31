@@ -12,7 +12,7 @@ import Foundation
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
     /// The only wire/schema version this build accepts.
-    public static let currentVersion = 52
+    public static let currentVersion = 53
 
     /// The JSON encoder for all wire messages. Dates are pinned explicitly to
     /// Foundation's `deferredToDate` numeric form.

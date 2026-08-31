@@ -348,6 +348,15 @@ export type HierarchySearchResponse = OpenAPISchemas["HierarchySearchResults"];
 export type Network = OpenAPISchemas["Network"];
 export type CreateNetworkRequest = OpenAPISchemas["CreateNetworkRequest"];
 export type UpdateNetworkRequest = OpenAPISchemas["UpdateNetworkRequest"];
+
+export type NetworkACLRuleDirection = OpenAPISchemas["NetworkACLRuleDirection"];
+export type NetworkACLRuleEthertype = OpenAPISchemas["NetworkACLRuleEthertype"];
+export type NetworkACLRuleAction = OpenAPISchemas["NetworkACLRuleAction"];
+export type CreateNetworkACLRuleRequest = OpenAPISchemas["CreateNetworkACLRuleRequest"];
+export type NetworkACLRule = OpenAPISchemas["NetworkACLRule"];
+export type NetworkACL = OpenAPISchemas["NetworkACL"];
+export const MAX_NETWORK_ACL_RULES = 100;
+
 export type SecurityGroupRuleDirection = OpenAPISchemas["SecurityGroupRuleDirection"];
 export type Ethertype = "ipv4" | "ipv6";
 
