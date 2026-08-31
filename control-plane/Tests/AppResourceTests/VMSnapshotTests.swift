@@ -61,8 +61,7 @@ final class VMSnapshotTests {
         app: Application,
         vm: VM,
         supportsSnapshots: Bool = true,
-        status: VMStatus = .running,
-        wireProtocolVersion: Int = WireProtocol.currentVersion
+        status: VMStatus = .running
     ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: "checkpoint-agent",
@@ -87,7 +86,7 @@ final class VMSnapshotTests {
                         maxVCPUs: 1024,
                         maxMemory: 16 * 1024 * 1024 * 1024 * 1024))
             ],
-            protocolVersion: wireProtocolVersion
+            protocolVersion: WireProtocol.currentVersion
         )
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
         let agentUUID = try await app.agentService.registerAgent(

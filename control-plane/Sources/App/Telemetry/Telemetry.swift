@@ -218,11 +218,42 @@ enum Telemetry {
         Counter(label: "strato_vm_drift_total").increment()
     }
 
+    /// A single workload could not be projected into an agent's desired-state
+    /// payload. Both dimensions are bounded enums owned by the assembler; no
+    /// workload ids or exception messages enter metric labels.
+    static func desiredStateAssemblyFailed(
+        kind: String, reason: String, factory: (any MetricsFactory)? = nil
+    ) {
+        let dimensions = [("kind", kind), ("reason", reason)]
+        if let factory {
+            Counter(
+                label: "strato_desired_state_assembly_failures_total",
+                dimensions: dimensions,
+                factory: factory
+            ).increment()
+        } else {
+            Counter(
+                label: "strato_desired_state_assembly_failures_total",
+                dimensions: dimensions
+            ).increment()
+        }
+    }
+
     /// Workloads whose observed state has remained different from desired
     /// state past the steady-state grace window. Recorded for both bounded
     /// kinds on every sweep, including zero, so recovered series do not stick.
     static func recordDivergedWorkloads(kind: String, count: Int) {
         Gauge(label: "strato_diverged_workloads", dimensions: [("kind", kind)]).record(count)
+    }
+
+    /// Stored secrets the configured primary/previous keyring cannot open.
+    /// This is level-triggered and records zero at every startup so a repaired
+    /// rotation clears the prior series. `table` is one of four fixed columns.
+    static func recordUnopenableStoredSecrets(table: String, count: Int) {
+        Gauge(
+            label: "strato_secrets_encryption_unopenable",
+            dimensions: [("table", table)]
+        ).record(count)
     }
 
     // MARK: - Teardown safety (STR-98)

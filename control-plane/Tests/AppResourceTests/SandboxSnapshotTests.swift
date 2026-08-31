@@ -62,8 +62,7 @@ final class SandboxSnapshotTests {
         app: Application,
         sandbox: Sandbox,
         supportsSnapshots: Bool = true,
-        status: SandboxStatus = .running,
-        wireProtocolVersion: Int = WireProtocol.currentVersion
+        status: SandboxStatus = .running
     ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: "snapshot-agent",
@@ -88,7 +87,7 @@ final class SandboxSnapshotTests {
                         maxVCPUs: 32,
                         maxMemory: 32 * 1024 * 1024 * 1024))
             ],
-            protocolVersion: wireProtocolVersion,
+            protocolVersion: WireProtocol.currentVersion,
             sandboxCapable: true
         )
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
