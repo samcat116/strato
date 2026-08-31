@@ -15,7 +15,7 @@ import type {
   VNCSession,
   VMNetworkInterface,
   CreateVMNetworkInterfaceRequest,
-} from "@/types/api";
+} from "@/types/api-contracts";
 
 // Lifecycle mutations are asynchronous: the server responds 202 Accepted with
 // the VM, the generation it now has to converge on, and the id of the

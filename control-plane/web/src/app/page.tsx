@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/providers";
+import { resolvePostLoginPath } from "@/lib/post-login-route";
 
 export default function Home() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -11,7 +12,9 @@ export default function Home() {
   useEffect(() => {
     if (!isLoading) {
       if (isAuthenticated) {
-        router.replace("/dashboard");
+        // OIDC returns to `/`, so consume the destination saved immediately
+        // before leaving for the identity provider.
+        router.replace(resolvePostLoginPath(null, true));
       } else {
         router.replace("/login");
       }

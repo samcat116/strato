@@ -484,6 +484,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
+      # Request-time rendering fetches the session and initial organization /
+      # project scope directly instead of making the browser discover them in
+      # sequence after hydration. Browser API calls still travel through nginx.
+      STRATO_API_URL: http://control-plane:8080
       # Gravatar profile pictures. Enabled here sends a hash of each user's email
       # to gravatar.com; set STRATO_GRAVATAR_ENABLED=false in .env to keep the UI
       # free of third-party requests and show initials instead.

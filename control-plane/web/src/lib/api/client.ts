@@ -1,5 +1,7 @@
 // Base API client for making requests to the Vapor backend
 
+import { loginHrefFor } from "@/lib/post-login-route";
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -22,7 +24,8 @@ function redirectToLoginOnSessionExpiry(endpoint: string) {
   if (endpoint.startsWith("/auth/")) return;
   const path = window.location.pathname;
   if (path === "/login" || path === "/register") return;
-  window.location.assign("/login");
+  const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  window.location.assign(loginHrefFor(currentPath));
 }
 
 export async function apiClient<T>(

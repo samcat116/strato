@@ -69,7 +69,7 @@ function SidebarLink({
  * toggles the group open/closed; navigation lives entirely in the nested items.
  * The section auto-expands whenever the active route falls inside it.
  */
-function SidebarSection({
+export function SidebarSection({
   item,
   onNavigate,
 }: {
@@ -83,9 +83,19 @@ function SidebarSection({
 
   // The section holding the current page stays expanded; a manual toggle
   // (`override`) takes precedence so other sections open/close on click.
-  const [override, setOverride] = useState<boolean | null>(null);
-  const open = override ?? sectionActive;
-  const toggle = () => setOverride(!open);
+  const [override, setOverride] = useState<{
+    pathname: string;
+    open: boolean;
+  } | null>(null);
+  // A manual choice only belongs to the route where the user made it. Once
+  // navigation occurs, derive expansion from the new active section so a
+  // command-palette jump never lands with its sidebar destination hidden.
+  if (override && override.pathname !== pathname) {
+    setOverride(null);
+  }
+  const open =
+    override?.pathname === pathname ? override.open : sectionActive;
+  const toggle = () => setOverride({ pathname, open: !open });
 
   const children = (item.children ?? []).filter(
     (child) => !child.adminOnly || user?.isSystemAdmin

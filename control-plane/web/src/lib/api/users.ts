@@ -8,7 +8,7 @@ import type {
   CreateUserRequest,
   UpdateUserRequest,
   User,
-} from "@/types/api";
+} from "@/types/api-contracts";
 
 export const usersApi = {
   // Create the account record before starting the passkey ceremony.

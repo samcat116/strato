@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useState } from "react";
 import { ListChecks, Loader2, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -41,7 +43,7 @@ export function SecurityGroupTable({
 
   const handleDelete = async (group: SecurityGroup) => {
     if (
-      !confirm(`Delete security group "${group.name}"? This cannot be undone.`)
+      !await confirmAction(`Delete security group "${group.name}"? This cannot be undone.`)
     ) {
       return;
     }

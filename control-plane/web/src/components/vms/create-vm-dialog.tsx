@@ -22,26 +22,16 @@ import { useSecurityGroups } from "@/lib/hooks/use-security-groups";
 import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
 import { MAX_SECURITY_GROUPS_PER_NIC, type MetadataSource } from "@/types/api";
 import { toast } from "sonner";
+import {
+  createNetworkInterfaceDraft as initialNIC,
+  type VMNetworkInterfaceDraft as NICRow,
+} from "@/lib/vm-create-form";
 
 interface CreateVMDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated?: () => void;
 }
-
-interface NICRow {
-  key: string;
-  networkId: string;
-  securityGroupIds: string[];
-  mtu: string;
-}
-
-const initialNIC = (): NICRow => ({
-  key: "nic-0",
-  networkId: "",
-  securityGroupIds: [],
-  mtu: "",
-});
 
 export function CreateVMDialog({
   open,

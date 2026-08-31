@@ -4,7 +4,11 @@ import { networksApi } from "@/lib/api/networks";
 export function useNetworks(projectId?: string) {
   return useQuery({
     queryKey: ["networks", { projectId: projectId ?? null }],
-    queryFn: ({ signal }) => networksApi.list(projectId, signal),
+    queryFn: ({ signal }) =>
+      projectId ? networksApi.list(projectId, signal) : Promise.resolve([]),
+    // An omitted project means the project provider is still resolving or the
+    // selected organization has none. Do not turn that into a fleet-wide read.
+    enabled: !!projectId,
   });
 }
 

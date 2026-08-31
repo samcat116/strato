@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useState } from "react";
 import { Loader2, Trash2 } from "lucide-react";
 import {
@@ -53,7 +55,7 @@ export function MembersTable({
 
   const handleRevoke = async (member: ProjectMember) => {
     if (
-      !window.confirm(
+      !await confirmAction(
         `Remove ${member.displayName || member.username} from this project?`
       )
     ) {

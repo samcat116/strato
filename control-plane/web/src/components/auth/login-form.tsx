@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Building2, KeyRound, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,10 @@ import {
 import { useAuth } from "@/providers";
 import { useRegistrationPolicy } from "@/lib/hooks";
 import { oidcProvidersApi } from "@/lib/api/oidc-providers";
+import {
+  rememberPostLoginPath,
+  resolvePostLoginPath,
+} from "@/lib/post-login-route";
 import type { PublicOIDCProvider } from "@/types/api";
 import { toast } from "sonner";
 
@@ -25,9 +29,9 @@ export function LoginForm() {
   const [username, setUsername] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const { login, isWebAuthnSupported } = useAuth();
-  const router = useRouter();
   const searchParams = useSearchParams();
   const ssoFailed = searchParams.get("error") === "oidc_failed";
+  const requestedDestination = searchParams.get("next");
 
   // Operators can close self-registration; a deployment with no users yet
   // always allows it, since that first account is how anyone gets in. The
@@ -54,7 +58,6 @@ export function LoginForm() {
     try {
       await login(username || null);
       toast.success("Login successful");
-      router.push("/dashboard");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Login failed");
     } finally {
@@ -72,7 +75,6 @@ export function LoginForm() {
     try {
       await login(null); // Discoverable credentials - no username needed
       toast.success("Login successful");
-      router.push("/dashboard");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Login failed");
     } finally {
@@ -104,6 +106,9 @@ export function LoginForm() {
       setSsoProviders(result.providers);
       if (result.providers.length === 1) {
         // Only one way to sign in — go straight to the identity provider.
+        rememberPostLoginPath(
+          resolvePostLoginPath(requestedDestination)
+        );
         window.location.assign(
           oidcProvidersApi.authorizeUrl(
             result.organizationID,
@@ -122,13 +127,18 @@ export function LoginForm() {
 
   const handleSsoContinue = (provider: PublicOIDCProvider) => {
     if (!ssoOrgId) return;
+    rememberPostLoginPath(resolvePostLoginPath(requestedDestination));
     window.location.assign(oidcProvidersApi.authorizeUrl(ssoOrgId, provider.id));
   };
 
   return (
     <Card className="w-full max-w-md bg-card border-border">
       <CardHeader className="space-y-1">
-        <CardTitle className="text-2xl font-bold text-foreground">
+        <CardTitle
+          role="heading"
+          aria-level={1}
+          className="text-2xl font-bold text-foreground"
+        >
           Sign in to Strato
         </CardTitle>
         <CardDescription className="text-muted-foreground">
@@ -137,7 +147,10 @@ export function LoginForm() {
       </CardHeader>
       <CardContent className="space-y-4">
         {ssoFailed && (
-          <div className="p-3 bg-red-500/10 border border-red-300 rounded-md text-sm text-red-800">
+          <div
+            role="alert"
+            className="p-3 bg-red-500/10 border border-red-300 rounded-md text-sm text-red-800"
+          >
             Single sign-on failed. Please try again, or contact your
             organization administrator.
           </div>

@@ -6,7 +6,7 @@ import type {
   GroupMember,
   CreateGroupRequest,
   UpdateGroupRequest,
-} from "@/types/api";
+} from "@/types/api-contracts";
 
 export const groupsApi = {
   list(orgId: string, signal?: AbortSignal): Promise<Group[]> {

@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useState } from "react";
 import { Loader2, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -45,7 +47,7 @@ export function NetworkTable({
 
   const handleDelete = async (network: Network) => {
     if (!network.id) return;
-    if (!confirm(`Delete network "${network.name}"? This cannot be undone.`)) {
+    if (!await confirmAction(`Delete network "${network.name}"? This cannot be undone.`)) {
       return;
     }
     setBusyId(network.id);

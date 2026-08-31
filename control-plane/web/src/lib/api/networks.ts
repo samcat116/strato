@@ -6,7 +6,7 @@ import type {
   Network,
   CreateNetworkRequest,
   UpdateNetworkRequest,
-} from "@/types/api";
+} from "@/types/api-contracts";
 
 export const networksApi = {
   list(projectId?: string, signal?: AbortSignal): Promise<Network[]> {
