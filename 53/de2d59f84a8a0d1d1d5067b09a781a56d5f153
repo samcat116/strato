@@ -1,0 +1,347 @@
+control-plane/Sources/App/Services/AgentService+Registration.swift
+  s_a794bdb6881990::t_4f672c80248d26 164-165
+control-plane/Sources/App/Services/AgentMaintenanceLoop.swift
+  s_a794bdb6881990::t_0981aab7f42963 713
+.github/workflows/helm-test.yml
+  s_a794bdb6881990::t_93c606409b118c 197-199,201-204
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerManager.swift
+  s_a794bdb6881990::t_b5d85464646dc8 12
+SwiftFirecracker/Tests/SwiftFirecrackerTests/FirecrackerAdoptionTests.swift
+  s_a794bdb6881990::t_58e432ec13f5c4 126,129
+SwiftFirecracker/Tests/SwiftFirecrackerTests/HTTPConcurrencyTests.swift
+  s_a794bdb6881990::t_97044df3d8a4e4 288-289,291,304,399-402,429
+agent/Sources/StratoAgent/NetworkServiceMacOS.swift
+  s_a794bdb6881990::t_ecfc5dd7e392a7 67
+agent/Sources/StratoAgentCore/DomainRedefinition.swift
+  s_a794bdb6881990::t_578d380648a5a9 449,454
+agent/Sources/StratoAgentCore/DomainXMLBuilder.swift
+  s_a794bdb6881990::t_101a9049335e8d 286,734,826
+agent/Sources/StratoAgentCore/MessageOrdering.swift
+  s_a794bdb6881990::t_da25d48b2933df 7-8,21,74,76,78,80,84-95,97
+agent/Tests/StratoAgentTests/DomainRedefinitionTests.swift
+  s_a794bdb6881990::t_550a262589b989 537
+agent/Tests/StratoAgentTests/DomainXMLBuilderTests.swift
+  s_a794bdb6881990::t_6991f3b0775aa7 684,899-900,907,910,913
+agent/Tests/StratoAgentTests/MessageOrderingTests.swift
+  s_a794bdb6881990::t_edd5641a74bf41 62,81,85,102,106,120-123,195,203
+control-plane/Package.swift
+  s_a794bdb6881990::t_c5b847fb9cfd9e 125
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_a794bdb6881990::t_0d470e5d982ca8 46,48,54-58
+control-plane/Sources/App/Bootstrap/HTTPPipelineBootstrap.swift
+  s_a794bdb6881990::t_0ff4ef15917b0b 18,52,169-171
+control-plane/Sources/App/Bootstrap/RuntimeBootstrap.swift
+  s_a794bdb6881990::t_074a0d0cda1bd3 7
+control-plane/Sources/App/BuildInfo.swift
+  s_a794bdb6881990::t_6abc3d7f226933 13,18
+control-plane/Sources/App/ControlPlaneConfiguration.swift
+  s_a794bdb6881990::t_bb975332d1c9dd 381-383,458-482,485-512
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_a794bdb6881990::t_f2c6e26f4fb316 87
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_a794bdb6881990::t_81c2742b9a10de 335-338,443,575-578
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_a794bdb6881990::t_04f0487eece67e 383-384
+control-plane/Sources/App/Controllers/UserController.swift
+  s_a794bdb6881990::t_3d0bdad7a3d4d5 1121
+control-plane/Sources/App/Controllers/VMSnapshotController.swift
+  s_a794bdb6881990::t_c5d61cde0ca33f 93
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_a794bdb6881990::t_580ce12ae1a3ad 909
+control-plane/Sources/App/DatabaseTLSConfiguration.swift
+  s_a794bdb6881990::t_543d0d26cb05df 59
+control-plane/Sources/App/Extensions/Application+LazyService.swift
+  s_a794bdb6881990::t_0fa65f98da12af 4,14
+control-plane/Sources/App/Extensions/Request+ProjectResolution.swift
+  s_a794bdb6881990::t_b1e25369b94bcc 5-7,15-18,33-36
+control-plane/Sources/App/Extensions/Request+VMAuthorization.swift
+  s_a794bdb6881990::t_ea21683fd370c9 18-24
+control-plane/Sources/App/IAM/GuardrailWriteReport.swift
+  s_a794bdb6881990::t_4f12310282008b 5-7
+control-plane/Sources/App/IAM/IAMDecisionRecorder.swift
+  s_a794bdb6881990::t_b9e24454baac22 36-39
+control-plane/Sources/App/IAM/IAMResourceTree.swift
+  s_a794bdb6881990::t_c8c71eaae817dd 30-32
+control-plane/Sources/App/IAM/ProjectVisibility.swift
+  s_a794bdb6881990::t_11ef975ca09fb5 5-8
+control-plane/Sources/App/Middleware/RateLimitMiddleware.swift
+  s_a794bdb6881990::t_00b2ccb322c776 50-58
+control-plane/Sources/App/Models/Agent.swift
+  s_a794bdb6881990::t_288a65ce44ebb3 93,101-103,108-109,122-123,262,282,341,407,415
+control-plane/Sources/App/Models/DNSZone.swift
+  s_a794bdb6881990::t_94b671e7822de4 88-89
+control-plane/Sources/App/Models/FloatingIP.swift
+  s_a794bdb6881990::t_bb5c9afc1437ea 81-82
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_a794bdb6881990::t_6fe7e0941da4ef 294-295
+control-plane/Sources/App/Models/SecurityGroup.swift
+  s_a794bdb6881990::t_abc66a4d7b0e69 97-98
+control-plane/Sources/App/Models/Volume.swift
+  s_a794bdb6881990::t_8eb5464c9b5667 422-423
+control-plane/Sources/App/SchemaMigrator.swift
+  s_a794bdb6881990::t_be7fa9ea6d35d6 90
+control-plane/Sources/App/Services/AgentService+Types.swift
+  s_a794bdb6881990::t_bf1d8041af8750 13
+control-plane/Sources/App/Services/AuditService.swift
+  s_a794bdb6881990::t_5d6cc9bbf1f599 160,162,165-170
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_a794bdb6881990::t_9724fdb4938b73 51-54,56,90-94,104,118-119,243-244,274,440-441,473,653-654,950-952,1236,1241,1246-1247,1257,1450
+control-plane/Sources/App/Services/DesiredStatePollRegistry.swift
+  s_a794bdb6881990::t_548f27b721ab79 102,133
+control-plane/Sources/App/Services/ImageObjectStoreFactory.swift
+  s_a794bdb6881990::t_a84bc148dee3fc 38,102
+control-plane/Sources/App/Services/NetworkSpecFactory.swift
+  s_a794bdb6881990::t_f7af5173cc88eb 17,19-20,23-25
+control-plane/Sources/App/Services/ProxyClientIP.swift
+  s_a794bdb6881990::t_f4e2b3f9261c00 35-36
+control-plane/Sources/App/Services/RegistrationPolicy.swift
+  s_a794bdb6881990::t_920d2cc1684e89 28
+control-plane/Sources/App/Services/ReplicaMessageBridge.swift
+  s_a794bdb6881990::t_3fed532108b6a4 5-6,28-31,34-35
+control-plane/Sources/App/Services/SPIFFE/GuestIdentity.swift
+  s_a794bdb6881990::t_0002744a116e36 87
+control-plane/Sources/App/Services/SPIFFE/GuestIdentityIssuanceConfig.swift
+  s_a794bdb6881990::t_9cfc9eaeb4d94a 21-22
+control-plane/Sources/App/Services/SPIFFE/OrgSPIREClientRegistry.swift
+  s_a794bdb6881990::t_7b3f374cf0e20f 64-65
+control-plane/Sources/App/Services/SPIFFE/OrgTrustDomainProvisioning.swift
+  s_a794bdb6881990::t_961bcc300dac56 37
+control-plane/Sources/App/Services/SPIFFE/SPIREIssuanceMetrics.swift
+  s_a794bdb6881990::t_d200e59e88980e 77-79
+control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift
+  s_a794bdb6881990::t_bd46a212673854 446,473,493
+control-plane/Sources/App/Services/SPIFFE/SPIREService.swift
+  s_a794bdb6881990::t_b5c722fdad2b17 184-185
+control-plane/Sources/App/Services/SSFService.swift
+  s_a794bdb6881990::t_6c68ddf1b082aa 374,378
+control-plane/Sources/App/Services/SSRFGuard.swift
+  s_a794bdb6881990::t_e5dbdbae806548 60-61
+control-plane/Sources/App/Services/SandboxSpecBuilder.swift
+  s_a794bdb6881990::t_9f283fa6d947c5 19-21,23-26
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_a794bdb6881990::t_124d48b182d87d 44,75,529-531
+control-plane/Sources/App/Services/SnapshotArtifactMutation.swift
+  s_a794bdb6881990::t_79202adb77e440 6-8,63-65,81-82
+control-plane/Sources/App/Services/ValkeyService.swift
+  s_a794bdb6881990::t_3aaed9838051b0 74,76,81,83
+control-plane/Sources/App/Services/ValkeySessions.swift
+  s_a794bdb6881990::t_e34bba0fbd3e8e 109
+control-plane/Sources/App/Services/VolumeAttachmentService.swift
+  s_a794bdb6881990::t_cf56f86c1a4fad 85
+control-plane/Sources/App/Services/WebhookDeliveryService.swift
+  s_a794bdb6881990::t_e66ce6f370e6ee 69-70,74
+control-plane/Sources/App/Telemetry/ObservabilityBootstrap.swift
+  s_a794bdb6881990::t_0eae67a6d7f9c1 121-123
+control-plane/Tests/AppIAMTests/AdminExceptionPathTests.swift
+  s_a794bdb6881990::t_ea2713826e4c4d 47-48,55,57-58
+control-plane/Tests/AppIAMTests/VolumeAttachProjectContainmentTests.swift
+  s_a794bdb6881990::t_7b68a3661f5569 113-114
+control-plane/Tests/AppIdentityTests/ConsoleSessionManagerTests.swift
+  s_a794bdb6881990::t_5dbac4f26a6c5a 14,44,97,130,170,188
+control-plane/Tests/AppIdentityTests/GroupTests.swift
+  s_a794bdb6881990::t_a30742c69c6343 15,39,66,104,139,193,240,271
+control-plane/Tests/AppIdentityTests/GuestJWTSVIDMintTests.swift
+  s_a794bdb6881990::t_0cc996ed6da7fc 56-65,152-155,328-330,344-348,423
+control-plane/Tests/AppIdentityTests/ListPaginationTests.swift
+  s_a794bdb6881990::t_389dcedd2d1034 21,90
+control-plane/Tests/AppIdentityTests/OIDCControllerTests.swift
+  s_a794bdb6881990::t_b6d973ba9c50bb 69,98,122,150,176,202,228,264,306,359,406,439,469,518,558,594,653,689,727,761,780,797,822,860,914,927,956,984,1012,1083,1144
+control-plane/Tests/AppIdentityTests/OrgTrustDomainTests.swift
+  s_a794bdb6881990::t_8fbceca85f440c 385-386,388-389,391-392,434-435,440-441,455-457,463
+control-plane/Tests/AppIdentityTests/PasskeyManagementTests.swift
+  s_a794bdb6881990::t_c299cdd475f0d3 65,85,98,116,132,151,169,189,217,240,259,276,294,312,328,343,357
+control-plane/Tests/AppIdentityTests/RegistrationPolicyTests.swift
+  s_a794bdb6881990::t_e738639e5fdbaf 81,95,110,129,144,161,180,206
+control-plane/Tests/AppIdentityTests/SCIMFilterTests.swift
+  s_a794bdb6881990::t_cdeb6b74ee69b4 80,97,114,129,144,167,183,205,233
+control-plane/Tests/AppIdentityTests/SPIRERegistrationFlowTests.swift
+  s_a794bdb6881990::t_074bc365450ec3 110,198,226,246,287,309,332,351,377,409,434,477,503,533,537,562,591,601,622,646,669,698,707,736,740,766,807,811,833,839,854-863,868-869
+control-plane/Tests/AppIdentityTests/UserControllerTests.swift
+  s_a794bdb6881990::t_2464bba30b07d3 37,53,73,88,104,122,138,161,181
+control-plane/Tests/AppIdentityTests/UserCreationAndClaimTests.swift
+  s_a794bdb6881990::t_b29cf46bd94c37 25,47,87,107,125,154,176,203,224,253,264,297,329,373,412
+control-plane/Tests/AppIdentityTests/WorkloadIdentityControllerTests.swift
+  s_a794bdb6881990::t_a48d8de66ebd8e 58,70,81,100,128,252,291,344,377,398
+control-plane/Tests/AppPlatformTests/AgentAutoUpdateTests.swift
+  s_a794bdb6881990::t_bfc3e06c053008 38,65,78-79,89-90,163,191,285,332,361,661
+control-plane/Tests/AppPlatformTests/AgentControllerTests.swift
+  s_a794bdb6881990::t_92dbfd21ab00fe 95-96,107-108
+control-plane/Tests/AppPlatformTests/AgentDependencyHealthTests.swift
+  s_a794bdb6881990::t_bd25847ea892f6 139-140,190
+control-plane/Tests/AppPlatformTests/AgentManifestQuarantineTests.swift
+  s_a794bdb6881990::t_87b06e5435d224 56-57,64,66-67
+control-plane/Tests/AppPlatformTests/AgentMetadataServiceCapabilityTests.swift
+  s_a794bdb6881990::t_b3b3c3994bcacf 25,32
+control-plane/Tests/AppPlatformTests/AgentServiceLifecycleTests.swift
+  s_a794bdb6881990::t_cc76ad168606c1 33-36,47-48,69
+control-plane/Tests/AppPlatformTests/AgentUpdateEndpointTests.swift
+  s_a794bdb6881990::t_d770409c9a5c5f 61-62,72-73
+control-plane/Tests/AppPlatformTests/AgentWebSocketIntegrationTests.swift
+  s_a794bdb6881990::t_7887223d99a2e5 348
+control-plane/Tests/AppPlatformTests/CoordinationServiceTests.swift
+  s_a794bdb6881990::t_062b135c17b7f0 262-263
+control-plane/Tests/AppPlatformTests/DesiredStateAssemblerTests.swift
+  s_a794bdb6881990::t_7f74e4fba2d145 55-57,59-60,317-319
+control-plane/Tests/AppPlatformTests/DesiredStateDNSZoneTests.swift
+  s_a794bdb6881990::t_eacd7122f36ac5 49-51,53-54,524-529
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_a794bdb6881990::t_4466d66196b016 106-110,114-116,126
+control-plane/Tests/AppPlatformTests/NetworkControllerTests.swift
+  s_a794bdb6881990::t_4ab789d9f2134a 984
+control-plane/Tests/AppPlatformTests/OpenAPISpecDriftTests.swift
+  s_a794bdb6881990::t_a39742d6b5edc8 255,293
+control-plane/Tests/AppPlatformTests/ProjectResolutionTests.swift
+  s_a794bdb6881990::t_8cd7fa700ce20b 264-265
+control-plane/Tests/AppPlatformTests/ReplicaRoutingTests.swift
+  s_a794bdb6881990::t_d5355e68ce22b4 23,134-136
+control-plane/Tests/AppPlatformTests/ResourceConditionsTests.swift
+  s_a794bdb6881990::t_ce4aedc67bec54 58-60,67
+control-plane/Tests/AppPlatformTests/ResourceFinalizerTests.swift
+  s_a794bdb6881990::t_8994c172c22875 74-75,77,81,84
+control-plane/Tests/AppPlatformTests/ResourceMutationTests.swift
+  s_a794bdb6881990::t_24b17d5b97e33e 44-45
+control-plane/Tests/AppPlatformTests/SchedulerServiceTests.swift
+  s_a794bdb6881990::t_62652aa2cef026 45,66
+control-plane/Tests/AppPlatformTests/SiteTests.swift
+  s_a794bdb6881990::t_5f2488b5f97262 60-62,64-65,608-627,636,657,664,677,704,827-829
+control-plane/Tests/AppPlatformTests/StorageDeviceControllerTests.swift
+  s_a794bdb6881990::t_208ebbadcd133d 90
+control-plane/Tests/AppPlatformTests/StorageDeviceInventoryReconcilerTests.swift
+  s_a794bdb6881990::t_dae71d212e6584 240
+control-plane/Tests/AppPlatformTests/VMMetadataOptOutTests.swift
+  s_a794bdb6881990::t_f3eb747090434b 48-49
+control-plane/Tests/AppPlatformTests/VMMutableMetadataTests.swift
+  s_a794bdb6881990::t_fd0dea9dc16670 68-73
+control-plane/Tests/AppPlatformTests/WorkloadTombstoneTests.swift
+  s_a794bdb6881990::t_03023f289f4b36 55-56,61,63-64
+control-plane/Tests/AppResourceTests/DesiredStatePollTests.swift
+  s_a794bdb6881990::t_b2a6a74473f170 45-46,51-53,451
+control-plane/Tests/AppResourceTests/GuestExecAttachIntegrationTests.swift
+  s_a794bdb6881990::t_e8197dee29a62a 582
+control-plane/Tests/AppResourceTests/GuestExecTests.swift
+  s_a794bdb6881990::t_466383af4d0f24 68-70,81,83,87,90
+control-plane/Tests/AppResourceTests/ImageDownloadMTLSTests.swift
+  s_a794bdb6881990::t_47efeec849a7be 44-45,50,256
+control-plane/Tests/AppResourceTests/ImageDownloadScopingTests.swift
+  s_a794bdb6881990::t_72d6addf127749 47-48
+control-plane/Tests/AppResourceTests/RegistryPullSecretTests.swift
+  s_a794bdb6881990::t_35cf9f9c4677f5 68-70,72
+control-plane/Tests/AppResourceTests/SandboxSnapshotTests.swift
+  s_a794bdb6881990::t_00673b2b0525ce 11-12,61-63,79-81,89,653-655,665
+control-plane/Tests/AppResourceTests/SandboxTests.swift
+  s_a794bdb6881990::t_24e3872fc8335f 78-80,94,96,99
+control-plane/Tests/AppResourceTests/SnapshotConvergenceTests.swift
+  s_a794bdb6881990::t_f8918b43045965 57-59,69
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_a794bdb6881990::t_b3b27afcde578b 105-106,108,114
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  s_a794bdb6881990::t_a22a989e164896 58-59,67-69
+control-plane/Tests/AppResourceTests/VMSnapshotTests.swift
+  s_a794bdb6881990::t_ebdc124e3d13dd 65-67,82,84,92
+control-plane/Tests/AppResourceTests/VolumeAgentSelectionTests.swift
+  s_a794bdb6881990::t_0c5a593107dda3 28
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_a794bdb6881990::t_e2f6db089b87a3 52-53
+control-plane/Tests/AppResourceTests/VolumeIOLimitsTests.swift
+  s_a794bdb6881990::t_e8d293adda84a4 61-62
+control-plane/Tests/AppResourceTests/VolumeObservedSizeTests.swift
+  s_a794bdb6881990::t_db3316ac58754d 65-68
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_a794bdb6881990::t_b4076aef7ff1c5 61-62
+control-plane/Tests/AppResourceTests/VolumeSizeValidationTests.swift
+  s_a794bdb6881990::t_9114fde931fb7c 272-273
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_a794bdb6881990::t_608fc372ab7525 7,23-24,153-154,383-528
+control-plane/web/src/app/(dashboard)/dns-zones/page.tsx
+  s_a794bdb6881990::t_1349470a71a9bc 63,68,73,78,84
+control-plane/web/src/app/(dashboard)/projects/page.tsx
+  s_a794bdb6881990::t_9e5748dbb67c16 38,43,51,56,61
+control-plane/web/src/app/(dashboard)/quotas/page.tsx
+  s_a794bdb6881990::t_4a935bdcda1818 29,39,116,120,136,146
+control-plane/web/src/components/agents/agent-detail-page.tsx
+  s_a794bdb6881990::t_a231eecef0b3e0 243
+control-plane/web/src/components/agents/agent-host-info-card.tsx
+  s_a794bdb6881990::t_13b5aa01bba29d 11,16-17,25,49-50,57,59
+control-plane/web/src/components/networks/create-network-dialog.tsx
+  s_a794bdb6881990::t_9b03289209a923 3,16-22,24,64-65,71-74,80-81,94-97,127,174-197,299
+control-plane/web/src/components/networks/network-acl-permissions.test.tsx
+  s_a794bdb6881990::t_fdc460c68e03a2 40-41
+control-plane/web/src/components/oidc-providers/oidc-provider-dialog.tsx
+  s_a794bdb6881990::t_8e57cd826f7791 154
+control-plane/web/src/components/quotas/quota-card.tsx
+  s_a794bdb6881990::t_a89abdbeb067f8 7,10,12-13,108,121
+control-plane/web/src/components/quotas/quota-dialog.tsx
+  s_a794bdb6881990::t_612096f76d9725 22,31,63,151
+control-plane/web/src/components/sandboxes/sandbox-actions.tsx
+  s_a794bdb6881990::t_c5c3befefacbfe 78
+control-plane/web/src/components/security-groups/security-group-rules-dialog.tsx
+  s_a794bdb6881990::t_77fd65b9a3c7c1 108,316
+control-plane/web/src/components/vms/mutation-watcher.tsx
+  s_a794bdb6881990::t_288014989151af 36
+control-plane/web/src/components/vms/vm-actions.tsx
+  s_a794bdb6881990::t_71a4a5d9fe4ad3 80
+control-plane/web/src/components/webhooks/event-catalog.ts
+  s_a794bdb6881990::t_4a4a96da5e43b2 1-4,6,11,42
+control-plane/web/src/components/workload-identity/svid-badge.tsx
+  s_a794bdb6881990::t_e510542872c224 2,14-18
+control-plane/web/src/components/workload-identity/workload-identity-view.tsx
+  s_a794bdb6881990::t_49b1e7a1976d20 145-148
+control-plane/web/src/lib/api/images.ts
+  s_a794bdb6881990::t_24fecd7ba5dfc4 9,39
+control-plane/web/src/lib/hooks/index.ts
+  s_a794bdb6881990::t_6db66465b2a8fe 154
+control-plane/web/src/lib/hooks/use-hierarchy.ts
+  s_a794bdb6881990::t_b4949f423a9704 1,3
+control-plane/web/src/lib/hooks/use-images.ts
+  s_a794bdb6881990::t_2a3e04dff61c92 6,64
+control-plane/web/src/lib/hooks/use-resource-logs.ts
+  s_a794bdb6881990::t_6a84228a19d3d8 18
+control-plane/web/src/lib/operation-labels.ts
+  s_a794bdb6881990::t_7357dc3d8e3106 25
+control-plane/web/src/lib/sandbox-guards.test.ts
+  s_a794bdb6881990::t_8eebd24934631a 12,28,35
+control-plane/web/src/types/api-contracts.ts
+  s_a794bdb6881990::t_48441dcbe23c85 39
+control-plane/web/src/types/api.ts
+  s_a794bdb6881990::t_15b3d951c237a8 6,21,23,30-33,35-38,40-43,45,48-49,51-52,57-62,65,67-68,72-126,129-132,134,136-138,140-141,143-163,182,184-185,187-195,266-283,290-295,328-357,360,365-383
+docs/development/code-review.md
+  s_a794bdb6881990::t_a3c3488de5e0f1 241-245
+helm/strato-control-plane/templates/NOTES.txt
+  s_a794bdb6881990::t_890300cb50f727 27-28
+helm/strato-control-plane/templates/_helpers.tpl
+  s_a794bdb6881990::t_87ed806785c9b3 92-107
+helm/strato-control-plane/templates/deployment.yaml
+  s_a794bdb6881990::t_e9e1c716cf530e 56,175,177,179
+helm/strato-control-plane/templates/spire-db-init-job.yaml
+  s_a794bdb6881990::t_4094c8584a3189 45,53
+shared/Sources/StratoShared/QEMUMemoryReservation.swift
+  s_a794bdb6881990::t_877255a7f07896 23-33
+shared/Sources/StratoShared/SandboxSnapshotMessages.swift
+  s_a794bdb6881990::t_f945478197b653 3,29,50-52,75-76
+shared/Sources/StratoShared/VMSnapshotMessages.swift
+  s_a794bdb6881990::t_f8fc970a9e7b9d 7-8,17
+shared/Sources/StratoShared/VMSpec.swift
+  s_a794bdb6881990::t_d3238581678a96 26,28,30,35,46,51,67,69,164,166-168,171,173-175,181-188
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_a794bdb6881990::t_e1f5c24e939e29 10,20,25,354-355
+shared/Sources/StratoShared/WireProtocol.swift
+  s_a794bdb6881990::t_0f836a07221b93 14
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_a794bdb6881990::t_02fe282f298d51 138-140,142-171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "53de2d59f84a8a0d1d1d5067b09a781a56d5f153",
+  "prompts": {},
+  "sessions": {
+    "s_a794bdb6881990": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0597d-f390-7ac3-b450-7fccc3a566ae",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
