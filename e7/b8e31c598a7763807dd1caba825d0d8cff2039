@@ -139,6 +139,10 @@ control-plane/web/src/components/vms/vm-actions.tsx
   s_14cd71c8010725::t_c16a370447a9b4 113
 control-plane/web/src/components/volumes/snapshot-table.tsx
   s_14cd71c8010725::t_c16a370447a9b4 64-67
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_14cd71c8010725::t_117881651af06e 126-130
+control-plane/Sources/App/Bootstrap/HTTPPipelineBootstrap.swift
+  s_14cd71c8010725::t_117881651af06e 117-122
 ---
 {
   "schema_version": "authorship/3.0.0",
