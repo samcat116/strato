@@ -268,9 +268,9 @@ extraEnv: []
 strato:
   logLevel: info
 
-  # Git commit SHA this image was built from, surfaced on /health/* as gitSHA.
-  # Defaults to the image tag / chart appVersion when left empty; set to the full
-  # commit SHA in CI for precise build identification.
+  # Optional Git commit SHA override, surfaced on /health/* as gitSHA. Published
+  # images already bake in their full SHA, so the chart leaves STRATO_GIT_SHA
+  # unset when this is empty. Set it for custom images that lack baked identity.
   gitSHA: ""
 
   # Where the control plane keeps VM image bytes (uploaded disks, kernels,
