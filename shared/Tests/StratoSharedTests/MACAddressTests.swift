@@ -17,8 +17,8 @@ struct MACAddressTests {
         "Rejects malformed, zero, multicast, and broadcast addresses",
         arguments: [
             "", "02:00:00:00:00", "02-00-00-00-00-01", "2:00:00:00:00:01",
-            "02:00:00:00:00:gg", "00:00:00:00:00:00", "01:00:5e:00:00:01",
-            "ff:ff:ff:ff:ff:ff",
+            "02:00:00:00:00:gg", "02:+1:00:00:00:01", "02:-1:00:00:00:01",
+            "00:00:00:00:00:00", "01:00:5e:00:00:01", "ff:ff:ff:ff:ff:ff",
         ])
     func rejectsInvalid(_ string: String) {
         #expect(MACAddress(string) == nil)

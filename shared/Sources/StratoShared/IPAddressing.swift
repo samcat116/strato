@@ -38,7 +38,17 @@ public struct MACAddress: CustomStringConvertible, Equatable, Hashable, Sendable
 
         var raw: UInt64 = 0
         for part in parts {
-            guard part.count == 2, let octet = UInt8(part, radix: 16) else { return nil }
+            let isHexOctet =
+                part.utf8.count == 2
+                && part.utf8.allSatisfy { byte in
+                    switch byte {
+                    case 0x30...0x39, 0x41...0x46, 0x61...0x66:
+                        return true
+                    default:
+                        return false
+                    }
+                }
+            guard isHexOctet, let octet = UInt8(part, radix: 16) else { return nil }
             raw = (raw << 8) | UInt64(octet)
         }
 

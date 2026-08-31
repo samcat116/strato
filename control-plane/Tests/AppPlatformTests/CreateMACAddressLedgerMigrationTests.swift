@@ -94,6 +94,36 @@ struct CreateMACAddressLedgerMigrationTests {
         try await app.shutdownForTesting()
     }
 
+    @Test("The startup audit fetches assignments only for duplicate normalized addresses")
+    func startupAuditFetchesOnlyDuplicateAssignments() async throws {
+        let app = try await legacyInterfaceDatabase()
+        do {
+            let sql = try #require(app.db as? any SQLDatabase)
+            let duplicateVMID = UUID()
+            let duplicateSandboxID = UUID()
+            let uniqueVMID = UUID()
+            try await sql.raw(
+                "INSERT INTO vm_network_interfaces (id, mac_address) VALUES (\(bind: duplicateVMID), '02:0A:00:00:00:01')"
+            ).run()
+            try await sql.raw(
+                "INSERT INTO sandbox_network_interfaces (id, mac_address) VALUES (\(bind: duplicateSandboxID), '02:0a:00:00:00:01')"
+            ).run()
+            try await sql.raw(
+                "INSERT INTO vm_network_interfaces (id, mac_address) VALUES (\(bind: uniqueVMID), '02:0a:00:00:00:02')"
+            ).run()
+
+            let assignments = try await MACAddressAudit.duplicateAssignments(on: app.db)
+
+            #expect(assignments.map(\.interfaceID) == [duplicateSandboxID, duplicateVMID])
+            #expect(!assignments.contains { $0.interfaceID == uniqueVMID })
+            #expect(MACAddressAudit.duplicates(in: assignments).count == 1)
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
     private func legacyInterfaceDatabase() async throws -> Application {
         let app = try await Application.makeForBareDatabaseTesting()
         let sql = try #require(app.db as? any SQLDatabase)

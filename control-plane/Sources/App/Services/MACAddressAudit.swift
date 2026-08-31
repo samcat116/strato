@@ -4,7 +4,7 @@ import Logging
 import SQLKit
 import StratoShared
 
-/// Read-only inventory of the two workload-interface tables.
+/// Read-only inspection of the two workload-interface tables.
 ///
 /// A MAC collision is fleet-scoped rather than logical-network-scoped: two
 /// networks may meet on the same localnet uplink, so the audit deliberately
@@ -52,6 +52,45 @@ enum MACAddressAudit {
         }
     }
 
+    /// Returns only assignments whose normalized address occurs more than once.
+    /// PostgreSQL performs the fleet-wide grouping so the recurring startup
+    /// audit does not transfer or retain the ordinary unique-address inventory.
+    static func duplicateAssignments(on database: any Database) async throws -> [Assignment] {
+        guard let sql = database as? any SQLDatabase else {
+            throw MACAddressAuditError.sqlDatabaseRequired
+        }
+        let rows = try await sql.raw(
+            """
+            WITH assignments AS (
+                SELECT 'vm' AS interface_kind, id AS interface_id,
+                       mac_address, lower(mac_address) AS normalized_mac_address
+                FROM vm_network_interfaces
+                UNION ALL
+                SELECT 'sandbox' AS interface_kind, id AS interface_id,
+                       mac_address, lower(mac_address) AS normalized_mac_address
+                FROM sandbox_network_interfaces
+            ), duplicate_addresses AS (
+                SELECT normalized_mac_address
+                FROM assignments
+                GROUP BY normalized_mac_address
+                HAVING count(*) > 1
+            )
+            SELECT assignments.interface_kind, assignments.interface_id,
+                   assignments.mac_address
+            FROM assignments
+            INNER JOIN duplicate_addresses USING (normalized_mac_address)
+            ORDER BY assignments.interface_kind, assignments.interface_id
+            """
+        ).all()
+        return try rows.map { row in
+            Assignment(
+                interfaceKind: try row.decode(column: "interface_kind", as: String.self),
+                interfaceID: try row.decode(column: "interface_id", as: UUID.self),
+                storedMACAddress: try row.decode(column: "mac_address", as: String.self)
+            )
+        }
+    }
+
     static func duplicates(in assignments: [Assignment]) -> [Duplicate] {
         Dictionary(
             grouping: assignments.compactMap { assignment in
@@ -77,7 +116,7 @@ enum MACAddressAudit {
     /// fail closed, but still gets a named warning and metric before startup
     /// exits instead of surfacing only as an opaque unique-index error.
     static func warnAboutDuplicates(on database: any Database, logger: Logger) async throws {
-        let duplicates = duplicates(in: try await assignments(on: database))
+        let duplicates = duplicates(in: try await duplicateAssignments(on: database))
         Telemetry.recordDuplicateMACAddressGroups(duplicates.count)
         for duplicate in duplicates {
             logger.warning(
