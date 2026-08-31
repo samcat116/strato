@@ -40,6 +40,24 @@ To install with custom values:
 helm install strato-control-plane ./helm/strato-control-plane -f my-values.yaml
 ```
 
+## Upgrades
+
+The control-plane Deployment deliberately uses Kubernetes' `Recreate` strategy.
+STR-275 moved advisory locks from the legacy one-argument PostgreSQL keyspace to
+the disjoint two-argument keyspace, so an old and a new control-plane process do
+not protect each other. Kubernetes must terminate every old pod before it starts
+the replacement set. Expect a brief API and agent-channel outage while the old
+pods drain and the new pods boot; durable state remains in PostgreSQL and agents
+reconnect automatically.
+
+For the first upgrade across this boundary, stage the new chart while keeping
+the exact current image tag, verify the Deployment reports `Recreate`, and only
+then upgrade to the new image. That leaves a non-overlapping Helm revision to
+roll back to if the new image fails. Do not run a blue/green control-plane or a
+second Helm release against the same database during this cutover. See the
+[Kubernetes upgrade runbook](../../docs/deployment/kubernetes.md#upgrades) for
+the complete sequence.
+
 ## Configuration
 
 ### Required Configuration

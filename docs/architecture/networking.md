@@ -37,6 +37,10 @@ Most of the layered model below is implemented. What exists today:
   switches, composed with security groups through OVN tiers (§Network ACLs).
 - **IPv4/IPv6 dual-stack**: a generated ULA /64 alongside each network's v4
   subnet by default, per-family NIC address rows, RA + DHCPv6 delivery.
+- **Fleet-wide MAC allocation.** VM and sandbox NICs draw locally administered
+  unicast addresses from `MACAllocator`; a shared database ledger makes the
+  canonical MAC unique across both interface tables, while per-table unique
+  constraints provide an additional backstop.
 - **Instance metadata (IMDS)**: guests read their own metadata over HTTP at
   `169.254.169.254` / `[fd00:ec2::254]` behind a mandatory IMDSv2-style token
   handshake (STR-56). The document rides the sync (wire v26). QEMU guests use
@@ -112,6 +116,19 @@ is only visible through the QEMU guest agent, reported per-MAC and persisted
 separately (`vm_interface_observed_addresses`) so the API and UI can show
 observed alongside allocated (issue #563). See
 [agent](./agent.md#qemu-guest-agent-qga).
+
+The NIC's MAC comes from `MACAllocator`, not from the agent or a vendor OUI.
+It uses the locally administered `02:` prefix plus 40 random bits, canonicalized
+as six lowercase colon-separated octets by `MACAddress`. Randomness supplies a
+candidate, not the uniqueness guarantee: allocation inserts it into
+`mac_address_allocations`, whose primary key spans VM and sandbox interfaces,
+and redraws on conflict. Each interface table also has a unique `mac_address`
+constraint. Deleting an interface releases its ledger row through a database
+trigger, including when its owning workload is cascade-deleted. Existing MACs
+are never renumbered during upgrade; the ledger migration backfills them and
+refuses to install over a collision while naming every affected interface. A
+startup audit repeats that diagnosis and records the duplicate-group gauge so
+a damaged or incorrectly recorded schema cannot make a collision silent.
 
 ## The layered model
 

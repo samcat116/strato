@@ -75,8 +75,11 @@ final class SnapshotConvergenceTests {
             sandboxCapable: true
         )
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let project = try #require(try await Project.query(on: app.db).sort(\.$createdAt).first())
+        let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
         let uuid = try await app.agentService.registerAgent(
-            message, agentName: name, organizationScope: orgID.map { .organization($0) })
+            message, agentName: name, siteID: siteID,
+            organizationScope: orgID.map { .organization($0) })
         return uuid.uuidString
     }
 

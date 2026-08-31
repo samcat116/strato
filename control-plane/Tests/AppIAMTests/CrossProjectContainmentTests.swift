@@ -140,7 +140,7 @@ final class CrossProjectContainmentTests {
         let networkID = try network.requireID()
         let nic = VMNetworkInterface(
             vmID: try vm.requireID(), logicalNetworkID: networkID,
-            macAddress: VMNetworkInterface.generateMACAddress())
+            macAddress: MACAllocator.generateCandidate().description)
         try await nic.save(on: app.db)
         if let address {
             try await VMInterfaceAddress(

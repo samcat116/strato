@@ -5,6 +5,11 @@ extension Application {
     /// Reconciles code-owned registries and durable derived state after schema
     /// migration and before the process becomes ready.
     func reconcileStartupState() async throws {
+        // The migration makes new collisions structurally impossible. Keep the
+        // audit on every boot as defense against a manually damaged/mis-recorded
+        // schema and as an explicit zero-valued health metric.
+        try await MACAddressAudit.warnAboutDuplicates(on: db, logger: logger)
+
         // STR-186 prevents new tenant IPv6 subnets from overlapping the ULA space
         // used by metadata and per-network resolvers. Existing rows cannot be
         // renumbered safely in place, so name every collision at each startup until

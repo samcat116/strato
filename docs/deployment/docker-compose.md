@@ -314,6 +314,13 @@ fails with "SPIRE server unreachable: 127.0.0.1:8081", which reads like a
 SPIRE problem rather than a container-lifecycle one. The helper always
 recreates the namespace owner and its tenants together.
 
+The same stop-then-recreate behavior is a correctness requirement when crossing
+STR-275. Old one-argument and current two-argument advisory locks occupy
+disjoint PostgreSQL keyspaces, so never run a second blue/green Compose project
+against the same database during that upgrade. `redeploy.sh` stops the old
+control-plane process and closes its database sessions before starting the new
+one; rollback through the helper has the same non-overlapping boundary.
+
 `smoke-test.sh` exercises the stack *through* the proxy (health, auth
 rejection, image full and ranged downloads with strict header checks, the
 Envoy mTLS listener). It needs a write-scoped API key, and is worth running
@@ -339,7 +346,7 @@ plane and agents can be upgraded in either order.
 good, not merely once the process started. On `down` and on `up -d` upgrades the
 control plane drains in-flight requests and agent WebSockets within
 `stop_grace_period` (60s). See
-[Health checks & zero-downtime deploys](/deployment/health-checks).
+[Health checks & controlled deploys](/deployment/health-checks).
 
 ## Adding hypervisors
 
