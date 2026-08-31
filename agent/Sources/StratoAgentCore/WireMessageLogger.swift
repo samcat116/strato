@@ -14,26 +14,30 @@ public enum WireMessageLogger {
 
     static let maximumIdentifierUTF8Bytes = 128
 
-    /// Log one successfully encoded or decoded envelope without exposing its body.
+    /// Log one successfully encoded or decoded message without exposing its body.
+    ///
+    /// The caller supplies the already-typed message. This function must never
+    /// encode or decode it merely to produce debug metadata.
     public static func log(
-        envelope: MessageEnvelope,
+        message: any WebSocketMessage,
         direction: Direction,
         byteCount: Int,
         logger: Logger
     ) {
         guard logger.logLevel <= .debug else { return }
 
-        let correlation = try? WireProtocol.makeDecoder().decode(
-            CorrelationFields.self,
-            from: envelope.payload)
         var metadata: Logger.Metadata = [
             "byteCount": .string(String(byteCount)),
             "direction": .string(direction.rawValue),
-            "type": .string(envelope.type.rawValue),
+            "type": .string(message.type.rawValue),
         ]
-        addIdentifier(correlation?.requestId, named: "requestId", to: &metadata)
-        addIdentifier(correlation?.sessionId, named: "sessionId", to: &metadata)
-        addIdentifier(correlation?.syncId, named: "syncId", to: &metadata)
+        addIdentifier(message.requestId, named: "requestId", to: &metadata)
+        if let message = message as? any SessionCorrelatedWireMessage {
+            addIdentifier(message.sessionId, named: "sessionId", to: &metadata)
+        }
+        if let message = message as? any SyncCorrelatedWireMessage {
+            addIdentifier(message.syncId, named: "syncId", to: &metadata)
+        }
 
         logger.debug("WebSocket message", metadata: metadata)
     }
@@ -123,11 +127,30 @@ public enum WireMessageLogger {
             return String(scalar)
         }
     }
-
-    /// The only inner fields that generic transport logging may observe.
-    private struct CorrelationFields: Decodable {
-        let requestId: String?
-        let sessionId: String?
-        let syncId: String?
-    }
 }
+
+/// Explicit correlation allowlists. Adding a conformance is the review boundary
+/// for exposing another typed field to the privileged agent log.
+private protocol SessionCorrelatedWireMessage {
+    var sessionId: String { get }
+}
+
+extension ConsoleConnectMessage: SessionCorrelatedWireMessage {}
+extension ConsoleDisconnectMessage: SessionCorrelatedWireMessage {}
+extension ConsoleDataMessage: SessionCorrelatedWireMessage {}
+extension ConsoleConnectedMessage: SessionCorrelatedWireMessage {}
+extension ConsoleDisconnectedMessage: SessionCorrelatedWireMessage {}
+extension GuestExecStartMessage: SessionCorrelatedWireMessage {}
+extension GuestExecStartedMessage: SessionCorrelatedWireMessage {}
+extension GuestExecInputMessage: SessionCorrelatedWireMessage {}
+extension GuestExecOutputMessage: SessionCorrelatedWireMessage {}
+extension GuestExecResizeMessage: SessionCorrelatedWireMessage {}
+extension GuestExecExitMessage: SessionCorrelatedWireMessage {}
+extension GuestExecCloseMessage: SessionCorrelatedWireMessage {}
+extension GuestExecClosedMessage: SessionCorrelatedWireMessage {}
+
+private protocol SyncCorrelatedWireMessage {
+    var syncId: String { get }
+}
+
+extension DesiredStateMessage: SyncCorrelatedWireMessage {}

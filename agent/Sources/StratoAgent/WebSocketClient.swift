@@ -44,6 +44,13 @@ final class LockedWebSocket: Sendable {
     }
 }
 
+/// A decoded outer envelope plus the size of the WebSocket frame that carried it.
+/// The typed inner message is decoded later on the agent actor, off the event loop.
+struct InboundWebSocketFrame: Sendable {
+    let envelope: MessageEnvelope
+    let byteCount: Int
+}
+
 actor WebSocketClient {
     private var url: String
     private weak var agent: Agent?
@@ -73,7 +80,7 @@ actor WebSocketClient {
     // drains this stream and dispatches each frame onto a per-resource serial lane. This
     // replaces the previous "one detached Task per frame" model, which gave no FIFO
     // guarantee and could reorder operations for the same VM (see issue #179).
-    private let inboundContinuation: AsyncStream<MessageEnvelope>.Continuation
+    private let inboundContinuation: AsyncStream<InboundWebSocketFrame>.Continuation
 
     // Distinguishes an operator-initiated disconnect (no reconnect) from an unexpected
     // drop (triggers the agent's reconnection loop).
@@ -82,7 +89,7 @@ actor WebSocketClient {
     init(
         url: String, agent: Agent, logger: Logger, tlsConfiguration: TLSConfiguration? = nil,
         spiffePinning: SPIFFEPeerPinning? = nil,
-        inboundContinuation: AsyncStream<MessageEnvelope>.Continuation
+        inboundContinuation: AsyncStream<InboundWebSocketFrame>.Continuation
     ) {
         self.url = url
         self.agent = agent
@@ -165,13 +172,9 @@ actor WebSocketClient {
                 wsHolderRef.set(ws)
 
                 // Text and binary frames carry the same JSON envelope, so both
-                // decode through here. Routine receipt is logged at `.debug`:
-                // an idle agent still takes a heartbeat ack every ~15s and a
-                // desired-state sync every ~30s, and at INFO that alone is the
-                // dominant source of log volume across a fleet (issue #705).
-                // Nothing here is actionable — the lines an operator needs
-                // (reconnects, registration failures, reconciliation errors)
-                // are logged where they happen.
+                // decode through here. Only the outer envelope is decoded on
+                // the event loop; typed handling and debug metadata happen on
+                // the agent actor so logging never adds payload parsing here.
                 let decodeAndYield: @Sendable (String) -> Void = { text in
                     guard let data = text.data(using: .utf8) else {
                         loggerRef.error("Failed to convert message to UTF-8 data")
@@ -180,15 +183,10 @@ actor WebSocketClient {
 
                     do {
                         let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
-                        WireMessageLogger.log(
-                            envelope: envelope,
-                            direction: .inbound,
-                            byteCount: data.count,
-                            logger: loggerRef)
 
                         // Preserve arrival order: hand off to the agent's ordered inbound
                         // pipeline rather than spawning an unordered per-frame Task.
-                        inboundRef.yield(envelope)
+                        inboundRef.yield(InboundWebSocketFrame(envelope: envelope, byteCount: data.count))
                     } catch {
                         WireMessageLogger.logEnvelopeDecodingFailure(
                             direction: .inbound,
@@ -351,7 +349,7 @@ actor WebSocketClient {
         // Send as text frame
         try await ws.send(jsonString)
         WireMessageLogger.log(
-            envelope: envelope,
+            message: message,
             direction: .outbound,
             byteCount: data.count,
             logger: logger)
