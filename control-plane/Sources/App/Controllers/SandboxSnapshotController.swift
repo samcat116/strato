@@ -1,6 +1,5 @@
 import Fluent
 import Foundation
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -104,6 +103,8 @@ extension SandboxController {
         let environment = sandbox.environment
         let memory = sandbox.memory
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+            try await IdempotencyService.reserve(
+                req.idempotencyContext, actor: .user(userID), on: db)
             // Snapshot storage draws from the shared storage quota pool
             // (issue #415 enforcement points).
             try await QuotaEnforcementService.reserveSnapshotStorage(
@@ -144,7 +145,7 @@ extension SandboxController {
                 try await sandbox.save(on: db)
             }
             return try await SnapshotArtifactMutation.recordCapture(
-                snapshot, actor: .user(userID), on: db)
+                snapshot, actor: .user(userID), idempotencyContext: req.idempotencyContext, on: db)
         }
 
         let snapshotID = try snapshot.requireID()
@@ -153,7 +154,7 @@ extension SandboxController {
         req.logger.info(
             "Sandbox snapshot accepted",
             metadata: [
-                "sandbox_id": .string(sandboxID.uuidString),
+                "strato.sandbox.id": .string(sandboxID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
                 "stop": .stringConvertible(stopAfterSnapshot),
             ])
@@ -202,16 +203,20 @@ extension SandboxController {
 
         // The lineage guard is a data-dependency rule, not a lifecycle one:
         // deleting a checkpoint that live forks were built from would break
-        // them. Checked here and again under the lineage lock inside the
-        // mutation, and shared with the retention sweep so a clock is refused
-        // for exactly the reasons a human is.
-        try await Self.lockSnapshotLineage([snapshotID], on: req.db)
+        // them. This is a readable preflight; `SnapshotArtifactMutation.delete`
+        // checks it authoritatively under the lineage lock in its transaction,
+        // shared with every API and retention deletion path.
         if let blocker = try await SnapshotDeletionGuard.blocker(for: snapshot, on: req.db) {
             throw Abort(.conflict, reason: blocker)
         }
 
         let accepted = try await SnapshotArtifactMutation.delete(
-            snapshot, actor: .user(try user.requireID()), on: req.db, app: req.application)
+            snapshot, actor: .user(try user.requireID()),
+            idempotencyContext: req.idempotencyContext,
+            idempotencyResponseBody: { @Sendable snapshot, accepted, _ in
+                try AcceptedMutation(SandboxSnapshotResponse(from: snapshot), accepted).encodedBody()
+            },
+            on: req.db, app: req.application)
 
         req.logger.info(
             "Sandbox snapshot deletion requested",
@@ -336,7 +341,7 @@ extension SandboxController {
         req.logger.info(
             "Sandbox restore accepted",
             metadata: [
-                "sandbox_id": .string(sandboxID.uuidString),
+                "strato.sandbox.id": .string(sandboxID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
             ])
         return try await SandboxController.acceptedResponse(for: sandbox, accepted, on: req)
@@ -354,12 +359,8 @@ extension SandboxController {
     /// the snapshot IDs they touch. Postgres advisory locks span replicas and
     /// live until the enclosing transaction commits.
     static func lockSnapshotLineage(_ snapshotIDs: [UUID], on db: any Database) async throws {
-        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
-        for snapshotID in Set(snapshotIDs).sorted(by: { $0.uuidString < $1.uuidString }) {
-            try await sql.raw(
-                "SELECT pg_advisory_xact_lock(hashtext(\(bind: "sandbox-snapshot-lineage:\(snapshotID.uuidString)")))"
-            ).run()
-        }
+        try await AdvisoryLock.acquireTransactionLocks(
+            .sandboxSnapshotLineage, objectIDs: snapshotIDs, on: db)
     }
 
     /// Removes the exported object-store copies of every snapshot belonging

@@ -17,9 +17,8 @@ final class VMResizeTests {
 
     /// Boots a configured test app with a user, org, project and one VM sized
     /// 2 vCPU / 2 GiB with hot-add headroom to 8 vCPU / 8 GiB, plus an online
-    /// agent that speaks the resize protocol version.
+    /// agent that can receive resize operations.
     private func withResizeTestApp(
-        agentWireVersion: Int = WireProtocol.currentVersion,
         agentArchitecture: CPUArchitecture = .x86_64,
         quotaVCPUs: Int = 32,
         quotaMemoryGB: Double = 64,
@@ -70,7 +69,6 @@ final class VMResizeTests {
                 architecture: agentArchitecture,
                 lastHeartbeat: Date()
             )
-            agent.wireProtocolVersion = agentWireVersion
             agent.$site.id = try await builder.placementSite(for: project).requireID()
             try await agent.save(on: app.db)
 
@@ -98,10 +96,14 @@ final class VMResizeTests {
 
     private func put(
         _ app: Application, _ vm: VM, token: String, body: [String: Any],
+        idempotencyKey: String? = nil,
         _ assertions: (TestingHTTPResponse) throws -> Void
     ) async throws {
         try await app.test(.PUT, "/api/vms/\(vm.id!)") { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            if let idempotencyKey {
+                req.headers.replaceOrAdd(name: "Idempotency-Key", value: idempotencyKey)
+            }
             req.headers.contentType = .json
             req.body = ByteBuffer(data: try JSONSerialization.data(withJSONObject: body))
         } afterResponse: { res in
@@ -155,6 +157,49 @@ final class VMResizeTests {
             // generation still reaches the agent, which must update its stopped
             // definition before it advances observedGeneration (STR-248).
             #expect(refreshed.convergenceDeadline == nil)
+        }
+    }
+
+    @Test("Idempotency keys replay metadata and stopped-resize 200 responses")
+    func synchronousUpdatesReplay() async throws {
+        try await withResizeTestApp { app, _, vm, project, token in
+            let renameKey = UUID().uuidString
+            for _ in 0..<2 {
+                try await put(
+                    app, vm, token: token, body: ["name": "renamed"],
+                    idempotencyKey: renameKey
+                ) { res in
+                    #expect(res.status == .ok)
+                    let detail = try res.content.decode(VMDetailResponse.self)
+                    #expect(detail.name == "renamed")
+                }
+            }
+
+            let resizeKey = UUID().uuidString
+            try await put(
+                app, vm, token: token, body: ["cpu": 6], idempotencyKey: resizeKey
+            ) { res in
+                #expect(res.status == .ok)
+            }
+            let firstGeneration = try #require(
+                try await VM.find(vm.id, on: app.db)?.generation)
+
+            try await put(
+                app, vm, token: token, body: ["cpu": 6], idempotencyKey: resizeKey
+            ) { res in
+                #expect(res.status == .ok)
+                let detail = try res.content.decode(VMDetailResponse.self)
+                #expect(detail.cpu == 6)
+            }
+
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(refreshed.generation == firstGeneration)
+            let quotas = try await QuotaEnforcementService.applicableQuotas(
+                for: project, environment: vm.environment, on: app.db)
+            #expect(try #require(quotas.first).reservedVCPUs == 6)
+            let claims = try await IdempotencyKey.query(on: app.db).all()
+            #expect(claims.count == 2)
+            #expect(claims.allSatisfy { $0.responseStatus == 200 && $0.responseBody != nil })
         }
     }
 

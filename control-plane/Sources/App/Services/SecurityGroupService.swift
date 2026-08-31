@@ -213,16 +213,14 @@ enum SecurityGroupService {
     /// path takes the same lock so the per-NIC cap is enforced against the
     /// same stable set.
     ///
-    /// `pg_advisory_xact_lock` for the same reasons as `IPAMService`: it is
-    /// held to the end of the transaction and serializes across replicas,
+    /// PostgreSQL's `pg_advisory_xact_lock` for the same reasons as
+    /// `IPAMService`: it is held to the end of the transaction and serializes across replicas,
     /// which no unique index can do here (the invariant is a *count*, not a
-    /// duplicate). Keyed on the interface id, with a prefix so VM and sandbox
-    /// NICs cannot collide in the shared lock space.
+    /// duplicate). VM and sandbox NICs share this namespace deliberately: both
+    /// kinds use UUID ids and enforce the same membership invariant.
     static func lockMembership(interfaceID: UUID, on db: Database) async throws {
-        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
-        try await sql.raw(
-            "SELECT pg_advisory_xact_lock(hashtext(\(bind: "sgmember:\(interfaceID.uuidString)")))"
-        ).run()
+        try await AdvisoryLock.acquireTransactionLock(
+            .object(.securityGroupMembership, id: interfaceID), on: db)
     }
 
     // MARK: - Attachments

@@ -1478,7 +1478,7 @@ public actor Reconciler {
             logger.debug(
                 "Ignoring stale instance metadata; a newer sync is already recorded for this VM",
                 metadata: [
-                    "vmId": .string(entry.vmId.uuidString),
+                    "strato.vm.id": .string(entry.vmId.uuidString),
                     "generation": .stringConvertible(entry.generation),
                     "recordedGeneration": .stringConvertible(recorded),
                 ])
@@ -1496,7 +1496,7 @@ public actor Reconciler {
             "Retired restored instance metadata the control plane no longer knows about",
             metadata: [
                 "count": .stringConvertible(retired.count),
-                "vmIds": .string(retired.map(\.uuidString).joined(separator: ",")),
+                "strato.vm.ids": .array(retired.map { .string($0.uuidString) }),
             ])
     }
 

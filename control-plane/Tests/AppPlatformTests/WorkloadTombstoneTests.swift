@@ -66,7 +66,6 @@ final class WorkloadTombstoneTests {
             architecture: .x86_64,
             lastHeartbeat: Date()
         )
-        agent.wireProtocolVersion = WireProtocol.currentVersion
         agent.organizationScope = .organization(try org.requireID())
         try await agent.save(on: app.db)
         return agent

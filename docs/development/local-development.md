@@ -118,6 +118,8 @@ The frontend uses Bun for all package and script work:
 cd control-plane/web
 bun install
 bun run lint     # CI-enforced
+bun run test     # CI-enforced unit and component tests
+bun run test:e2e # CI-enforced browser smoke tests
 bun run build    # CI-enforced
 bun run dev      # dev server on http://localhost:3000
 ```

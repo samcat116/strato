@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -59,8 +61,17 @@ import {
   useVMs,
 } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
+import {
+  agentsAtSite as siteMembers,
+  instancesAtSite as siteInstances,
+  siteDisplayStatus as displayStatus,
+  siteReservedCapacity as siteCapacity,
+  SITE_STATUS_STYLES as STATUS_STYLES,
+  type SiteDisplayStatus as DisplayStatus,
+  type SiteStatusFilter as StatusFilter,
+} from "@/lib/site-presentation";
 import { useOrganization } from "@/providers";
-import type { Agent, Site, SiteStatus, UpdateSiteRequest, VM } from "@/types/api";
+import type { Agent, Site, SiteStatus, UpdateSiteRequest } from "@/types/api";
 
 const SITE_STATUSES: SiteStatus[] = [
   "active",
@@ -68,15 +79,6 @@ const SITE_STATUSES: SiteStatus[] = [
   "maintenance",
   "decommissioned",
 ];
-
-type DisplayStatus = "healthy" | "degraded" | "provisioning";
-type StatusFilter = "all" | DisplayStatus;
-
-const STATUS_STYLES: Record<DisplayStatus, { label: string; dot: string }> = {
-  healthy: { label: "Healthy", dot: "#16a34a" },
-  degraded: { label: "Degraded", dot: "#d97706" },
-  provisioning: { label: "Provisioning", dot: "#94a3b8" },
-};
 
 interface SiteFormState {
   name: string;
@@ -101,50 +103,6 @@ const EMPTY_FORM: SiteFormState = {
   labels: [],
   networkControllerAgentId: "",
 };
-
-function displayStatus(
-  site: Site,
-  members: Agent[],
-  agentsKnown: boolean
-): DisplayStatus {
-  if (agentsKnown && members.length === 0 && site.status === "active") {
-    return "provisioning";
-  }
-  if (
-    site.status === "active" &&
-    site.networkControllerAgentId &&
-    !site.networkControllerIssue &&
-    (!site.networkControllerStatus || site.networkControllerStatus === "online")
-  ) {
-    return "healthy";
-  }
-  return "degraded";
-}
-
-function siteMembers(siteId: string, agents: Agent[]): Agent[] {
-  return agents.filter((agent) => agent.siteId === siteId);
-}
-
-function siteInstances(siteId: string, agents: Agent[], vms: VM[]): VM[] {
-  const agentIds = new Set(
-    agents
-      .filter((agent) => agent.siteId === siteId)
-      .map((agent) => agent.id.toLowerCase())
-  );
-  return vms.filter(
-    (vm) => vm.hypervisorId && agentIds.has(vm.hypervisorId.toLowerCase())
-  );
-}
-
-function siteCapacity(members: Agent[]): number {
-  const online = members.filter((agent) => agent.isOnline);
-  const total = online.reduce((sum, agent) => sum + agent.resources.totalCPU, 0);
-  const available = online.reduce(
-    (sum, agent) => sum + agent.resources.availableCPU,
-    0
-  );
-  return reservedPercent(total, available);
-}
 
 function SiteFootprint({
   sites,
@@ -413,9 +371,9 @@ export default function SitesPage() {
       toast.error(error instanceof Error ? error.message : "Failed to delete site"),
   });
 
-  const handleDelete = (site: Site) => {
+  const handleDelete = async (site: Site) => {
     if (
-      window.confirm(
+      await confirmAction(
         `Delete site "${site.name}"? This cannot be undone, and sites with agents cannot be deleted.`
       )
     ) {

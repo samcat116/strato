@@ -100,17 +100,18 @@ export function CreateVolumeDialog({
 
     // Accepted, not created: the agent still has to place and materialize
     // it, and MutationWatcher toasts the outcome (backend STR-148).
+    const payload = {
+      name,
+      description: formData.description.trim() || undefined,
+      projectId,
+      sizeGB,
+      format: formData.format,
+      volumeType: formData.volumeType,
+      sourceImageId: formData.sourceImageId || undefined,
+    };
     await run({
-      request: () =>
-        volumesApi.create({
-          name,
-          description: formData.description.trim() || undefined,
-          projectId,
-          sizeGB,
-          format: formData.format,
-          volumeType: formData.volumeType,
-          sourceImageId: formData.sourceImageId || undefined,
-        }),
+      intentKey: JSON.stringify(["POST", "/api/volumes", payload]),
+      request: (idempotencyKey) => volumesApi.create(payload, idempotencyKey),
       watch: { kind: "create", resourceKind: "volume", resourceName: name },
       errorMessage: "Failed to create volume",
       onSuccess: () => {

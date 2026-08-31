@@ -82,7 +82,7 @@ struct AgentDesiredStateController: RouteCollection {
         else {
             req.logger.warning(
                 "Desired-state poll from an agent identity with no registered agent",
-                metadata: ["agent": .string(agent.identity.key)])
+                metadata: ["strato.agent.identity": .string(agent.identity.key)])
             throw Abort(.forbidden, reason: "No agent is registered for this identity")
         }
 
@@ -128,7 +128,7 @@ struct AgentDesiredStateController: RouteCollection {
                 req.logger.debug(
                     "Desired-state poll served",
                     metadata: [
-                        "agentId": .string(agentId),
+                        "strato.agent.id": .string(agentId),
                         "syncId": .string(message.syncId),
                         "vmCount": .stringConvertible(message.vms.count),
                         "conditional": .stringConvertible(ifNoneMatch != nil),
@@ -148,7 +148,7 @@ struct AgentDesiredStateController: RouteCollection {
                 Telemetry.recordDesiredStatePoll(mode: mode, outcome: .assemblyBudgetExhausted)
                 req.logger.notice(
                     "Desired-state poll exhausted its assembly budget; idling out the hold window",
-                    metadata: ["agentId": .string(agentId)])
+                    metadata: ["strato.agent.id": .string(agentId)])
                 try? await Task.sleep(until: deadline, clock: clock)
                 return Self.notModifiedResponse(etag: etag)
             }

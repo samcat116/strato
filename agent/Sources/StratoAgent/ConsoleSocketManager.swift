@@ -65,8 +65,8 @@ actor ConsoleSocketManager {
         logger.info(
             "Connecting to console socket",
             metadata: [
-                "vmId": .string(vmId),
-                "sessionId": .string(sessionId),
+                "strato.vm.id": .string(vmId),
+                "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
                 "stream": .string(stream.rawValue),
                 "socketPath": .string(socketPath),
             ])
@@ -123,8 +123,8 @@ actor ConsoleSocketManager {
             logger.info(
                 "Console socket connected",
                 metadata: [
-                    "vmId": .string(vmId),
-                    "sessionId": .string(sessionId),
+                    "strato.vm.id": .string(vmId),
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
                     "stream": .string(stream.rawValue),
                 ])
         } catch {
@@ -132,8 +132,8 @@ actor ConsoleSocketManager {
             logger.error(
                 "Failed to connect to console socket",
                 metadata: [
-                    "vmId": .string(vmId),
-                    "sessionId": .string(sessionId),
+                    "strato.vm.id": .string(vmId),
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
                     "error": .string(error.localizedDescription),
                 ])
             throw ConsoleError.connectionFailed(error.localizedDescription)
@@ -146,7 +146,7 @@ actor ConsoleSocketManager {
             logger.warning(
                 "Attempted to disconnect unknown session",
                 metadata: [
-                    "sessionId": .string(sessionId)
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
                 ])
             return
         }
@@ -166,7 +166,7 @@ actor ConsoleSocketManager {
             logger.debug(
                 "Error closing channel (may already be closed)",
                 metadata: [
-                    "sessionId": .string(sessionId),
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -174,8 +174,8 @@ actor ConsoleSocketManager {
         logger.info(
             "Console session disconnected",
             metadata: [
-                "vmId": .string(connection.vmId),
-                "sessionId": .string(sessionId),
+                "strato.vm.id": .string(connection.vmId),
+                "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
             ])
     }
 
@@ -192,7 +192,7 @@ actor ConsoleSocketManager {
             logger.error(
                 "Failed to write to console",
                 metadata: [
-                    "sessionId": .string(sessionId),
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
                     "error": .string(error.localizedDescription),
                 ])
             throw ConsoleError.writeFailed(error.localizedDescription)
@@ -256,16 +256,16 @@ actor ConsoleSocketManager {
             logger.info(
                 "Received first console data",
                 metadata: [
-                    "sessionId": .string(sessionId),
-                    "vmId": .string(vmId),
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
+                    "strato.vm.id": .string(vmId),
                     "bytes": .stringConvertible(data.count),
                 ])
         } else {
             logger.debug(
                 "Received console data",
                 metadata: [
-                    "sessionId": .string(sessionId),
-                    "vmId": .string(vmId),
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
+                    "strato.vm.id": .string(vmId),
                     "bytes": .stringConvertible(data.count),
                 ])
         }
@@ -278,7 +278,7 @@ actor ConsoleSocketManager {
         logger.info(
             "Console connection closed by remote",
             metadata: [
-                "sessionId": .string(sessionId)
+                "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
             ])
 
         // Clean up the connection. `finish` rather than `cancel`: the socket

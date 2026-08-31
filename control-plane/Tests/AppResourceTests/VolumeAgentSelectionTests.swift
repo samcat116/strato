@@ -18,8 +18,7 @@ struct VolumeAgentSelectionTests {
     private func makeAgent(
         id: String,
         hypervisors: [HypervisorSupport],
-        status: AgentStatus = .online,
-        wireProtocolVersion: Int? = WireProtocol.currentVersion
+        status: AgentStatus = .online
     ) -> Agent {
         let agent = Agent(
             id: UUID(),
@@ -38,7 +37,6 @@ struct VolumeAgentSelectionTests {
             hypervisors: hypervisors,
             lastHeartbeat: Date()
         )
-        agent.wireProtocolVersion = wireProtocolVersion
         return agent
     }
 

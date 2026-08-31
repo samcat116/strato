@@ -174,12 +174,51 @@ internal network.
 - `VALKEY_PASSWORD`
 - `STRATO_SECRET_ENCRYPTION_KEY` — encrypts stored secrets (OIDC client
   secrets, SSF stream auth tokens, registry pull secrets, webhook signing
-  secrets) at rest in the database. Do not lose or change it after secrets
-  are configured: stored values are unreadable without the original key
-  (recover by re-entering them in the provider or stream settings).
+  secrets) at rest in the database. Do not lose it: stored values are
+  unreadable without the primary or a configured previous key.
   Deployments whose `.env` predates this key can add it at any time
   (`openssl rand -hex 32`); existing plaintext secrets are encrypted
   automatically at the next startup.
+- `STRATO_SECRET_ENCRYPTION_KEYS_PREVIOUS` — comma-separated decrypt-only keys
+  used temporarily while rotating the primary. It is empty normally.
+
+### Rotating the stored-secret encryption key
+
+First upgrade the control plane to a version that supports previous keys and
+let that deployment finish before changing key configuration. Existing v1
+ciphertext stays v1 during this compatibility rollout, so an older replica is
+never handed a v2 value it cannot parse. Do not create or rotate recoverable
+secrets until every replica is running the upgraded version; a newly initialized
+database has no v1 rows to hold the compatibility gate closed.
+
+Then rotate in three configuration rollouts. This staging order ensures that
+every running replica can read both keys before any replica writes with the new
+primary:
+
+1. Back up `.env` and the database. Generate the future primary with
+   `openssl rand -hex 32`, put that new key in
+   `STRATO_SECRET_ENCRYPTION_KEYS_PREVIOUS`, and leave
+   `STRATO_SECRET_ENCRYPTION_KEY` set to the old primary. Run
+   `docker compose up -d` and wait for every control-plane replica to restart.
+   This distributes the future key as decrypt-only before it can be used for
+   writes.
+2. Swap the values: set `STRATO_SECRET_ENCRYPTION_KEY` to the new key and set
+   `STRATO_SECRET_ENCRYPTION_KEYS_PREVIOUS` to the old key. Run
+   `docker compose up -d` again. In the control-plane logs, verify all four
+   `Stored secret sealing summary` entries report `unopenable=0`. Restart once
+   more with both keys present and verify every table reports both
+   `rewrapped=0` and `unopenable=0`; this is the completion gate.
+3. Clear `STRATO_SECRET_ENCRYPTION_KEYS_PREVIOUS`, run
+   `docker compose up -d` again, and verify the same zero/zero summaries.
+
+Never promote a new primary until every replica has first received it as a
+previous key, and never replace the primary without retaining the old value as
+a previous key during the promotion rollout.
+If a configured keyring cannot open some rows, `/health/ready` remains HTTP 200
+but reports `secrets-encryption` as degraded and
+`strato_secrets_encryption_unopenable` reports per-table counts. If ciphertext
+exists and no primary key is configured, startup fails and names the affected
+tables instead of writing new plaintext beside it.
 
 There is nothing to rotate before production use; the values never leave the
 host.
@@ -275,6 +314,13 @@ fails with "SPIRE server unreachable: 127.0.0.1:8081", which reads like a
 SPIRE problem rather than a container-lifecycle one. The helper always
 recreates the namespace owner and its tenants together.
 
+The same stop-then-recreate behavior is a correctness requirement when crossing
+STR-275. Old one-argument and current two-argument advisory locks occupy
+disjoint PostgreSQL keyspaces, so never run a second blue/green Compose project
+against the same database during that upgrade. `redeploy.sh` stops the old
+control-plane process and closes its database sessions before starting the new
+one; rollback through the helper has the same non-overlapping boundary.
+
 `smoke-test.sh` exercises the stack *through* the proxy (health, auth
 rejection, image full and ranged downloads with strict header checks, the
 Envoy mTLS listener). It needs a write-scoped API key, and is worth running
@@ -300,7 +346,7 @@ plane and agents can be upgraded in either order.
 good, not merely once the process started. On `down` and on `up -d` upgrades the
 control plane drains in-flight requests and agent WebSockets within
 `stop_grace_period` (60s). See
-[Health checks & zero-downtime deploys](/deployment/health-checks).
+[Health checks & controlled deploys](/deployment/health-checks).
 
 ## Adding hypervisors
 

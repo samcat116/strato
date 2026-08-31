@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useState } from "react";
 import { Loader2, Pencil, Trash2 } from "lucide-react";
 import {
@@ -44,7 +46,7 @@ export function PoliciesTable({
 
   const handleDelete = async (policy: IAMPolicy) => {
     if (
-      !window.confirm(
+      !await confirmAction(
         `Delete the policy "${policy.name}"? This can't be undone.`
       )
     ) {

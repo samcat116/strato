@@ -70,6 +70,7 @@ func routes(_ app: Application) throws {
 
     // Network management controller
     try app.register(collection: NetworkController())
+    try app.register(collection: NetworkACLController())
 
     // Floating IPs: external address pools + VM NIC attachments (issue #344)
     try app.register(collection: FloatingIPController())
@@ -108,7 +109,4 @@ func routes(_ app: Application) throws {
     // hand-written controller can never shadow a generated route unnoticed —
     // the drift suite asserts each generated route is registered exactly once.
     try registerGeneratedAPIHandlers(on: app)
-
-    // The frontend is served by the separate Next.js container; ingress owns
-    // user-facing page routing.
 }

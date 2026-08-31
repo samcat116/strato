@@ -6,7 +6,7 @@ import type {
   Site,
   CreateSiteRequest,
   UpdateSiteRequest,
-} from "@/types/api";
+} from "@/types/api-contracts";
 
 export const sitesApi = {
   list(organizationId?: string, signal?: AbortSignal): Promise<Site[]> {

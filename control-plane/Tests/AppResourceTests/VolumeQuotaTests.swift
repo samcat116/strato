@@ -114,6 +114,55 @@ final class VolumeQuotaTests {
 
     // MARK: - What the aggregate measures
 
+    @Test("A duplicate volume name is a conflict rather than a retryable server fault")
+    func duplicateVolumeNameIsConflict() async throws {
+        try await withVolumeQuotaApp { app, _, _, project, token in
+            for expectedStatus in [HTTPStatus.accepted, .conflict] {
+                try await app.test(.POST, "/api/volumes") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        createBody(project: project, name: "one-name", sizeGB: 1))
+                } afterResponse: { response in
+                    #expect(response.status == expectedStatus)
+                }
+            }
+        }
+    }
+
+    @Test("A refused create leaves no idempotency claim and the same key can succeed later")
+    func rolledBackCreateDoesNotClaimKey() async throws {
+        try await withVolumeQuotaApp { app, builder, _, project, token in
+            let quota = try await builder.createResourceQuota(
+                name: "Initially full", maxStorageGB: 0, project: project)
+            let body = createBody(project: project, name: "retry-after-capacity", sizeGB: 1)
+            let key = UUID().uuidString
+
+            try await app.test(.POST, "/api/volumes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
+                try req.content.encode(body)
+            } afterResponse: { response in
+                #expect(response.status == .forbidden)
+            }
+            #expect(try await IdempotencyKey.query(on: app.db).count() == 0)
+
+            quota.maxStorage = gb(10)
+            try await quota.save(on: app.db)
+
+            try await app.test(.POST, "/api/volumes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
+                try req.content.encode(body)
+            } afterResponse: { response in
+                #expect(response.status == .accepted)
+            }
+            #expect(try await IdempotencyKey.query(on: app.db).count() == 1)
+            #expect(
+                try await Volume.query(on: app.db)
+                    .filter(\.$name == "retry-after-capacity").count() == 1)
+        }
+    }
+
     @Test("A volume and a snapshot of it both count toward measured storage")
     func volumeAndSnapshotAreMeasured() async throws {
         try await withVolumeQuotaApp { app, builder, user, project, _ in

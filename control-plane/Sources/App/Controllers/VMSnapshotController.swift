@@ -105,6 +105,8 @@ extension VMController {
         let environment = vm.environment
         let memory = vm.memory
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+            try await IdempotencyService.reserve(
+                req.idempotencyContext, actor: .user(userID), on: db)
             // Checkpoint state draws from the shared storage quota pool
             // (issue #415 enforcement points).
             try await QuotaEnforcementService.reserveSnapshotStorage(
@@ -122,7 +124,7 @@ extension VMController {
                 on: db
             )
             return try await SnapshotArtifactMutation.recordCapture(
-                snapshot, actor: .user(userID), on: db)
+                snapshot, actor: .user(userID), idempotencyContext: req.idempotencyContext, on: db)
         }
 
         let snapshotID = try snapshot.requireID()
@@ -131,7 +133,7 @@ extension VMController {
         req.logger.info(
             "VM checkpoint accepted",
             metadata: [
-                "vm_id": .string(vmID.uuidString),
+                "strato.vm.id": .string(vmID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
             ])
         return try AcceptedMutation(VMSnapshotResponse(from: snapshot), accepted).acceptedResponse()
@@ -175,7 +177,12 @@ extension VMController {
         }
 
         let accepted = try await SnapshotArtifactMutation.delete(
-            snapshot, actor: .user(try user.requireID()), on: req.db, app: req.application)
+            snapshot, actor: .user(try user.requireID()),
+            idempotencyContext: req.idempotencyContext,
+            idempotencyResponseBody: { @Sendable snapshot, accepted, _ in
+                try AcceptedMutation(VMSnapshotResponse(from: snapshot), accepted).encodedBody()
+            },
+            on: req.db, app: req.application)
 
         req.logger.info(
             "VM checkpoint deletion requested",
@@ -251,7 +258,7 @@ extension VMController {
         req.logger.info(
             "VM restore accepted",
             metadata: [
-                "vm_id": .string(vmID.uuidString),
+                "strato.vm.id": .string(vmID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
             ])
         return try await Self.acceptedResponse(for: vm, accepted, on: req)

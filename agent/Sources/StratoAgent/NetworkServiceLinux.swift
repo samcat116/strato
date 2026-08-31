@@ -387,13 +387,22 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
         logger.info(
             "Creating VM network",
-            metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
+            metadata: ["strato.vm.id": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
 
         // Create logical switch port for the workload's NIC. Everything down to
         // the TAP/veth step below is identical for VMs and sandboxes — only the
         // port's namespace and how the device is realized differ.
         let portName = Self.portName(workloadId: vmId, nicIndex: nicIndex, placement: placement)
-        var macAddress = config.macAddress ?? generateMACAddress()
+        var macAddress: String
+        if let configuredMAC = config.macAddress {
+            guard let parsedMAC = MACAddress(configuredMAC) else {
+                throw NetworkError.invalidConfiguration(
+                    "MAC address '\(configuredMAC)' is not a six-octet unicast address")
+            }
+            macAddress = parsedMAC.description
+        } else {
+            macAddress = generateMACAddress()
+        }
         // The control plane owns IPAM; an absent IP means the port is bound by
         // MAC only. The old fake allocation (random 192.168.1.x) is gone.
         var ipAddress = config.ipAddress
@@ -560,7 +569,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         logger.info(
             "VM network created successfully",
             metadata: [
-                "vmId": .string(vmId),
+                "strato.vm.id": .string(vmId),
                 "portName": .string(portName),
                 "tapInterface": .string(tapInterface),
             ])
@@ -568,7 +577,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         return networkInfo
         #else
         // Development mode
-        logger.info("Creating mock VM network (development mode)", metadata: ["vmId": .string(vmId)])
+        logger.info("Creating mock VM network (development mode)", metadata: ["strato.vm.id": .string(vmId)])
 
         return VMNetworkInfo(
             vmId: vmId,
@@ -590,7 +599,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
         logger.info(
             "Detaching VM from network",
-            metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
+            metadata: ["strato.vm.id": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
 
         let portName = Self.portName(workloadId: vmId, nicIndex: nicIndex, placement: placement)
 
@@ -637,10 +646,10 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 sandboxId: vmId, nicIndex: nicIndex, netnsName: netnsName, portName: portName)
         }
 
-        logger.info("VM detached from network successfully", metadata: ["vmId": .string(vmId)])
+        logger.info("VM detached from network successfully", metadata: ["strato.vm.id": .string(vmId)])
         #else
         // Development mode
-        logger.info("Detaching mock VM from network (development mode)", metadata: ["vmId": .string(vmId)])
+        logger.info("Detaching mock VM from network (development mode)", metadata: ["strato.vm.id": .string(vmId)])
         #endif
     }
 
@@ -943,7 +952,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             "Creating TAP interface",
             metadata: [
                 "tapName": .string(tapName),
-                "vmId": .string(vmId),
+                "strato.vm.id": .string(vmId),
             ])
 
         // Idempotent: reuse the device if it already exists (crash recovery, re-attach).
@@ -1039,7 +1048,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         logger.info(
             "Sandbox NIC attached into namespace",
             metadata: [
-                "sandboxId": .string(sandboxId),
+                "strato.sandbox.id": .string(sandboxId),
                 "nicIndex": .stringConvertible(nicIndex),
                 "netns": .string(netnsName),
                 "portName": .string(portName),
@@ -1117,7 +1126,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             logger.warning(
                 "Failed to remove OVS port",
                 metadata: [
-                    "sandboxId": .string(sandboxId),
+                    "strato.sandbox.id": .string(sandboxId),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -1131,7 +1140,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 logger.warning(
                     "Failed to tear down sandbox NIC device",
                     metadata: [
-                        "sandboxId": .string(sandboxId),
+                        "strato.sandbox.id": .string(sandboxId),
                         "command": .string(command.arguments.joined(separator: " ")),
                         "error": .string(error.localizedDescription),
                         // Without an absolute path this ran through `PATH`, which
@@ -1602,14 +1611,41 @@ extension NetworkServiceLinux {
         // for this pre-v20-registered agent — impossible here, but the
         // contract stands): touch nothing, exactly like the `networks` list's
         // absence semantics.
+        var securityGroupTiersReady = false
         if let securityGroups {
             do {
-                try await SecurityGroupReconciler.reconcile(
+                securityGroupTiersReady = try await SecurityGroupReconciler.reconcile(
                     securityGroups: securityGroups, actuator: self, logger: logger)
             } catch {
                 logger.error(
                     "Security-group reconciliation could not complete",
                     metadata: ["error": .string(error.localizedDescription)])
+            }
+        }
+
+        // Network ACLs (authority side) run only after every managed security-
+        // group port group has migrated to tier 2. An old tier-0
+        // `allow-related` ACL is terminal and would bypass the tier-1 NACL.
+        // Per-network nil remains no opinion; an explicit [] tears the policy
+        // down. Stale networks are protected from the global observed-minus-
+        // desired reap just like their topology is above.
+        if current.contains(where: { $0.networkACLs != nil }) {
+            if securityGroupTiersReady {
+                do {
+                    try await NetworkACLReconciler.reconcile(
+                        networks: current,
+                        protectedSwitchNames: Set(
+                            stale.map { OVNNaming.switchName(networkId: $0.networkId) }),
+                        actuator: self,
+                        logger: logger)
+                } catch {
+                    logger.error(
+                        "Network ACL reconciliation could not complete",
+                        metadata: ["error": .string(error.localizedDescription)])
+                }
+            } else {
+                logger.warning(
+                    "Network ACL reconciliation deferred until every managed security group uses the tiered ACL schema")
             }
         }
         await SecurityGroupReconciler.reconcileMembership(
@@ -3111,7 +3147,7 @@ extension NetworkServiceLinux: SecurityGroupActuator {
         #endif
     }
 
-    func ensurePortGroup(_ plan: PortGroupPlan) async throws {
+    func ensurePortGroup(_ plan: PortGroupPlan) async throws -> Bool {
         #if os(Linux)
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
@@ -3126,7 +3162,10 @@ extension NetworkServiceLinux: SecurityGroupActuator {
                     observed: existing.external_ids?[Self.generationKey].flatMap(Int64.init),
                     observedBuilderRevision: existing.external_ids?[Self.builderRevisionKey]
                         .flatMap(Int64.init))
-            else { return }
+            else {
+                return existing.external_ids?[Self.builderRevisionKey]
+                    .flatMap(Int64.init) == SecurityGroupACLBuilder.aclSchemaRevision
+            }
             guard let uuid = existing.uuid else {
                 throw NetworkError.ovnError("Port group \(plan.name) has no UUID")
             }
@@ -3162,7 +3201,8 @@ extension NetworkServiceLinux: SecurityGroupActuator {
                     log: acl.log,
                     severity: acl.severity,
                     name: acl.name,
-                    external_ids: acl.externalIDs),
+                    external_ids: acl.externalIDs,
+                    tier: acl.tier),
                 onPortGroup: plan.name)
         }
         for aclUUID in supersededACLs {
@@ -3187,6 +3227,11 @@ extension NetworkServiceLinux: SecurityGroupActuator {
                 "generation": .stringConvertible(plan.generation),
                 "acls": .stringConvertible(plan.acls.count),
             ])
+        return true
+        #endif
+
+        #if !os(Linux)
+        return false
         #endif
     }
 
@@ -3263,6 +3308,144 @@ extension NetworkServiceLinux: SecurityGroupActuator {
         try await ovnManager.removePorts([portUUID], fromPortGroup: group)
         #endif
     }
+}
+
+// MARK: - Network ACL actuation (OVN logical-switch ACLs)
+
+extension NetworkServiceLinux: NetworkACLActuator {
+    func observeNetworkACLs() async throws -> [ObservedNetworkACL] {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+
+        var managedACLs: [String: OVNACL] = [:]
+        for acl in try await ovnManager.getACLs() {
+            guard
+                acl.external_ids?[NetworkACLRowIdentity.managedKey]
+                    == NetworkACLRowIdentity.managedValue,
+                acl.external_ids?[NetworkACLRowIdentity.roleKey]
+                    == NetworkACLRowIdentity.roleValue
+            else { continue }
+            guard let uuid = acl.uuid else {
+                throw NetworkError.ovnError("Managed network ACL row has no UUID")
+            }
+            managedACLs[uuid] = acl
+        }
+
+        var observed: [ObservedNetworkACL] = []
+        for logicalSwitch in try await ovnManager.getLogicalSwitches() {
+            let rules = (logicalSwitch.acls ?? []).compactMap { uuid -> ObservedNetworkACLRule? in
+                guard let acl = managedACLs[uuid] else { return nil }
+                return ObservedNetworkACLRule(
+                    uuid: uuid,
+                    action: acl.action,
+                    direction: acl.direction,
+                    priority: acl.priority,
+                    tier: acl.tier,
+                    match: acl.match,
+                    kind: acl.external_ids?[NetworkACLRowIdentity.ruleKindKey],
+                    externalIDs: acl.external_ids ?? [:])
+            }
+            let ids = logicalSwitch.external_ids ?? [:]
+            let hasStamp =
+                ids[NetworkACLRowIdentity.generationKey] != nil
+                || ids[NetworkACLRowIdentity.builderRevisionKey] != nil
+                || ids[NetworkACLRowIdentity.policyStampKey] != nil
+            guard !rules.isEmpty || hasStamp else { continue }
+            observed.append(
+                ObservedNetworkACL(
+                    switchName: logicalSwitch.name,
+                    policyID: ids[NetworkACLRowIdentity.policyStampKey].flatMap(UUID.init(uuidString:)),
+                    generation: ids[NetworkACLRowIdentity.generationKey].flatMap(Int64.init),
+                    builderRevision: ids[NetworkACLRowIdentity.builderRevisionKey].flatMap(Int64.init),
+                    rules: rules))
+        }
+        return observed
+        #else
+        return []
+        #endif
+    }
+
+    func createNetworkACL(_ acl: ACLSpec, onSwitchNamed switchName: String) async throws -> String {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        return try await ovnManager.createACL(
+            OVNACL(
+                priority: acl.priority,
+                direction: acl.direction,
+                match: acl.match,
+                action: acl.action,
+                log: acl.log,
+                severity: acl.severity,
+                name: acl.name,
+                external_ids: acl.externalIDs,
+                tier: acl.tier),
+            onSwitch: switchName)
+        #else
+        return ""
+        #endif
+    }
+
+    func removeNetworkACL(uuid: String) async throws {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        // SwiftOVN detaches this strong reference from both Logical_Switch and
+        // Port_Group parents in the same transaction before deleting the row.
+        try await ovnManager.deleteACL(uuid: uuid)
+        #endif
+    }
+
+    func stampNetworkACL(_ plan: NetworkACLPlan) async throws {
+        #if os(Linux)
+        try await updateNetworkACLStamp(onSwitchNamed: plan.switchName) { ids in
+            ids[NetworkACLRowIdentity.policyStampKey] = plan.policyID.uuidString.lowercased()
+            ids[NetworkACLRowIdentity.generationKey] = String(plan.generation)
+            ids[NetworkACLRowIdentity.builderRevisionKey] = String(NetworkACLBuilder.builderRevision)
+        }
+        #endif
+    }
+
+    func clearNetworkACLStamp(onSwitchNamed switchName: String) async throws {
+        #if os(Linux)
+        try await updateNetworkACLStamp(onSwitchNamed: switchName, missingIsSuccess: true) { ids in
+            ids.removeValue(forKey: NetworkACLRowIdentity.policyStampKey)
+            ids.removeValue(forKey: NetworkACLRowIdentity.generationKey)
+            ids.removeValue(forKey: NetworkACLRowIdentity.builderRevisionKey)
+        }
+        #endif
+    }
+
+    #if os(Linux)
+    /// Updates only `external_ids`. Every strong-reference property on the
+    /// model stays nil, so stamping can never replace the switch's ports, ACLs,
+    /// QoS rules, or forwarding groups with a stale read.
+    private func updateNetworkACLStamp(
+        onSwitchNamed switchName: String,
+        missingIsSuccess: Bool = false,
+        mutate: (inout [String: String]) -> Void
+    ) async throws {
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        guard let logicalSwitch = try await ovnManager.getLogicalSwitch(named: switchName) else {
+            if missingIsSuccess { return }
+            throw NetworkError.ovnError("Logical switch \(switchName) not found while stamping network ACL")
+        }
+        guard let uuid = logicalSwitch.uuid else {
+            throw NetworkError.ovnError("Logical switch \(switchName) has no UUID")
+        }
+        var ids = logicalSwitch.external_ids ?? [:]
+        mutate(&ids)
+        try await ovnManager.updateLogicalSwitch(
+            uuid: uuid,
+            OVNLogicalSwitch(name: logicalSwitch.name, external_ids: ids))
+    }
+    #endif
 }
 
 #if os(Linux)

@@ -95,7 +95,7 @@ final class SecurityGroupControllerTests {
             name: "sg-net-\(UUID().uuidString.prefix(8))", project: project)
         let nic = VMNetworkInterface(
             vmID: vm.id!, logicalNetworkID: try network.requireID(),
-            macAddress: VMNetworkInterface.generateMACAddress())
+            macAddress: MACAllocator.generateCandidate().description)
         try await nic.save(on: app.db)
         if let protocolVersion {
             let message = AgentRegisterMessage(
@@ -135,7 +135,7 @@ final class SecurityGroupControllerTests {
             name: "sg-sbx-net-\(UUID().uuidString.prefix(8))", project: project)
         let nic = SandboxNetworkInterface(
             sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
-            macAddress: VMNetworkInterface.generateMACAddress())
+            macAddress: MACAllocator.generateCandidate().description)
         try await nic.save(on: app.db)
         if let protocolVersion {
             let message = AgentRegisterMessage(

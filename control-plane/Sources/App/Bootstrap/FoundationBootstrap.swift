@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 import Vapor
 
 extension Application {
@@ -8,26 +9,45 @@ extension Application {
         // Resolve every operator setting before constructing any service. A value
         // that is present but malformed must stop startup rather than being treated
         // as absent and replaced by a default at its eventual call site.
-        controlPlaneConfiguration = try await .load(
+        let configuration = try await ControlPlaneConfiguration.load(
             environmentVariables: environmentVariables,
             for: environment)
+        try bootstrapFoundation(
+            resolvedConfiguration: configuration,
+            preparedObservability: nil)
+    }
+
+    /// Installs foundation facilities from the configuration and logging
+    /// backend prepared before `Application.make` by the executable entrypoint.
+    func bootstrapFoundation(
+        resolvedConfiguration: ControlPlaneConfiguration,
+        preparedObservability: PreparedControlPlaneObservability?
+    ) throws {
+        controlPlaneConfiguration = resolvedConfiguration
 
         // Capture this process's identity once, before anything else, so the boot log
         // and the /health endpoints can report exactly who is answering. Two control
         // planes on the same port will report different instanceIds — the tell we
         // lacked when a stale duplicate silently intercepted port 8080.
-        let identity = InstanceIdentity(environment: environment.name)
+        let identity = InstanceIdentity(
+            instanceId: UUID(uuidString: replicaID)!,
+            environment: environment.name)
         instanceIdentity = identity
+        let baseLoggingMetadata = ControlPlaneLoggingMetadata.base(
+            serviceName: controlPlaneConfiguration.string(.otelServiceName)!,
+            serviceInstanceID: identity.instanceId.uuidString,
+            environmentName: identity.environment,
+            serviceVersion: BuildInfo.version(configuration: controlPlaneConfiguration))
+        for (key, value) in baseLoggingMetadata {
+            logger[metadataKey: key] = value
+        }
         logger.info(
             "Control plane booting",
             metadata: [
-                "instanceId": .string(identity.instanceId.uuidString),
-                "version": .string(BuildInfo.version(configuration: controlPlaneConfiguration)),
-                "gitSHA": .string(BuildInfo.gitSHA(configuration: controlPlaneConfiguration)),
-                "environment": .string(identity.environment),
+                "vcs.revision": .string(BuildInfo.gitSHA(configuration: controlPlaneConfiguration))
             ])
 
-        try bootstrapObservability()
+        try bootstrapObservability(preparedObservability)
 
         // Track fire-and-forget background work (async VM operations) so shutdown
         // can drain it before Fluent closes its connection pools. Registered

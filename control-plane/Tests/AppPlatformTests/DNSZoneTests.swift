@@ -77,7 +77,7 @@ final class DNSZoneTests {
         let networkID = try network.requireID()
         let nic = VMNetworkInterface(
             vmID: try vm.requireID(), logicalNetworkID: networkID,
-            macAddress: VMNetworkInterface.generateMACAddress())
+            macAddress: MACAllocator.generateCandidate().description)
         try await nic.save(on: app.db)
         for (address, family, prefix) in addresses {
             try await VMInterfaceAddress(
@@ -946,7 +946,7 @@ final class DNSZoneTests {
                 addresses: [("10.10.0.5", .ipv4, 24)])
             let secondNIC = VMNetworkInterface(
                 vmID: try vm.requireID(), logicalNetworkID: try networks[1].requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress(),
+                macAddress: MACAllocator.generateCandidate().description,
                 deviceName: "net1", orderIndex: 1)
             try await secondNIC.save(on: app.db)
             try await VMInterfaceAddress(

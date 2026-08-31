@@ -21,7 +21,7 @@ OpenTelemetry is bootstrapped. Controlled by environment variables (see
 |----------|---------|-------|
 | `OTEL_METRICS_ENABLED` | `true` | Master switch for metric export |
 | `OTEL_TRACES_ENABLED` | `true` | Master switch for trace/span export |
-| `OTEL_LOGS_ENABLED` | `true` | Master switch for log export |
+| `OTEL_LOGS_ENABLED` | `true` | Adds OTLP log export; console/stdout logging always remains enabled |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` (gRPC) | Where to ship OTLP |
 | `OTEL_SERVICE_NAME` | `strato-control-plane` | `service.name` resource attribute |
 | `OTEL_RESOURCE_ATTRIBUTES` | — | Extra resource attributes; merged over the built-in `service.version` / `service.instance.id` / `deployment.environment.name` |
@@ -30,9 +30,10 @@ The compose deployment sets all **three** `OTEL_*_ENABLED` variables to
 `false` — its Prometheus and Loki serve agent host telemetry and VM console
 logs, not control-plane OTLP export.
 
-When a pillar is disabled, its facade uses a no-op backend — emission call sites
-(`Counter`/`Gauge`/`Timer`, `withSpan`) stay in the code but cost nothing. The
-bootstrap is also skipped entirely under the `.testing` environment.
+When metrics or traces are disabled, their facade uses a no-op backend —
+emission call sites (`Counter`/`Gauge`/`Timer`, `withSpan`) stay in the code but
+cost nothing. Disabling OTLP logs leaves the console backend in place. The OTel
+backends are skipped entirely under the `.testing` environment.
 
 Production should run with `OTEL_METRICS_ENABLED=true` pointed at a collector.
 The Helm chart wires this via the `opentelemetry.*` values.
@@ -148,6 +149,68 @@ bounded; unmatched requests fall back to `unmatched`.
 | `strato_http_server_requests_total` | counter | `method`, `route`, `status` = `2xx`…`5xx` | Request count by route and status class |
 | `strato_http_server_request_duration_seconds` | timer | `method`, `route` | Request latency distribution |
 
+### PostgreSQL advisory locks
+
+| Metric | Type | Labels | Meaning |
+|--------|------|--------|---------|
+| `strato_advisory_lock_acquisitions_total` | counter | `namespace` | Successful transaction- and session-lock acquisitions |
+| `strato_advisory_lock_wait_duration_seconds` | timer | `namespace` | Time from the first attempt until successful acquisition; graph its upper percentiles to find cross-replica contention |
+| `strato_advisory_lock_release_failures_total` | counter | `namespace` | A session lock could not be confirmed released. **Alert on any increase** and inspect the paired critical log for the resource UUID and digest |
+
+`namespace` is deliberately the only metric label. Resource UUIDs and digests
+belong in logs and diagnostic queries, not an unbounded metric dimension. The
+stable `classid` mapping in PostgreSQL's two-`int4` advisory-lock space is:
+
+| `classid` | Namespace | `classid` | Namespace |
+|-----------|-----------|-----------|-----------|
+| 1 | `schema_migration` | 7 | `floating_ip_pool` |
+| 2 | `user_registration` | 8 | `resolver_index` |
+| 3 | `project_network` | 9 | `dns_zone` |
+| 4 | `sandbox_snapshot_lineage` | 10 | `volume_attachment` |
+| 5 | `quota` | 11 | `security_group_membership` |
+| 6 | `ipam` | 12 | `agent_enrollment` |
+
+List held and waiting Strato locks with signed digests that match the
+application's logs:
+
+```sql
+SELECT pid,
+       classid::bigint AS namespace,
+       CASE WHEN objid::bigint > 2147483647
+            THEN objid::bigint - 4294967296
+            ELSE objid::bigint
+       END AS object_digest,
+       mode,
+       granted
+FROM pg_locks
+WHERE locktype = 'advisory'
+  AND objsubid = 2
+  AND classid::bigint BETWEEN 1 AND 12
+ORDER BY granted, namespace, object_digest;
+```
+
+Object keys hash the UUID's 16 binary bytes with SHA-256, take the first four
+bytes in network order, and reinterpret that value as a signed `int4`.
+Singleton locks use digest `0`. To compare a candidate UUID with `objid`:
+
+```sql
+WITH candidate(id) AS (VALUES ('00112233-4455-6677-8899-aabbccddeeff'::uuid)),
+hashed AS (
+  SELECT id,
+         (get_byte(sha256(uuid_send(id)), 0)::bigint << 24)
+       | (get_byte(sha256(uuid_send(id)), 1)::bigint << 16)
+       | (get_byte(sha256(uuid_send(id)), 2)::bigint << 8)
+       |  get_byte(sha256(uuid_send(id)), 3)::bigint AS unsigned_digest
+  FROM candidate
+)
+SELECT id,
+       CASE WHEN unsigned_digest > 2147483647
+            THEN unsigned_digest - 4294967296
+            ELSE unsigned_digest
+       END AS object_digest
+FROM hashed;
+```
+
 ### Agent lifecycle & VM health
 
 | Metric | Type | Labels | Meaning |
@@ -162,6 +225,7 @@ bounded; unmatched requests fall back to `unmatched`.
 | `strato_vm_drift_total` | counter | — | A VM's observed state changed out-of-band with no mutation in flight (issue #260) |
 | `strato_desired_state_assembly_failures_total` | counter | `kind` = `vm`, `reason` = `boot_volume_count` \| `non_canonical_boot_volume` \| `terminating_boot_volume` \| `missing_volume_identity` \| `invalid_volume_device_name` \| `unexpected` | One workload entry could not be assembled and was omitted while the rest of the host payload continued. Alert on any increase; inspect the named VM in the paired error log and its degraded condition |
 | `strato_diverged_workloads` | gauge | `kind` = `vm` \| `sandbox` | Current workloads whose acknowledged observed status has remained different from desired state for at least 15 minutes with no mutation outstanding. Recorded every sweep, including zero. **Alert on `> 0`** |
+| `strato_secrets_encryption_unopenable` | gauge | `table` = one of the four recoverable-secret columns | Stored secrets the boot keyring could not open. Recorded for every table at startup, including zero. **Alert on `> 0`**; `/health/ready` also reports `secrets-encryption` degraded. |
 
 ### Teardown safety & site networking
 
@@ -207,6 +271,7 @@ this is the allow/deny rate and evaluation latency for the entire API.
 |--------|------|--------|---------|
 | `strato_ipam_allocations_total` | counter | `family` = `ipv4` \| `ipv6` | A NIC address was allocated from a network's subnet |
 | `strato_ipam_allocation_failures_total` | counter | `family`, `reason` = `pool_exhausted` \| `invalid_subnet` \| `invalid_gateway` | An allocation failed; `pool_exhausted` is the capacity signal |
+| `strato_network_interface_duplicate_mac_addresses` | gauge | — | Canonical MAC addresses assigned to more than one VM or sandbox NIC at startup; zero is healthy |
 
 ### Notes on the labels
 
@@ -333,9 +398,10 @@ SSF poll delivery are all timer-driven, with no enclosing span to attach to.
 
 ### Correlating traces with logs
 
-`entrypoint.swift` bootstraps SwiftLog with swift-otel's logging metadata
-provider, so any line logged inside a span carries `trace_id`, `span_id` and
-`trace_flags`. The default console handler renders metadata as a sorted,
+`entrypoint.swift` bootstraps SwiftLog once with the console handler, the
+optional OTLP handler, and swift-otel's logging metadata provider. Any line
+logged inside a span therefore carries `trace_id`, `span_id` and `trace_flags`
+in both sinks. The default console handler renders metadata as a sorted,
 bracketed suffix:
 
 ```

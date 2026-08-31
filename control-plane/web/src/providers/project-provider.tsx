@@ -57,12 +57,22 @@ function writeStoredProject(orgId: string, projectId: string) {
   }
 }
 
-export function ProjectProvider({ children }: { children: ReactNode }) {
+export function ProjectProvider({
+  children,
+  initialProjects,
+  initialOrganizationId,
+}: {
+  children: ReactNode;
+  initialProjects?: Project[];
+  initialOrganizationId: string | null;
+}) {
   const { currentOrg } = useOrganization();
 
   const orgId = currentOrg?.id;
-  const { data: unsortedProjects = [], isLoading } =
-    useProjectsForOrganization(orgId);
+  const { data: unsortedProjects = [], isLoading } = useProjectsForOrganization(
+    orgId,
+    orgId && orgId === initialOrganizationId ? initialProjects : undefined
+  );
 
   // One global name order, because the API's is two orders concatenated:
   // `listOrganizationProjects` returns the organization's own projects sorted

@@ -714,6 +714,71 @@ public struct DesiredSecurityGroup: Codable, Sendable, Equatable {
     }
 }
 
+// MARK: - Desired Network ACLs
+
+/// One ordered, stateless rule in a network-level ACL (STR-33).
+///
+/// Rules are evaluated independently for ingress and egress in ascending
+/// `ruleNumber` order. The topology-authority agent owns the mapping from that
+/// stable API ordering to OVN tiers and priorities; the wire deliberately does
+/// not expose backend-specific priority values.
+public struct DesiredNetworkACLRule: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let ruleNumber: Int
+    /// "ingress" (`to-lport`) or "egress" (`from-lport`).
+    public let direction: String
+    /// "ipv4" or "ipv6".
+    public let ethertype: String
+    /// "allow" or "deny". These are policy verdicts, not raw OVN actions.
+    public let action: String
+    /// "tcp", "udp", or "icmp"; nil matches any IP protocol.
+    public let protocolName: String?
+    /// Destination ports for TCP/UDP, or ICMP type/code.
+    public let portRangeMin: Int?
+    public let portRangeMax: Int?
+    /// Source CIDR for ingress, destination CIDR for egress.
+    public let remoteCIDR: String
+
+    public init(
+        id: UUID,
+        ruleNumber: Int,
+        direction: String,
+        ethertype: String,
+        action: String,
+        protocolName: String? = nil,
+        portRangeMin: Int? = nil,
+        portRangeMax: Int? = nil,
+        remoteCIDR: String
+    ) {
+        self.id = id
+        self.ruleNumber = ruleNumber
+        self.direction = direction
+        self.ethertype = ethertype
+        self.action = action
+        self.protocolName = protocolName
+        self.portRangeMin = portRangeMin
+        self.portRangeMax = portRangeMax
+        self.remoteCIDR = remoteCIDR
+    }
+}
+
+/// The one network ACL attached to a logical network.
+///
+/// The control plane bumps `generation` for every rule mutation. The agent
+/// realizes the whole ordered rule set as one fail-closed replacement, never as
+/// an imperative per-rule edit.
+public struct DesiredNetworkACL: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let generation: Int64
+    public let rules: [DesiredNetworkACLRule]
+
+    public init(id: UUID, generation: Int64, rules: [DesiredNetworkACLRule]) {
+        self.id = id
+        self.generation = generation
+        self.rules = rules
+    }
+}
+
 // MARK: - Desired Network State
 
 /// One floating IP the agent should realize as a `dnat_and_snat` NAT rule on
@@ -988,6 +1053,11 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// Native OVN load balancers whose VIP belongs to this network. Nil means
     /// a pre-v43 control plane has no opinion; an empty array is authoritative.
     public let loadBalancers: [DesiredLoadBalancer]?
+    /// The network-level ACL attached to this switch (STR-33). The schema
+    /// permits at most one entry, while the collection shape preserves the
+    /// desired-state distinction between no opinion (`nil`) and authoritative
+    /// absence (`[]`), which tells the agent to remove managed switch ACLs.
+    public let networkACLs: [DesiredNetworkACL]?
 
     public init(
         networkId: UUID,
@@ -1007,7 +1077,8 @@ public struct DesiredNetworkState: Codable, Sendable {
         resolverAddresses: [String]? = nil,
         generation: Int64,
         floatingIPs: [DesiredFloatingIP]? = nil,
-        loadBalancers: [DesiredLoadBalancer]? = nil
+        loadBalancers: [DesiredLoadBalancer]? = nil,
+        networkACLs: [DesiredNetworkACL]? = nil
     ) {
         self.networkId = networkId
         self.name = name
@@ -1027,6 +1098,7 @@ public struct DesiredNetworkState: Codable, Sendable {
         self.generation = generation
         self.floatingIPs = floatingIPs
         self.loadBalancers = loadBalancers
+        self.networkACLs = networkACLs
     }
 }
 

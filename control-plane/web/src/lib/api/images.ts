@@ -7,7 +7,7 @@ import type {
   ArtifactKind,
   CreateImageRequest,
   UpdateImageRequest,
-} from "@/types/api";
+} from "@/types/api-contracts";
 
 export const imagesApi = {
   list(projectId: string, signal?: AbortSignal): Promise<Image[]> {

@@ -212,7 +212,7 @@ struct DesiredStateAssembler {
                     app.logger.warning(
                         "Failed to build image info for desired-state sync",
                         metadata: [
-                            "vmId": .string(vmId.uuidString),
+                            "strato.vm.id": .string(vmId.uuidString),
                             "imageId": .string(image.id?.uuidString ?? ""),
                             "error": .string(error.localizedDescription),
                         ])
@@ -220,7 +220,7 @@ struct DesiredStateAssembler {
             } else if vm.$sourceImage.id != nil {
                 app.logger.warning(
                     "VM references an image that is missing or not ready; syncing without image info",
-                    metadata: ["vmId": .string(vmId.uuidString)])
+                    metadata: ["strato.vm.id": .string(vmId.uuidString)])
             }
 
             let metadata = InstanceMetadata.build(
@@ -277,6 +277,8 @@ struct DesiredStateAssembler {
             on: db)
         let loadBalancersByNetwork = try await desiredLoadBalancers(
             networkIDs: scope.networkIDs, on: db)
+        let networkACLsByNetwork = try await desiredNetworkACLs(
+            networkIDs: scope.networkIDs, on: db)
         // Sorted by id: names are no longer unique, so only the id gives the
         // topology list a stable, total order.
         let networkStates =
@@ -303,7 +305,11 @@ struct DesiredStateAssembler {
                         siteCapable: siteResolverCapable),
                     generation: Int64(network.generation),
                     floatingIPs: floatingIPsByNetwork[networkId] ?? [],
-                    loadBalancers: loadBalancersByNetwork[networkId] ?? []
+                    loadBalancers: loadBalancersByNetwork[networkId] ?? [],
+                    // The current lockstep wire always carries an
+                    // authoritative opinion: [] tears down managed switch
+                    // ACLs, while the schema limits this list to one entry.
+                    networkACLs: networkACLsByNetwork[networkId].map { [$0] } ?? []
                 )
             }
 
@@ -363,7 +369,7 @@ struct DesiredStateAssembler {
                         app.logger.warning(
                             "Fork is placed off its snapshot's agent but the exported copy is unavailable",
                             metadata: [
-                                "sandboxId": .string(sandboxId.uuidString),
+                                "strato.sandbox.id": .string(sandboxId.uuidString),
                                 "snapshotId": .string(snapshotID.uuidString),
                             ])
                     }
@@ -416,8 +422,8 @@ struct DesiredStateAssembler {
                 app.logger.debug(
                     "Withholding a sandbox's NIC: its host does not advertise sandbox networking",
                     metadata: [
-                        "sandboxId": .string(sandboxId.uuidString),
-                        "agentId": .string(agentId),
+                        "strato.sandbox.id": .string(sandboxId.uuidString),
+                        "strato.agent.id": .string(agentId),
                     ])
             }
             // The restore *edge* (STR-151), as distinct from the fork create
@@ -435,7 +441,7 @@ struct DesiredStateAssembler {
                         app.logger.warning(
                             "Sandbox restore targets a snapshot on another agent whose exported copy is unavailable",
                             metadata: [
-                                "sandboxId": .string(sandboxId.uuidString),
+                                "strato.sandbox.id": .string(sandboxId.uuidString),
                                 "snapshotId": .string(snapshotID.uuidString),
                             ])
                     }
@@ -530,7 +536,7 @@ struct DesiredStateAssembler {
         app.logger.error(
             "Omitting an unassemblable VM from desired state",
             metadata: [
-                "vmId": .string(vmId.uuidString),
+                "strato.vm.id": .string(vmId.uuidString),
                 "reason": .string(reasonCode),
                 "error": .string(detail),
             ])
@@ -548,7 +554,7 @@ struct DesiredStateAssembler {
         guard let sql = db as? any SQLDatabase else {
             app.logger.error(
                 "Could not record the VM desired-state assembly failure: SQL database required",
-                metadata: ["vmId": .string(vmId.uuidString)])
+                metadata: ["strato.vm.id": .string(vmId.uuidString)])
             return
         }
         do {
@@ -578,7 +584,7 @@ struct DesiredStateAssembler {
             app.logger.error(
                 "Could not record the VM desired-state assembly failure",
                 metadata: [
-                    "vmId": .string(vmId.uuidString),
+                    "strato.vm.id": .string(vmId.uuidString),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -604,7 +610,7 @@ struct DesiredStateAssembler {
             app.logger.error(
                 "Could not clear a repaired VM desired-state assembly failure",
                 metadata: [
-                    "vmId": .string(vmId.uuidString),
+                    "strato.vm.id": .string(vmId.uuidString),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -1015,7 +1021,7 @@ struct DesiredStateAssembler {
             app.logger.warning(
                 "Could not resolve the agent update artifact for the sync; omitting it",
                 metadata: [
-                    "agentName": .string(agent.name),
+                    "strato.agent.name": .string(agent.name),
                     "targetVersion": .string(assigned),
                     "error": .string(String(describing: error)),
                 ])
@@ -1034,6 +1040,49 @@ struct DesiredStateAssembler {
                 .filter(\.$id ~~ Array(ids))
                 .all()
                 .compactMap { network in network.id.map { ($0, network) } })
+    }
+
+    /// The optional ACL attached to each authoritative logical network. One
+    /// bounded eager load avoids a rule query per switch, and both the outer
+    /// index and each rule list are made deterministic before they reach the
+    /// desired-state digest.
+    private func desiredNetworkACLs(
+        networkIDs: Set<UUID>, on db: any Database
+    ) async throws -> [UUID: DesiredNetworkACL] {
+        guard !networkIDs.isEmpty else { return [:] }
+        let rows = try await NetworkACL.query(on: db)
+            .filter(\.$logicalNetwork.$id ~~ Array(networkIDs))
+            .with(\.$rules)
+            .all()
+
+        var byNetwork: [UUID: DesiredNetworkACL] = [:]
+        for acl in rows {
+            guard let aclID = acl.id else { continue }
+            let rules = acl.rules
+                .compactMap { rule -> DesiredNetworkACLRule? in
+                    guard let ruleID = rule.id else { return nil }
+                    return DesiredNetworkACLRule(
+                        id: ruleID,
+                        ruleNumber: rule.ruleNumber,
+                        direction: rule.direction.rawValue,
+                        ethertype: rule.ethertype.rawValue,
+                        action: rule.action.rawValue,
+                        protocolName: rule.protocolName,
+                        portRangeMin: rule.portRangeMin,
+                        portRangeMax: rule.portRangeMax,
+                        remoteCIDR: rule.remoteCIDR)
+                }
+                .sorted { lhs, rhs in
+                    let lhsDirection = lhs.direction == "ingress" ? 0 : 1
+                    let rhsDirection = rhs.direction == "ingress" ? 0 : 1
+                    if lhsDirection != rhsDirection { return lhsDirection < rhsDirection }
+                    if lhs.ruleNumber != rhs.ruleNumber { return lhs.ruleNumber < rhs.ruleNumber }
+                    return lhs.id.uuidString < rhs.id.uuidString
+                }
+            byNetwork[acl.$logicalNetwork.id] = DesiredNetworkACL(
+                id: aclID, generation: acl.generation, rules: rules)
+        }
+        return byNetwork
     }
 
     /// Per-sandbox registry work at sync assembly (issue #414): pins an
@@ -1059,12 +1108,13 @@ struct DesiredStateAssembler {
         guard sandbox.desiredStatus != .absent else { return nil }
 
         guard let ref = OCIImageReference.parse(sandbox.image) else {
+            var metadata: Logger.Metadata = ["image": .string(sandbox.image)]
+            if let sandboxID = sandbox.id {
+                metadata["strato.sandbox.id"] = .string(sandboxID.uuidString)
+            }
             app.logger.warning(
                 "Sandbox image reference is unparseable; syncing without digest or credential",
-                metadata: [
-                    "sandboxId": .string(sandbox.id?.uuidString ?? ""),
-                    "image": .string(sandbox.image),
-                ])
+                metadata: metadata)
             return nil
         }
 
@@ -1109,7 +1159,7 @@ struct DesiredStateAssembler {
                     app.logger.info(
                         "Pinned sandbox image tag to digest",
                         metadata: [
-                            "sandboxId": .string(sandboxId.uuidString),
+                            "strato.sandbox.id": .string(sandboxId.uuidString),
                             "image": .string(sandbox.image),
                             "digest": .string(digest),
                         ])
@@ -1123,7 +1173,7 @@ struct DesiredStateAssembler {
                 app.logger.warning(
                     "Failed to resolve sandbox image tag to a digest; syncing unpinned",
                     metadata: [
-                        "sandboxId": .string(sandboxId.uuidString),
+                        "strato.sandbox.id": .string(sandboxId.uuidString),
                         "image": .string(sandbox.image),
                         "error": .string(error.localizedDescription),
                     ])
@@ -1264,7 +1314,7 @@ struct DesiredStateAssembler {
             // this is a misconfiguration, not a transient.
             app.logger.warning(
                 "Site has no network controller; its networks will not be reconciled",
-                metadata: ["site": .string(site.name), "agentName": .string(agent.name)])
+                metadata: ["site": .string(site.name), "strato.agent.name": .string(agent.name)])
             return NetworkAssemblyScope(
                 networkIDs: [],
                 authoritative: false,

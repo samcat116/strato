@@ -1,5 +1,4 @@
 import Fluent
-import SQLKit
 import StratoShared
 import Vapor
 
@@ -16,7 +15,7 @@ import Vapor
 ///
 /// Every transition now goes through here: claim and release each move all four
 /// columns together, and claim runs under the same per-subject advisory lock
-/// idiom `IPAMService.lockAllocations` uses, so the read-allocate-write cycle
+/// idiom `IPAMService.lockNetworkAllocations` uses, so the read-allocate-write cycle
 /// behind an auto-generated device name serializes across replicas. The
 /// `(vm_id, device_name)` unique index is the backstop, not the only defense.
 enum VolumeAttachmentService {
@@ -24,19 +23,15 @@ enum VolumeAttachmentService {
     // MARK: - Serialization
 
     /// Serializes attachment writes for one VM. Transaction-scoped, so it is
-    /// released by the commit or rollback and there is nothing to leak; a
-    /// non-Postgres database (none in production) is a no-op, exactly as IPAM
-    /// treats it.
+    /// released by the commit or rollback and there is nothing to leak.
+    /// PostgreSQL and an active transaction are required; skipping either
+    /// would make the read-allocate-write cycle unprotected.
     ///
     /// Keyed on the VM rather than the volume: what races is the *set* of names
     /// on one VM, which two different volumes contend for.
     static func lock(vmID: UUID, on db: any Database) async throws {
-        guard let sql = db as? any SQLDatabase, sql.dialect.name == "postgresql" else { return }
-        try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: lockKey(vmID: vmID))))").run()
-    }
-
-    static func lockKey(vmID: UUID) -> String {
-        "volume-attach:\(vmID.uuidString)"
+        try await AdvisoryLock.acquireTransactionLock(
+            .object(.volumeAttachment, id: vmID), on: db)
     }
 
     // MARK: - Claim
@@ -122,9 +117,8 @@ enum VolumeAttachmentService {
             try await volume.save(on: db)
         } catch let error as any DatabaseError where error.isConstraintFailure {
             // The unique index caught what the checks above could not: a
-            // concurrent attach on a replica that could not take the advisory
-            // lock (a non-Postgres database, or a lock this transaction never
-            // acquired). Reported as the same conflict, not a 500.
+            // concurrent attach that bypassed this service, or corrupted state
+            // predating the lock. Reported as the same conflict, not a 500.
             throw Abort(
                 .conflict,
                 reason:

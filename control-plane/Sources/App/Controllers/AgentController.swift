@@ -239,7 +239,7 @@ struct AgentController: RouteCollection {
         }
 
         return try await AgentEnrollment.withOperationLock(
-            enrollmentID: enrollmentID, on: req.db
+            enrollmentID: enrollmentID, on: req.db, logger: req.logger
         ) { db in
             guard
                 let lockedEnrollment = try await AgentEnrollment.findByBootstrapToken(
@@ -279,7 +279,7 @@ struct AgentController: RouteCollection {
                 req.logger.error(
                     "SPIRE join-token minting failed while redeeming an agent enrollment",
                     metadata: [
-                        "agentName": .string(lockedEnrollment.agentName),
+                        "strato.agent.name": .string(lockedEnrollment.agentName),
                         "enrollmentId": .string(enrollmentID.uuidString),
                         "error": .string("\(error)"),
                     ])
@@ -337,7 +337,7 @@ struct AgentController: RouteCollection {
             req.logger.info(
                 "Enrolling into the platform trust domain",
                 metadata: [
-                    "agentName": .string(createRequest.agentName),
+                    "strato.agent.name": .string(createRequest.agentName),
                     "reason": .string(fallback.label),
                 ])
         }
@@ -424,7 +424,7 @@ struct AgentController: RouteCollection {
             req.logger.error(
                 "SPIRE provisioning failed while creating an agent enrollment",
                 metadata: [
-                    "agentName": .string(createRequest.agentName),
+                    "strato.agent.name": .string(createRequest.agentName),
                     "error": .string("\(error)"),
                 ])
             throw Abort(
@@ -468,7 +468,7 @@ struct AgentController: RouteCollection {
             if claimed {
                 req.logger.warning(
                     "Concurrent enrollment won this agent name; leaving its SPIRE grant intact",
-                    metadata: ["agentName": .string(createRequest.agentName)])
+                    metadata: ["strato.agent.name": .string(createRequest.agentName)])
                 throw Abort(
                     .conflict,
                     reason:
@@ -483,9 +483,9 @@ struct AgentController: RouteCollection {
         req.logger.info(
             "Created agent enrollment",
             metadata: [
-                "agentName": .string(createRequest.agentName),
+                "strato.agent.name": .string(createRequest.agentName),
                 "enrollmentId": .string(enrollment.id?.uuidString ?? "unknown"),
-                "spiffeId": .string(enrollment.spiffeID),
+                "strato.agent.identity": .string(enrollment.spiffeID),
                 "expiresAt": .string(enrollment.expiresAt?.description ?? "no expiration"),
             ])
 
@@ -581,7 +581,7 @@ struct AgentController: RouteCollection {
         }
 
         return try await AgentEnrollment.withOperationLock(
-            enrollmentID: enrollmentId, on: req.db
+            enrollmentID: enrollmentId, on: req.db, logger: req.logger
         ) { db in
             guard let enrollment = try await AgentEnrollment.find(enrollmentId, on: db) else {
                 throw Abort(.notFound, reason: "Agent enrollment not found")
@@ -638,7 +638,7 @@ struct AgentController: RouteCollection {
                     req.logger.error(
                         "SPIRE deprovisioning failed while revoking an agent enrollment",
                         metadata: [
-                            "agentName": .string(enrollment.agentName),
+                            "strato.agent.name": .string(enrollment.agentName),
                             "error": .string("\(error)"),
                         ])
                     throw Abort(
@@ -662,7 +662,7 @@ struct AgentController: RouteCollection {
                 "Revoked agent enrollment",
                 metadata: [
                     "enrollmentId": .string(enrollmentId.uuidString),
-                    "agentName": .string(enrollment.agentName),
+                    "strato.agent.name": .string(enrollment.agentName),
                 ])
 
             return .noContent
@@ -949,9 +949,9 @@ struct AgentController: RouteCollection {
         req.logger.notice(
             "Adopted workloads onto a re-enrolled agent record",
             metadata: [
-                "agentId": .string(targetId),
-                "agentName": .string(agent.name),
-                "fromAgentId": .string(sourceId),
+                "strato.agent.id": .string(targetId),
+                "strato.agent.name": .string(agent.name),
+                "strato.agent.source.id": .string(sourceId),
                 "adoptedVMs": .stringConvertible(counts.adoptedVMs),
                 "adoptedSandboxes": .stringConvertible(counts.adoptedSandboxes),
                 "adoptedVolumes": .stringConvertible(counts.adoptedVolumes),
@@ -1033,7 +1033,7 @@ struct AgentController: RouteCollection {
                 req.logger.error(
                     "SPIRE deprovisioning failed while deregistering agent",
                     metadata: [
-                        "agentName": .string(agent.name),
+                        "strato.agent.name": .string(agent.name),
                         "error": .string("\(error)"),
                     ])
                 throw Abort(
@@ -1074,8 +1074,8 @@ struct AgentController: RouteCollection {
         req.logger.info(
             "Deregistered agent",
             metadata: [
-                "agentId": .string(agentId.uuidString),
-                "agentName": .string(agent.name),
+                "strato.agent.id": .string(agentId.uuidString),
+                "strato.agent.name": .string(agent.name),
             ])
 
         return .noContent
@@ -1102,8 +1102,8 @@ struct AgentController: RouteCollection {
         req.logger.info(
             "Forced agent offline",
             metadata: [
-                "agentId": .string(agentId.uuidString),
-                "agentName": .string(agent.name),
+                "strato.agent.id": .string(agentId.uuidString),
+                "strato.agent.name": .string(agent.name),
             ])
 
         return .noContent
@@ -1315,8 +1315,8 @@ struct AgentController: RouteCollection {
         req.logger.notice(
             "Agent update assigned",
             metadata: [
-                "agentId": .string(agentId.uuidString),
-                "agentName": .string(agent.name),
+                "strato.agent.id": .string(agentId.uuidString),
+                "strato.agent.name": .string(agent.name),
                 "currentVersion": .string(agent.version),
                 "targetVersion": .string(targetVersion),
                 // Redacted: explicit overrides may be presigned URLs whose
@@ -1375,8 +1375,8 @@ struct AgentController: RouteCollection {
         req.logger.notice(
             "Agent update assignment cancelled",
             metadata: [
-                "agentId": .string(agentId.uuidString),
-                "agentName": .string(agent.name),
+                "strato.agent.id": .string(agentId.uuidString),
+                "strato.agent.name": .string(agent.name),
                 "targetVersion": .string(assigned),
             ])
 
@@ -1436,8 +1436,8 @@ struct AgentController: RouteCollection {
             req.logger.info(
                 "Agent auto-update toggled",
                 metadata: [
-                    "agentId": .string(agentId.uuidString),
-                    "agentName": .string(agent.name),
+                    "strato.agent.id": .string(agentId.uuidString),
+                    "strato.agent.name": .string(agent.name),
                     "autoUpdate": .stringConvertible(autoUpdate),
                 ])
             // Push a sync so a withdrawn agent stops seeing the desired

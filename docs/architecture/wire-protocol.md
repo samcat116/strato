@@ -50,7 +50,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 52). The required registration fields
+currently 53). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -101,6 +101,14 @@ its last observation; an empty list means enumeration succeeded and found no
 whole disks. WWN or serial identifies a physical disk across path renumbering,
 while devices without either identifier remain visible but cannot become
 OSD-eligible.
+
+Wire v53 adds `DesiredNetworkState.networkACLs`, carrying the optional ordered
+network ACL and its full rule set to the site's topology authority. `nil` keeps
+the semantic no-op convention; current control planes send `[]` to authoritatively
+remove managed switch ACLs or a one-element list for the schema-enforced policy.
+This is an exact-version payload change, not a `supportsNetworkACLs` capability:
+the existing live overlay-network capability already decides whether an agent
+may author OVN topology.
 
 Two consequences worth knowing:
 

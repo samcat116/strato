@@ -5,10 +5,25 @@ public func configure(
     _ app: Application,
     environmentVariables: [String: String] = ProcessInfo.processInfo.environment
 ) async throws {
-    // Startup ordering is part of the control plane's interface. Each bootstrap
-    // module owns a cohesive phase; this manifest owns the dependencies between
-    // those phases.
     try await app.bootstrapFoundation(environmentVariables: environmentVariables)
+    try await configureAfterFoundation(app)
+}
+
+func configure(
+    _ app: Application,
+    resolvedConfiguration: ControlPlaneConfiguration,
+    preparedObservability: PreparedControlPlaneObservability
+) async throws {
+    try app.bootstrapFoundation(
+        resolvedConfiguration: resolvedConfiguration,
+        preparedObservability: preparedObservability)
+    try await configureAfterFoundation(app)
+}
+
+/// Startup ordering is part of the control plane's interface. Each bootstrap
+/// module owns a cohesive phase; this manifest owns the dependencies between
+/// those phases after foundation facilities have been installed.
+private func configureAfterFoundation(_ app: Application) async throws {
     try app.bootstrapHTTPPipeline()
     try await app.bootstrapDatabase()
     try await app.reconcileStartupState()

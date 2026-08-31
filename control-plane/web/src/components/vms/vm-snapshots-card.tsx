@@ -46,9 +46,11 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
   const submitCreate = async (event: React.FormEvent) => {
     event.preventDefault();
     const trimmed = name.trim();
+    const payload = trimmed ? { name: trimmed } : undefined;
     await runCreate({
-      request: () =>
-        vmsApi.createSnapshot(vm.id, trimmed ? { name: trimmed } : undefined),
+      intentKey: JSON.stringify(["POST", `/api/vms/${vm.id}/snapshots`, payload ?? null]),
+      request: (idempotencyKey) =>
+        vmsApi.createSnapshot(vm.id, payload, idempotencyKey),
       watch: {
         snapshot: true,
         kind: "create",
@@ -70,7 +72,9 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
     // checkpoint itself does not change (backend STR-151).
     await runRowAction({
       busyKey: restoring.id,
-      request: () => vmsApi.restoreSnapshot(vm.id, restoring.id),
+      intentKey: JSON.stringify(["POST", `/api/vms/${vm.id}/snapshots/${restoring.id}/restore`, null]),
+      request: (idempotencyKey) =>
+        vmsApi.restoreSnapshot(vm.id, restoring.id, idempotencyKey),
       watch: {
         kind: "restore",
         resourceKind: "virtual_machine",
@@ -87,7 +91,9 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
     const snapshot = deleting;
     await runRowAction({
       busyKey: snapshot.id,
-      request: () => vmsApi.deleteSnapshot(vm.id, snapshot.id),
+      intentKey: JSON.stringify(["DELETE", `/api/vms/${vm.id}/snapshots/${snapshot.id}`, null]),
+      request: (idempotencyKey) =>
+        vmsApi.deleteSnapshot(vm.id, snapshot.id, idempotencyKey),
       watch: {
         snapshot: true,
         kind: "delete",

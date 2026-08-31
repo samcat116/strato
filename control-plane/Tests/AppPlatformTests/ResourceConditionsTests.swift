@@ -183,6 +183,65 @@ final class ResourceConditionsTests {
         }
     }
 
+    @Test("A terminal failure after a blocked retry finalizes the same generation")
+    func terminalFailureAfterBlockedRetryFinalizesGeneration() async throws {
+        try await withTestApp { app, user, project in
+            try await self.subscribeToEverything(app: app)
+            let vm = try await TestDataBuilder(db: app.db).createVM(
+                name: "blocked-then-terminal-vm", project: project)
+            let agentId = try await self.registerAgent(
+                app: app, named: "blocked-then-terminal-agent", hypervisorType: .qemu)
+            vm.hypervisorId = agentId
+            vm.setFixtureDesiredStatus(.running)
+            vm.setStatus(.shutdown)
+            vm.extendConvergenceDeadline(by: 120)
+            try await vm.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .boot, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
+                actor: .user(try user.requireID()), on: app.db)
+
+            let blocked = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!, status: .shutdown, observedGeneration: 0,
+                        lastError: "host capacity is temporarily exhausted",
+                        failedGeneration: vm.generation, failureClassification: .blocked)
+                ])
+            await app.agentService.applyObservedStateReport(
+                blocked, fromAgentKey: agentKey("blocked-then-terminal-agent"))
+
+            let afterBlocked = try #require(await VM.find(vm.id, on: app.db))
+            #expect(afterBlocked.desiredStatus == .running)
+            #expect(afterBlocked.generation == 1)
+            #expect(afterBlocked.convergenceDeadline != nil)
+            #expect(try await self.mutationOutcomes(app: app).isEmpty)
+
+            let terminalReason = "image manifest has no entry for this architecture"
+            let terminal = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!, status: .shutdown, observedGeneration: 0,
+                        lastError: terminalReason, failedGeneration: vm.generation,
+                        failureClassification: .permanent)
+                ])
+            await app.agentService.applyObservedStateReport(
+                terminal, fromAgentKey: agentKey("blocked-then-terminal-agent"))
+
+            let finalized = try #require(await VM.find(vm.id, on: app.db))
+            #expect(finalized.desiredStatus == .shutdown)
+            #expect(finalized.generation == 2)
+            #expect(finalized.convergenceDeadline == nil)
+            #expect(finalized.conditions.degraded?.reason == terminalReason)
+            #expect(try await self.mutationOutcomes(app: app) == ["operation.failed"])
+
+            await app.agentService.applyObservedStateReport(
+                terminal, fromAgentKey: agentKey("blocked-then-terminal-agent"))
+            #expect(try await self.mutationOutcomes(app: app) == ["operation.failed"])
+        }
+    }
+
     @Test("A stale timeout snapshot cannot overwrite a committed success")
     func timeoutSnapshotCannotOverwriteCommittedSuccess() async throws {
         try await withTestApp { app, user, project in
