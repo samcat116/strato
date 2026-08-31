@@ -390,6 +390,12 @@ enum Telemetry {
         ).increment()
     }
 
+    /// Number of canonical MAC addresses currently assigned to more than one
+    /// VM or sandbox interface. Recorded by the startup audit; zero is healthy.
+    static func recordDuplicateMACAddressGroups(_ count: Int) {
+        Gauge(label: "strato_network_interface_duplicate_mac_addresses").record(Double(count))
+    }
+
     // MARK: - Desired-state polling
 
     /// A desired-state long-poll resolved (STR-146). Both dimensions are typed
