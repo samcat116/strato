@@ -134,6 +134,21 @@ struct MockSandboxRuntimeTests {
         #expect(observed == .running)
     }
 
+    @Test("Recorded-uid adoption and deletion remain available through the runtime protocol")
+    func recordedUIDLifecycle() async throws {
+        let runtime: any SandboxRuntimeService = makeRuntime()
+
+        let adopted = try await runtime.adoptSandbox(
+            sandboxId: "sb-legacy", spec: makeSpec(), jailUID: 100_123)
+        #expect(adopted == .running)
+        #expect(try await runtime.getSandboxStatus(sandboxId: "sb-legacy") == .running)
+
+        try await runtime.deleteSandbox(sandboxId: "sb-legacy", jailUID: 100_123)
+        await #expect(throws: SandboxRuntimeError.self) {
+            try await runtime.getSandboxStatus(sandboxId: "sb-legacy")
+        }
+    }
+
     @Test("A networked spec is accepted and its attachment recorded (issue STR-100)")
     func networkedSpecIsAccepted() async throws {
         let runtime = makeRuntime()

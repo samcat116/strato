@@ -6,59 +6,102 @@ import Testing
 @Suite("Sandbox Jail Tests")
 struct SandboxJailTests {
 
-    private let config = SandboxJailerConfig(
-        jailerBinaryPath: "/usr/local/bin/jailer",
-        chrootBaseDir: "/var/lib/strato/vms/jailer",
-        uidBase: 100_000)
+    private func config(uidBase: UInt32 = 100_000) throws -> SandboxJailerConfig {
+        try SandboxJailerConfig(
+            jailerBinaryPath: "/usr/local/bin/jailer",
+            chrootBaseDir: "/var/lib/strato/vms/jailer",
+            uidBase: uidBase)
+    }
 
-    private func plan(_ sandboxId: String = "0d9f8c6a-1b2c-4d3e-9f4a-5b6c7d8e9f0a") -> SandboxJailPlan {
-        SandboxJailPlan(
-            sandboxId: sandboxId, config: config,
+    private func plan(
+        _ sandboxId: String = "0d9f8c6a-1b2c-4d3e-9f4a-5b6c7d8e9f0a",
+        jailUID: UInt32 = 120_000
+    ) throws -> SandboxJailPlan {
+        try SandboxJailPlan(
+            sandboxId: sandboxId, jailUID: jailUID, config: config(),
             firecrackerBinaryPath: "/usr/local/bin/firecracker")
     }
 
-    // MARK: - uid/gid derivation
+    // MARK: - uid/gid allocation
 
-    @Test("uid derivation is deterministic and inside the configured range")
-    func uidDerivation() {
-        let a = plan()
-        let b = plan()
+    @Test("the plan carries its explicitly allocated uid and matching gid")
+    func explicitIdentity() throws {
+        let p = try plan(jailUID: 123_456)
 
-        // Stable across derivations (and hence agent restarts): create,
-        // adoption, and teardown always agree.
-        #expect(a.uid == b.uid)
-        #expect(a.gid == a.uid)
-        #expect(a.uid >= config.uidBase)
-        #expect(a.uid < config.uidBase + SandboxJailerConfig.uidCount)
+        #expect(p.uid == 123_456)
+        #expect(p.gid == 123_456)
     }
 
-    @Test("different sandboxes get their own uids")
-    func uidsDifferPerSandbox() {
-        let uids = Set((0..<32).map { plan("sandbox-\($0)").uid })
-        // FNV-1a over 32 inputs into a 65536 slot range: collisions are
-        // possible but all-collide is not; require substantial spread.
-        #expect(uids.count > 16)
+    @Test("the allocator supplies an exactly distinct identity to every plan")
+    func allocatedUIDsAreDistinct() throws {
+        var allocator = SandboxJailUIDAllocator(uidBase: 100_000)
+        let plans = try (0..<32).map { index in
+            let sandboxId = "sandbox-\(index)"
+            return try plan(sandboxId, jailUID: allocator.allocate(for: sandboxId))
+        }
+
+        #expect(Set(plans.map(\.uid)).count == plans.count)
+        #expect(plans.allSatisfy { $0.gid == $0.uid })
     }
 
-    @Test("uid never lands on root even with a wrapping base")
-    func uidNeverZero() {
-        // A base near UInt32.max can wrap to exactly 0 for some hash slot;
-        // scan for a wrapping input and confirm the guard kicks in.
-        let hostile = SandboxJailerConfig(
-            jailerBinaryPath: "/j", chrootBaseDir: "/c", uidBase: UInt32.max &- 100)
-        for i in 0..<100_000 {
-            let plan = SandboxJailPlan(
-                sandboxId: "probe-\(i)", config: hostile, firecrackerBinaryPath: "/f")
-            #expect(plan.uid != 0)
-            if plan.uid == 1 { return }  // found (and passed) a wrap case
+    @Test("legacy hash adoption preserves the historical assignment")
+    func legacyUIDGoldenValue() throws {
+        #expect(
+            try SandboxJailPlan.legacyUID(
+                sandboxId: "0d9f8c6a-1b2c-4d3e-9f4a-5b6c7d8e9f0a",
+                uidBase: 100_000) == 149_626)
+    }
+
+    @Test("legacy adoption preserves the old wrapping-zero guard")
+    func legacyUIDWrappingCompatibility() {
+        let hostileBase = UInt32.max &- 100
+        let adopted = (0..<100_000).compactMap { index in
+            try? SandboxJailPlan.legacyUID(
+                sandboxId: "probe-\(index)", uidBase: hostileBase)
+        }
+
+        #expect(adopted.contains(1))
+        #expect(!adopted.contains(0))
+        #expect(!adopted.contains(UInt32.max))
+    }
+
+    @Test("uid ranges reject system-space and wrapping bases")
+    func uidRangeValidation() throws {
+        let invalidBases: [UInt32] = [
+            0,
+            SandboxJailerConfig.minimumUIDBase - 1,
+            SandboxJailerConfig.maximumUIDBase + 1,
+            UInt32.max,
+        ]
+        for base in invalidBases {
+            #expect(throws: SandboxJailerConfigError.invalidUIDBase(base)) {
+                _ = try config(uidBase: base)
+            }
+        }
+
+        #expect(
+            try config(uidBase: SandboxJailerConfig.minimumUIDBase).uidBase
+                == SandboxJailerConfig.minimumUIDBase)
+        #expect(
+            try config(uidBase: SandboxJailerConfig.maximumUIDBase).uidBase
+                == SandboxJailerConfig.maximumUIDBase)
+    }
+
+    @Test("a plan cannot run Firecracker as root or uid_t(-1)")
+    func rootIdentityIsRejected() throws {
+        #expect(throws: SandboxJailPlanError.rootIdentity) {
+            _ = try plan(jailUID: 0)
+        }
+        #expect(throws: SandboxJailPlanError.rootIdentity) {
+            _ = try plan(jailUID: UInt32.max)
         }
     }
 
     // MARK: - Layout
 
     @Test("jail layout derives from the chroot base, exec file name, and sandbox id")
-    func jailLayout() {
-        let p = plan("abc-123")
+    func jailLayout() throws {
+        let p = try plan("abc-123")
 
         #expect(p.jailDirectory == "/var/lib/strato/vms/jailer/firecracker/abc-123")
         #expect(p.jailRoot == "/var/lib/strato/vms/jailer/firecracker/abc-123/root")
@@ -73,12 +116,12 @@ struct SandboxJailTests {
     }
 
     @Test("the NIC placement carries the jail's namespace and uid (issue STR-100)")
-    func nicPlacementDerivation() {
+    func nicPlacementDerivation() throws {
         // The attachment path needs exactly these three facts, and each must
         // match what the jailer itself is given — the TAP is created in that
         // namespace and chowned to that uid, and Firecracker opens it after the
         // jailer has setuid'd.
-        let p = plan("abc-123")
+        let p = try plan("abc-123")
         let placement = NICPlacement.sandboxNetns(
             netnsName: p.netnsName, owner: JailOwner(uid: p.uid, gid: p.gid))
         #expect(placement.netnsName == "strato-sbx-abc-123")
@@ -94,13 +137,14 @@ struct SandboxJailTests {
     }
 
     @Test("the namespace name is derivable from the sandbox id alone")
-    func netnsNameNeedsNoConfig() {
+    func netnsNameNeedsNoConfig() throws {
         // Teardown runs on agents whose jailer config is gone (the sandbox
         // runtime was deconfigured since the sandbox was created). If the
         // namespace name needed the config, that cleanup would have to fall
         // back to the VM path and would leak the port, veth, and namespace.
+        let p = try plan("abc-123")
         #expect(SandboxJailPlan.netnsName(sandboxId: "abc-123") == "strato-sbx-abc-123")
-        #expect(SandboxJailPlan.netnsName(sandboxId: "abc-123") == plan("abc-123").netnsName)
+        #expect(SandboxJailPlan.netnsName(sandboxId: "abc-123") == p.netnsName)
 
         // And a teardown placement is expressible with no ownership at all.
         let teardown = NICPlacement.sandboxNetns(
@@ -130,9 +174,10 @@ struct SandboxJailTests {
     }
 
     @Test("the exec file basename keys the layout, not its directory")
-    func execFileBasename() {
-        let p = SandboxJailPlan(
-            sandboxId: "abc", config: config, firecrackerBinaryPath: "/opt/fc/bin/firecracker-v1.13")
+    func execFileBasename() throws {
+        let p = try SandboxJailPlan(
+            sandboxId: "abc", jailUID: 120_000, config: config(),
+            firecrackerBinaryPath: "/opt/fc/bin/firecracker-v1.13")
         #expect(p.jailDirectory == "/var/lib/strato/vms/jailer/firecracker-v1.13/abc")
     }
 

@@ -18,8 +18,14 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "CLinuxPidfd",
+            path: "Sources/CLinuxPidfd",
+            publicHeadersPath: "include"
+        ),
+        .target(
             name: "SwiftFirecracker",
             dependencies: [
+                "CLinuxPidfd",
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),

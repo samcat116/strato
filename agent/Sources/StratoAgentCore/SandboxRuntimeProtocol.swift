@@ -15,6 +15,40 @@ import StratoShared
 /// (issue #423) is stream-shaped instead: sessions are keyed by the control
 /// plane's sessionId and end with exactly one terminal event.
 public protocol SandboxRuntimeService: Sendable {
+    /// Reserve this sandbox's host identity before any host artifact is
+    /// chowned or any VMM is spawned. Real jailer runtimes return a lease;
+    /// runtimes with no host uid namespace (the simulation mock) return nil.
+    func leaseJailUID(for sandboxId: String) async throws -> SandboxJailUIDLease?
+
+    /// Commit a freshly persisted lease. Until this call, a legacy duplicate
+    /// claim remains poisoned at both its old and proposed identities so
+    /// another reconcile lane cannot observe a temporarily exclusive uid.
+    func commitJailUID(_ lease: SandboxJailUIDLease) async
+
+    /// Undo a failed create, but only when its lease actually introduced the
+    /// assignment. See `SandboxJailUIDAllocator.rollBack(_:)`.
+    func rollBackJailUID(_ lease: SandboxJailUIDLease) async
+
+    /// Re-claim a durable manifest assignment during adoption or a recovered
+    /// manifest read. Conflict is reported rather than silently shared.
+    func reserveJailUID(_ uid: UInt32, for sandboxId: String) async -> SandboxJailUIDReservation
+
+    /// Release an identity only after the sandbox process and UID-owned host
+    /// artifacts are proven gone. Failure must be visible to the manifest
+    /// owner so it never forgets a claim the allocator retained.
+    func releaseJailUID(for sandboxId: String) async throws
+
+    /// Prove that no process or host artifact can still be reached through
+    /// this identity before a failed create rolls its durable lease back.
+    /// Jailer runtimes must fail closed: returning normally is the proof that
+    /// the caller may remove the manifest claim.
+    func prepareJailUIDRelease(for sandboxId: String, jailUID: UInt32?) async throws
+
+    /// Refresh the required-jailer preflight gate on control-plane
+    /// registration. Existing sandboxes remain operable while new creates
+    /// follow the latest host identity-range evidence.
+    func updateJailerBlockedReason(_ reason: String?) async
+
     /// Materialize the sandbox's rootfs from its OCI image and define the
     /// microVM (ends "exists, not running" — `SandboxStatus.stopped`).
     func createSandbox(
@@ -31,9 +65,20 @@ public protocol SandboxRuntimeService: Sendable {
     /// Gracefully stop (best effort) and remove the sandbox from this host.
     func deleteSandbox(sandboxId: String) async throws
 
+    /// Teardown using the identity recorded in the manifest. This path is
+    /// deliberately usable for a legacy duplicate claim: it may destroy that
+    /// existing jail, but it never authorizes constructing a new one.
+    func deleteSandbox(sandboxId: String, jailUID: UInt32?) async throws
+
     /// Reconnect an orphan's Firecracker session and return its observed
     /// status, so the reconciler can plan the remaining convergence steps.
     func adoptSandbox(sandboxId: String, spec: SandboxSpec) async throws -> SandboxStatus
+
+    /// Reconnect an existing jail using its recorded identity, including a
+    /// legacy identity that is intentionally poisoned against new allocation.
+    func adoptSandbox(
+        sandboxId: String, spec: SandboxSpec, jailUID: UInt32?
+    ) async throws -> SandboxStatus
 
     func getSandboxStatus(sandboxId: String) async throws -> SandboxStatus
 
@@ -133,6 +178,29 @@ public protocol SandboxRuntimeService: Sendable {
     func controlPlaneConnected() async
 }
 
+/// Non-jailing runtimes occupy no host UID/GID namespace. Defaults keep that
+/// fact out of every mock while the real Firecracker runtime overrides all
+/// four operations with its manifest-backed allocator.
+extension SandboxRuntimeService {
+    public func leaseJailUID(for sandboxId: String) async throws -> SandboxJailUIDLease? { nil }
+    public func commitJailUID(_ lease: SandboxJailUIDLease) async {}
+    public func rollBackJailUID(_ lease: SandboxJailUIDLease) async {}
+    public func reserveJailUID(_ uid: UInt32, for sandboxId: String) async -> SandboxJailUIDReservation {
+        .reserved
+    }
+    public func releaseJailUID(for sandboxId: String) async throws {}
+    public func prepareJailUIDRelease(for sandboxId: String, jailUID: UInt32?) async throws {}
+    public func updateJailerBlockedReason(_ reason: String?) async {}
+    public func deleteSandbox(sandboxId: String, jailUID: UInt32?) async throws {
+        try await deleteSandbox(sandboxId: sandboxId)
+    }
+    public func adoptSandbox(
+        sandboxId: String, spec: SandboxSpec, jailUID: UInt32?
+    ) async throws -> SandboxStatus {
+        try await adoptSandbox(sandboxId: sandboxId, spec: spec)
+    }
+}
+
 /// What one completed sandbox snapshot left on disk (issue #426): the input
 /// for the agent's `SandboxSnapshotStatusResponse` back to the control plane.
 public struct SandboxSnapshotResult: Sendable {
@@ -210,6 +278,11 @@ public enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Senda
     /// filesystem/tooling operations a retry can succeed at once the host
     /// condition (disk pressure, an iproute2 hiccup) clears.
     case jailSetupFailed(String)
+    /// This sandbox has no exclusive manifest-backed jail identity. Permanent:
+    /// a missing/colliding record must be adopted or replaced by a create that
+    /// persists a fresh allocation; retrying the same plan cannot make sharing
+    /// an identity safe.
+    case jailIdentityUnavailable(String)
     /// `sandbox_jailer_mode = "required"` is unmet on this host, so creating
     /// a sandbox (which would have to run unjailed) is refused; existing
     /// sandboxes are still adopted and torn down. Permanent: only a host or
@@ -241,7 +314,7 @@ public enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Senda
     public var failureClassification: FailureClassification {
         switch self {
         case .runtimeUnavailable, .unsupportedStep, .networkingUnsupported, .jailerRequiredUnavailable,
-            .notSnapshottable, .snapshotNotFound:
+            .jailIdentityUnavailable, .notSnapshottable, .snapshotNotFound:
             return .permanent
         case .sandboxNotFound, .adoptionTargetGone, .execSessionNotFound, .jailSetupFailed,
             .checkpointInProgress, .snapshotIOFailed, .warmStartFailed, .hostCapabilityUnknown:
@@ -265,6 +338,8 @@ public enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Senda
             return "this sandbox's NIC cannot be realized: \(reason)"
         case .jailSetupFailed(let reason):
             return "sandbox jail setup failed: \(reason)"
+        case .jailIdentityUnavailable(let reason):
+            return "sandbox jail identity unavailable: \(reason)"
         case .jailerRequiredUnavailable(let reason):
             return "sandbox_jailer_mode is 'required' but the jailer is unusable: \(reason)"
         case .checkpointInProgress(let id):

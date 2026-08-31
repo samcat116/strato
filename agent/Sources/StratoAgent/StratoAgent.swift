@@ -176,6 +176,11 @@ private func launchAgent(options: AgentOptions) async throws {
         config.sandboxJailerChrootDir
         ?? AgentConfig.defaultSandboxJailerChrootDir(vmStoragePath: finalVMStoragePath)
     let finalSandboxJailerUidBase = config.sandboxJailerUidBase ?? AgentConfig.defaultSandboxJailerUidBase
+    // Manifests written before STR-290 do not carry their assignment. Preserve
+    // the old default solely for that one-time adoption; an explicit operator
+    // base remains its own legacy base.
+    let legacySandboxJailerUidBase =
+        config.sandboxJailerUidBase ?? AgentConfig.legacySandboxJailerUidBase
 
     // Resolve hypervisor type
     let finalHypervisorType = config.hypervisorType ?? AgentConfig.defaultHypervisorType
@@ -292,6 +297,7 @@ private func launchAgent(options: AgentOptions) async throws {
         sandboxJailerBinaryPath: finalSandboxJailerBinaryPath,
         sandboxJailerChrootDir: finalSandboxJailerChrootDir,
         sandboxJailerUidBase: finalSandboxJailerUidBase,
+        legacySandboxJailerUidBase: legacySandboxJailerUidBase,
         sandboxWarmStart: config.sandboxWarmStart ?? true,
         sandboxWarmCacheMaxSizeBytes: config.sandboxWarmCacheMaxSizeBytes,
         hypervisorType: finalHypervisorType,

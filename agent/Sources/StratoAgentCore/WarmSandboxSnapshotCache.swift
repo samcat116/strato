@@ -221,7 +221,7 @@ public struct WarmSandboxSnapshotCache: Sendable {
         try fileManager.createDirectory(atPath: rootPath, withIntermediateDirectories: true)
         let target = entryDirectory(for: key)
         if fileManager.fileExists(atPath: target) {
-            try? fileManager.removeItem(atPath: stagingDirectory)
+            try fileManager.removeItem(atPath: stagingDirectory)
             return WarmSnapshotEntry(directory: target)
         }
         do {
@@ -230,7 +230,7 @@ public struct WarmSandboxSnapshotCache: Sendable {
             // A concurrent publish can land between the check and the move;
             // losing that race is fine, anything else is a real failure.
             if fileManager.fileExists(atPath: target) {
-                try? fileManager.removeItem(atPath: stagingDirectory)
+                try fileManager.removeItem(atPath: stagingDirectory)
             } else {
                 throw error
             }
@@ -261,8 +261,14 @@ public struct WarmSandboxSnapshotCache: Sendable {
     /// liveness cannot be ruled out for them).
     public func removeAbandonedStaging(
         olderThan: TimeInterval = 3600, now: Date = Date(), fileManager: FileManager = .default
-    ) {
-        guard let names = try? fileManager.contentsOfDirectory(atPath: rootPath) else { return }
+    ) throws {
+        let names: [String]
+        do {
+            names = try fileManager.contentsOfDirectory(atPath: rootPath)
+        } catch {
+            guard !Self.isFileNotFound(error) else { return }
+            throw error
+        }
         for name in names where name.hasPrefix(".staging-") {
             let path = rootPath + "/" + name
             if olderThan > 0 {
@@ -270,7 +276,37 @@ public struct WarmSandboxSnapshotCache: Sendable {
                     (try? fileManager.attributesOfItem(atPath: path))?[.modificationDate] as? Date
                 guard let modified, now.timeIntervalSince(modified) > olderThan else { continue }
             }
-            try? fileManager.removeItem(atPath: path)
+            do {
+                try fileManager.removeItem(atPath: path)
+            } catch {
+                guard !Self.isFileNotFound(error) else {
+                    // A concurrent housekeeping pass won the race.
+                    continue
+                }
+                throw error
+            }
+        }
+    }
+
+    private static func isFileNotFound(_ error: any Error) -> Bool {
+        var current: any Error = error
+        while true {
+            let candidate = current as NSError
+            if candidate.domain == NSCocoaErrorDomain,
+                candidate.code == NSFileNoSuchFileError
+                    || candidate.code == NSFileReadNoSuchFileError
+            {
+                return true
+            }
+            if candidate.domain == NSPOSIXErrorDomain,
+                candidate.code == POSIXErrorCode.ENOENT.rawValue
+            {
+                return true
+            }
+            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
+                return false
+            }
+            current = underlying
         }
     }
 

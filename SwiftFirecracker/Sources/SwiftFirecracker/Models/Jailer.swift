@@ -34,8 +34,8 @@ public struct JailerOptions: Sendable {
     var cgroups: [String]
     /// Run the VMM in its own PID namespace (`--new-pid-ns`). A VMM compromised
     /// after a guest breakout then cannot observe or signal host or peer
-    /// processes — which is what closes the cross-sandbox signalling the shared
-    /// host PID namespace allows when two sandboxes hash to the same jail uid.
+    /// processes, independently of the uid/gid and filesystem-isolation
+    /// barriers.
     ///
     /// This changes the *spawn shape*: the jailer forks the VMM into the new
     /// namespace, records its pid, and the parent exits immediately, so the

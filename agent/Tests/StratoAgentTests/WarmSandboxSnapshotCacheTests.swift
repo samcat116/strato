@@ -4,6 +4,27 @@ import Testing
 
 @testable import StratoAgentCore
 
+private final class FailingWarmCacheFileManager: FileManager, @unchecked Sendable {
+    enum FailurePoint: Equatable { case enumeration, removal }
+
+    private let failurePoint: FailurePoint
+
+    init(_ failurePoint: FailurePoint) {
+        self.failurePoint = failurePoint
+        super.init()
+    }
+
+    override func contentsOfDirectory(atPath path: String) throws -> [String] {
+        if failurePoint == .enumeration { throw CocoaError(.fileReadNoPermission) }
+        return try super.contentsOfDirectory(atPath: path)
+    }
+
+    override func removeItem(atPath path: String) throws {
+        if failurePoint == .removal { throw CocoaError(.fileWriteNoPermission) }
+        try super.removeItem(atPath: path)
+    }
+}
+
 /// Coverage for the warm-start template snapshot cache (issue #426): key
 /// derivation, the lookup/publish/invalidate lifecycle, and the LRU sweep
 /// integration. Pure filesystem — no Firecracker required.
@@ -250,7 +271,7 @@ struct WarmSandboxSnapshotCacheTests {
             [.modificationDate: Date().addingTimeInterval(-7200)], ofItemAtPath: abandoned)
         let live = try cache.makeStagingDirectory()
 
-        cache.removeAbandonedStaging()
+        try cache.removeAbandonedStaging()
 
         #expect(!FileManager.default.fileExists(atPath: abandoned), "old staging must be removed")
         #expect(FileManager.default.fileExists(atPath: live), "a live build's staging must survive")
@@ -258,8 +279,30 @@ struct WarmSandboxSnapshotCacheTests {
         // The ungated startup sweep (no build can be in flight) collects
         // everything, however fresh — a restart shortly after a crash must
         // not strand young debris behind the age gate forever.
-        cache.removeAbandonedStaging(olderThan: 0)
+        try cache.removeAbandonedStaging(olderThan: 0)
         #expect(!FileManager.default.fileExists(atPath: live))
+    }
+
+    @Test("startup staging cleanup fails closed on enumeration or removal errors")
+    func abandonedStagingCleanupErrorsAreVisible() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = WarmSandboxSnapshotCache(rootPath: root)
+        let staging = try cache.makeStagingDirectory()
+
+        #expect(throws: CocoaError.self) {
+            try cache.removeAbandonedStaging(
+                olderThan: 0,
+                fileManager: FailingWarmCacheFileManager(.enumeration))
+        }
+        #expect(FileManager.default.fileExists(atPath: staging))
+
+        #expect(throws: CocoaError.self) {
+            try cache.removeAbandonedStaging(
+                olderThan: 0,
+                fileManager: FailingWarmCacheFileManager(.removal))
+        }
+        #expect(FileManager.default.fileExists(atPath: staging))
     }
 
     // MARK: - Eviction

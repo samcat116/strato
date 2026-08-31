@@ -339,7 +339,24 @@ actor Agent {
     private let sandboxJailerBinaryPath: String
     private let sandboxJailerChrootDir: String
     private let sandboxJailerUidBase: UInt32
+    /// Base used only to reconstruct manifests written before jailUID was
+    /// persisted. This remains the old default when the current allocation
+    /// default moves, unless the operator explicitly configured a base.
+    private let legacySandboxJailerUidBase: UInt32
     private var sandboxJailerBlockedReason: String?
+    /// Live host-range failure under `required`, refreshed by preflight on
+    /// every registration and checked again on the create path.
+    private var sandboxJailerUIDRangeBlockedReason: String?
+    /// A legacy manifest entry had no persisted UID and its existing jail
+    /// ownership could not be inspected. Guessing would reserve the wrong
+    /// identity, so every new create stays blocked until a later manifest
+    /// reload can prove the old assignment.
+    private var sandboxJailUIDRecoveryBlockedReason: String?
+    private var sandboxJailCreationBlockedReason: String? {
+        sandboxJailerBlockedReason
+            ?? sandboxJailerUIDRangeBlockedReason
+            ?? sandboxJailUIDRecoveryBlockedReason
+    }
     // The resolved jail layout, built unconditionally at start() — even an
     // unjailed agent needs it to tear down jailed leftovers from a previous
     // life. Nil only when this build/host has no sandbox runtime at all.
@@ -348,6 +365,10 @@ actor Agent {
     // the jail's network namespace, so without the barrier there is nowhere to
     // put it and networked specs are refused (issue STR-100).
     private var sandboxJailNewSandboxes = false
+    /// Bootstrap copy populated from the manifest before the Firecracker
+    /// runtime exists. The runtime receives this complete namespace and owns
+    /// subsequent sandbox/template leases.
+    private var sandboxJailUIDs: SandboxJailUIDAllocator
     // Warm start (issue #426): provision sandboxes from per-image template
     // snapshots when possible. Default on; warm failures cold-boot.
     private let sandboxWarmStart: Bool
@@ -440,6 +461,7 @@ actor Agent {
         sandboxJailerBinaryPath: String = "/usr/local/bin/jailer",
         sandboxJailerChrootDir: String = "/var/lib/strato/vms/jailer",
         sandboxJailerUidBase: UInt32 = AgentConfig.defaultSandboxJailerUidBase,
+        legacySandboxJailerUidBase: UInt32? = nil,
         sandboxWarmStart: Bool = true,
         sandboxWarmCacheMaxSizeBytes: Int64? = nil,
         hypervisorType: HypervisorType = .qemu,
@@ -477,6 +499,8 @@ actor Agent {
         self.sandboxJailerBinaryPath = sandboxJailerBinaryPath
         self.sandboxJailerChrootDir = sandboxJailerChrootDir
         self.sandboxJailerUidBase = sandboxJailerUidBase
+        self.legacySandboxJailerUidBase = legacySandboxJailerUidBase ?? sandboxJailerUidBase
+        self.sandboxJailUIDs = SandboxJailUIDAllocator(uidBase: sandboxJailerUidBase)
         self.sandboxWarmStart = sandboxWarmStart
         self.sandboxWarmCacheMaxSizeBytes = sandboxWarmCacheMaxSizeBytes
         self.hypervisorType = hypervisorType
@@ -541,7 +565,7 @@ actor Agent {
         // These workloads are not re-adopted here — the reconciler re-adopts them
         // when the backend supports it — but they stay routable to the backend that
         // owns them and keep reserving capacity until deleted or re-created.
-        applyManifestLoad(manifestStore.load())
+        await applyManifestLoad(manifestStore.load())
         applySnapshotInventory(snapshotRecordStore.load())
 
         // Simulation mode drives no real network backend. `NetworkOrchestrator`
@@ -784,13 +808,19 @@ actor Agent {
                 // previous life; the resolution only decides whether *new*
                 // sandboxes get the barrier.
                 let isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
-                let jailerConfig = SandboxJailerConfig(
+                let jailerConfig = try SandboxJailerConfig(
                     jailerBinaryPath: sandboxJailerBinaryPath,
                     chrootBaseDir: sandboxJailerChrootDir,
                     uidBase: sandboxJailerUidBase,
                     ipBinaryPath: SandboxJailerResolver.resolveIPBinaryPath(isExecutable: isExecutable),
                     tcBinaryPath: SandboxJailerResolver.resolveTCBinaryPath(isExecutable: isExecutable))
                 sandboxJailerConfig = jailerConfig
+                let jailUIDRangeCheck = HostPreflight.checkSandboxJailerUIDRange(
+                    sandboxJailerUIDRangeInputs())
+                if sandboxJailerMode == .required, !jailUIDRangeCheck.passed {
+                    sandboxJailerUIDRangeBlockedReason =
+                        jailUIDRangeCheck.detail ?? "the configured sandbox jail uid/gid range is not isolated"
+                }
                 var jailNewSandboxes = false
                 switch SandboxJailerResolver.resolve(
                     mode: sandboxJailerMode,
@@ -806,6 +836,18 @@ actor Agent {
                             "jailerBinaryPath": .string(sandboxJailerBinaryPath),
                             "chrootBaseDir": .string(sandboxJailerChrootDir),
                         ])
+                    if !jailUIDRangeCheck.passed, sandboxJailerMode == .auto {
+                        // Auto keeps its advisory semantics: retain the other
+                        // jailer barriers instead of dropping the whole jail,
+                        // while stating plainly that UID isolation is weak.
+                        logger.warning(
+                            "Sandbox jail uid/gid range overlaps a host identity; UID-BASED FILESYSTEM ISOLATION IS NOT TRUSTWORTHY. Reserve a clean range or set sandbox_jailer_mode = \"required\" to refuse creates.",
+                            metadata: [
+                                "reason": .string(
+                                    jailUIDRangeCheck.detail
+                                        ?? "the configured range overlaps a host identity")
+                            ])
+                    }
                 case .unjailed(let reason):
                     if let reason {
                         logger.warning(
@@ -855,8 +897,10 @@ actor Agent {
                     guestImagePath: sandboxGuestImagePath,
                     firecrackerBinaryPath: firecrackerBinaryPath,
                     jailer: jailerConfig,
+                    jailUIDAllocator: sandboxJailUIDs,
+                    legacyJailerUIDBase: legacySandboxJailerUidBase,
                     jailNewSandboxes: jailNewSandboxes,
-                    jailerBlockedReason: sandboxJailerBlockedReason,
+                    jailerBlockedReason: sandboxJailCreationBlockedReason,
                     warmStartEnabled: sandboxWarmStart,
                     warmCacheBudgetBytes: sandboxWarmCacheMaxSizeBytes,
                     snapshotTransfer: snapshotTransfer
@@ -1154,6 +1198,7 @@ actor Agent {
         managedSandboxes.removeAll()
         orphanedSandboxes.removeAll()
         vsockCIDs = VsockCIDAllocator()
+        sandboxJailUIDs = SandboxJailUIDAllocator(uidBase: sandboxJailerUidBase)
 
         logger.info("Agent stopped")
 
@@ -1322,6 +1367,7 @@ actor Agent {
         // no real hypervisor to detect, so it advertises the mock backends as
         // available+accelerated to make the agent placement-eligible.
         let hypervisors: [HypervisorSupport]
+        var hostPreflightReport: HostPreflight.Report? = nil
         // Whether this host can back a guest TPM 2.0 (issue #565). Simulation
         // mode asserts it for the same reason it asserts the sandbox runtime:
         // the host fact it checks for is meaningless to a mock backend, and
@@ -1340,6 +1386,7 @@ actor Agent {
             let libvirt = await probeLibvirt()
             let preflight = runHostPreflight(
                 libvirt: libvirt, tpmSupport: await probeTPMSupport(libvirt: libvirt))
+            hostPreflightReport = preflight
             tpmAvailable = preflight.tpmAvailable
             logHostPreflight(preflight)
             // The domain builder refuses a `<tpm>` element this host cannot
@@ -1372,6 +1419,18 @@ actor Agent {
                 )
             }
         }
+
+        // The identity range gates only jailed sandboxes, never trusted
+        // Firecracker VMs. Refresh on every registration so fixing the host's
+        // passwd/group/subordinate-id reservations recovers capability without
+        // restarting the agent.
+        if sandboxJailerMode == .required {
+            sandboxJailerUIDRangeBlockedReason =
+                hostPreflightReport?.sandboxJailerUIDRangeFailureDetail
+        } else {
+            sandboxJailerUIDRangeBlockedReason = nil
+        }
+        await sandboxRuntime?.updateJailerBlockedReason(sandboxJailCreationBlockedReason)
         let networkCapability = currentNetworkCapability()
 
         // Sandbox runtime: probed on the same cadence, gated on Firecracker
@@ -1401,7 +1460,7 @@ actor Agent {
             sandboxProbe = SandboxRuntimeProbe.probe(
                 firecracker: hypervisors.first { $0.type == .firecracker },
                 guestImagePath: sandboxGuestImagePath,
-                jailerBlockedReason: sandboxJailerBlockedReason,
+                jailerBlockedReason: sandboxJailCreationBlockedReason,
                 jailsNewSandboxes: sandboxJailNewSandboxes,
                 networkCapability: networkCapability
             )
@@ -1766,11 +1825,14 @@ actor Agent {
         let firecrackerSocketDirectory: String? = firecrackerSocketDir
         let qemuFirmwareDescriptorPath: String? = "/usr/share/qemu/firmware"
         let vhostVsock: HostPreflight.VhostVsockSupport = .device(path: "/dev/vhost-vsock")
+        let sandboxJailerUIDRange: HostPreflight.SandboxJailerUIDRangeInputs? =
+            sandboxJailerUIDRangeInputs()
         #else
         let firecrackerSocketDirectory: String? = nil
         let qemuFirmwareDescriptorPath: String? = nil
         let vhostVsock: HostPreflight.VhostVsockSupport = .unsupportedPlatform(
             "virtio-vsock for QEMU is not supported on this platform")
+        let sandboxJailerUIDRange: HostPreflight.SandboxJailerUIDRangeInputs? = nil
         #endif
 
         // Mirror the driver's firmware resolution so the preflight reports
@@ -1800,8 +1862,32 @@ actor Agent {
                 vhostVsock: vhostVsock,
                 ovnMode: effectiveNetworkMode == .ovn,
                 ovnNBConnection: ovnNorthbound ?? "unix:/var/run/ovn/ovnnb_db.sock",
-                ovnNBTLSFilePaths: ovnNorthboundTLS?.configuredFilePaths ?? []
+                ovnNBTLSFilePaths: ovnNorthboundTLS?.configuredFilePaths ?? [],
+                sandboxJailerUIDRange: sandboxJailerUIDRange
             ))
+    }
+
+    /// Snapshot the four host identity databases for the pure range-overlap
+    /// check. Missing passwd/group files fail closed; missing subuid/subgid
+    /// files mean no file-backed subordinate delegation and are accepted by
+    /// `HostPreflight`.
+    private func sandboxJailerUIDRangeInputs() -> HostPreflight.SandboxJailerUIDRangeInputs {
+        HostPreflight.SandboxJailerUIDRangeInputs(
+            mode: sandboxJailerMode,
+            uidBase: sandboxJailerUidBase,
+            passwd: hostIdentityFile(at: "/etc/passwd"),
+            group: hostIdentityFile(at: "/etc/group"),
+            subuid: hostIdentityFile(at: "/etc/subuid"),
+            subgid: hostIdentityFile(at: "/etc/subgid"))
+    }
+
+    private func hostIdentityFile(at path: String) -> HostPreflight.HostIdentityFile {
+        guard FileManager.default.fileExists(atPath: path) else { return .missing }
+        do {
+            return .contents(try String(contentsOfFile: path, encoding: .utf8))
+        } catch {
+            return .unreadable(error.localizedDescription)
+        }
     }
 
     /// Logs every failed preflight check with its remediation — gating
@@ -2135,7 +2221,7 @@ actor Agent {
 
         // Retry a manifest that could not be *read*, so a host quarantined by a
         // transient cause recovers on its own (STR-138).
-        retryManifestLoadIfQuarantined()
+        await retryManifestLoadIfQuarantined()
 
         // Retry a failed manifest write so a transient disk error can't leave the
         // on-disk manifest permanently behind the in-memory VM records.
@@ -2859,7 +2945,8 @@ extension Agent {
     /// every heartbeat (each write covers the full VM set, so one success
     /// heals all missed updates). The stale manifest only matters if the agent
     /// restarts before a retry succeeds.
-    private func persistManifest() {
+    @discardableResult
+    private func persistManifest() -> Bool {
         // Never write over a manifest we could not read (STR-138). The first
         // write after a failed load is what turns "unreadable, but the bytes
         // are still there" into an unrecoverable loss — and what it would
@@ -2873,7 +2960,7 @@ extension Agent {
                     "path": .string(failure.path),
                     "preservedCopy": .string(failure.preservedCopyPath ?? "none"),
                 ])
-            return
+            return false
         }
 
         // One flat map for every workload kind; ids cannot collide across kinds
@@ -2885,7 +2972,9 @@ extension Agent {
         // routing field is what a build that understands them needs, and this
         // one rewriting it in a shape it prefers would destroy that.
         capacityManifestRevision &+= 1
-        manifestPersistFailed = !manifestStore.save(manifest, preserving: quarantinedWorkloads)
+        let saved = manifestStore.save(manifest, preserving: quarantinedWorkloads)
+        manifestPersistFailed = !saved
+        return saved
     }
 
     /// Fold a manifest read into the agent's view of the host.
@@ -2895,15 +2984,30 @@ extension Agent {
     /// loaded manifest names what a previous incarnation was running, and an
     /// unreadable one means the contents are unknown — which must never be
     /// spelled the same way as "empty".
-    private func applyManifestLoad(_ load: ManifestLoad) {
+    private func applyManifestLoad(_ load: ManifestLoad) async {
         switch load {
         case .fresh:
             manifestReadFailure = nil
 
-        case .loaded(let entries, let quarantined):
+        case .loaded(var entries, let quarantined):
             manifestReadFailure = nil
+            sandboxJailUIDRecoveryBlockedReason = nil
             quarantinedWorkloads = quarantined
+            // STR-290 migration: a nil field is an old manifest, not an
+            // invitation to allocate a different identity. Recover the owner
+            // of a surviving jail when possible; otherwise replay the exact
+            // historical hash base (including the retired 100000 default),
+            // then persist it before any new sandbox can be created.
+            var adoptedLegacyJailUIDs: [String: UInt32] = [:]
+            for id in entries.keys.sorted() {
+                guard let entry = entries[id], entry.kind == .sandbox, entry.jailUID == nil,
+                    let uid = legacyJailUID(for: id)
+                else { continue }
+                entries[id] = entry.recordingJailUID(uid)
+                adoptedLegacyJailUIDs[id] = uid
+            }
             reserveVsockCIDs(entries: entries, quarantined: quarantined)
+            await reserveSandboxJailUIDs(entries: entries, quarantined: quarantined)
             // Anything already managed by *this* incarnation stays managed: a
             // recovery re-read must not demote live workloads to orphans.
             var recovered: [String] = []
@@ -2920,10 +3024,164 @@ extension Agent {
                     "Found \(recovered.count) workload(s) managed before restart; their processes are now unmanaged but their resources stay reserved",
                     metadata: ["workloadIds": .string(recovered.sorted().joined(separator: ","))])
             }
+            if !adoptedLegacyJailUIDs.isEmpty {
+                if persistManifest() {
+                    logger.warning(
+                        "Adopted and persisted legacy sandbox jail UID assignments",
+                        metadata: [
+                            "sandboxIds": .string(adoptedLegacyJailUIDs.keys.sorted().joined(separator: ",")),
+                            "assignments": .string(
+                                adoptedLegacyJailUIDs.keys.sorted().map {
+                                    "\($0)=\(adoptedLegacyJailUIDs[$0]!)"
+                                }.joined(separator: ",")),
+                        ])
+                } else {
+                    logger.error(
+                        "Could not persist adopted legacy sandbox jail UIDs; their in-memory reservations remain held and new creates will fail until the manifest is writable"
+                    )
+                }
+            }
 
         case .unreadable(let failure):
             // The store has already logged this loudly and preserved a copy.
             manifestReadFailure = failure
+        }
+    }
+
+    /// Recover the identity an older build actually used. Filesystem ownership
+    /// outranks configuration because an operator may have changed the base;
+    /// the old hash is the fallback for an unjailed/dead sandbox with no jail
+    /// tree left to inspect.
+    private func legacyJailUID(for sandboxId: String) -> UInt32? {
+        let jailDirectory = SandboxJailPlan.jailDirectory(
+            sandboxId: sandboxId,
+            chrootBaseDir: sandboxJailerChrootDir,
+            firecrackerBinaryPath: firecrackerBinaryPath)
+        for path in [
+            jailDirectory + "/root",
+            jailDirectory + "/root/rootfs.ext4",
+            jailDirectory + "/root/config.img",
+        ] {
+            let attributes: [FileAttributeKey: Any]
+            do {
+                attributes = try FileManager.default.attributesOfItem(atPath: path)
+            } catch {
+                guard !Self.isFileNotFound(error) else { continue }
+                let reason =
+                    "could not inspect legacy jail ownership at \(path): \(error.localizedDescription)"
+                sandboxJailUIDRecoveryBlockedReason = reason
+                logger.error(
+                    "Cannot recover a legacy sandbox jail UID without guessing",
+                    metadata: [
+                        "strato.sandbox.id": .string(sandboxId),
+                        "path": .string(path),
+                        "error": .string(error.localizedDescription),
+                    ])
+                return nil
+            }
+            if let owner = attributes[.ownerAccountID] as? NSNumber,
+                owner.uint64Value > 0, owner.uint64Value < UInt64(UInt32.max)
+            {
+                return owner.uint32Value
+            }
+        }
+        do {
+            return try SandboxJailPlan.legacyUID(
+                sandboxId: sandboxId, uidBase: legacySandboxJailerUidBase)
+        } catch {
+            logger.error(
+                "Cannot recover a legacy sandbox jail UID",
+                metadata: [
+                    "strato.sandbox.id": .string(sandboxId),
+                    "legacyUIDBase": .stringConvertible(legacySandboxJailerUidBase),
+                    "error": .string(error.localizedDescription),
+                ])
+            return nil
+        }
+    }
+
+    private static func isFileNotFound(_ error: any Error) -> Bool {
+        var current: any Error = error
+        while true {
+            let candidate = current as NSError
+            if candidate.domain == NSCocoaErrorDomain,
+                candidate.code == NSFileNoSuchFileError
+                    || candidate.code == NSFileReadNoSuchFileError
+            {
+                return true
+            }
+            if candidate.domain == NSPOSIXErrorDomain,
+                candidate.code == POSIXErrorCode.ENOENT.rawValue
+            {
+                return true
+            }
+            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
+                return false
+            }
+            current = underlying
+        }
+    }
+
+    /// Restore the whole host UID namespace before any create. Quarantined
+    /// entries participate because their process may still be running even
+    /// though this build cannot route it; legacy quarantined sandboxes cannot
+    /// be rewritten without violating verbatim quarantine, so their recovered
+    /// claim is held in memory on every start.
+    private func reserveSandboxJailUIDs(
+        entries: [String: VMManifestEntry], quarantined: [String: QuarantinedManifestEntry]
+    ) async {
+        for refusal in sandboxJailUIDs.reserveAll(entries: entries, quarantined: quarantined) {
+            logSandboxJailUIDRefusal(
+                sandboxId: refusal.sandboxId, uid: refusal.uid, reason: refusal.reason)
+        }
+
+        var claims: [(id: String, uid: UInt32)] =
+            entries.compactMap { id, entry in entry.jailUID.map { (id, $0) } }
+            + quarantined.compactMap { id, entry in entry.jailUID.map { (id, $0) } }
+        for (id, entry) in quarantined where entry.jailUID == nil && entry.effectiveKind == .sandbox {
+            guard let uid = legacyJailUID(for: id) else { continue }
+            claims.append((id, uid))
+            let result = sandboxJailUIDs.reserve(uid, for: id)
+            if case .reserved = result {
+                continue
+            }
+            if case .unchanged = result {
+                continue
+            }
+            logSandboxJailUIDRefusal(sandboxId: id, uid: uid, reason: result)
+        }
+
+        // On the initial load the concrete runtime does not exist yet and
+        // receives `sandboxJailUIDs` by value during construction. This branch
+        // covers a later recovery read after an unreadable manifest.
+        if let sandboxRuntime {
+            for claim in claims.sorted(by: { $0.id < $1.id }) {
+                _ = await sandboxRuntime.reserveJailUID(claim.uid, for: claim.id)
+            }
+        }
+    }
+
+    private func logSandboxJailUIDRefusal(
+        sandboxId: String, uid: UInt32, reason: SandboxJailUIDReservation
+    ) {
+        switch reason {
+        case .conflict(let holder):
+            logger.error(
+                "Two sandbox manifest claims share one jail UID; the identity remains poisoned until every claimant is removed, and each sandbox must be re-created with its own allocation",
+                metadata: [
+                    "jailUID": .stringConvertible(uid),
+                    "holder": .string(holder),
+                    "strato.sandbox.id": .string(sandboxId),
+                ])
+        case .notAssignable:
+            logger.error(
+                "Ignoring an unusable root or uid_t(-1) sandbox jail manifest claim",
+                metadata: [
+                    "jailUID": .stringConvertible(uid),
+                    "strato.sandbox.id": .string(sandboxId),
+                ])
+        case .reserved, .unchanged:
+            break
         }
     }
 
@@ -2993,12 +3251,12 @@ extension Agent {
     /// somebody deleted it. Accepting that would hand every running guest's
     /// capacity straight back to the scheduler, so deciding this host is empty
     /// stays a deliberate act — restart the agent.
-    private func retryManifestLoadIfQuarantined() {
+    private func retryManifestLoadIfQuarantined() async {
         guard manifestReadFailure != nil else { return }
         let load = manifestStore.load()
         guard case .loaded = load else { return }
 
-        applyManifestLoad(load)
+        await applyManifestLoad(load)
         logger.warning(
             "VM manifest became readable again; this host is no longer quarantined and will converge and advertise capacity normally"
         )
@@ -4036,18 +4294,46 @@ extension Agent: ReconcileActuator {
             throw SandboxRuntimeError.sandboxNotFound(item.id)
         }
 
+        // Adoption is allowed only with the durable identity this process was
+        // originally created under. Startup normally restored this claim
+        // before the runtime was built; repeating the reservation here makes
+        // the invariant explicit on recovery/retry paths too.
+        guard let jailUID = entry.jailUID else {
+            throw SandboxRuntimeError.jailIdentityUnavailable(
+                "sandbox \(item.id) has no persisted jail uid/gid assignment")
+        }
+        switch await runtime.reserveJailUID(jailUID, for: item.id) {
+        case .reserved, .unchanged:
+            break
+        case .conflict(let holder):
+            // Both processes may already exist under this legacy collision.
+            // Keep the uid poisoned against every new create, but use the
+            // manifest value to reconnect this particular existing jail.
+            logger.warning(
+                "Re-adopting a legacy sandbox whose jail uid/gid is duplicated",
+                metadata: [
+                    "strato.sandbox.id": .string(item.id),
+                    "uid": .stringConvertible(jailUID),
+                    "otherSandboxId": .string(holder),
+                ])
+        case .notAssignable:
+            throw SandboxRuntimeError.jailIdentityUnavailable(
+                "manifest uid/gid \(jailUID) is not a usable jail identity")
+        }
+
         let status: SandboxStatus
         do {
-            status = try await runtime.adoptSandbox(sandboxId: item.id, spec: spec)
+            status = try await runtime.adoptSandbox(
+                sandboxId: item.id, spec: spec, jailUID: jailUID)
         } catch SandboxRuntimeError.adoptionTargetGone(let reason) {
             // The orphan's Firecracker process is gone, so there is nothing to
-            // re-attach — but its artifacts persist and create is idempotent, so
-            // a fresh create rebuilds the same sandbox in the "exists, not
-            // running" state. The next sync plans any remaining power-state
-            // steps from `.stopped`. Requires the desired entry (present for an
-            // orphan the control plane still wants); without it, re-adoption
-            // simply failed.
+            // re-attach. Before a recreate can move a legacy duplicate to a
+            // fresh UID, remove every artifact owned by its recorded old UID;
+            // otherwise the other claimant could still reach stale files after
+            // the manifest forgets this side of the collision. The claim itself
+            // remains held until create persists and commits the replacement.
             guard item.desiredSandbox != nil else { throw SandboxRuntimeError.sandboxNotFound(item.id) }
+            try await runtime.prepareJailUIDRelease(for: item.id, jailUID: jailUID)
             logger.warning(
                 "Orphaned sandbox has no live process; re-creating it from the desired entry",
                 metadata: ["strato.sandbox.id": .string(item.id), "reason": .string(reason)])
@@ -5583,8 +5869,12 @@ extension Agent: ReconcileActuator {
         // sandbox, or an attachment this agent life never learned because the
         // sandbox was adopted rather than created here.
         let networks = item.desiredSandbox?.spec.network.map { [$0] } ?? []
+        let jailUID = (managedSandboxes[item.id] ?? orphanedSandboxes[item.id])?.jailUID
         let placement =
-            networks.isEmpty ? NICPlacement.hostNamespace : try sandboxNICPlacement(sandboxId: item.id)
+            networks.isEmpty
+            ? NICPlacement.hostNamespace
+            : try sandboxNICPlacement(
+                sandboxId: item.id, jailUID: jailUID, existingJail: true)
         let attachments = try await networkOrchestrator.prepareAttachments(
             vmId: item.id, networks: networks, placement: placement)
         try await requireSandboxRuntime().restoreSandbox(
@@ -5603,22 +5893,27 @@ extension Agent: ReconcileActuator {
     /// `forTeardown` derives the placement even on an agent that no longer jails
     /// new sandboxes: the jail layout is built unconditionally precisely so a
     /// previous life's jailed leftovers can still be cleaned up.
-    private func sandboxNICPlacement(sandboxId: String) throws -> NICPlacement {
+    private func sandboxNICPlacement(
+        sandboxId: String, jailUID: UInt32?, existingJail: Bool = false
+    ) throws -> NICPlacement {
         // A simulated agent jails nothing and realizes nothing, but it does
         // advertise sandbox networking so the scheduler treats it as a full
         // host (STR-103). The host namespace is the honest answer for it: the
         // orchestrator is a no-op either way, and refusing here would make the
         // advertised capability a lie the very first time it was used.
         if isSimulationMode { return .hostNamespace }
-        guard sandboxJailNewSandboxes, let jailerConfig = sandboxJailerConfig else {
+        guard existingJail || (sandboxJailNewSandboxes && sandboxJailerConfig != nil) else {
             throw SandboxRuntimeError.networkingUnsupported(
                 "a sandbox NIC lives in the jail's network namespace, and this agent creates sandboxes "
                     + "unjailed; set sandbox_jailer_mode = \"required\" and satisfy its prerequisites")
         }
-        let plan = SandboxJailPlan(
-            sandboxId: sandboxId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
+        guard let jailUID, jailUID != 0, jailUID != UInt32.max else {
+            throw SandboxRuntimeError.jailIdentityUnavailable(
+                "sandbox \(sandboxId) has no exclusive manifest-backed uid/gid assignment")
+        }
         return .sandboxNetns(
-            netnsName: plan.netnsName, owner: JailOwner(uid: plan.uid, gid: plan.gid))
+            netnsName: SandboxJailPlan.netnsName(sandboxId: sandboxId),
+            owner: JailOwner(uid: jailUID, gid: jailUID))
     }
 
     /// The placement teardown should use. Never throws, and never degrades to
@@ -5642,6 +5937,10 @@ extension Agent: ReconcileActuator {
         }
         let runtime = try requireSandboxRuntime()
 
+        if let blockedReason = sandboxJailCreationBlockedReason {
+            throw SandboxRuntimeError.jailerRequiredUnavailable(blockedReason)
+        }
+
         let currentReservation =
             (managedSandboxes[item.id] ?? orphanedSandboxes[item.id])?.sandboxSpec
             .map(SandboxHostReservation.forSpec) ?? HostReservation()
@@ -5652,6 +5951,42 @@ extension Agent: ReconcileActuator {
             snapshot: raw, agentName: initialAgentID)
         defer { capacityAdmissionLedger.release(claim) }
 
+        // A real Firecracker runtime always returns a lease. The simulation
+        // runtime returns nil because it owns no host uid namespace.
+        let jailUIDLease = try await runtime.leaseJailUID(for: item.id)
+
+        // Persist the allocation before NIC ownership, chroot staging, or VMM
+        // spawn. Without this strict pre-side-effect commit, a crash can leave
+        // a live jail whose identity is free for reuse after restart.
+        let previousManaged = managedSandboxes[item.id]
+        let previousOrphan = orphanedSandboxes[item.id]
+        let provisionalEntry = VMManifestEntry(
+            sandboxSpec: desired.spec,
+            jailUID: jailUIDLease?.uid,
+            appliedEdges: (previousManaged ?? previousOrphan)?.appliedEdges)
+        managedSandboxes[item.id] = provisionalEntry
+        orphanedSandboxes.removeValue(forKey: item.id)
+        guard persistManifest() else {
+            if let previousManaged {
+                managedSandboxes[item.id] = previousManaged
+            } else {
+                managedSandboxes.removeValue(forKey: item.id)
+            }
+            if let previousOrphan {
+                orphanedSandboxes[item.id] = previousOrphan
+            } else {
+                orphanedSandboxes.removeValue(forKey: item.id)
+            }
+            if let jailUIDLease {
+                await runtime.rollBackJailUID(jailUIDLease)
+            }
+            throw SandboxRuntimeError.jailSetupFailed(
+                "could not persist uid/gid assignment before creating sandbox \(item.id)")
+        }
+        if let jailUIDLease {
+            await runtime.commitJailUID(jailUIDLease)
+        }
+
         // Resolve the placement after admission but before doing network or
         // runtime work. This is still a pure validation step: a host that
         // cannot realize a sandbox NIC surfaces the permanent reason without
@@ -5660,32 +5995,110 @@ extension Agent: ReconcileActuator {
         let networks = desired.spec.network.map { [$0] } ?? []
         // A network-free sandbox never reaches the placement, so don't refuse an
         // unjailed one over a NIC it doesn't have.
-        let placement =
-            networks.isEmpty ? NICPlacement.hostNamespace : try sandboxNICPlacement(sandboxId: item.id)
+        let placement: NICPlacement
+        do {
+            placement =
+                networks.isEmpty
+                ? NICPlacement.hostNamespace
+                : try sandboxNICPlacement(sandboxId: item.id, jailUID: jailUIDLease?.uid)
+        } catch {
+            _ = await rollBackSandboxCreateManifest(
+                sandboxId: item.id, provisionalEntry: provisionalEntry,
+                previousManaged: previousManaged, previousOrphan: previousOrphan,
+                lease: jailUIDLease, runtime: runtime, hostUIDArtifactsMayExist: false)
+            throw error
+        }
 
         // Same contract as the VM path: the orchestrator realizes the
         // sandbox's NIC on this host before the runtime runs, and rolls it
         // back if the runtime never created the sandbox.
-        let attachments = try await networkOrchestrator.prepareAttachments(
-            vmId: item.id, networks: networks, placement: placement)
+        let attachments: [ResolvedNetworkAttachment]
+        do {
+            attachments = try await networkOrchestrator.prepareAttachments(
+                vmId: item.id, networks: networks, placement: placement)
+        } catch {
+            let released = await rollBackSandboxCreateManifest(
+                sandboxId: item.id, provisionalEntry: provisionalEntry,
+                previousManaged: previousManaged, previousOrphan: previousOrphan,
+                lease: jailUIDLease, runtime: runtime, hostUIDArtifactsMayExist: true)
+            if released {
+                await networkOrchestrator.teardownAttachments(
+                    vmId: item.id, networks: networks, placement: placement)
+            }
+            throw error
+        }
         do {
             try await runtime.createSandbox(
                 sandboxId: item.id, spec: desired.spec,
                 registryCredential: desired.registryCredential, networkAttachments: attachments)
         } catch {
-            await networkOrchestrator.teardownAttachments(
-                vmId: item.id, networks: networks, placement: placement)
+            let released = await rollBackSandboxCreateManifest(
+                sandboxId: item.id, provisionalEntry: provisionalEntry,
+                previousManaged: previousManaged, previousOrphan: previousOrphan,
+                lease: jailUIDLease, runtime: runtime, hostUIDArtifactsMayExist: true)
+            if released {
+                await networkOrchestrator.teardownAttachments(
+                    vmId: item.id, networks: networks, placement: placement)
+            }
             throw error
         }
+    }
 
-        // Carried over for `reconcileCreate`'s reason: this path also rebuilds
-        // an orphan whose Firecracker process is gone, and its record of what
-        // has already been applied to it is not the spec's to discard.
-        managedSandboxes[item.id] = VMManifestEntry(
-            sandboxSpec: desired.spec,
-            appliedEdges: (managedSandboxes[item.id] ?? orphanedSandboxes[item.id])?.appliedEdges)
-        orphanedSandboxes.removeValue(forKey: item.id)
-        persistManifest()
+    /// Undo the provisional manifest transition after a create-side effect
+    /// fails. A successful cleanup write proves the new uid is no longer
+    /// durable and permits lease rollback. If the write itself fails, retain
+    /// the provisional entry as an orphan and retain the allocation: a retry
+    /// may reclaim it, but no new sandbox can share it after a restart.
+    private func rollBackSandboxCreateManifest(
+        sandboxId: String,
+        provisionalEntry: VMManifestEntry,
+        previousManaged: VMManifestEntry?,
+        previousOrphan: VMManifestEntry?,
+        lease: SandboxJailUIDLease?,
+        runtime: any SandboxRuntimeService,
+        hostUIDArtifactsMayExist: Bool
+    ) async -> Bool {
+        if hostUIDArtifactsMayExist {
+            do {
+                try await runtime.prepareJailUIDRelease(
+                    for: sandboxId, jailUID: lease?.uid ?? provisionalEntry.jailUID)
+            } catch {
+                managedSandboxes.removeValue(forKey: sandboxId)
+                orphanedSandboxes[sandboxId] = provisionalEntry
+                logger.error(
+                    "Retaining failed sandbox create and its jail UID because cleanup could not be proven",
+                    metadata: [
+                        "strato.sandbox.id": .string(sandboxId),
+                        "error": .string(error.localizedDescription),
+                    ])
+                return false
+            }
+        }
+
+        if let previousManaged {
+            managedSandboxes[sandboxId] = previousManaged
+        } else {
+            managedSandboxes.removeValue(forKey: sandboxId)
+        }
+        if let previousOrphan {
+            orphanedSandboxes[sandboxId] = previousOrphan
+        } else {
+            orphanedSandboxes.removeValue(forKey: sandboxId)
+        }
+
+        if persistManifest() {
+            if let lease {
+                await runtime.rollBackJailUID(lease)
+            }
+            return true
+        } else {
+            managedSandboxes.removeValue(forKey: sandboxId)
+            orphanedSandboxes[sandboxId] = provisionalEntry
+            logger.error(
+                "Retaining failed sandbox create as an orphan because its provisional jail UID could not be removed from the manifest",
+                metadata: ["strato.sandbox.id": .string(sandboxId)])
+            return false
+        }
     }
 
     private func sandboxReconcileBoot(_ item: ReconcileWorkItem) async throws {
@@ -5716,43 +6129,60 @@ extension Agent: ReconcileActuator {
     }
 
     private func sandboxReconcileDelete(_ item: ReconcileWorkItem) async throws {
-        // Orphan with no live session: try to re-adopt first so the surviving
-        // process is actually torn down instead of leaking. If the session
-        // cannot be reattached (no runtime in this build, dead process), fall
-        // back to releasing the manifest entry — the same manual-cleanup
-        // contract as the VM path.
-        if managedSandboxes[item.id] == nil, let entry = orphanedSandboxes[item.id] {
-            if let runtime = sandboxRuntime, let spec = entry.sandboxSpec,
-                (try? await runtime.adoptSandbox(sandboxId: item.id, spec: spec)) != nil
-            {
-                managedSandboxes[item.id] = entry
-            } else {
-                orphanedSandboxes.removeValue(forKey: item.id)
-                persistManifest()
-                // Host-side network resources are derived from deterministic
-                // names, so they can be torn down even with no live session.
-                await networkOrchestrator.teardownAttachments(
-                    vmId: item.id, networks: entry.sandboxSpec?.network.map { [$0] } ?? [],
-                    placement: sandboxTeardownPlacement(sandboxId: item.id))
-                logger.warning(
-                    "Deleted orphaned sandbox from manifest; any surviving process must be cleaned up manually",
-                    metadata: ["strato.sandbox.id": .string(item.id)])
-                return
-            }
+        let runtime = try requireSandboxRuntime()
+        guard let entry = managedSandboxes[item.id] ?? orphanedSandboxes[item.id] else {
+            // With no durable entry there is no claim this operation is
+            // authorized to release. In particular, leave salvaged claims
+            // from quarantined future-schema entries untouched.
+            return
+        }
+        guard let jailUID = entry.jailUID else {
+            throw SandboxRuntimeError.jailIdentityUnavailable(
+                "sandbox \(item.id) has no persisted jail uid/gid")
+        }
+        switch await runtime.reserveJailUID(jailUID, for: item.id) {
+        case .reserved, .unchanged:
+            break
+        case .conflict(let holder):
+            // Existing legacy collisions must remain poison for allocation,
+            // but either claimant still needs an explicit teardown path.
+            logger.warning(
+                "Deleting a legacy sandbox whose jail uid/gid is duplicated",
+                metadata: [
+                    "strato.sandbox.id": .string(item.id),
+                    "uid": .stringConvertible(jailUID),
+                    "otherSandboxId": .string(holder),
+                ])
+        case .notAssignable:
+            throw SandboxRuntimeError.jailIdentityUnavailable(
+                "manifest uid/gid \(jailUID) is not a usable jail identity")
         }
 
-        guard let entry = managedSandboxes[item.id] else {
-            return  // already absent — deletion is idempotent
-        }
-        try await requireSandboxRuntime().deleteSandbox(sandboxId: item.id)
+        // This call returns only after the process inventory is empty and all
+        // UID-owned artifacts have been removed. Until then the manifest and
+        // allocator claims stay intact.
+        try await runtime.deleteSandbox(sandboxId: item.id, jailUID: jailUID)
 
         await networkOrchestrator.teardownAttachments(
             vmId: item.id, networks: entry.sandboxSpec?.network.map { [$0] } ?? [],
             placement: sandboxTeardownPlacement(sandboxId: item.id))
 
+        // Release in memory before removing the durable record. A crash in
+        // this narrow interval leaves the old manifest to over-reserve on the
+        // next start; the inverse order could make a retained allocator claim
+        // disappear across restart.
+        try await runtime.releaseJailUID(for: item.id)
         managedSandboxes.removeValue(forKey: item.id)
         orphanedSandboxes.removeValue(forKey: item.id)
-        persistManifest()
+        guard persistManifest() else {
+            // Restore both halves when the durable removal failed. No other
+            // Agent operation can allocate between the awaited release and
+            // this synchronous write/re-reservation sequence.
+            orphanedSandboxes[item.id] = entry
+            _ = await runtime.reserveJailUID(jailUID, for: item.id)
+            throw SandboxRuntimeError.jailSetupFailed(
+                "sandbox was torn down, but its jail UID claim could not be removed from the manifest")
+        }
     }
 
     /// Assemble and send the full observed state of this host: every managed
