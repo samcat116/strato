@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Trash2, UserCog } from "lucide-react";
@@ -172,7 +174,7 @@ export default function ProjectIntegrationsPage() {
             {(credentialsQuery.data ?? []).map((credential) => (
               <div key={credential.id} className="flex items-center justify-between gap-4 p-3">
                 <div><p className="font-medium">{credential.registry}</p><p className="text-sm text-muted-foreground">{credential.username}</p></div>
-                {permissions.manage_credentials && credential.id && <Button variant="ghost" size="icon" aria-label={`Delete credential for ${credential.registry}`} onClick={() => window.confirm(`Delete the credential for ${credential.registry}?`) && deleteCredential.mutate(credential.id!)}><Trash2 className="h-4 w-4" /></Button>}
+                {permissions.manage_credentials && credential.id && <Button variant="ghost" size="icon" aria-label={`Delete credential for ${credential.registry}`} onClick={async () => await confirmAction(`Delete the credential for ${credential.registry}?`) && deleteCredential.mutate(credential.id!)}><Trash2 className="h-4 w-4" /></Button>}
               </div>
             ))}
             {credentialsQuery.data?.length === 0 && <p className="p-4 text-sm text-muted-foreground">No private registry credentials.</p>}
@@ -194,7 +196,7 @@ export default function ProjectIntegrationsPage() {
             {(accountsQuery.data ?? []).map((account) => (
               <div key={account.id} className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div><p className="font-medium">{account.name}</p><p className="text-sm text-muted-foreground">{account.description || "No description"} · {account.projectRoles.join(", ") || "No project role"}</p></div>
-                <div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => setSelectedAccount(selectedAccountId === account.id ? "" : account.id)}>{selectedAccountId === account.id ? "Close" : "Manage identity"}</Button>{accountPermissions[`delete:${account.id}`] && <Button variant="ghost" size="icon" aria-label={`Delete ${account.name}`} onClick={() => window.confirm(`Delete service account ${account.name} and all its identity registrations?`) && deleteAccount.mutate(account.id)}><Trash2 className="h-4 w-4" /></Button>}</div>
+                <div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => setSelectedAccount(selectedAccountId === account.id ? "" : account.id)}>{selectedAccountId === account.id ? "Close" : "Manage identity"}</Button>{accountPermissions[`delete:${account.id}`] && <Button variant="ghost" size="icon" aria-label={`Delete ${account.name}`} onClick={async () => await confirmAction(`Delete service account ${account.name} and all its identity registrations?`) && deleteAccount.mutate(account.id)}><Trash2 className="h-4 w-4" /></Button>}</div>
               </div>
             ))}
             {accountsQuery.data?.length === 0 && <p className="p-4 text-sm text-muted-foreground">No service accounts.</p>}
@@ -212,7 +214,7 @@ export default function ProjectIntegrationsPage() {
                 <div className="flex-1"><Label htmlFor="service-account-spiffe">SPIFFE ID</Label><Input id="service-account-spiffe" value={spiffeId} onChange={(event) => setSpiffeId(event.target.value)} placeholder="spiffe://example.org/workload/api" required /></div>
                 <Button className="self-end">Register</Button>
               </form>
-              <div className="divide-y">{(registrationsQuery.data ?? []).map((registration) => <div key={registration.id} className="flex items-center justify-between py-2"><code className="overflow-x-auto text-sm">{registration.spiffeId}</code><Button variant="ghost" size="icon" aria-label={`Remove ${registration.spiffeId}`} onClick={() => window.confirm(`Remove identity ${registration.spiffeId}?`) && manageAccount.mutate(() => serviceAccountsApi.deleteRegistration(selectedAccountId, registration.id))}><Trash2 className="h-4 w-4" /></Button></div>)}</div>
+              <div className="divide-y">{(registrationsQuery.data ?? []).map((registration) => <div key={registration.id} className="flex items-center justify-between py-2"><code className="overflow-x-auto text-sm">{registration.spiffeId}</code><Button variant="ghost" size="icon" aria-label={`Remove ${registration.spiffeId}`} onClick={async () => await confirmAction(`Remove identity ${registration.spiffeId}?`) && manageAccount.mutate(() => serviceAccountsApi.deleteRegistration(selectedAccountId, registration.id))}><Trash2 className="h-4 w-4" /></Button></div>)}</div>
             </div>
           )}
         </CardContent>

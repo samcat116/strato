@@ -100,9 +100,9 @@ final class ConsoleSessionManager: @unchecked Sendable {
         app.logger.info(
             "Console session created",
             metadata: [
-                "sessionId": .string(sessionId),
-                "vmId": .string(vmId),
-                "agentKey": .string(agentKey),
+                "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
+                "strato.vm.id": .string(vmId),
+                "strato.agent.identity": .string(agentKey),
             ])
     }
 
@@ -140,9 +140,9 @@ final class ConsoleSessionManager: @unchecked Sendable {
         app.logger.info(
             "Graphics console session minted",
             metadata: [
-                "sessionId": .string(session.sessionId),
-                "vmId": .string(vmId),
-                "agentKey": .string(agentKey),
+                "strato.session.kind": .string("console"), "strato.session.id": .string(session.sessionId),
+                "strato.vm.id": .string(vmId),
+                "strato.agent.identity": .string(agentKey),
             ])
         return session
     }
@@ -202,9 +202,9 @@ final class ConsoleSessionManager: @unchecked Sendable {
         app.logger.info(
             "Graphics console session attached",
             metadata: [
-                "sessionId": .string(sessionId),
-                "vmId": .string(session.vmId),
-                "agentKey": .string(session.agentKey),
+                "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
+                "strato.vm.id": .string(session.vmId),
+                "strato.agent.identity": .string(session.agentKey),
             ])
         return session
     }
@@ -230,8 +230,8 @@ final class ConsoleSessionManager: @unchecked Sendable {
                 app.logger.info(
                     "Console session removed",
                     metadata: [
-                        "sessionId": .string(sessionId),
-                        "vmId": .string(sessionInfo.vmId),
+                        "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
+                        "strato.vm.id": .string(sessionInfo.vmId),
                     ])
             }
         }
@@ -282,7 +282,10 @@ final class ConsoleSessionManager: @unchecked Sendable {
         if let reason {
             app.logger.debug(
                 "Console session closed by agent",
-                metadata: ["sessionId": .string(sessionId), "reason": .string(reason)])
+                metadata: [
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
+                    "reason": .string(reason),
+                ])
         }
     }
 
@@ -300,8 +303,8 @@ final class ConsoleSessionManager: @unchecked Sendable {
             app.logger.warning(
                 "Dropping console disconnect from an agent that does not own the session",
                 metadata: [
-                    "sessionId": .string(sessionId),
-                    "agentKey": .string(agentKey),
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
                 ])
             return
         }
@@ -358,8 +361,8 @@ final class ConsoleSessionManager: @unchecked Sendable {
             app.logger.info(
                 "Closed console session: agent disconnected",
                 metadata: [
-                    "sessionId": .string(sessionId),
-                    "agentKey": .string(agentKey),
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
                 ])
             guard let websocket else { continue }
             websocket.send("error: \(reason)")
@@ -383,16 +386,19 @@ final class ConsoleSessionManager: @unchecked Sendable {
         guard let session else {
             app.logger.debug(
                 "Console \(event) for unknown session",
-                metadata: ["sessionId": .string(sessionId), "agentKey": .string(agentKey)])
+                metadata: [
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
+                ])
             return nil
         }
         guard session.agentKey == agentKey else {
             app.logger.warning(
                 "Dropping console \(event) from an agent that does not own the session",
                 metadata: [
-                    "sessionId": .string(sessionId),
-                    "agentKey": .string(agentKey),
-                    "sessionAgentName": .string(session.agentKey),
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
+                    "strato.agent.session.identity": .string(session.agentKey),
                 ])
             return nil
         }
@@ -420,7 +426,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
         app.logger.info(
             "Notifying frontend that console is ready",
             metadata: [
-                "sessionId": .string(sessionId)
+                "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
             ])
 
         // The serial console's frontend parses the bare string `ready`; the
@@ -488,9 +494,9 @@ final class ConsoleSessionManager: @unchecked Sendable {
         app.logger.info(
             "Sending console connect to agent",
             metadata: [
-                "sessionId": .string(sessionId),
-                "vmId": .string(vmId),
-                "agentKey": .string(agentKey),
+                "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
+                "strato.vm.id": .string(vmId),
+                "strato.agent.identity": .string(agentKey),
                 "stream": .string(stream.rawValue),
             ])
 
@@ -507,8 +513,8 @@ final class ConsoleSessionManager: @unchecked Sendable {
         app.logger.info(
             "Console connect message sent successfully",
             metadata: [
-                "sessionId": .string(sessionId),
-                "vmId": .string(vmId),
+                "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
+                "strato.vm.id": .string(vmId),
             ])
     }
 
@@ -534,10 +540,10 @@ final class ConsoleSessionManager: @unchecked Sendable {
     // MARK: - Private Helpers
 
     private func sendMessageToAgent<T: WebSocketMessage>(_ message: T, agentKey: String) async throws {
-        app.logger.debug("Looking up WebSocket for agent", metadata: ["agentKey": .string(agentKey)])
+        app.logger.debug("Looking up WebSocket for agent", metadata: ["strato.agent.identity": .string(agentKey)])
 
         guard let websocket = app.websocketManager.getConnection(agentKey: agentKey) else {
-            app.logger.error("Agent WebSocket not found", metadata: ["agentKey": .string(agentKey)])
+            app.logger.error("Agent WebSocket not found", metadata: ["strato.agent.identity": .string(agentKey)])
             throw ConsoleSessionError.agentNotConnected(agentKey)
         }
 
@@ -546,7 +552,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
         app.logger.debug(
             "Sending message to agent",
             metadata: [
-                "agentKey": .string(agentKey),
+                "strato.agent.identity": .string(agentKey),
                 "messageType": .string(message.type.rawValue),
                 "dataSize": .stringConvertible(data.count),
             ])

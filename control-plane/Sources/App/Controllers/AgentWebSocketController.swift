@@ -150,7 +150,7 @@ struct AgentWebSocketController: RouteCollection {
             if !state.value.buffer.isEmpty {
                 req.logger.info(
                     "Processing \(state.value.buffer.count) buffered messages",
-                    metadata: ["agentName": .string(agent.name)]
+                    metadata: ["strato.agent.name": .string(agent.name)]
                 )
             }
             for text in state.value.buffer {
@@ -211,8 +211,8 @@ struct AgentWebSocketController: RouteCollection {
                 req.logger.info(
                     "Agent authenticated via XFCC header (Envoy mTLS)",
                     metadata: [
-                        "spiffeID": .string(verified.identity.uri),
-                        "agentName": .string(identity.name),
+                        "strato.agent.identity": .string(verified.identity.uri),
+                        "strato.agent.name": .string(identity.name),
                         "organizationId": .string(verified.organizationID?.uuidString ?? "platform"),
                     ])
 
@@ -296,7 +296,7 @@ struct AgentWebSocketController: RouteCollection {
             // key order, and a payload-first recorded-state envelope can carry
             // a full MiB of command output before its `type` key.
             var traceMetadata: Logger.Metadata = [
-                "agentName": .string(agentName),
+                "strato.agent.name": .string(agentName),
                 "messageLength": .string("\(text.count)"),
             ]
             if let preview = Self.rawTextPreview(for: text, envelopeType: envelope.type) {
@@ -305,7 +305,7 @@ struct AgentWebSocketController: RouteCollection {
             req.logger.trace("Processing WebSocket message", metadata: traceMetadata)
             req.logger.debug(
                 "Decoded message envelope",
-                metadata: ["type": .string("\(envelope.type)"), "agentName": .string(agentName)])
+                metadata: ["type": .string("\(envelope.type)"), "strato.agent.name": .string(agentName)])
 
             switch envelope.type {
             case .agentRegister:
@@ -423,7 +423,7 @@ struct AgentWebSocketController: RouteCollection {
                 req.logger.debug(
                     "Ignoring an uncorrelated response frame from an agent",
                     metadata: [
-                        "agentName": .string(agentName),
+                        "strato.agent.name": .string(agentName),
                         "type": .string(envelope.type.rawValue),
                     ])
 
@@ -453,8 +453,8 @@ struct AgentWebSocketController: RouteCollection {
                 req.logger.info(
                     "Console connected confirmation from agent",
                     metadata: [
-                        "vmId": .string(message.vmId),
-                        "sessionId": .string(message.sessionId),
+                        "strato.vm.id": .string(message.vmId),
+                        "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionId),
                     ])
                 // Notify the frontend that the console is ready for input
                 req.consoleSessionManager.notifyFrontendReady(
@@ -465,8 +465,8 @@ struct AgentWebSocketController: RouteCollection {
                 req.logger.info(
                     "Console disconnected from agent",
                     metadata: [
-                        "vmId": .string(message.vmId),
-                        "sessionId": .string(message.sessionId),
+                        "strato.vm.id": .string(message.vmId),
+                        "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionId),
                         "reason": .string(message.reason ?? "unknown"),
                     ])
                 // Close the browser socket as well as cleaning up: this is the
@@ -481,7 +481,7 @@ struct AgentWebSocketController: RouteCollection {
                 if !(await req.vmCommandExecutionService.handleStarted(
                     sessionId: message.sessionId, fromAgentKey: agentKey))
                 {
-                    req.guestExecSessionManager.handleStarted(
+                    await req.guestExecSessionManager.handleStarted(
                         sessionId: message.sessionId, fromAgentKey: agentKey)
                 }
 
@@ -504,7 +504,7 @@ struct AgentWebSocketController: RouteCollection {
                     sessionId: message.sessionId, fromAgentKey: agentKey,
                     exitCode: message.exitCode))
                 {
-                    req.guestExecSessionManager.handleExit(
+                    await req.guestExecSessionManager.handleExit(
                         sessionId: message.sessionId, fromAgentKey: agentKey,
                         exitCode: message.exitCode)
                 }
@@ -514,7 +514,7 @@ struct AgentWebSocketController: RouteCollection {
                 if !(await req.vmCommandExecutionService.handleClosed(
                     sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason))
                 {
-                    req.guestExecSessionManager.handleClosed(
+                    await req.guestExecSessionManager.handleClosed(
                         sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
                 }
 
@@ -592,7 +592,7 @@ struct AgentWebSocketController: RouteCollection {
             logger.error(
                 "Failed to send success response to agent",
                 metadata: [
-                    "requestId": .string(requestId),
+                    "strato.request.id": .string(requestId),
                     "error": .string("\(error)"),
                 ])
         }
@@ -609,7 +609,7 @@ struct AgentWebSocketController: RouteCollection {
             logger.error(
                 "Failed to send error response to agent",
                 metadata: [
-                    "requestId": .string(requestId),
+                    "strato.request.id": .string(requestId),
                     "error": .string("\(error)"),
                 ])
         }
@@ -637,7 +637,7 @@ struct AgentWebSocketController: RouteCollection {
             req.logger.info(
                 "Setting up WebSocket connection",
                 metadata: [
-                    "agentName": .string(agentName),
+                    "strato.agent.name": .string(agentName),
                     "authMethod": .string(authMethod),
                 ])
 
@@ -651,14 +651,14 @@ struct AgentWebSocketController: RouteCollection {
                     req.logger.info(
                         "Agent WebSocket connection closed normally",
                         metadata: [
-                            "agentName": .string(agentName),
+                            "strato.agent.name": .string(agentName),
                             "authMethod": .string(authMethod),
                         ])
                 case .failure(let error):
                     req.logger.error(
                         "Agent WebSocket connection closed with error: \(error)",
                         metadata: [
-                            "agentName": .string(agentName),
+                            "strato.agent.name": .string(agentName),
                             "authMethod": .string(authMethod),
                         ])
                 }
@@ -674,13 +674,13 @@ struct AgentWebSocketController: RouteCollection {
                     else {
                         req.logger.debug(
                             "Closed WebSocket was already superseded; skipping agent cleanup",
-                            metadata: ["agentName": .string(agentName)])
+                            metadata: ["strato.agent.name": .string(agentName)])
                         return
                     }
 
                     req.application.consoleSessionManager.closeAllSessions(
                         forAgent: agentKey, reason: "agent disconnected")
-                    req.application.guestExecSessionManager.closeAllSessions(
+                    await req.application.guestExecSessionManager.closeAllSessions(
                         forAgent: agentKey, reason: "agent disconnected")
                     await req.agentService.removeAgent(agentKey)
                 }
@@ -706,7 +706,7 @@ struct AgentWebSocketController: RouteCollection {
                     else { return }
                     req.application.consoleSessionManager.closeAllSessions(
                         forAgent: agentKey, reason: "agent reconnected")
-                    req.application.guestExecSessionManager.closeAllSessions(
+                    await req.application.guestExecSessionManager.closeAllSessions(
                         forAgent: agentKey, reason: "agent reconnected")
                     self.activateMessageRouting(
                         req: req, ws: ws, state: state, agent: agent, processor: processor)
@@ -724,7 +724,7 @@ struct AgentWebSocketController: RouteCollection {
             req.logger.info(
                 "Agent WebSocket connection established via \(authMethod)",
                 metadata: [
-                    "agentName": .string(agentName)
+                    "strato.agent.name": .string(agentName)
                 ])
         }
     }

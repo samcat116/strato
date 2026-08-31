@@ -1,4 +1,5 @@
 import Fluent
+import MetricsTestKit
 import StratoShared
 import Testing
 import Vapor
@@ -29,6 +30,8 @@ final class DesiredStateAssemblerTests {
             try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
+            _ = try await builder.createUser(
+                username: "assembler-owner", email: "assembler-owner@example.com")
             let org = try await builder.createOrganization(name: "Metadata Org")
             let project = try await builder.createProject(
                 name: "Metadata Project", description: "Project for metadata assembly tests",
@@ -71,12 +74,23 @@ final class DesiredStateAssemblerTests {
 
     private func placeVM(
         app: Application, project: Project, named name: String, onAgent agentId: String,
-        environment: String = "development"
+        environment: String = "development", withBootVolume: Bool = true
     ) async throws -> VM {
         let vm = try await TestDataBuilder(db: app.db).createVM(
             name: name, project: project, environment: environment)
         vm.hypervisorId = agentId
         try await vm.save(on: app.db)
+        if withBootVolume {
+            let owner = try #require(try await User.query(on: app.db).sort(\.$createdAt).first())
+            let boot = Volume(
+                name: "\(name)-boot", description: "", projectID: try project.requireID(),
+                environment: environment, size: vm.disk, format: .qcow2,
+                volumeType: .boot, status: .attached, createdByID: try owner.requireID())
+            boot.$vm.id = try vm.requireID()
+            boot.deviceName = VolumeDeviceName.disk(0).rawValue
+            boot.bootOrder = 0
+            try await boot.save(on: app.db)
+        }
         return vm
     }
 
@@ -109,6 +123,34 @@ final class DesiredStateAssemblerTests {
                 gateway: ipv6.gateway
             ).save(on: app.db)
         }
+    }
+
+    private func vmFixture(desiredStatus: DesiredVMStatus = .shutdown) -> VM {
+        let vm = VM(
+            name: "assembly-fixture", description: "", image: "image", projectID: UUID(),
+            environment: "development", cpu: 2, memory: 1 << 30, disk: 1 << 34)
+        vm.id = UUID()
+        vm.setDesiredStatus(desiredStatus)
+        return vm
+    }
+
+    private func volumeFixture(
+        for vm: VM, id: UUID? = UUID(), type: VolumeType = .data,
+        deviceName: String? = VolumeDeviceName.disk(1).rawValue, bootOrder: Int? = nil
+    ) -> Volume {
+        let volume = Volume(
+            id: id, name: "assembly-volume", description: "", projectID: vm.$project.id,
+            environment: vm.environment, size: 1 << 30, volumeType: type,
+            status: .attached, createdByID: UUID())
+        volume.$vm.id = vm.id
+        volume.deviceName = deviceName
+        volume.bootOrder = bootOrder
+        return volume
+    }
+
+    private func canonicalBoot(for vm: VM) -> Volume {
+        volumeFixture(
+            for: vm, type: .boot, deviceName: VolumeDeviceName.disk(0).rawValue, bootOrder: 0)
     }
 
     // MARK: - Content
@@ -288,6 +330,131 @@ final class DesiredStateAssemblerTests {
             // report, but the host is still named.
             #expect(metadata.region == nil)
             #expect(metadata.availabilityZone == "bare-agent")
+        }
+    }
+
+    // MARK: - Per-VM assembly isolation (STR-287)
+
+    @Test("A bad boot-volume count is a bounded per-VM assembly error")
+    func bootVolumeCountError() {
+        let vm = vmFixture()
+        let extraBoot = volumeFixture(
+            for: vm, type: .boot, deviceName: VolumeDeviceName.disk(1).rawValue, bootOrder: 1)
+        #expect(throws: VMSpecBuilder.AssemblyError.bootVolumeCount(2)) {
+            _ = try VMSpecBuilder.buildVMSpec(
+                from: vm, image: nil, volumes: [canonicalBoot(for: vm), extraBoot],
+                resolvedInterfaces: [])
+        }
+    }
+
+    @Test("A non-canonical boot volume is a bounded per-VM assembly error")
+    func nonCanonicalBootVolumeError() {
+        let vm = vmFixture()
+        let boot = canonicalBoot(for: vm)
+        boot.readonly = true
+        #expect(throws: VMSpecBuilder.AssemblyError.nonCanonicalBootVolume) {
+            _ = try VMSpecBuilder.buildVMSpec(
+                from: vm, image: nil, volumes: [boot], resolvedInterfaces: [])
+        }
+    }
+
+    @Test("A terminating boot volume on a live VM is a bounded per-VM assembly error")
+    func terminatingBootVolumeError() {
+        let vm = vmFixture()
+        let boot = canonicalBoot(for: vm)
+        boot.setDesiredStatus(.absent)
+        #expect(throws: VMSpecBuilder.AssemblyError.terminatingBootVolume) {
+            _ = try VMSpecBuilder.buildVMSpec(
+                from: vm, image: nil, volumes: [boot], resolvedInterfaces: [])
+        }
+    }
+
+    @Test("An attached volume with no id is a bounded per-VM assembly error")
+    func attachedVolumeIdentityError() {
+        let vm = vmFixture()
+        let missingIdentity = volumeFixture(for: vm, id: nil)
+        #expect(throws: VMSpecBuilder.AssemblyError.attachedVolumeMissingIdentity) {
+            _ = try VMSpecBuilder.buildVMSpec(
+                from: vm, image: nil, volumes: [canonicalBoot(for: vm), missingIdentity],
+                resolvedInterfaces: [])
+        }
+    }
+
+    @Test("An illegal attached-volume device name is a bounded per-VM assembly error")
+    func invalidAttachmentDeviceNameError() {
+        let vm = vmFixture()
+        let volumeID = UUID()
+        let invalid = volumeFixture(for: vm, id: volumeID, deviceName: "not a disk")
+        #expect(
+            throws: VMSpecBuilder.AssemblyError.invalidAttachmentDeviceName(volumeID: volumeID)
+        ) {
+            _ = try VMSpecBuilder.buildVMSpec(
+                from: vm, image: nil, volumes: [canonicalBoot(for: vm), invalid],
+                resolvedInterfaces: [])
+        }
+    }
+
+    @Test("One poison VM is omitted, degraded, metered, and never tombstoned")
+    func poisonVMDoesNotFailItsHost() async throws {
+        try await withAssemblerApp { app, org, project in
+            let site = Site(
+                name: "Isolation Site", organizationScope: .organization(try org.requireID()))
+            try await site.save(on: app.db)
+            let agentId = try await self.registerAgent(
+                app: app, named: "isolation-agent", siteID: try site.requireID())
+            let healthy = try await self.placeVM(
+                app: app, project: project, named: "healthy-vm", onAgent: agentId)
+            let poison = try await self.placeVM(
+                app: app, project: project, named: "poison-vm", onAgent: agentId,
+                withBootVolume: false)
+            let poisonID = try poison.requireID()
+            let metrics = TestMetrics()
+
+            let sync = try await DesiredStateAssembler(app: app, metricsFactory: metrics)
+                .assemble(agentId: agentId)
+
+            #expect(sync.vms.map(\.vmId) == [healthy.id!])
+            #expect(!sync.tombstones.contains { $0.workloadId == poisonID })
+            let degraded = try #require(
+                try await VM.find(poisonID, on: app.db)?.conditions.degraded)
+            #expect(degraded.sinceGeneration == poison.generation)
+            #expect(degraded.reason.contains("expected exactly one managed boot volume, found 0"))
+            #expect(degraded.lastErrorAt != nil)
+            let counter = try metrics.expectCounter(
+                "strato_desired_state_assembly_failures_total",
+                [("kind", "vm"), ("reason", "boot_volume_count")])
+            #expect(counter.totalValue == 1)
+
+            // Repairing the row makes the entry and clears the control-plane
+            // condition on the same assembly, without waiting for a heartbeat.
+            let repairedBoot = self.canonicalBoot(for: poison)
+            let owner = try #require(try await User.query(on: app.db).sort(\.$createdAt).first())
+            repairedBoot.$createdBy.id = try owner.requireID()
+            try await repairedBoot.save(on: app.db)
+            let repaired = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            #expect(Set(repaired.vms.map(\.vmId)) == Set([healthy.id!, poisonID]))
+            #expect(try await VM.find(poisonID, on: app.db)?.conditions.degraded == nil)
+        }
+    }
+
+    @Test("A terminating VM whose boot volume was reaped still reaches the agent")
+    func terminatingVMNeedsNoBootVolume() async throws {
+        try await withAssemblerApp { app, org, project in
+            let site = Site(
+                name: "Teardown Gap Site", organizationScope: .organization(try org.requireID()))
+            try await site.save(on: app.db)
+            let agentId = try await self.registerAgent(
+                app: app, named: "teardown-gap-agent", siteID: try site.requireID())
+            let vm = try await self.placeVM(
+                app: app, project: project, named: "teardown-gap-vm", onAgent: agentId,
+                withBootVolume: false)
+            vm.setDesiredStatus(.absent)
+            try await vm.save(on: app.db)
+
+            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            let entry = try #require(sync.vms.first { $0.vmId == vm.id })
+            #expect(entry.desiredStatus == .absent)
+            #expect(entry.spec.volumes.isEmpty)
         }
     }
 
@@ -487,7 +654,7 @@ final class DesiredStateAssemblerTests {
                         try await self.attachNIC(
                             app: app, vm: vm, network: network, deviceName: "net\(nic)",
                             orderIndex: nic,
-                            mac: VMNetworkInterface.generateMACAddress(),
+                            mac: MACAllocator.generateCandidate().description,
                             ipv4: ("10.50.\(index % 250).\(10 + nic)", 24, "10.50.\(index % 250).1"))
                     }
                 }

@@ -52,6 +52,13 @@ namespace (symptom: agent enrollment fails with "SPIRE server unreachable:
 127.0.0.1:8081"). The helper always recreates the namespace owner and its
 tenants together.
 
+That stop-then-recreate boundary is also required when upgrading across
+STR-275. The legacy and current advisory locks use disjoint PostgreSQL
+keyspaces, so do not start a second blue/green Compose project against the same
+database. `redeploy.sh` stops the existing control-plane container and lets its
+database sessions close before the replacement starts; use the same helper for
+a rollback.
+
 ## Smoke test
 
 Verify the assembled stack through the proxy (health, auth rejection, image

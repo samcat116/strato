@@ -467,7 +467,8 @@ public actor VMExecSessionManager {
         logger.info(
             "VM exec session ended",
             metadata: [
-                "vmId": .string(session.vmId), "sessionId": .string(sessionId),
+                "strato.vm.id": .string(session.vmId), "strato.session.kind": .string("guest_exec"),
+                "strato.session.id": .string(sessionId),
                 "terminal": .string(String(describing: terminal)),
             ])
         session.events(terminal)
@@ -509,7 +510,7 @@ public actor VMExecSessionManager {
                 logger.warning(
                     "Closing VM exec session after guest identity nonce changed",
                     metadata: [
-                        "sessionId": .string(sessionId),
+                        "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                         "expectedNonce": .string(expectedNonce),
                         "receivedNonce": .string(response.nonce),
                     ])

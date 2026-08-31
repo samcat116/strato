@@ -1,5 +1,7 @@
 import Fluent
 import Foundation
+import Metrics
+import SQLKit
 import StratoShared
 import Vapor
 
@@ -12,11 +14,18 @@ import Vapor
 /// sync reaches an agent on another replica all stay with the socket owner
 /// (`AgentService`); tests exercise the assembly through this interface
 /// without an agent socket in sight. The one write the otherwise read-only
-/// assembly performs is recording image-download grants (issue #562) — done
-/// here, at the single point where a sync's download URLs are produced, so
-/// the grant can never be tighter or later than what the agent is handed.
+/// assembly performs are recording image-download grants (issue #562) and a
+/// VM-local assembly failure (STR-287). Both belong here: this is the single
+/// point that knows what was handed to the agent and which one entry could not
+/// be projected without withholding unrelated workloads.
 struct DesiredStateAssembler {
     let app: Application
+    private let metricsFactory: (any MetricsFactory)?
+
+    init(app: Application, metricsFactory: (any MetricsFactory)? = nil) {
+        self.app = app
+        self.metricsFactory = metricsFactory
+    }
 
     private struct NetworkAssemblyScope {
         let networkIDs: Set<UUID>
@@ -160,16 +169,28 @@ struct DesiredStateAssembler {
             // consumer — which would read as two NICs having gone missing.
             let resolvedInterfaces = VMSpecBuilder.resolvedInterfaces(
                 from: vm.networkInterfaces, networks: networksByID, logger: app.logger)
-            let spec = try VMSpecBuilder.buildVMSpec(
-                from: vm,
-                image: image,
-                volumes: vm.volumes,
-                diskAttachmentsByVolumeID: volumeDiskAttachments,
-                resolvedInterfaces: resolvedInterfaces,
-                securityGroupsByInterface: securityGroupsByInterface,
-                sendsMetadataPort: true,
-                siteResolverCapable: siteResolverCapable
-            )
+            let spec: VMSpec
+            do {
+                spec = try VMSpecBuilder.buildVMSpec(
+                    from: vm,
+                    image: image,
+                    volumes: vm.volumes,
+                    diskAttachmentsByVolumeID: volumeDiskAttachments,
+                    resolvedInterfaces: resolvedInterfaces,
+                    securityGroupsByInterface: securityGroupsByInterface,
+                    sendsMetadataPort: true,
+                    siteResolverCapable: siteResolverCapable
+                )
+            } catch {
+                await recordVMAssemblyFailure(vm: vm, vmId: vmId, error: error, on: db)
+                continue
+            }
+            // A repair is visible as soon as this VM can be projected again;
+            // it does not have to wait for the agent's next observed-state
+            // heartbeat to clear a control-plane-owned condition.
+            if vm.desiredStateAssemblyError != nil {
+                await clearVMAssemblyFailure(vm: vm, vmId: vmId, on: db)
+            }
 
             // Image download info lets the agent materialize a VM it doesn't
             // have yet. Best effort: a VM whose image is missing/not-ready can
@@ -191,7 +212,7 @@ struct DesiredStateAssembler {
                     app.logger.warning(
                         "Failed to build image info for desired-state sync",
                         metadata: [
-                            "vmId": .string(vmId.uuidString),
+                            "strato.vm.id": .string(vmId.uuidString),
                             "imageId": .string(image.id?.uuidString ?? ""),
                             "error": .string(error.localizedDescription),
                         ])
@@ -199,7 +220,7 @@ struct DesiredStateAssembler {
             } else if vm.$sourceImage.id != nil {
                 app.logger.warning(
                     "VM references an image that is missing or not ready; syncing without image info",
-                    metadata: ["vmId": .string(vmId.uuidString)])
+                    metadata: ["strato.vm.id": .string(vmId.uuidString)])
             }
 
             let metadata = InstanceMetadata.build(
@@ -256,6 +277,8 @@ struct DesiredStateAssembler {
             on: db)
         let loadBalancersByNetwork = try await desiredLoadBalancers(
             networkIDs: scope.networkIDs, on: db)
+        let networkACLsByNetwork = try await desiredNetworkACLs(
+            networkIDs: scope.networkIDs, on: db)
         // Sorted by id: names are no longer unique, so only the id gives the
         // topology list a stable, total order.
         let networkStates =
@@ -282,7 +305,11 @@ struct DesiredStateAssembler {
                         siteCapable: siteResolverCapable),
                     generation: Int64(network.generation),
                     floatingIPs: floatingIPsByNetwork[networkId] ?? [],
-                    loadBalancers: loadBalancersByNetwork[networkId] ?? []
+                    loadBalancers: loadBalancersByNetwork[networkId] ?? [],
+                    // The current lockstep wire always carries an
+                    // authoritative opinion: [] tears down managed switch
+                    // ACLs, while the schema limits this list to one entry.
+                    networkACLs: networkACLsByNetwork[networkId].map { [$0] } ?? []
                 )
             }
 
@@ -342,7 +369,7 @@ struct DesiredStateAssembler {
                         app.logger.warning(
                             "Fork is placed off its snapshot's agent but the exported copy is unavailable",
                             metadata: [
-                                "sandboxId": .string(sandboxId.uuidString),
+                                "strato.sandbox.id": .string(sandboxId.uuidString),
                                 "snapshotId": .string(snapshotID.uuidString),
                             ])
                     }
@@ -395,8 +422,8 @@ struct DesiredStateAssembler {
                 app.logger.debug(
                     "Withholding a sandbox's NIC: its host does not advertise sandbox networking",
                     metadata: [
-                        "sandboxId": .string(sandboxId.uuidString),
-                        "agentId": .string(agentId),
+                        "strato.sandbox.id": .string(sandboxId.uuidString),
+                        "strato.agent.id": .string(agentId),
                     ])
             }
             // The restore *edge* (STR-151), as distinct from the fork create
@@ -414,7 +441,7 @@ struct DesiredStateAssembler {
                         app.logger.warning(
                             "Sandbox restore targets a snapshot on another agent whose exported copy is unavailable",
                             metadata: [
-                                "sandboxId": .string(sandboxId.uuidString),
+                                "strato.sandbox.id": .string(sandboxId.uuidString),
                                 "snapshotId": .string(snapshotID.uuidString),
                             ])
                     }
@@ -491,6 +518,102 @@ struct DesiredStateAssembler {
             volumes: volumes,
             snapshots: snapshots,
             dnsZones: dnsZones)
+    }
+
+    /// Omit one bad VM while making the omission visible on that VM. The
+    /// condition write is deliberately fail-open: an unavailable telemetry
+    /// write must not recreate the host-wide assembly failure this path exists
+    /// to prevent. The generation guard keeps an assembly of stale rows from
+    /// attaching its failure to newer desired state.
+    private func recordVMAssemblyFailure(
+        vm: VM, vmId: UUID, error: any Error, on db: any Database
+    ) async {
+        let assemblyError = error as? VMSpecBuilder.AssemblyError
+        let reasonCode = assemblyError?.code ?? "unexpected"
+        let detail = error.localizedDescription
+        let conditionReason = "VM desired state cannot be assembled: \(detail)"
+
+        app.logger.error(
+            "Omitting an unassemblable VM from desired state",
+            metadata: [
+                "strato.vm.id": .string(vmId.uuidString),
+                "reason": .string(reasonCode),
+                "error": .string(detail),
+            ])
+        Telemetry.desiredStateAssemblyFailed(
+            kind: "vm", reason: reasonCode, factory: metricsFactory)
+
+        // The counter records every failed projection, but an unchanged poison
+        // row must not also generate an UPDATE on every long poll.
+        guard
+            vm.desiredStateAssemblyError != conditionReason
+                || vm.desiredStateAssemblyErrorGeneration != vm.generation
+                || vm.desiredStateAssemblyErrorAt == nil
+        else { return }
+
+        guard let sql = db as? any SQLDatabase else {
+            app.logger.error(
+                "Could not record the VM desired-state assembly failure: SQL database required",
+                metadata: ["strato.vm.id": .string(vmId.uuidString)])
+            return
+        }
+        do {
+            let now = Date()
+            try await sql.raw(
+                """
+                UPDATE vms
+                SET desired_state_assembly_error = \(bind: conditionReason),
+                    desired_state_assembly_error_generation = \(bind: vm.generation),
+                    desired_state_assembly_error_at = CASE
+                        WHEN desired_state_assembly_error IS DISTINCT FROM \(bind: conditionReason)
+                          OR desired_state_assembly_error_generation IS DISTINCT FROM \(bind: vm.generation)
+                          OR desired_state_assembly_error_at IS NULL
+                        THEN \(bind: now)
+                        ELSE desired_state_assembly_error_at
+                    END
+                WHERE id = \(bind: vmId)
+                  AND generation = \(bind: vm.generation)
+                  AND (
+                    desired_state_assembly_error IS DISTINCT FROM \(bind: conditionReason)
+                    OR desired_state_assembly_error_generation IS DISTINCT FROM \(bind: vm.generation)
+                    OR desired_state_assembly_error_at IS NULL
+                  )
+                """
+            ).run()
+        } catch {
+            app.logger.error(
+                "Could not record the VM desired-state assembly failure",
+                metadata: [
+                    "strato.vm.id": .string(vmId.uuidString),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
+
+    private func clearVMAssemblyFailure(vm: VM, vmId: UUID, on db: any Database) async {
+        guard let sql = db as? any SQLDatabase else { return }
+        do {
+            try await sql.raw(
+                """
+                UPDATE vms
+                SET desired_state_assembly_error = NULL,
+                    desired_state_assembly_error_generation = NULL,
+                    desired_state_assembly_error_at = NULL
+                WHERE id = \(bind: vmId)
+                  AND generation = \(bind: vm.generation)
+                  AND desired_state_assembly_error IS NOT NULL
+                """
+            ).run()
+        } catch {
+            // The VM is safe to send; retaining a stale diagnostic is less
+            // severe than withholding the whole host's desired state.
+            app.logger.error(
+                "Could not clear a repaired VM desired-state assembly failure",
+                metadata: [
+                    "strato.vm.id": .string(vmId.uuidString),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
     }
 
     /// The DNS zones this sync's topology authority should realize (STR-39):
@@ -777,13 +900,14 @@ struct DesiredStateAssembler {
             // A name outside `VolumeDeviceName`'s charset cannot be stored (the
             // API validates it and the schema's check constraint plus unique
             // index hold the column to it), so the failed initializer below is
-            // unreachable. Where `VMSpecBuilder.volumeSpecs` answers the same
-            // impossible case by omitting the volume, this cannot: a desired
-            // entry with no attachment reads as *detach*, and dropping the
-            // entry entirely reads as a volume this agent should not hold. An
-            // attachment the agent would refuse is the worse of the three, so
-            // it is the one not sent — loudly, because a row that reached this
-            // state is a broken invariant, not a routine skip.
+            // unreachable. `VMSpecBuilder.volumeSpecs` fails that VM's entry in
+            // the same impossible case; here the volume lane must instead keep
+            // the volume entry and omit only its attachment. An entry with no
+            // attachment reads as *detach*, while dropping the entry entirely
+            // reads as a volume this agent should not hold. An attachment the
+            // agent would refuse is the worse of the three, so it is the one
+            // not sent — loudly, because a row that reached this state is a
+            // broken invariant, not a routine skip.
             var attachment: DesiredVolumeAttachment?
             if let vmID = volume.$vm.id,
                 attachmentVMs[vmID]?.agentId == agentId,
@@ -897,7 +1021,7 @@ struct DesiredStateAssembler {
             app.logger.warning(
                 "Could not resolve the agent update artifact for the sync; omitting it",
                 metadata: [
-                    "agentName": .string(agent.name),
+                    "strato.agent.name": .string(agent.name),
                     "targetVersion": .string(assigned),
                     "error": .string(String(describing: error)),
                 ])
@@ -916,6 +1040,49 @@ struct DesiredStateAssembler {
                 .filter(\.$id ~~ Array(ids))
                 .all()
                 .compactMap { network in network.id.map { ($0, network) } })
+    }
+
+    /// The optional ACL attached to each authoritative logical network. One
+    /// bounded eager load avoids a rule query per switch, and both the outer
+    /// index and each rule list are made deterministic before they reach the
+    /// desired-state digest.
+    private func desiredNetworkACLs(
+        networkIDs: Set<UUID>, on db: any Database
+    ) async throws -> [UUID: DesiredNetworkACL] {
+        guard !networkIDs.isEmpty else { return [:] }
+        let rows = try await NetworkACL.query(on: db)
+            .filter(\.$logicalNetwork.$id ~~ Array(networkIDs))
+            .with(\.$rules)
+            .all()
+
+        var byNetwork: [UUID: DesiredNetworkACL] = [:]
+        for acl in rows {
+            guard let aclID = acl.id else { continue }
+            let rules = acl.rules
+                .compactMap { rule -> DesiredNetworkACLRule? in
+                    guard let ruleID = rule.id else { return nil }
+                    return DesiredNetworkACLRule(
+                        id: ruleID,
+                        ruleNumber: rule.ruleNumber,
+                        direction: rule.direction.rawValue,
+                        ethertype: rule.ethertype.rawValue,
+                        action: rule.action.rawValue,
+                        protocolName: rule.protocolName,
+                        portRangeMin: rule.portRangeMin,
+                        portRangeMax: rule.portRangeMax,
+                        remoteCIDR: rule.remoteCIDR)
+                }
+                .sorted { lhs, rhs in
+                    let lhsDirection = lhs.direction == "ingress" ? 0 : 1
+                    let rhsDirection = rhs.direction == "ingress" ? 0 : 1
+                    if lhsDirection != rhsDirection { return lhsDirection < rhsDirection }
+                    if lhs.ruleNumber != rhs.ruleNumber { return lhs.ruleNumber < rhs.ruleNumber }
+                    return lhs.id.uuidString < rhs.id.uuidString
+                }
+            byNetwork[acl.$logicalNetwork.id] = DesiredNetworkACL(
+                id: aclID, generation: acl.generation, rules: rules)
+        }
+        return byNetwork
     }
 
     /// Per-sandbox registry work at sync assembly (issue #414): pins an
@@ -941,12 +1108,13 @@ struct DesiredStateAssembler {
         guard sandbox.desiredStatus != .absent else { return nil }
 
         guard let ref = OCIImageReference.parse(sandbox.image) else {
+            var metadata: Logger.Metadata = ["image": .string(sandbox.image)]
+            if let sandboxID = sandbox.id {
+                metadata["strato.sandbox.id"] = .string(sandboxID.uuidString)
+            }
             app.logger.warning(
                 "Sandbox image reference is unparseable; syncing without digest or credential",
-                metadata: [
-                    "sandboxId": .string(sandbox.id?.uuidString ?? ""),
-                    "image": .string(sandbox.image),
-                ])
+                metadata: metadata)
             return nil
         }
 
@@ -991,7 +1159,7 @@ struct DesiredStateAssembler {
                     app.logger.info(
                         "Pinned sandbox image tag to digest",
                         metadata: [
-                            "sandboxId": .string(sandboxId.uuidString),
+                            "strato.sandbox.id": .string(sandboxId.uuidString),
                             "image": .string(sandbox.image),
                             "digest": .string(digest),
                         ])
@@ -1005,7 +1173,7 @@ struct DesiredStateAssembler {
                 app.logger.warning(
                     "Failed to resolve sandbox image tag to a digest; syncing unpinned",
                     metadata: [
-                        "sandboxId": .string(sandboxId.uuidString),
+                        "strato.sandbox.id": .string(sandboxId.uuidString),
                         "image": .string(sandbox.image),
                         "error": .string(error.localizedDescription),
                     ])
@@ -1146,7 +1314,7 @@ struct DesiredStateAssembler {
             // this is a misconfiguration, not a transient.
             app.logger.warning(
                 "Site has no network controller; its networks will not be reconciled",
-                metadata: ["site": .string(site.name), "agentName": .string(agent.name)])
+                metadata: ["site": .string(site.name), "strato.agent.name": .string(agent.name)])
             return NetworkAssemblyScope(
                 networkIDs: [],
                 authoritative: false,

@@ -153,10 +153,13 @@ boundary.
   close delivered after the agent has already reconnected elsewhere marks it
   `offline` in the database until the holding replica's next heartbeat, since
   the guard that used to consult the routing key is gone.
-- **Rolling deploy**: same as a crash, one replica at a time. In-flight
-  mutations are not lost — the desired state and its convergence deadline live
-  in PostgreSQL, and they settle from observed-state reports (or are degraded
-  by the sweep and surfaced to the client, never silently dropped).
+- **Deployment replacement**: the Helm chart uses `Recreate`, so every replica
+  drains and stops before the replacement set starts. STR-275 requires that
+  process boundary because legacy and current advisory locks occupy disjoint
+  PostgreSQL keyspaces. Agents reconnect as they do after a crash. In-flight
+  mutations are not lost — desired state and its convergence deadline live in
+  PostgreSQL, and they settle from observed-state reports (or are degraded by
+  the sweep and surfaced to the client, never silently dropped).
 - **Coordination-store outage**: coordination fails open (issue #258 policy).
   Agents keep converging on their own unconditional re-fetch (the poll
   endpoint's Valkey grant bookkeeping is bounded and fail-open). Every

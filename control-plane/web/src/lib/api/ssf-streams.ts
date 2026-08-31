@@ -11,7 +11,7 @@ import type {
   RegisterSSFStreamResponse,
   SSFStreamStatus,
   SSFPollResult,
-} from "@/types/api";
+} from "@/types/api-contracts";
 
 const base = (orgId: string) => `/api/organizations/${orgId}/ssf-streams`;
 

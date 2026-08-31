@@ -1209,7 +1209,7 @@ actor Agent {
                 "Using file-based SPIFFE client",
                 metadata: [
                     "certificatePath": .string(certPath),
-                    "spiffeID": .string(spiffeID.uri),
+                    "strato.agent.identity": .string(spiffeID.uri),
                 ])
 
             return FileSPIFFEClient(
@@ -1227,7 +1227,7 @@ actor Agent {
                 "Using Workload API SPIFFE client",
                 metadata: [
                     "socketPath": .string(socketPath),
-                    "spiffeID": .string(spiffeID.uri),
+                    "strato.agent.identity": .string(spiffeID.uri),
                 ])
 
             return WorkloadAPISPIFFEClient(
@@ -1691,7 +1691,7 @@ actor Agent {
         logger.error(
             "Control plane reported an error: \(message.error)\(detailSuffix)",
             metadata: [
-                "requestId": .string(message.requestId)
+                "strato.request.id": .string(message.requestId)
             ])
     }
 
@@ -2270,13 +2270,10 @@ actor Agent {
         if let client = websocketClient {
             try await client.sendMessage(message)
         }
-        logger.debug("Heartbeat sent", metadata: ["agentId": .string(effectiveAgentID)])
-
         // A successfully written result can still lose its ACK with the
         // socket. Re-offer the oldest terminal snapshot on every heartbeat;
         // the control plane's idempotent persistence makes duplicates safe.
         await sendNextRecordedExecTerminalState()
-
         // The beat is already on the wire before this bounded host probe runs,
         // so a slow lsblk cannot make the control plane mark the agent offline.
         _ = await storageDeviceInventory.refreshForHeartbeat()
@@ -2650,7 +2647,10 @@ extension Agent {
             guard let self,
                 await self.websocketClient?.isCurrentConnection(frame.generation) == true
             else { return }
-            await self.handleMessage(envelope, sourceGeneration: frame.generation)
+            await self.handleMessage(
+                envelope,
+                sourceGeneration: frame.generation,
+                wireByteCount: frame.byteCount)
         }
     }
 
@@ -2664,22 +2664,39 @@ extension Agent {
         }
     }
 
+    /// Decode once for normal handling, then derive transport metadata from the
+    /// typed value. HTTP-polled desired state has no WebSocket byte count and is
+    /// deliberately omitted from the WebSocket transport log.
+    private func decodeInboundMessage<T: WebSocketMessage>(
+        _ envelope: MessageEnvelope,
+        as type: T.Type,
+        wireByteCount: Int?
+    ) throws -> T {
+        let message = try envelope.decode(as: type)
+        if let wireByteCount {
+            WireMessageLogger.log(
+                message: message,
+                direction: .inbound,
+                byteCount: wireByteCount,
+                logger: logger)
+        }
+        return message
+    }
+
     func handleMessage(
         _ envelope: MessageEnvelope,
-        sourceGeneration: ControlPlaneWebSocketState.Generation? = nil
+        sourceGeneration: ControlPlaneWebSocketState.Generation? = nil,
+        wireByteCount: Int? = nil
     ) async {
-        logger.debug(
-            "Handling message from control plane",
-            metadata: [
-                "type": .string(envelope.type.rawValue)
-            ])
-
         do {
             switch envelope.type {
             case .agentRegisterResponse:
                 let message: AgentRegisterResponseMessage
                 do {
-                    message = try envelope.decode(as: AgentRegisterResponseMessage.self)
+                    message = try decodeInboundMessage(
+                        envelope,
+                        as: AgentRegisterResponseMessage.self,
+                        wireByteCount: wireByteCount)
                 } catch DecodingError.keyNotFound(let key, _)
                     where key.stringValue == "protocolVersion"
                 {
@@ -2698,7 +2715,10 @@ extension Agent {
             // desired entry at wire v34 (STR-151), joining capture and delete,
             // which became desired artifacts at v33 (STR-150).
             case .desiredState:
-                let message = try envelope.decode(as: DesiredStateMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: DesiredStateMessage.self,
+                    wireByteCount: wireByteCount)
                 // Realize logical networks (per-project routers, SNAT uplinks)
                 // before converging VMs, so a VM's switch and L3 gateway exist
                 // before its NIC attaches (issue #342). Level-triggered and
@@ -2855,26 +2875,47 @@ extension Agent {
                 // arrives with the lanes already drained.
                 await handleDesiredAgentUpdate(message.desiredAgentUpdate)
             case .consoleConnect:
-                let message = try envelope.decode(as: ConsoleConnectMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: ConsoleConnectMessage.self,
+                    wireByteCount: wireByteCount)
                 await handleConsoleConnect(message)
             case .consoleDisconnect:
-                let message = try envelope.decode(as: ConsoleDisconnectMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: ConsoleDisconnectMessage.self,
+                    wireByteCount: wireByteCount)
                 await handleConsoleDisconnect(message)
             case .consoleData:
-                let message = try envelope.decode(as: ConsoleDataMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: ConsoleDataMessage.self,
+                    wireByteCount: wireByteCount)
                 await handleConsoleData(message)
             // Guest exec sessions (STR-78).
             case .guestExecStart:
-                let message = try envelope.decode(as: GuestExecStartMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: GuestExecStartMessage.self,
+                    wireByteCount: wireByteCount)
                 await handleGuestExecStart(message, sourceGeneration: sourceGeneration)
             case .guestExecInput:
-                let message = try envelope.decode(as: GuestExecInputMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: GuestExecInputMessage.self,
+                    wireByteCount: wireByteCount)
                 await handleGuestExecInput(message)
             case .guestExecResize:
-                let message = try envelope.decode(as: GuestExecResizeMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: GuestExecResizeMessage.self,
+                    wireByteCount: wireByteCount)
                 await handleGuestExecResize(message)
             case .guestExecClose:
-                let message = try envelope.decode(as: GuestExecCloseMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: GuestExecCloseMessage.self,
+                    wireByteCount: wireByteCount)
                 await handleGuestExecClose(message)
             case .guestExecRecordedAck:
                 let message = try envelope.decode(as: GuestExecRecordedAckMessage.self)
@@ -2887,23 +2928,24 @@ extension Agent {
             // deleted at v32 as a read that was never an action (STR-149), and
             // both snapshot verbs became desired artifacts at v33 (STR-150).
             case .success:
-                // ACK to a control-plane-initiated request (incl. every heartbeat).
-                // Logged at debug so it stops surfacing as "unknown message type".
-                let message = try envelope.decode(as: SuccessMessage.self)
-                logger.debug(
-                    "Received success response from control plane",
-                    metadata: [
-                        "requestId": .string(message.requestId),
-                        "message": .string(message.message ?? ""),
-                    ])
+                // ACK to an agent-initiated request (including every heartbeat).
+                // It needs no action; the transport record already carries its
+                // type, request id and size without exposing `message`.
+                _ = try decodeInboundMessage(
+                    envelope,
+                    as: SuccessMessage.self,
+                    wireByteCount: wireByteCount)
             case .error:
-                let message = try envelope.decode(as: ErrorMessage.self)
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: ErrorMessage.self,
+                    wireByteCount: wireByteCount)
                 await handleErrorResponse(message)
             default:
                 logger.warning("Received unknown message type: \(envelope.type)")
             }
         } catch {
-            logger.error("Failed to handle message: \(error)")
+            WireMessageLogger.logMessageHandlingFailure(envelope: envelope, logger: logger)
         }
     }
 
@@ -2936,7 +2978,7 @@ extension Agent {
             // it can only yield misleading vmNotFound errors (or operate on the
             // wrong VM). An unknown vmId means this agent has no record of the VM.
             logger.error(
-                "No hypervisor backend recorded for VM; rejecting operation", metadata: ["vmId": .string(vmId)])
+                "No hypervisor backend recorded for VM; rejecting operation", metadata: ["strato.vm.id": .string(vmId)])
             return nil
         }
         return getHypervisorService(for: entry.hypervisorType)
@@ -3076,7 +3118,7 @@ extension Agent {
     private func releaseVsockCID(_ vmId: String) {
         guard let cid = vsockCIDs.release(vmId) else { return }
         logger.debug(
-            "Released vsock context ID", metadata: ["vmId": .string(vmId), "vsockCID": .stringConvertible(cid)])
+            "Released vsock context ID", metadata: ["strato.vm.id": .string(vmId), "vsockCID": .stringConvertible(cid)])
     }
 
     /// Re-read a manifest that was unreadable, so a transient cause — a
@@ -3278,21 +3320,22 @@ extension Agent {
         logger.info(
             "Console connect request received",
             metadata: [
-                "vmId": .string(message.vmId),
-                "sessionId": .string(message.sessionId),
-                "requestId": .string(message.requestId),
+                "strato.vm.id": .string(message.vmId),
+                "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionId),
+                "strato.request.id": .string(message.requestId),
                 "stream": .string(stream.rawValue),
             ])
 
         guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
             logger.error(
-                "Hypervisor service not available for console connect", metadata: ["vmId": .string(message.vmId)])
+                "Hypervisor service not available for console connect",
+                metadata: ["strato.vm.id": .string(message.vmId)])
             await failConsoleConnect(message, reason: "Hypervisor service not available for VM")
             return
         }
 
         // Try serial socket first, then fall back to virtio-console if connect fails.
-        logger.debug("Looking up console endpoint", metadata: ["vmId": .string(message.vmId)])
+        logger.debug("Looking up console endpoint", metadata: ["strato.vm.id": .string(message.vmId)])
         let endpoint: ConsoleEndpoint?
         do {
             endpoint = try await service.consoleEndpoint(vmId: message.vmId)
@@ -3300,7 +3343,7 @@ extension Agent {
             logger.error(
                 "Console not available",
                 metadata: [
-                    "vmId": .string(message.vmId),
+                    "strato.vm.id": .string(message.vmId),
                     "error": .string(error.localizedDescription),
                 ])
             await failConsoleConnect(
@@ -3320,13 +3363,13 @@ extension Agent {
             guard !candidatePaths.isEmpty else {
                 logger.error(
                     "No console socket found (tried serial and virtio-console)",
-                    metadata: ["vmId": .string(message.vmId)])
+                    metadata: ["strato.vm.id": .string(message.vmId)])
                 await failConsoleConnect(message, reason: "Console socket not found for VM \(message.vmId)")
                 return
             }
         case .vnc:
             guard let vncPath = endpoint?.vncSocketPath else {
-                logger.error("No VNC socket found", metadata: ["vmId": .string(message.vmId)])
+                logger.error("No VNC socket found", metadata: ["strato.vm.id": .string(message.vmId)])
                 // The display device is fixed in the QEMU process's arguments,
                 // so this is not something a restart fixes — say so rather than
                 // leaving the operator to guess.
@@ -3358,7 +3401,7 @@ extension Agent {
                 logger.info(
                     "Cleaning up existing console sessions for VM",
                     metadata: [
-                        "vmId": .string(message.vmId),
+                        "strato.vm.id": .string(message.vmId),
                         "stream": .string(stream.rawValue),
                         "sessionCount": .stringConvertible(existingSessions.count),
                     ])
@@ -3383,8 +3426,8 @@ extension Agent {
                 logger.warning(
                     "Failed to connect to console socket",
                     metadata: [
-                        "vmId": .string(message.vmId),
-                        "sessionId": .string(message.sessionId),
+                        "strato.vm.id": .string(message.vmId),
+                        "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionId),
                         "socketPath": .string(candidatePath),
                         "error": .string(error.localizedDescription),
                     ])
@@ -3397,8 +3440,8 @@ extension Agent {
             logger.error(
                 "Failed to connect to console",
                 metadata: [
-                    "vmId": .string(message.vmId),
-                    "sessionId": .string(message.sessionId),
+                    "strato.vm.id": .string(message.vmId),
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionId),
                     "error": .string(lastError?.localizedDescription ?? "unknown"),
                 ])
             return
@@ -3419,8 +3462,8 @@ extension Agent {
         logger.info(
             "Console connected",
             metadata: [
-                "vmId": .string(message.vmId),
-                "sessionId": .string(message.sessionId),
+                "strato.vm.id": .string(message.vmId),
+                "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionId),
                 "socketPath": .string(connectedPath ?? "unknown"),
             ])
     }
@@ -3429,8 +3472,8 @@ extension Agent {
         logger.info(
             "Console disconnect request",
             metadata: [
-                "vmId": .string(message.vmId),
-                "sessionId": .string(message.sessionId),
+                "strato.vm.id": .string(message.vmId),
+                "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionId),
             ])
 
         guard let consoleManager = consoleSocketManager else {
@@ -3461,8 +3504,8 @@ extension Agent {
         logger.info(
             "Console disconnected",
             metadata: [
-                "vmId": .string(message.vmId),
-                "sessionId": .string(message.sessionId),
+                "strato.vm.id": .string(message.vmId),
+                "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionId),
             ])
     }
 
@@ -3484,7 +3527,7 @@ extension Agent {
             logger.error(
                 "Failed to write to console",
                 metadata: [
-                    "sessionId": .string(message.sessionId),
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionId),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -3600,7 +3643,7 @@ extension Agent {
                 "Hypervisor reported a VM lifecycle transition",
                 metadata: [
                     "hypervisor": .string(type.rawValue),
-                    "vmId": .string(id),
+                    "strato.vm.id": .string(id),
                     "event": .string(reason),
                 ])
         case .resynchronize(let reason):
@@ -3643,9 +3686,10 @@ extension Agent {
             "Guest exec start request received",
             metadata: [
                 "resourceKind": .string(message.resourceKind.rawValue),
-                "resourceId": .string(message.resourceId),
-                "sessionId": .string(message.sessionId),
-                "sessionKind": .string(message.sessionKind.rawValue),
+                LogMetadata.guestResourceIDKey(for: message.resourceKind): .string(
+                    message.resourceId),
+                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(message.sessionId),
+                "guestExecSessionKind": .string(message.sessionKind.rawValue),
                 "tty": .stringConvertible(message.tty),
             ])
 
@@ -3716,8 +3760,9 @@ extension Agent {
                 "Failed to start guest exec session",
                 metadata: [
                     "resourceKind": .string(message.resourceKind.rawValue),
-                    "resourceId": .string(message.resourceId),
-                    "sessionId": .string(sessionId),
+                    LogMetadata.guestResourceIDKey(for: message.resourceKind): .string(
+                        message.resourceId),
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                     "error": .string(error.localizedDescription),
                 ])
             if message.sessionKind == .recorded {
@@ -3758,7 +3803,9 @@ extension Agent {
             // failure paths: tear the session down and tell the control plane.
             logger.warning(
                 "Invalid guest exec input received (failed to decode base64); closing session",
-                metadata: ["sessionId": .string(message.sessionId)])
+                metadata: [
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(message.sessionId),
+                ])
             await closeGuestExec(sessionId: message.sessionId)
             await sendGuestExecClosed(
                 sessionId: message.sessionId, reason: "undecodable exec input (invalid base64)")
@@ -3780,7 +3827,7 @@ extension Agent {
             logger.warning(
                 "Failed to write guest exec input",
                 metadata: [
-                    "sessionId": .string(message.sessionId),
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(message.sessionId),
                     "error": .string(error.localizedDescription),
                 ])
             await closeGuestExec(sessionId: message.sessionId)
@@ -3813,7 +3860,7 @@ extension Agent {
             logger.warning(
                 "Failed to resize guest exec session",
                 metadata: [
-                    "sessionId": .string(message.sessionId),
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(message.sessionId),
                     "error": .string(error.localizedDescription),
                 ])
             await closeGuestExec(sessionId: message.sessionId)
@@ -3825,7 +3872,7 @@ extension Agent {
         logger.info(
             "Guest exec close request received",
             metadata: [
-                "sessionId": .string(message.sessionId),
+                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(message.sessionId),
                 "reason": .string(message.reason ?? ""),
             ])
         // The control plane already tore its side down; closing is terminal
@@ -3893,7 +3940,7 @@ extension Agent {
             logger.warning(
                 "Dropping sandbox exec event: no control plane connection",
                 metadata: [
-                    "sessionId": .string(sessionId),
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                     "event": .string(String(describing: event)),
                 ])
             return
@@ -3914,7 +3961,7 @@ extension Agent {
             logger.error(
                 "Failed to send guest exec message",
                 metadata: [
-                    "sessionId": .string(sessionId),
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -4003,7 +4050,10 @@ extension Agent {
             // `sendGuestExecEvent` for why a warning is enough.
             logger.warning(
                 "Dropping guest exec closed message: no control plane connection",
-                metadata: ["sessionId": .string(sessionId), "reason": .string(reason ?? "")])
+                metadata: [
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
+                    "reason": .string(reason ?? ""),
+                ])
             return
         }
         do {
@@ -4012,7 +4062,10 @@ extension Agent {
         } catch {
             logger.error(
                 "Failed to send guest exec closed message",
-                metadata: ["sessionId": .string(sessionId), "error": .string(error.localizedDescription)])
+                metadata: [
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
+                    "error": .string(error.localizedDescription),
+                ])
         }
     }
 
@@ -4025,7 +4078,7 @@ extension Agent {
         } catch {
             logger.error(
                 "Failed to send sandbox log line",
-                metadata: ["sandboxId": .string(sandboxId), "error": .string(error.localizedDescription)])
+                metadata: ["strato.sandbox.id": .string(sandboxId), "error": .string(error.localizedDescription)])
         }
     }
 
@@ -4184,7 +4237,7 @@ extension Agent: ReconcileActuator {
             // power-state steps from `.created`.
             logger.warning(
                 "Orphaned VM has no live process; re-creating it from the manifest spec",
-                metadata: ["vmId": .string(item.id), "reason": .string(reason)])
+                metadata: ["strato.vm.id": .string(item.id), "reason": .string(reason)])
             try await reconcileCreate(item)
             return .created
         }
@@ -4255,7 +4308,7 @@ extension Agent: ReconcileActuator {
         logger.info(
             "Orphaned VM re-adopted and managed again",
             metadata: [
-                "vmId": .string(item.id),
+                "strato.vm.id": .string(item.id),
                 "status": .string(status.rawValue),
             ])
         await sendVMLog(
@@ -4314,7 +4367,7 @@ extension Agent: ReconcileActuator {
             guard item.desiredSandbox != nil else { throw SandboxRuntimeError.sandboxNotFound(item.id) }
             logger.warning(
                 "Orphaned sandbox has no live process; re-creating it from the desired entry",
-                metadata: ["sandboxId": .string(item.id), "reason": .string(reason)])
+                metadata: ["strato.sandbox.id": .string(item.id), "reason": .string(reason)])
             try await sandboxReconcileCreate(item)
             return .stopped
         }
@@ -4325,7 +4378,7 @@ extension Agent: ReconcileActuator {
         logger.info(
             "Orphaned sandbox re-adopted and managed again",
             metadata: [
-                "sandboxId": .string(item.id),
+                "strato.sandbox.id": .string(item.id),
                 "status": .string(status.rawValue),
             ])
         return status
@@ -4408,7 +4461,7 @@ extension Agent: ReconcileActuator {
             recoveredManifest = true
             logger.warning(
                 "Recovered historical path-only VM manifest with managed volume identities",
-                metadata: ["vmId": .string(vmId)])
+                metadata: ["strato.vm.id": .string(vmId)])
         }
         if recoveredManifest { persistManifest() }
 
@@ -4440,7 +4493,7 @@ extension Agent: ReconcileActuator {
                     logger.error(
                         "Failed to adopt historical VM disk as a managed volume",
                         metadata: [
-                            "vmId": .string(desiredVM.vmId.uuidString),
+                            "strato.vm.id": .string(desiredVM.vmId.uuidString),
                             "volumeId": .string(volumeId),
                             "path": .string(existingPath),
                             "error": .string(error.localizedDescription),
@@ -4680,7 +4733,7 @@ extension Agent: ReconcileActuator {
                     hot-plug slots and size ceilings it already had
                     """,
                     metadata: [
-                        "vmId": .string(item.id), "error": .string(error.localizedDescription),
+                        "strato.vm.id": .string(item.id), "error": .string(error.localizedDescription),
                     ])
             }
         }
@@ -5286,7 +5339,7 @@ extension Agent: ReconcileActuator {
         guard let service = getHypervisorServiceForVM(vmId: vmId), await service.hasLiveSession(vmId: vmId) else {
             logger.info(
                 "Recorded volume attachment for a VM with no live session; it lands at its next boot",
-                metadata: ["volumeId": .string(item.id), "vmId": .string(vmId)])
+                metadata: ["volumeId": .string(item.id), "strato.vm.id": .string(vmId)])
             return
         }
         try await service.attachDisk(
@@ -5707,7 +5760,7 @@ extension Agent: ReconcileActuator {
                 level: adoption == .processGone ? .info : .warning,
                 "Could not re-adopt an orphaned VM to delete it",
                 metadata: [
-                    "vmId": .string(vmId),
+                    "strato.vm.id": .string(vmId),
                     "adoption": .string(String(describing: adoption)),
                     "error": .string(error.localizedDescription),
                 ])
@@ -5742,7 +5795,7 @@ extension Agent: ReconcileActuator {
                 } else {
                     logger.warning(
                         "Deleting an orphaned VM this agent could not re-adopt; any surviving hypervisor process and the VM's files must be cleaned up manually",
-                        metadata: ["vmId": .string(item.id)])
+                        metadata: ["strato.vm.id": .string(item.id)])
                 }
 
                 orphanedVMs.removeValue(forKey: item.id)
@@ -6000,7 +6053,7 @@ extension Agent: ReconcileActuator {
                     placement: sandboxTeardownPlacement(sandboxId: item.id))
                 logger.warning(
                     "Deleted orphaned sandbox from manifest; any surviving process must be cleaned up manually",
-                    metadata: ["sandboxId": .string(item.id)])
+                    metadata: ["strato.sandbox.id": .string(item.id)])
                 return
             }
         }
@@ -6526,7 +6579,7 @@ extension Agent {
             logger.warning(
                 "Unable to refresh Firecracker MMDS snapshot",
                 metadata: [
-                    "vmId": .string(vmId),
+                    "strato.vm.id": .string(vmId),
                     "error": .string(error.localizedDescription),
                 ])
         }

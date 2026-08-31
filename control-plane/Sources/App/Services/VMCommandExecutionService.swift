@@ -9,8 +9,24 @@ import Vapor
 /// `guest_exec_started` until the terminal result is durably committed.
 actor VMCommandExecutionService {
     static let outputLimitBytes = GuestExecRecordedStateMessage.outputLimitBytes
+    static let aggregateOutputLimitBytes = 16 * outputLimitBytes
+    static let maxBufferedExecutions = 64
+    static let maxDiscardedExecutions = 64
     static let completionBudget: TimeInterval = 300
-    private static let timeoutReason = "Command execution timed out"
+    static let timeoutReason = "Command execution timed out"
+
+    struct BufferStats: Sendable {
+        let states: Int
+        let discardedStates: Int
+        let capturedBytes: Int
+        let stateShedTotal: Int
+        let outputShedTotal: Int
+    }
+
+    private struct CaptureKey: Hashable, Sendable {
+        let executionID: UUID
+        let agentKey: String
+    }
 
     private enum PayloadRevisionPolicy {
         case authoritative(Int64)
@@ -81,13 +97,60 @@ actor VMCommandExecutionService {
     }
 
     private struct Claimed: Decodable { let id: UUID }
+    private struct TimestampedClaim: Decodable {
+        let id: UUID
+        let completedAt: Date
+        enum CodingKeys: String, CodingKey {
+            case id
+            case completedAt = "completed_at"
+        }
+    }
+    private struct CompletionCandidate: Decodable {
+        let status: String
+        let timedOutBySweeper: Bool
+        enum CodingKeys: String, CodingKey {
+            case status
+            case timedOutBySweeper = "timed_out_by_sweeper"
+        }
+    }
     private struct TimedOut: Decodable {
         let id: UUID
         let agentKey: String
+        let completedAt: Date
         enum CodingKeys: String, CodingKey {
             case id
             case agentKey = "agent_key"
+            case completedAt = "completed_at"
         }
+    }
+
+    private struct CompletedTransition: Sendable {
+        let context: VMGuestExecutionAuditContext
+        let correctsTimeout: Bool
+        let timestamp: Date
+    }
+
+    private struct CompletionPersistence: Sendable {
+        let outcome: PersistenceOutcome
+        let transition: CompletedTransition?
+    }
+
+    private struct FailurePersistence: Sendable {
+        let outcome: PersistenceOutcome
+        let transition: FailedTransition?
+    }
+
+    private struct TimedOutTransition: Sendable {
+        let id: UUID
+        let agentKey: String
+        let context: VMGuestExecutionAuditContext
+        let timestamp: Date
+    }
+
+    private struct FailedTransition: Sendable {
+        let context: VMGuestExecutionAuditContext
+        let correctsTimeout: Bool
+        let timestamp: Date
     }
 
     private let app: Application
@@ -95,9 +158,14 @@ actor VMCommandExecutionService {
     private let beforeClassifyStart: (@Sendable () async throws -> Void)?
     private let beforePersistResult: (@Sendable () async throws -> Void)?
     private let beforeSweepPersistence: (@Sendable () async throws -> Void)?
+    private let afterTimeoutCommitBeforeAudit: (@Sendable () async -> Void)?
     private let retryDelay: Duration
     private var captures: [UUID: Capture] = [:]
     private var pendingCompletions: [UUID: PendingCompletion] = [:]
+    private var discardedCaptures: Set<CaptureKey> = []
+    private var discardedCaptureOrder: [CaptureKey] = []
+    private var stateShedTotal = 0
+    private var outputShedTotal = 0
     private var nextCaptureMutationToken: UInt64 = 0
 
     init(
@@ -106,12 +174,14 @@ actor VMCommandExecutionService {
         beforeClassifyStart: (@Sendable () async throws -> Void)? = nil,
         beforePersistResult: (@Sendable () async throws -> Void)? = nil,
         beforeSweepPersistence: (@Sendable () async throws -> Void)? = nil,
+        afterTimeoutCommitBeforeAudit: (@Sendable () async -> Void)? = nil,
         retryDelay: Duration = .seconds(1)
     ) {
         self.app = app
         self.beforeClassifyStart = beforeClassifyStart
         self.beforePersistResult = beforePersistResult
         self.beforeSweepPersistence = beforeSweepPersistence
+        self.afterTimeoutCommitBeforeAudit = afterTimeoutCommitBeforeAudit
         self.retryDelay = retryDelay
         self.sendEnvelope =
             sendEnvelope ?? { [weak app] envelope, agentKey in
@@ -120,11 +190,54 @@ actor VMCommandExecutionService {
             }
     }
 
-    private func storeCapture(_ unstampedCapture: Capture, id: UUID) {
+    @discardableResult
+    private func storeCapture(_ unstampedCapture: Capture, id: UUID) -> Bool {
+        let key = CaptureKey(executionID: id, agentKey: unstampedCapture.agentKey)
+        if let displaced = captures[id], displaced.agentKey != unstampedCapture.agentKey {
+            rememberDiscardedCapture(
+                CaptureKey(executionID: id, agentKey: displaced.agentKey))
+        }
+        if captures[id] == nil, pendingCompletions[id] == nil,
+            captures.count + pendingCompletions.count >= Self.maxBufferedExecutions
+        {
+            recordStateShedding(key: key, reason: "recorded capture capacity exhausted")
+            rememberDiscardedCapture(key)
+            return false
+        }
+
         var capture = unstampedCapture
+        let existingBytes = captures[id].map(Self.capturedByteCount) ?? 0
+        let aggregateRemaining = max(
+            0, Self.aggregateOutputLimitBytes - (liveCapturedByteCount - existingBytes))
+        let captureBytes = Self.capturedByteCount(capture)
+        if captureBytes > aggregateRemaining {
+            if capture.authoritativeRevision != nil {
+                // The complete snapshot is already durable. Retaining a
+                // compacted actor-local copy would let the timeout sweep
+                // replace that fuller row at the same revision.
+                captures.removeValue(forKey: id)
+                recordOutputShedding(
+                    key: key, droppedBytes: captureBytes - aggregateRemaining)
+                rememberDiscardedCapture(key)
+                return false
+            }
+            var compacted = Capture(agentKey: capture.agentKey, deadline: capture.deadline)
+            compacted.authoritativeRevision = capture.authoritativeRevision
+            compacted.revisionPolicy = capture.revisionPolicy
+            compacted.replacesPersistedResult = capture.replacesPersistedResult
+            compacted.append(Data(capture.stdout.prefix(aggregateRemaining)), stream: "stdout")
+            let stderrRemaining = max(0, aggregateRemaining - compacted.stdout.count)
+            compacted.append(Data(capture.stderr.prefix(stderrRemaining)), stream: "stderr")
+            compacted.truncated = true
+            recordOutputShedding(
+                key: key, droppedBytes: captureBytes - Self.capturedByteCount(compacted))
+            capture = compacted
+        }
         nextCaptureMutationToken &+= 1
         capture.mutationToken = nextCaptureMutationToken
         captures[id] = capture
+        forgetDiscardedCapture(key)
+        return true
     }
 
     @discardableResult
@@ -135,8 +248,7 @@ actor VMCommandExecutionService {
         {
             return false
         }
-        storeCapture(capture, id: id)
-        return true
+        return storeCapture(capture, id: id)
     }
 
     private func removeCaptureUnlessNewer(id: UUID, than revision: Int64) {
@@ -148,6 +260,68 @@ actor VMCommandExecutionService {
         }
     }
 
+    private static func capturedByteCount(_ capture: Capture) -> Int {
+        capture.stdout.count + capture.stderr.count
+    }
+
+    private var liveCapturedByteCount: Int {
+        captures.values.reduce(into: 0) { $0 += Self.capturedByteCount($1) }
+            + pendingCompletions.values.reduce(into: 0) {
+                $0 += Self.capturedByteCount($1.capture)
+            }
+    }
+
+    func bufferStats() -> BufferStats {
+        BufferStats(
+            states: captures.count + pendingCompletions.count,
+            discardedStates: discardedCaptures.count,
+            capturedBytes: liveCapturedByteCount,
+            stateShedTotal: stateShedTotal,
+            outputShedTotal: outputShedTotal)
+    }
+
+    private func rememberDiscardedCapture(_ key: CaptureKey) {
+        guard discardedCaptures.insert(key).inserted else { return }
+        discardedCaptureOrder.append(key)
+        if discardedCaptureOrder.count > Self.maxDiscardedExecutions {
+            discardedCaptures.remove(discardedCaptureOrder.removeFirst())
+        }
+    }
+
+    @discardableResult
+    private func forgetDiscardedCapture(_ key: CaptureKey) -> Bool {
+        guard discardedCaptures.remove(key) != nil else { return false }
+        discardedCaptureOrder.removeAll { $0 == key }
+        return true
+    }
+
+    private func recordStateShedding(key: CaptureKey, reason: String) {
+        stateShedTotal += 1
+        guard stateShedTotal == 1 || stateShedTotal.isMultiple(of: 100) else { return }
+        app.logger.warning(
+            "VM command capture state shed under backpressure",
+            metadata: [
+                "executionId": .string(key.executionID.uuidString),
+                "strato.agent.identity": .string(key.agentKey),
+                "reason": .string(reason),
+                "shedTotal": .stringConvertible(stateShedTotal),
+            ])
+    }
+
+    private func recordOutputShedding(key: CaptureKey, droppedBytes: Int) {
+        guard droppedBytes > 0 else { return }
+        outputShedTotal += 1
+        guard outputShedTotal == 1 || outputShedTotal.isMultiple(of: 100) else { return }
+        app.logger.warning(
+            "VM command captured output shed under backpressure",
+            metadata: [
+                "executionId": .string(key.executionID.uuidString),
+                "strato.agent.identity": .string(key.agentKey),
+                "droppedBytes": .stringConvertible(droppedBytes),
+                "shedTotal": .stringConvertible(outputShedTotal),
+            ])
+    }
+
     /// Returns true only for a recorded command. Interactive session starts
     /// fall through to `GuestExecSessionManager` without changing behavior.
     func handleStarted(sessionId: String, fromAgentKey agentKey: String) async -> Bool {
@@ -155,10 +329,12 @@ actor VMCommandExecutionService {
         guard app.guestExecSessionManager.getSession(sessionId: sessionId) == nil else {
             return false
         }
-        if let capture = captures[id] { return capture.agentKey == agentKey }
+        if let capture = captures[id], capture.agentKey == agentKey { return true }
         if let completion = pendingCompletions[id] {
-            return completion.capture.agentKey == agentKey
+            if completion.capture.agentKey == agentKey { return true }
         }
+        let key = CaptureKey(executionID: id, agentKey: agentKey)
+        if discardedCaptures.contains(key) { return true }
         do {
             guard let execution = try await recordedExecution(id: id, agentKey: agentKey) else {
                 return false
@@ -201,11 +377,22 @@ actor VMCommandExecutionService {
         }
 
         var capture: Capture
-        if let existing = captures[id] {
-            guard existing.agentKey == agentKey else { return false }
+        let key = CaptureKey(executionID: id, agentKey: agentKey)
+        if let existing = captures[id], existing.agentKey == agentKey {
             capture = existing
         } else if let completion = pendingCompletions[id] {
-            return completion.capture.agentKey == agentKey
+            if completion.capture.agentKey == agentKey { return true }
+            do {
+                guard
+                    let execution = try await recordedExecution(
+                        id: id, agentKey: agentKey, acceptingSweptFailure: true)
+                else { return false }
+                capture = try await restoredCapture(id: id, execution: execution)
+            } catch {
+                return false
+            }
+        } else if discardedCaptures.contains(key) {
+            return true
         } else {
             do {
                 guard
@@ -254,11 +441,22 @@ actor VMCommandExecutionService {
         }
 
         var capture: Capture
-        if let existing = captures[id] {
-            guard existing.agentKey == agentKey else { return false }
+        let key = CaptureKey(executionID: id, agentKey: agentKey)
+        if let existing = captures[id], existing.agentKey == agentKey {
             capture = existing
         } else if let completion = pendingCompletions[id] {
-            return completion.capture.agentKey == agentKey
+            if completion.capture.agentKey == agentKey { return true }
+            do {
+                guard
+                    let execution = try await recordedExecution(
+                        id: id, agentKey: agentKey, acceptingSweptFailure: true)
+                else { return false }
+                capture = try await restoredCapture(id: id, execution: execution)
+            } catch {
+                return false
+            }
+        } else if forgetDiscardedCapture(key) {
+            capture = Self.compactCapture(agentKey: agentKey)
         } else {
             do {
                 guard
@@ -280,12 +478,21 @@ actor VMCommandExecutionService {
             }
         }
         capture.prepareForLegacyFrame()
-        captures.removeValue(forKey: id)
+        if captures[id]?.agentKey == agentKey {
+            captures.removeValue(forKey: id)
+        }
         let completion = PendingCompletion(capture: capture, exitCode: exitCode)
-        pendingCompletions[id] = completion
+        let retainForRetry =
+            pendingCompletions[id] != nil
+            || captures.count + pendingCompletions.count < Self.maxBufferedExecutions
+        if retainForRetry {
+            pendingCompletions[id] = completion
+        } else {
+            recordStateShedding(key: key, reason: "completion retry capacity exhausted")
+        }
         do {
             _ = try await complete(id: id, capture: capture, exitCode: exitCode)
-            pendingCompletions.removeValue(forKey: id)
+            if retainForRetry { pendingCompletions.removeValue(forKey: id) }
         } catch {
             app.logger.warning(
                 "Could not persist completed VM command; retrying",
@@ -293,8 +500,10 @@ actor VMCommandExecutionService {
                     "executionId": .string(id.uuidString),
                     "error": .string(error.localizedDescription),
                 ])
-            Task { [weak self] in
-                await self?.retryCompletion(id: id, completion: completion)
+            if retainForRetry {
+                Task { [weak self] in
+                    await self?.retryCompletion(id: id, completion: completion)
+                }
             }
         }
         return true
@@ -307,13 +516,14 @@ actor VMCommandExecutionService {
         guard app.guestExecSessionManager.getSession(sessionId: sessionId) == nil else {
             return false
         }
-        let hadCapture = captures[id] != nil
+        let key = CaptureKey(executionID: id, agentKey: agentKey)
+        let hadCapture = captures[id]?.agentKey == agentKey
+        let wasDiscarding = forgetDiscardedCapture(key)
         var capture =
-            captures[id]
+            (hadCapture ? captures[id] : nil)
             ?? Capture(
                 agentKey: agentKey,
                 deadline: Date().addingTimeInterval(Self.completionBudget))
-        guard capture.agentKey == agentKey else { return false }
         capture.prepareForLegacyFrame()
         capture.truncated = true
 
@@ -329,14 +539,14 @@ actor VMCommandExecutionService {
                 return true
             case .discarded:
                 if hadCapture { captures.removeValue(forKey: id) }
-                return hadCapture
+                return hadCapture || wasDiscarding
             }
         } catch {
             app.logger.error("Could not fail closed recorded VM command: \(error)")
             // A known recorded capture must not fall through to the
             // interactive manager. Retain it so the deadline sweep gets
             // another opportunity to persist the partial bytes.
-            return hadCapture
+            return hadCapture || wasDiscarding
         }
     }
 
@@ -532,16 +742,19 @@ actor VMCommandExecutionService {
         guard app.db is any SQLDatabase else { return }
         do {
             try await beforeSweepPersistence?()
-            let (timedOut, payloadWrites) = try await app.db.transaction { db in
+            let (transitions, payloadWrites) = try await app.db.transaction { db in
                 guard let sql = db as? any SQLDatabase else {
                     throw Abort(.internalServerError)
                 }
                 let timedOut = try await sql.raw(
                     """
                     UPDATE vm_command_executions
-                    SET status = 'failed', error = \(bind: Self.timeoutReason), completed_at = \(bind: now)
+                    SET status = 'failed',
+                        error = \(bind: Self.timeoutReason),
+                        timed_out_by_sweeper = TRUE,
+                        completed_at = clock_timestamp()
                     WHERE status = 'pending' AND deadline <= \(bind: now)
-                    RETURNING id, agent_key
+                    RETURNING id, agent_key, completed_at
                     """
                 ).all(decoding: TimedOut.self)
                 let newlyTimedOut = Dictionary(
@@ -576,7 +789,7 @@ actor VMCommandExecutionService {
                             .first()
                         ownsTimedOutRow =
                             execution?.status == .failed
-                            && execution?.error == Self.timeoutReason
+                            && execution?.timedOutBySweeper == true
                     }
                     guard ownsTimedOutRow else { continue }
                     capture.truncated = true
@@ -586,7 +799,21 @@ actor VMCommandExecutionService {
                         payloadWrites.insert(id)
                     }
                 }
-                return (timedOut, payloadWrites)
+                var transitions: [TimedOutTransition] = []
+                transitions.reserveCapacity(timedOut.count)
+                for execution in timedOut {
+                    transitions.append(
+                        TimedOutTransition(
+                            id: execution.id,
+                            agentKey: execution.agentKey,
+                            context: try await Self.auditContext(id: execution.id, on: db),
+                            timestamp: execution.completedAt))
+                }
+                return (transitions, payloadWrites)
+            }
+
+            if !transitions.isEmpty {
+                await afterTimeoutCommitBeforeAudit?()
             }
 
             // Also bound actor-local memory if a database state transition
@@ -607,12 +834,18 @@ actor VMCommandExecutionService {
                     storeCapture(current, id: id)
                 }
             }
-            for execution in timedOut {
+            for transition in transitions {
+                let record = VMGuestExecutionAudit.makeCommandCompletedRecord(
+                    transition.context,
+                    outcome: .timedOut,
+                    reason: Self.timeoutReason,
+                    timestamp: transition.timestamp)
+                await app.audit.recordFailOpen(record)
                 try? await sendEnvelope(
                     MessageEnvelope(
                         message: GuestExecCloseMessage(
-                            sessionId: execution.id.uuidString, reason: "command execution timed out")),
-                    execution.agentKey)
+                            sessionId: transition.id.uuidString, reason: Self.timeoutReason)),
+                    transition.agentKey)
             }
         } catch {
             app.logger.error("Stuck VM command sweep failed: \(error)")
@@ -624,51 +857,78 @@ actor VMCommandExecutionService {
     ) async throws -> PersistenceOutcome {
         try await beforePersistResult?()
         do {
-            return try await app.db.transaction { db in
+            let persistence = try await app.db.transaction { db in
                 guard let sql = db as? any SQLDatabase else { throw Abort(.internalServerError) }
-                let claimed: [Claimed]
-                switch capture.revisionPolicy {
-                case .authoritative:
-                    // A newer authoritative terminal snapshot may correct a
-                    // result a legacy fallback already marked succeeded.
-                    claimed = try await sql.raw(
+                guard
+                    let candidate = try await sql.raw(
                         """
-                        UPDATE vm_command_executions
-                        SET status = 'succeeded', error = NULL, completed_at = now()
-                        WHERE id = \(bind: id)
-                          AND agent_key = \(bind: capture.agentKey)
-                          AND status IN ('pending', 'failed', 'succeeded')
-                        RETURNING id
+                        SELECT status, timed_out_by_sweeper
+                        FROM vm_command_executions
+                        WHERE id = \(bind: id) AND agent_key = \(bind: capture.agentKey)
+                        FOR UPDATE
                         """
-                    ).all(decoding: Claimed.self)
-                case .legacy:
-                    claimed = try await sql.raw(
-                        """
-                        UPDATE vm_command_executions
-                        SET status = 'succeeded', error = NULL, completed_at = now()
-                        WHERE id = \(bind: id)
-                          AND agent_key = \(bind: capture.agentKey)
-                          AND status IN ('pending', 'failed')
-                        RETURNING id
-                        """
-                    ).all(decoding: Claimed.self)
+                    ).first(decoding: CompletionCandidate.self)
+                else {
+                    return CompletionPersistence(outcome: .discarded, transition: nil)
                 }
-                if !claimed.isEmpty {
+
+                // A newer authoritative terminal snapshot may replace a
+                // legacy payload after the status already reached succeeded,
+                // but it must not append a second completion audit fact.
+                if candidate.status == "succeeded" {
+                    guard case .authoritative = capture.revisionPolicy else {
+                        return CompletionPersistence(outcome: .duplicate, transition: nil)
+                    }
                     guard
                         try await self.recordPayload(
                             id: id, capture: capture, exitCode: exitCode, on: db)
                     else { throw StalePayloadWrite() }
-                    return .persisted
+                    return CompletionPersistence(outcome: .duplicate, transition: nil)
                 }
 
+                let correctsTimeout =
+                    candidate.status == "failed" && candidate.timedOutBySweeper
+                guard candidate.status == "pending" || correctsTimeout else {
+                    return CompletionPersistence(outcome: .discarded, transition: nil)
+                }
+
+                let claimed = try await sql.raw(
+                    """
+                    UPDATE vm_command_executions
+                    SET status = 'succeeded', error = NULL, completed_at = clock_timestamp()
+                    WHERE id = \(bind: id)
+                      AND agent_key = \(bind: capture.agentKey)
+                      AND (
+                        status = 'pending'
+                        OR (status = 'failed' AND timed_out_by_sweeper = TRUE)
+                      )
+                    RETURNING id, completed_at
+                    """
+                ).all(decoding: TimestampedClaim.self)
+                guard let claim = claimed.first else {
+                    return CompletionPersistence(outcome: .discarded, transition: nil)
+                }
                 guard
-                    let execution = try await VMCommandExecution.query(on: db)
-                        .filter(\.$id == id)
-                        .filter(\.$agentKey == capture.agentKey)
-                        .first()
-                else { return .discarded }
-                return execution.status == .succeeded ? .duplicate : .discarded
+                    try await self.recordPayload(
+                        id: id, capture: capture, exitCode: exitCode, on: db)
+                else { throw StalePayloadWrite() }
+                return CompletionPersistence(
+                    outcome: .persisted,
+                    transition: CompletedTransition(
+                        context: try await Self.auditContext(id: id, on: db),
+                        correctsTimeout: correctsTimeout,
+                        timestamp: claim.completedAt))
             }
+            if let transition = persistence.transition {
+                let record = VMGuestExecutionAudit.makeCommandCompletedRecord(
+                    transition.context,
+                    outcome: .exited,
+                    exitCode: exitCode,
+                    correctsOutcome: transition.correctsTimeout ? .timedOut : nil,
+                    timestamp: transition.timestamp)
+                await app.audit.recordFailOpen(record)
+            }
+            return persistence.outcome
         } catch is StalePayloadWrite {
             // The thrown sentinel rolled the status claim back with the stale
             // payload write. Classify against the now-current durable row so a
@@ -751,7 +1011,7 @@ actor VMCommandExecutionService {
         }
         if execution.status == .pending { return execution }
         if acceptingSweptFailure, execution.status == .failed,
-            execution.error == Self.timeoutReason
+            execution.timedOutBySweeper
         {
             return execution
         }
@@ -781,6 +1041,14 @@ actor VMCommandExecutionService {
         capture.authoritativeRevision = payload.resultRevision
         capture.revisionPolicy = .legacy(expectedRevision: payload.resultRevision)
         capture.replacesPersistedResult = true
+        return capture
+    }
+
+    private static func compactCapture(agentKey: String) -> Capture {
+        var capture = Capture(
+            agentKey: agentKey,
+            deadline: Date().addingTimeInterval(Self.completionBudget))
+        capture.truncated = true
         return capture
     }
 
@@ -894,49 +1162,68 @@ actor VMCommandExecutionService {
     ) async throws -> PersistenceOutcome {
         try await beforePersistResult?()
         do {
-            return try await app.db.transaction { db in
+            let storedReason = Self.boundedStoredReason(reason)
+            let persistence = try await app.db.transaction { db in
                 guard let sql = db as? any SQLDatabase else { throw Abort(.internalServerError) }
-                let claimed: [Claimed]
-                switch capture.revisionPolicy {
-                case .authoritative:
-                    claimed = try await sql.raw(
-                        """
-                        UPDATE vm_command_executions
-                        SET status = 'failed', error = \(bind: String(reason.prefix(4_096))), completed_at = now()
-                        WHERE id = \(bind: id)
-                          AND agent_key = \(bind: capture.agentKey)
-                          AND status IN ('pending', 'failed', 'succeeded')
-                        RETURNING id
-                        """
-                    ).all(decoding: Claimed.self)
-                case .legacy:
-                    claimed = try await sql.raw(
-                        """
-                        UPDATE vm_command_executions
-                        SET status = 'failed', error = \(bind: String(reason.prefix(4_096))), completed_at = now()
-                        WHERE id = \(bind: id)
-                          AND agent_key = \(bind: capture.agentKey)
-                          AND status IN ('pending', 'failed')
-                        RETURNING id
-                        """
-                    ).all(decoding: Claimed.self)
-                }
-                if !claimed.isEmpty {
-                    guard
-                        try await self.recordPayload(
-                            id: id, capture: capture, exitCode: nil, on: db)
-                    else { throw StalePayloadWrite() }
-                    return .persisted
-                }
-
                 guard
-                    let execution = try await VMCommandExecution.query(on: db)
-                        .filter(\.$id == id)
-                        .filter(\.$agentKey == capture.agentKey)
-                        .first()
-                else { return .discarded }
-                return execution.status == .succeeded ? .duplicate : .discarded
+                    let candidate = try await sql.raw(
+                        """
+                        SELECT status, timed_out_by_sweeper
+                        FROM vm_command_executions
+                        WHERE id = \(bind: id) AND agent_key = \(bind: capture.agentKey)
+                        FOR UPDATE
+                        """
+                    ).first(decoding: CompletionCandidate.self)
+                else {
+                    return FailurePersistence(outcome: .discarded, transition: nil)
+                }
+                if candidate.status == "succeeded" {
+                    return FailurePersistence(outcome: .duplicate, transition: nil)
+                }
+                let correctsTimeout =
+                    candidate.status == "failed" && candidate.timedOutBySweeper
+                guard candidate.status == "pending" || correctsTimeout else {
+                    return FailurePersistence(outcome: .discarded, transition: nil)
+                }
+                let claimed = try await sql.raw(
+                    """
+                    UPDATE vm_command_executions
+                    SET status = 'failed',
+                        error = \(bind: storedReason),
+                        completed_at = clock_timestamp()
+                    WHERE id = \(bind: id)
+                      AND agent_key = \(bind: capture.agentKey)
+                      AND (
+                        status = 'pending'
+                        OR (status = 'failed' AND timed_out_by_sweeper = TRUE)
+                      )
+                    RETURNING id, completed_at
+                    """
+                ).all(decoding: TimestampedClaim.self)
+                guard let claim = claimed.first else {
+                    return FailurePersistence(outcome: .discarded, transition: nil)
+                }
+                guard
+                    try await self.recordPayload(
+                        id: id, capture: capture, exitCode: nil, on: db)
+                else { throw StalePayloadWrite() }
+                return FailurePersistence(
+                    outcome: .persisted,
+                    transition: FailedTransition(
+                        context: try await Self.auditContext(id: id, on: db),
+                        correctsTimeout: correctsTimeout,
+                        timestamp: claim.completedAt))
             }
+            if let transition = persistence.transition {
+                let record = VMGuestExecutionAudit.makeCommandCompletedRecord(
+                    transition.context,
+                    outcome: .failed,
+                    reason: reason,
+                    correctsOutcome: transition.correctsTimeout ? .timedOut : nil,
+                    timestamp: transition.timestamp)
+                await app.audit.recordFailOpen(record)
+            }
+            return persistence.outcome
         } catch is StalePayloadWrite {
             return try await persistenceOutcomeAfterRejectedWrite(
                 id: id, agentKey: capture.agentKey)
@@ -956,6 +1243,7 @@ actor VMCommandExecutionService {
     }
 
     private func acknowledgeRecordedSession(id: UUID, agentKey: String) async {
+        forgetDiscardedCapture(CaptureKey(executionID: id, agentKey: agentKey))
         do {
             try await sendEnvelope(
                 MessageEnvelope(
@@ -1130,15 +1418,62 @@ actor VMCommandExecutionService {
     }
 
     private func fail(id: UUID, reason: String) async throws {
-        guard let sql = app.db as? any SQLDatabase else { throw Abort(.internalServerError) }
-        _ = try await sql.raw(
-            """
-            UPDATE vm_command_executions
-            SET status = 'failed', error = \(bind: String(reason.prefix(4_096))), completed_at = now()
-            WHERE id = \(bind: id) AND status = 'pending'
-            RETURNING id
-            """
-        ).all(decoding: Claimed.self)
+        let storedReason = Self.boundedStoredReason(reason)
+        let transition: FailedTransition? = try await app.db.transaction { db in
+            guard let sql = db as? any SQLDatabase else { throw Abort(.internalServerError) }
+            let claimed = try await sql.raw(
+                """
+                UPDATE vm_command_executions
+                SET status = 'failed',
+                    error = \(bind: storedReason),
+                    completed_at = clock_timestamp()
+                WHERE id = \(bind: id) AND status = 'pending'
+                RETURNING id, completed_at
+                """
+            ).all(decoding: TimestampedClaim.self)
+            guard let claim = claimed.first else { return nil }
+            return FailedTransition(
+                context: try await Self.auditContext(id: id, on: db),
+                correctsTimeout: false,
+                timestamp: claim.completedAt)
+        }
+        guard let transition else { return }
+        let record = VMGuestExecutionAudit.makeCommandCompletedRecord(
+            transition.context,
+            outcome: .failed,
+            reason: reason,
+            timestamp: transition.timestamp)
+        await app.audit.recordFailOpen(record)
+    }
+
+    private static func boundedStoredReason(_ reason: String) -> String {
+        var scalars = String.UnicodeScalarView()
+        scalars.reserveCapacity(Validate.textLength)
+        for scalar in reason.unicodeScalars.prefix(Validate.textLength) {
+            scalars.append(scalar)
+        }
+        return String(scalars)
+    }
+
+    private static func auditContext(
+        id: UUID, on db: any Database
+    ) async throws -> VMGuestExecutionAuditContext {
+        guard let execution = try await VMCommandExecution.find(id, on: db) else {
+            throw Abort(.internalServerError, reason: "VM command execution is missing")
+        }
+        guard let payload = try await VMCommandPayload.find(id, on: db) else {
+            throw Abort(.internalServerError, reason: "VM command payload is missing")
+        }
+        return VMGuestExecutionAuditContext(
+            vmID: execution.vmID,
+            organizationID: execution.organizationID,
+            userID: execution.actorID,
+            username: execution.actorUsername,
+            apiKeyID: execution.apiKeyID,
+            sourceIP: execution.sourceIP,
+            adminBypass: execution.adminBypass,
+            correlationID: id.uuidString,
+            argv: payload.command)
     }
 }
 

@@ -61,8 +61,15 @@ export function SnapshotTable({
     // (STR-150), so the toast names an accepted request rather than a
     // finished one and the watcher reports the outcome.
     await run({
-      request: () =>
-        volumesApi.deleteSnapshot(deleteTarget.volumeId!, deleteTarget.id!),
+      intentKey: JSON.stringify([
+        "DELETE",
+        `/api/volumes/${deleteTarget.volumeId}/snapshots/${deleteTarget.id}`,
+        null,
+      ]),
+      request: (idempotencyKey) =>
+        volumesApi.deleteSnapshot(
+          deleteTarget.volumeId!, deleteTarget.id!, idempotencyKey
+        ),
       watch: {
         snapshot: true,
         kind: "delete",

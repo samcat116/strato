@@ -779,24 +779,18 @@ export interface AgentUpdateResult {
   message?: string;
 }
 
-// Returned only from the create endpoint — the SPIRE join token embedded in
-// `bootstrapCommand` is shown exactly once and never re-exposed.
+// Returned only from the create endpoint — the short-lived bootstrap token is
+// shown exactly once and never re-exposed. It carries no configuration; the
+// installer exchanges it for server-selected values and a SPIRE join token.
 export interface AgentEnrollment {
   id: string;
   agentName: string;
   spiffeId: string;
   expiresAt: string;
-  spire: SPIREProvisioning;
-  bootstrapCommand: string;
-}
-
-export interface SPIREProvisioning {
-  joinToken: string;
-  joinTokenExpiresAt: string;
-  spiffeId: string;
-  nodeId: string;
   trustDomain: string;
-  serverAddress: string;
+  spireServerAddress: string;
+  bootstrapToken: string;
+  bootstrapCommand: string;
 }
 
 // Returned when listing enrollments — the join token is intentionally absent.
@@ -2149,6 +2143,47 @@ export interface UpdateNetworkRequest {
   leaseTime?: number;
   metadataEnabled?: boolean;
   resolverEnabled?: boolean;
+}
+
+// Network ACLs (stateless logical-switch filtering)
+
+export type NetworkACLRuleDirection = "ingress" | "egress";
+export type NetworkACLRuleEthertype = "ipv4" | "ipv6";
+export type NetworkACLRuleAction = "allow" | "deny";
+
+/** Server-enforced cap (NetworkACL.maxRules in the control plane). */
+export const MAX_NETWORK_ACL_RULES = 100;
+
+export interface CreateNetworkACLRuleRequest {
+  /** Evaluation order within one direction; lower numbers win. */
+  ruleNumber: number;
+  direction: NetworkACLRuleDirection;
+  ethertype: NetworkACLRuleEthertype;
+  action: NetworkACLRuleAction;
+  /** "tcp", "udp", or "icmp"; absent matches any IP protocol. */
+  protocolName?: "tcp" | "udp" | "icmp";
+  /** tcp/udp: first destination port. icmp: ICMP type. */
+  portRangeMin?: number;
+  /** tcp/udp: last destination port. icmp: ICMP code. */
+  portRangeMax?: number;
+  /** Source CIDR for ingress; destination CIDR for egress. */
+  remoteCIDR: string;
+  description?: string;
+}
+
+export interface NetworkACLRule extends CreateNetworkACLRuleRequest {
+  id: string;
+  createdAt?: string;
+}
+
+export interface NetworkACL {
+  id: string;
+  networkId: string;
+  /** Monotonic full-policy generation used by agent convergence. */
+  generation: number;
+  rules: NetworkACLRule[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 // Security groups (stateful NIC-level firewalls, realized as OVN ACLs)

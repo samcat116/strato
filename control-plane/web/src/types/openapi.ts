@@ -1295,6 +1295,82 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/networks/{networkId}/acl": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The network's id. */
+                networkId: components["parameters"]["NetworkID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a network's stateless ACL
+         * @description Returns the optional ACL attached to this logical network. A network without an ACL returns 404 and remains unaffected by network-level filtering.
+         */
+        get: operations["getNetworkACL"];
+        put?: never;
+        /**
+         * Attach an empty stateless ACL to a network
+         * @description A network ACL is optional and is never backfilled. Creating one with no rules immediately defaults both ingress and egress IP traffic to deny.
+         */
+        post: operations["createNetworkACL"];
+        /**
+         * Remove a network's stateless ACL
+         * @description Removes network-level filtering and all of its rules. Security groups attached to workload NICs continue to apply.
+         */
+        delete: operations["deleteNetworkACL"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/networks/{networkId}/acl/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The network's id. */
+                networkId: components["parameters"]["NetworkID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add an ordered rule to a network ACL
+         * @description Rules are immutable; edit by deleting and recreating. Rule numbers are unique within each direction, and the lowest matching number wins. At most 100 rules may be attached to one network ACL.
+         */
+        post: operations["createNetworkACLRule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/networks/{networkId}/acl/rules/{ruleId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The network's id. */
+                networkId: components["parameters"]["NetworkID"];
+                /** @description The network ACL rule's id. */
+                ruleId: components["parameters"]["NetworkACLRuleID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a rule from a network ACL */
+        delete: operations["deleteNetworkACLRule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/load-balancers": {
         parameters: {
             query?: never;
@@ -3753,19 +3829,59 @@ export interface paths {
         };
         /**
          * List agent enrollments
-         * @description Outstanding and redeemed node enrollments. The SPIRE join token is never echoed here — it is returned exactly once, from the create endpoint. Enrollments with no organization scope are visible to system admins only.
+         * @description Outstanding and redeemed node enrollments. The bootstrap token is never echoed here — it is returned exactly once, from the create endpoint. SPIRE join tokens are minted only when the host redeems that bootstrap token. Enrollments with no organization scope are visible to system admins only.
          */
         get: operations["listAgentEnrollments"];
         put?: never;
         /**
          * Enroll a hypervisor node
-         * @description Provisions the node in SPIRE (join token + workload entry) and returns a copy-paste `bootstrapCommand` that installs `strato-agent` and `spire-agent`, attests the node, and points it at this control plane.
+         * @description Prepares the node's workload grant in SPIRE and returns a copy-paste `bootstrapCommand` that installs `strato-agent` and `spire-agent`, attests the node, and points it at this control plane.
          *
-         *     This is an operator-facing call authenticated with a normal user credential; the agent it provisions subsequently authenticates only with its SPIFFE/SPIRE X.509 SVID over mTLS. The response's `spire.joinToken` is a one-time bearer secret and is never returned again.
+         *     This is an operator-facing call authenticated with a normal user credential. The response's `bootstrapToken` is stored only as a hash; the host redeems it to mint a just-in-time SPIRE join token and fetch every server-selected identity and network value. The installed agent subsequently authenticates only with its SPIFFE/SPIRE X.509 SVID over mTLS.
          *
          *     Requires `manage_agents` on the target organization scope (system admins always pass), plus `manage` on the required `siteId`. One enrollment per agent name: revoke the existing one before re-enrolling.
          */
         post: operations["createAgentEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agent-enrollments/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download the agent enrollment installer wrapper
+         * @description Returns a small shell wrapper bound to this control-plane origin. Pipe it to `sudo bash -s -- <bootstrap-token>`; the wrapper downloads the versioned agent installer and supplies the private bootstrap exchange URL internally.
+         */
+        get: operations["getAgentEnrollmentInstaller"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agent-enrollments/bootstrap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Redeem an agent enrollment token
+         * @description Exchanges an `enroll_v1_` bearer token for the server-selected agent bootstrap bundle and a freshly minted one-time SPIRE join token. The bearer is atomically consumed before SPIRE mints the credential, so concurrent or later replays receive 401. The installer caches the winning bundle in root-only local state for same-host recovery.
+         */
+        post: operations["redeemAgentEnrollment"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6532,6 +6648,64 @@ export interface components {
             /** Format: date-time */
             updatedAt?: string;
         };
+        /**
+         * @description Traffic direction at the logical network boundary.
+         * @enum {string}
+         */
+        NetworkACLRuleDirection: "ingress" | "egress";
+        /**
+         * @description Address family the rule matches.
+         * @enum {string}
+         */
+        NetworkACLRuleEthertype: "ipv4" | "ipv6";
+        /**
+         * @description Stateless network-layer verdict. An allow must still pass the applicable NIC security groups.
+         * @enum {string}
+         */
+        NetworkACLRuleAction: "allow" | "deny";
+        CreateNetworkACLRuleRequest: {
+            /** @description Evaluation order within the direction; lower numbers win. */
+            ruleNumber: number;
+            direction: components["schemas"]["NetworkACLRuleDirection"];
+            ethertype: components["schemas"]["NetworkACLRuleEthertype"];
+            action: components["schemas"]["NetworkACLRuleAction"];
+            /**
+             * @description tcp, udp, or icmp; absent matches any IP protocol.
+             * @enum {string}
+             */
+            protocolName?: "tcp" | "udp" | "icmp";
+            /** @description tcp/udp: first destination port. icmp: ICMP type, limited to 255. */
+            portRangeMin?: number;
+            /** @description tcp/udp: last destination port. icmp: ICMP code, limited to 255. */
+            portRangeMax?: number;
+            /** @description Required source CIDR for ingress or destination CIDR for egress; its address family must match ethertype. */
+            remoteCIDR: string;
+            description?: string;
+        };
+        NetworkACLRule: components["schemas"]["CreateNetworkACLRuleRequest"] & {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        /** @description Ordered network-level policy. New traffic must satisfy this ACL and the applicable NIC security groups. OVN does not re-evaluate return traffic already tracked by a stateful security-group allow-related connection, so this backend is not an exact AWS stateless return-path model. */
+        NetworkACL: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            networkId: string;
+            /**
+             * Format: int64
+             * @description Monotonic full-policy generation.
+             */
+            generation: number;
+            /** @description Complete rule set, ordered by direction and ascending rule number. Each direction has an implicit default deny. */
+            rules: components["schemas"]["NetworkACLRule"][];
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
         LoadBalancerHealthCheck: {
             enabled: boolean;
             intervalSeconds: number;
@@ -8450,7 +8624,7 @@ export interface components {
             /** @description Unique agent name, restricted to characters SPIRE accepts in a SPIFFE ID path segment. */
             agentName: string;
             /**
-             * @description Lifetime of the enrollment and its SPIRE join token.
+             * @description Lifetime of the bootstrap bearer and the maximum expiry of any SPIRE join token minted from it.
              * @default 1
              */
             expirationHours: number;
@@ -8464,7 +8638,7 @@ export interface components {
             /** Format: uuid */
             organizationalUnitId?: string | null;
         };
-        /** @description A newly created enrollment. Returned only from the create endpoint, because it carries one-time SPIRE node-attestation material. */
+        /** @description A newly created enrollment. Returned only from the create endpoint, because it carries the one-time bootstrap bearer. */
         AgentEnrollmentDetail: {
             /** Format: uuid */
             id: string;
@@ -8472,21 +8646,16 @@ export interface components {
             spiffeId: string;
             /** Format: date-time */
             expiresAt: string;
-            spire: components["schemas"]["SPIREProvisioning"];
-            /** @description Copy-paste one-liner that installs strato-agent and spire-agent, attests the node with the join token, and points it at this control plane's mTLS listener. */
+            /** @description The server-selected SPIFFE trust domain for this agent. */
+            trustDomain: string;
+            /** @description The server-selected SPIRE node-attestation address. */
+            spireServerAddress: string;
+            /** @description Short-lived bearer shown once and stored only as a hash. It carries no configuration; the installer exchanges it for the bootstrap bundle. */
+            bootstrapToken: string;
+            /** @description Copy-paste one-liner that installs strato-agent and spire-agent, redeems the bootstrap token, attests the node with the resulting join token, and points it at this control plane's mTLS listener. */
             bootstrapCommand: string;
         };
-        /** @description SPIRE material handed back once, at enrollment creation. `joinToken` is a one-time bearer secret that is never persisted or re-exposed. */
-        SPIREProvisioning: {
-            joinToken: string;
-            /** Format: date-time */
-            joinTokenExpiresAt: string;
-            spiffeId: string;
-            nodeId: string;
-            trustDomain: string;
-            serverAddress: string;
-        };
-        /** @description List-safe view of an enrollment. Deliberately omits the whole `spire` block: the join token is shown exactly once, at creation time. */
+        /** @description List-safe view of an enrollment. Deliberately omits the bootstrap token, which is shown exactly once at creation time. */
         AgentEnrollmentListItem: {
             /** Format: uuid */
             id: string;
@@ -8496,7 +8665,7 @@ export interface components {
             expiresAt: string;
             /** @description Whether the named agent has registered. */
             isUsed: boolean;
-            /** @description Unused and not yet expired. */
+            /** @description Has a bootstrap credential, unused and not yet expired. */
             isValid: boolean;
             /** Format: uuid */
             organizationId?: string | null;
@@ -9989,6 +10158,8 @@ export interface components {
         };
     };
     parameters: {
+        /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+        IdempotencyKey: string;
         /** @description The virtual machine's id. */
         VMID: string;
         /** @description The VM network interface's id. */
@@ -10015,6 +10186,8 @@ export interface components {
         VolumeSnapshotID: string;
         /** @description The network's id. */
         NetworkID: string;
+        /** @description The network ACL rule's id. */
+        NetworkACLRuleID: string;
         /** @description The load balancer's id. */
         LoadBalancerID: string;
         /** @description The load balancer listener's id. */
@@ -10123,6 +10296,10 @@ export interface components {
         AuditUserIdQuery: string;
         /** @description Return only events scoped to this organization. */
         AuditOrganizationIdQuery: string;
+        /** @description Return only events for this canonical resource type (for example, `vms`). */
+        AuditResourceTypeQuery: string;
+        /** @description Return only events for this resource identifier. VM UUIDs are canonicalized. */
+        AuditResourceIdQuery: string;
         /** @description Return only events served via the system-admin bypass. */
         AuditAdminOnlyQuery: boolean;
         /** @description Lower bound on `createdAt`. ISO8601 (with or without fractional seconds) or epoch seconds; an unparseable value is treated as unbounded rather than matching nothing. */
@@ -10321,7 +10498,10 @@ export interface operations {
     createVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -10369,7 +10549,10 @@ export interface operations {
     updateVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10409,7 +10592,10 @@ export interface operations {
     deleteVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10487,7 +10673,10 @@ export interface operations {
     startVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10533,7 +10722,10 @@ export interface operations {
     attachVMNetworkInterface: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10557,7 +10749,10 @@ export interface operations {
     detachVMNetworkInterface: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10578,7 +10773,10 @@ export interface operations {
     retryVMNetworkInterfaceMutation: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10599,7 +10797,10 @@ export interface operations {
     stopVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10619,7 +10820,10 @@ export interface operations {
     restartVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10639,7 +10843,10 @@ export interface operations {
     pauseVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10659,7 +10866,10 @@ export interface operations {
     resumeVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10801,7 +11011,10 @@ export interface operations {
     createVMSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10825,7 +11038,10 @@ export interface operations {
     deleteVMSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10847,7 +11063,10 @@ export interface operations {
     restoreVMSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10924,7 +11143,10 @@ export interface operations {
     createSandbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -11002,7 +11224,10 @@ export interface operations {
     deleteSandbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11022,7 +11247,10 @@ export interface operations {
     startSandbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11042,7 +11270,10 @@ export interface operations {
     stopSandbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11062,7 +11293,10 @@ export interface operations {
     restartSandbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11204,7 +11438,10 @@ export interface operations {
     createSandboxSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11228,7 +11465,10 @@ export interface operations {
     deleteSandboxSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11250,7 +11490,10 @@ export interface operations {
     restoreSandboxSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11272,7 +11515,10 @@ export interface operations {
     exportSandboxSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11721,7 +11967,10 @@ export interface operations {
     createVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -11798,7 +12047,10 @@ export interface operations {
     deleteVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11818,7 +12070,10 @@ export interface operations {
     attachVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11842,7 +12097,10 @@ export interface operations {
     detachVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11862,7 +12120,10 @@ export interface operations {
     resizeVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11886,7 +12147,10 @@ export interface operations {
     setVolumeIOLimits: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11910,7 +12174,10 @@ export interface operations {
     createVolumeSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11934,7 +12201,10 @@ export interface operations {
     cloneVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11990,7 +12260,10 @@ export interface operations {
     deleteVolumeSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -12143,6 +12416,133 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    getNetworkACL: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The network's id. */
+                networkId: components["parameters"]["NetworkID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The network ACL and its complete ordered rule set. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkACL"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createNetworkACL: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The network's id. */
+                networkId: components["parameters"]["NetworkID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The created empty network ACL. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkACL"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteNetworkACL: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The network's id. */
+                networkId: components["parameters"]["NetworkID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createNetworkACLRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The network's id. */
+                networkId: components["parameters"]["NetworkID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateNetworkACLRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description The created network ACL rule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkACLRule"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteNetworkACLRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The network's id. */
+                networkId: components["parameters"]["NetworkID"];
+                /** @description The network ACL rule's id. */
+                ruleId: components["parameters"]["NetworkACLRuleID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     listLoadBalancers: {
@@ -16585,7 +16985,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The enrollment, including one-time SPIRE material. */
+            /** @description The enrollment, including the one-time bootstrap token. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -16608,6 +17008,67 @@ export interface operations {
                 };
             };
             /** @description SPIRE is not configured on this control plane, so no node can be enrolled. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getAgentEnrollmentInstaller: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A shell installer wrapper. */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/x-shellscript": string;
+                };
+            };
+        };
+    };
+    redeemAgentEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Versioned, line-oriented bootstrap data consumed by install.sh. The first line is `STRATO_AGENT_BOOTSTRAP_V1`; the remaining six lines are base64-encoded values. */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.strato.agent-bootstrap.v1": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description SPIRE could not mint a node-attestation token. The bootstrap bearer remains consumed; revoke and recreate the enrollment. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The enrollment's SPIRE instance is unavailable. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -18119,6 +18580,10 @@ export interface operations {
                 userID?: components["parameters"]["AuditUserIdQuery"];
                 /** @description Return only events scoped to this organization. */
                 organizationID?: components["parameters"]["AuditOrganizationIdQuery"];
+                /** @description Return only events for this canonical resource type (for example, `vms`). */
+                resourceType?: components["parameters"]["AuditResourceTypeQuery"];
+                /** @description Return only events for this resource identifier. VM UUIDs are canonicalized. */
+                resourceID?: components["parameters"]["AuditResourceIdQuery"];
                 /** @description Return only events served via the system-admin bypass. */
                 adminOnly?: components["parameters"]["AuditAdminOnlyQuery"];
                 /** @description Lower bound on `createdAt`. ISO8601 (with or without fractional seconds) or epoch seconds; an unparseable value is treated as unbounded rather than matching nothing. */
@@ -18156,6 +18621,10 @@ export interface operations {
                 eventType?: components["parameters"]["AuditEventTypeQuery"];
                 /** @description Return only events attributed to this user. */
                 userID?: components["parameters"]["AuditUserIdQuery"];
+                /** @description Return only events for this canonical resource type (for example, `vms`). */
+                resourceType?: components["parameters"]["AuditResourceTypeQuery"];
+                /** @description Return only events for this resource identifier. VM UUIDs are canonicalized. */
+                resourceID?: components["parameters"]["AuditResourceIdQuery"];
                 /** @description Return only events served via the system-admin bypass. */
                 adminOnly?: components["parameters"]["AuditAdminOnlyQuery"];
                 /** @description Lower bound on `createdAt`. ISO8601 (with or without fractional seconds) or epoch seconds; an unparseable value is treated as unbounded rather than matching nothing. */

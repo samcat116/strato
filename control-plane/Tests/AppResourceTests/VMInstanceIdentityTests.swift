@@ -72,6 +72,12 @@ final class VMInstanceIdentityTests {
         let resource: VMBody
     }
 
+    private struct AcceptedMutationBody: Content {
+        let resource: VMBody
+        let targetGeneration: Int64
+        let mutationId: UUID
+    }
+
     /// The paged envelope the list endpoint answers with.
     private struct PagedBody: Content {
         let items: [VMBody]
@@ -120,6 +126,119 @@ final class VMInstanceIdentityTests {
     }
 
     // MARK: - Create
+
+    @Test("One idempotency key creates one complete VM transaction")
+    func repeatedCreateReplaysOneVM() async throws {
+        try await withIdentityTestApp { app, user, _, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let quota = try await builder.createResourceQuota(
+                name: "Idempotent create quota", project: project)
+            let image = try await builder.createImage(project: project, uploadedBy: user)
+            let network = try await builder.createNetwork(
+                name: "idempotent-create-net", project: project)
+            let gib = Int64(1) << 30
+            let request = CreateVMBody(
+                name: "one-transaction", imageId: image.id, projectId: project.id,
+                cpu: 1, memory: gib, disk: 10 * gib,
+                networkId: try network.requireID())
+            let key = UUID().uuidString
+
+            var responses: [AcceptedMutationBody] = []
+            for _ in 0..<2 {
+                try await app.test(.POST, "/api/vms") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
+                    try req.content.encode(request)
+                } afterResponse: { response in
+                    #expect(response.status == .accepted)
+                    responses.append(try response.content.decode(AcceptedMutationBody.self))
+                }
+            }
+
+            let first = try #require(responses.first)
+            let replay = try #require(responses.last)
+            let vmID = try #require(first.resource.id)
+            #expect(replay.resource.id == vmID)
+            #expect(replay.mutationId == first.mutationId)
+            #expect(replay.targetGeneration == first.targetGeneration)
+
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "different-intent", imageId: image.id, projectId: project.id,
+                        cpu: 1, memory: gib, disk: 10 * gib,
+                        networkId: try network.requireID()))
+            } afterResponse: { response in
+                #expect(response.status == .unprocessableEntity)
+            }
+
+            #expect(
+                try await VM.query(on: app.db).filter(\.$name == "one-transaction").count() == 1)
+            #expect(
+                try await VM.query(on: app.db).filter(\.$name == "different-intent").count() == 0)
+            #expect(
+                try await Volume.query(on: app.db).filter(\.$vm.$id == vmID).count() == 1)
+            let networkInterface = try #require(
+                try await VMNetworkInterface.query(on: app.db)
+                    .filter(\.$vm.$id == vmID)
+                    .first())
+            #expect(
+                try await VMInterfaceAddress.query(on: app.db)
+                    .filter(\.$interface.$id == networkInterface.requireID())
+                    .count() == 1)
+            #expect(
+                try await WorkloadRegistration.query(on: app.db).filter(\.$vm.$id == vmID).count()
+                    == 1)
+            #expect(
+                try await ResourceEvent.query(on: app.db)
+                    .filter(\.$resourceKind == .virtualMachine)
+                    .filter(\.$resourceID == vmID)
+                    .filter(\.$mutation == .create)
+                    .count() == 1)
+
+            let storedQuota = try #require(try await ResourceQuota.find(quota.id, on: app.db))
+            #expect(storedQuota.reservedVCPUs == 1)
+            #expect(storedQuota.reservedMemory == gib)
+            #expect(storedQuota.reservedStorage == 10 * gib)
+            #expect(storedQuota.vmCount == 1)
+            #expect(storedQuota.volumeCount == 1)
+        }
+    }
+
+    @Test("Different idempotency keys preserve two identical create intents")
+    func differentKeysCreateTwoVMs() async throws {
+        try await withIdentityTestApp { app, user, _, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let image = try await builder.createImage(project: project, uploadedBy: user)
+            let network = try await builder.createNetwork(
+                name: "different-keys-net", project: project)
+            let gib = Int64(1) << 30
+            let body = CreateVMBody(
+                name: "same-display-name", imageId: image.id, projectId: project.id,
+                cpu: 1, memory: gib, disk: 10 * gib,
+                networkId: try network.requireID())
+            var ids: [UUID] = []
+
+            for _ in 0..<2 {
+                try await app.test(.POST, "/api/vms") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    req.headers.replaceOrAdd(
+                        name: "Idempotency-Key", value: UUID().uuidString)
+                    try req.content.encode(body)
+                } afterResponse: { response in
+                    #expect(response.status == .accepted)
+                    let accepted = try response.content.decode(AcceptedMutationBody.self)
+                    ids.append(try #require(accepted.resource.id))
+                }
+            }
+
+            #expect(Set(ids).count == 2)
+            #expect(
+                try await VM.query(on: app.db).filter(\.$name == "same-display-name").count() == 2)
+        }
+    }
 
     @Test("Creating a VM registers exactly one workload principal naming it")
     func createRegistersTheVM() async throws {

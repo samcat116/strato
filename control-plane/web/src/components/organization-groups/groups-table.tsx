@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useState } from "react";
 import { Loader2, Pencil, Trash2, Users } from "lucide-react";
 import {
@@ -38,7 +40,7 @@ export function GroupsTable({
 
   const handleDelete = async (group: Group) => {
     if (
-      !window.confirm(
+      !await confirmAction(
         `Delete the group "${group.name}"? Members will be removed from the group but not from the organization.`
       )
     ) {

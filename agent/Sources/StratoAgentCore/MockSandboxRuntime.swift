@@ -130,7 +130,7 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
                 "this agent realized the sandbox's NIC as \(nic.attachment), but a jailed "
                     + "Firecracker can only open a TAP by name inside its namespace")
         }
-        logger.info("Creating mock sandbox (mock mode)", metadata: ["sandboxId": .string(sandboxId)])
+        logger.info("Creating mock sandbox (mock mode)", metadata: ["strato.sandbox.id": .string(sandboxId)])
         if var existing = sandboxes[sandboxId] {
             // Replayed create: refresh the spec, never regress the status.
             existing.spec = spec
@@ -152,7 +152,7 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
         guard sandbox.status != .running else { return }
-        logger.info("Booting mock sandbox (mock mode)", metadata: ["sandboxId": .string(sandboxId)])
+        logger.info("Booting mock sandbox (mock mode)", metadata: ["strato.sandbox.id": .string(sandboxId)])
         try await Task.sleep(for: bootDelay)  // Simulate boot delay
         markRunning(sandboxId)
     }
@@ -162,7 +162,7 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
         guard sandbox.status != .stopped else { return }
-        logger.info("Shutting down mock sandbox (mock mode)", metadata: ["sandboxId": .string(sandboxId)])
+        logger.info("Shutting down mock sandbox (mock mode)", metadata: ["strato.sandbox.id": .string(sandboxId)])
         // Delay first, teardown after: the sleep throws on cancellation, and
         // tearing down before it could leave a cancelled shutdown with a
         // "running" sandbox whose emitter and exec sessions are already gone.
@@ -174,7 +174,7 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
     }
 
     public func deleteSandbox(sandboxId: String) async throws {
-        logger.info("Deleting mock sandbox (mock mode)", metadata: ["sandboxId": .string(sandboxId)])
+        logger.info("Deleting mock sandbox (mock mode)", metadata: ["strato.sandbox.id": .string(sandboxId)])
         endWorkloadActivity(sandboxId: sandboxId, execCloseReason: "sandbox deleted")
         sandboxes.removeValue(forKey: sandboxId)
     }
@@ -184,7 +184,7 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
     /// and reports the sandbox running, so a simulated agent restart converges
     /// exactly like a real one.
     public func adoptSandbox(sandboxId: String, spec: SandboxSpec) async throws -> SandboxStatus {
-        logger.info("Re-adopting mock sandbox (mock mode)", metadata: ["sandboxId": .string(sandboxId)])
+        logger.info("Re-adopting mock sandbox (mock mode)", metadata: ["strato.sandbox.id": .string(sandboxId)])
         sandboxes[sandboxId] = MockSandbox(spec: spec, status: .stopped)
         markRunning(sandboxId)
         return .running
@@ -245,7 +245,7 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
 
     private func workloadExited(sandboxId: String) {
         guard let sandbox = sandboxes[sandboxId], sandbox.status == .running else { return }
-        logger.info("Mock sandbox workload exited (mock mode)", metadata: ["sandboxId": .string(sandboxId)])
+        logger.info("Mock sandbox workload exited (mock mode)", metadata: ["strato.sandbox.id": .string(sandboxId)])
         endWorkloadActivity(sandboxId: sandboxId, execCloseReason: "sandbox workload exited")
         sandboxes[sandboxId]?.status = .exited
         sandboxes[sandboxId]?.exitCode = 0
@@ -262,7 +262,7 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
         logger.info(
             "Checkpointing mock sandbox (mock mode)",
             metadata: [
-                "sandboxId": .string(sandboxId),
+                "strato.sandbox.id": .string(sandboxId),
                 "snapshotId": .string(snapshotId),
                 "mode": .string(mode.rawValue),
             ])
@@ -318,7 +318,7 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
         }
         logger.info(
             "Restoring mock sandbox from snapshot (mock mode)",
-            metadata: ["sandboxId": .string(sandboxId), "snapshotId": .string(snapshotId)])
+            metadata: ["strato.sandbox.id": .string(sandboxId), "snapshotId": .string(snapshotId)])
         // The restored guest replaces whatever was running.
         endWorkloadActivity(sandboxId: sandboxId, execCloseReason: "sandbox restore")
         sandboxes[sandboxId]?.status = snapshot.capturedStatus
@@ -340,7 +340,7 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
         logger.info(
             "Exporting mock sandbox snapshot (mock mode)",
             metadata: [
-                "sandboxId": .string(sandboxId),
+                "strato.sandbox.id": .string(sandboxId),
                 "snapshotId": .string(snapshotId),
                 "uploads": .stringConvertible(uploads.count),
             ])
@@ -378,8 +378,8 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
         logger.info(
             "Starting mock sandbox exec session (mock mode)",
             metadata: [
-                "sandboxId": .string(sandboxId),
-                "sessionId": .string(sessionId),
+                "strato.sandbox.id": .string(sandboxId),
+                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                 "tty": .stringConvertible(request.tty),
             ])
 

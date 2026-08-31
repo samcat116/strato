@@ -12,9 +12,20 @@ final class VMCommandExecution: Model, @unchecked Sendable {
     @Field(key: "vm_id") var vmID: UUID
     @Enum(key: "actor_type") var actorType: MutationActorType
     @Field(key: "actor_id") var actorID: UUID
+    /// Request-time identity snapshots retained for asynchronous completion
+    /// audit events. These deliberately have no foreign keys: the audit fact
+    /// must remain attributable after a user, API key, or organization changes.
+    @OptionalField(key: "actor_username") var actorUsername: String?
+    @OptionalField(key: "api_key_id") var apiKeyID: UUID?
+    @OptionalField(key: "organization_id") var organizationID: UUID?
+    @OptionalField(key: "source_ip") var sourceIP: String?
+    @Field(key: "admin_bypass") var adminBypass: Bool
     @Field(key: "agent_key") var agentKey: String
     @Enum(key: "status") var status: VMOperationStatus
     @OptionalField(key: "error") var error: String?
+    /// Durable timeout provenance. Error text is operator-facing and cannot
+    /// safely distinguish a sweeper timeout from an agent-supplied reason.
+    @Field(key: "timed_out_by_sweeper") var timedOutBySweeper: Bool
     @Field(key: "deadline") var deadline: Date
     @Timestamp(key: "created_at", on: .create) var createdAt: Date?
     @OptionalField(key: "completed_at") var completedAt: Date?
@@ -23,14 +34,25 @@ final class VMCommandExecution: Model, @unchecked Sendable {
 
     init(
         id: UUID = UUID(), vmID: UUID, actorID: UUID, agentKey: String,
-        deadline: Date
+        deadline: Date,
+        actorUsername: String? = nil,
+        apiKeyID: UUID? = nil,
+        organizationID: UUID? = nil,
+        sourceIP: String? = nil,
+        adminBypass: Bool = false
     ) {
         self.id = id
         self.vmID = vmID
         self.actorType = .user
         self.actorID = actorID
+        self.actorUsername = actorUsername
+        self.apiKeyID = apiKeyID
+        self.organizationID = organizationID
+        self.sourceIP = sourceIP
+        self.adminBypass = adminBypass
         self.agentKey = agentKey
         self.status = .pending
+        self.timedOutBySweeper = false
         self.deadline = deadline
     }
 }

@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useState } from "react";
 import { Loader2, Pencil, Trash2, Lock } from "lucide-react";
 import {
@@ -39,7 +41,7 @@ export function RolesTable({
 
   const handleDelete = async (role: IAMRole) => {
     if (
-      !window.confirm(
+      !await confirmAction(
         `Delete the role "${role.name}"? This can't be undone. If any principal is still bound to it, the delete will be refused until those bindings are revoked.`
       )
     ) {

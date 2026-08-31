@@ -85,6 +85,7 @@ struct SecurityGroupReconcilerTests {
         #expect(acl.direction == "to-lport")
         #expect(acl.action == "allow-related")
         #expect(acl.priority == SecurityGroupACLBuilder.allowPriority)
+        #expect(acl.tier == StratoACLTier.securityGroup)
         #expect(
             acl.match
                 == "outport == @\(pg) && ip4 && ip4.src == 203.0.113.0/24 && tcp && tcp.dst >= 8000 && tcp.dst <= 8080"
@@ -196,6 +197,7 @@ struct SecurityGroupReconcilerTests {
         let drops = acls.filter { $0.action == "drop" }
         #expect(drops.count == 2)
         #expect(drops.allSatisfy { $0.priority == SecurityGroupACLBuilder.dropPriority })
+        #expect(drops.allSatisfy { $0.tier == StratoACLTier.securityGroup })
         #expect(
             Set(drops.map(\.match)) == [
                 "inport == @\(pgDrop) && ip",
@@ -203,6 +205,7 @@ struct SecurityGroupReconcilerTests {
             ])
 
         let allows = acls.filter { $0.action != "drop" }
+        #expect(allows.allSatisfy { $0.tier == StratoACLTier.system })
         // Every carve-out except metadata egress (asserted on its own below,
         // and deliberately a priority above the rest).
         #expect(
@@ -274,6 +277,7 @@ struct SecurityGroupReconcilerTests {
         // than through a standing inbound allow.
         #expect(acls.allSatisfy { $0.action == "allow-related" })
         #expect(acls.allSatisfy { $0.direction == "from-lport" })
+        #expect(acls.allSatisfy { $0.tier == StratoACLTier.system })
         // Never logged: an every-boot cloud-init probe on every guest in the
         // site is exactly the chatter the drop group's carve-outs stay quiet
         // about.
@@ -281,11 +285,14 @@ struct SecurityGroupReconcilerTests {
         #expect(acls.allSatisfy { $0.externalIDs["strato-managed"] == "true" })
     }
 
-    @Test("Metadata egress outranks rule allows and the default deny")
+    @Test("Metadata egress runs before network and security-group policy")
     func metadataEgressIsNonOverridable() {
-        // The point of the separate priority: a rule-derived ACL — including a
-        // deny-capable shape the model doesn't have yet — cannot tie with this
-        // one and win the coin flip.
+        #expect(
+            SecurityGroupACLBuilder.metadataEgressACLs().allSatisfy {
+                $0.tier == StratoACLTier.system
+            })
+        #expect(StratoACLTier.system < StratoACLTier.network)
+        #expect(StratoACLTier.network < StratoACLTier.securityGroup)
         #expect(SecurityGroupACLBuilder.metadataAllowPriority > SecurityGroupACLBuilder.allowPriority)
         #expect(SecurityGroupACLBuilder.allowPriority > SecurityGroupACLBuilder.dropPriority)
     }
@@ -340,6 +347,7 @@ struct SecurityGroupReconcilerTests {
         #expect(acls.allSatisfy { $0.action == "drop" })
         // Egress only — nothing returns from a connection never established.
         #expect(acls.allSatisfy { $0.direction == "from-lport" })
+        #expect(acls.allSatisfy { $0.tier == StratoACLTier.system })
         #expect(acls.allSatisfy { $0.externalIDs["strato-managed"] == "true" })
     }
 
@@ -514,6 +522,38 @@ struct SecurityGroupReconcilerTests {
             !SecurityGroupReconciler.needsACLRewrite(planned: 2, observed: 3, observedBuilderRevision: stale))
     }
 
+    @Test("Network ACL activation waits for every managed group to use the tiered builder")
+    func networkACLTierReadiness() {
+        let (plans, _) = SecurityGroupReconciler.plan(
+            securityGroups: [DesiredSecurityGroup(id: groupId, generation: 3, rules: [])])
+        let current = plans.map {
+            ObservedPortGroup(
+                name: $0.name,
+                generation: $0.generation,
+                builderRevision: SecurityGroupACLBuilder.aclSchemaRevision)
+        }
+        #expect(SecurityGroupReconciler.isNetworkACLTierReady(planned: plans, observed: current))
+        #expect(
+            !SecurityGroupReconciler.isNetworkACLTierReady(
+                planned: plans, observed: Array(current.dropLast())))
+
+        var oldBuilder = current
+        oldBuilder[0] = ObservedPortGroup(
+            name: oldBuilder[0].name,
+            generation: oldBuilder[0].generation,
+            builderRevision: SecurityGroupACLBuilder.aclSchemaRevision - 1)
+        #expect(!SecurityGroupReconciler.isNetworkACLTierReady(planned: plans, observed: oldBuilder))
+
+        var staleGeneration = current
+        staleGeneration[2] = ObservedPortGroup(
+            name: staleGeneration[2].name,
+            generation: 2,
+            builderRevision: SecurityGroupACLBuilder.aclSchemaRevision)
+        #expect(
+            !SecurityGroupReconciler.isNetworkACLTierReady(
+                planned: plans, observed: staleGeneration))
+    }
+
     // MARK: - Membership
 
     @Test("Desired membership is the attached groups plus the drop group; nil stays nil")
@@ -623,7 +663,7 @@ struct SecurityGroupReconcilerTests {
                 ObservedPortGroup(name: OVNNaming.dropPortGroupName, generation: 1),
                 ObservedPortGroup(name: peerPG, generation: 5),
             ])
-        try await SecurityGroupReconciler.reconcile(
+        let ready = try await SecurityGroupReconciler.reconcile(
             securityGroups: [group], actuator: actuator, logger: Logger(label: "test"))
 
         let ensured = await actuator.ensured
@@ -636,6 +676,7 @@ struct SecurityGroupReconcilerTests {
         // pre-STR-185 site: it is created by this pass rather than reaped, and
         // the group the authority no longer wants still goes.
         #expect(removedGroups == [peerPG])
+        #expect(ready)
     }
 }
 
@@ -655,7 +696,7 @@ private actor RecordingSecurityGroupActuator: SecurityGroupActuator {
     private(set) var removed: [Membership] = []
     private(set) var observedPorts: [String] = []
 
-    private let observed: [ObservedPortGroup]
+    private var observed: [ObservedPortGroup]
     private var membership: [String: Set<String>]
     private let failingGroups: Set<String>
 
@@ -674,12 +715,23 @@ private actor RecordingSecurityGroupActuator: SecurityGroupActuator {
 
     func observeSecurityGroups() async throws -> [ObservedPortGroup] { observed }
 
-    func ensurePortGroup(_ plan: PortGroupPlan) async throws {
+    func ensurePortGroup(_ plan: PortGroupPlan) async throws -> Bool {
         ensured.append(plan)
+        let row = ObservedPortGroup(
+            name: plan.name,
+            generation: plan.generation,
+            builderRevision: SecurityGroupACLBuilder.aclSchemaRevision)
+        if let index = observed.firstIndex(where: { $0.name == plan.name }) {
+            observed[index] = row
+        } else {
+            observed.append(row)
+        }
+        return true
     }
 
     func removePortGroup(named name: String) async throws {
         removedGroups.append(name)
+        observed.removeAll { $0.name == name }
     }
 
     func observeMembership(ofPorts portNames: [String]) async throws -> [String: Set<String>] {
@@ -743,6 +795,7 @@ struct ResolverEgressACLTests {
         #expect(acls.allSatisfy { $0.direction == "from-lport" })
         #expect(acls.allSatisfy { $0.action == "allow-related" })
         #expect(acls.allSatisfy { $0.priority == SecurityGroupACLBuilder.metadataAllowPriority })
+        #expect(acls.allSatisfy { $0.tier == StratoACLTier.system })
         #expect(SecurityGroupACLBuilder.metadataAllowPriority > SecurityGroupACLBuilder.allowPriority)
     }
 
