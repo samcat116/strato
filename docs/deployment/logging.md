@@ -7,9 +7,20 @@ control-plane logs never reached disk because stdout was block-buffered under
 
 ## Where logs go
 
-Both the control plane and the agent log to **stdout/stderr** via SwiftLog
-(`LoggingSystem.bootstrap`). They do not write log files themselves — capture is
-the responsibility of whatever supervises the process.
+Both the control plane and the agent log to **stdout/stderr** via SwiftLog. They
+do not write log files themselves — capture is the responsibility of whatever
+supervises the process.
+
+The control plane always installs that console sink. When
+`OTEL_LOGS_ENABLED=true`, the same SwiftLog records are also exported over OTLP;
+the OTLP backend is multiplexed with the console backend and does not replace
+it. `OTEL_LOGS_ENABLED=false` therefore means console-only logging, not no
+logging. Metrics and traces can be enabled or disabled independently.
+
+The Helm chart defaults OTLP log export on and points it at the configured OTel
+collector, so control-plane records appear both in Kubernetes container logs
+and in the collector's logs pipeline. The compose deployment disables OTLP
+signals and keeps the console sink.
 
 **Verbosity** is set with the `LOG_LEVEL` environment variable (a SwiftLog
 level: `trace`, `debug`, `info`, `notice`, `warning`, `error`, `critical`;
