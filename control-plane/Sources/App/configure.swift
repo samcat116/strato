@@ -422,6 +422,10 @@ public func configure(
     // STR-79: durable captured VM command state with cold output payloads.
     app.migrations.add(CreateVMCommandExecutions())
 
+    // STR-260: failed recorded commands may expose bounded partial output
+    // without inventing a guest exit code.
+    app.migrations.add(AllowPartialVMCommandResults())
+
     // STR-154: preserve the attachment case and its coordinates instead of
     // interpreting every agent-owned storage reference as a host path.
     app.migrations.add(ReplaceVolumeReplicaDatasetPath())

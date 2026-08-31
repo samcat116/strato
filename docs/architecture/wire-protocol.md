@@ -30,8 +30,9 @@ struct MessageEnvelope {
   through the single pinned coder pair `WireProtocol.makeEncoder()` /
   `makeDecoder()`. Never use an ad-hoc `JSONEncoder` for wire types; date
   strategy compatibility depends on the pinned pair.
-- Binary data (console output, exec stdin/stdout) travels as **base64
-  strings** inside JSON messages, with `rawData` conveniences on the message
+- Binary data (console output, exec stdin/stdout, and recorded-session output
+  snapshots) travels as **base64 strings** inside JSON messages, with `rawData`
+  or stream-specific `rawStdout`/`rawStderr` conveniences on the message
   structs.
 - Every concrete message conforms to `WebSocketMessage`: a `type`
   discriminator, a `requestId`, and a `timestamp`. **Nothing correlates on
@@ -50,7 +51,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 52). The required registration fields
+currently 53). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -102,6 +103,13 @@ whole disks. WWN or serial identifies a physical disk across path renumbering,
 while devices without either identifier remain visible but cannot become
 OSD-eligible.
 
+Wire v53 makes `GuestExecStartMessage.sessionKind` required: `interactive`
+sessions remain live streams whose frontend owns their lifetime, while
+`recorded` sessions survive a control-plane WebSocket reconnect for as long as
+the same agent process remains alive. It also adds a level-triggered recorded
+state and terminal-result replay. This is an exact-version cutover; a missing
+session kind does not decode to an implicit default.
+
 Two consequences worth knowing:
 
 - **A rejected agent cannot self-update.** Declarative self-update rides the
@@ -149,11 +157,12 @@ bump and a coordinated deployment of both sides.
 | `agent_register_response` | Registration reply: assigns the agent's DB UUID and name, echoes the protocol version |
 | `desired_state` | The authoritative `DesiredStateMessage` sync (see below) |
 | `console_connect`, `console_disconnect`, `console_data` | Console session control and input. `console_connect.stream` picks the serial console (default) or the VNC framebuffer (v23+) |
-| `guest_exec_start`, `guest_exec_input`, `guest_exec_resize`, `guest_exec_close` | Interactive exec into a VM or sandbox; start carries `resourceKind` and `resourceId` (v44+) |
+| `guest_exec_start`, `guest_exec_input`, `guest_exec_resize`, `guest_exec_close` | Exec into a VM or sandbox; start carries `resourceKind` and `resourceId` (v44+) plus required `sessionKind` (`interactive` or `recorded`, v53+) |
+| `guest_exec_recorded_ack` | Retires one terminal recorded-session snapshot after the control plane durably commits or deliberately discards its outcome |
 
-Everything the control plane sends is now either the sync or a live byte
-stream — the disposition ADR 0001 set out to reach. There are deliberately no
-`network_*` messages (topology is level-triggered from
+Everything the control plane sends is now the sync, live byte-stream control,
+or the typed retirement acknowledgement for recorded exec state. There are
+deliberately no `network_*` messages (topology is level-triggered from
 `DesiredStateMessage.networks` alone; the imperative frames went in issue #781,
 as did the pre-sync `vm_*` lifecycle messages and `status_update` in issue
 #512), no `volume_*` messages (v31/v32/v33), no snapshot verbs (v33), and since
@@ -169,11 +178,38 @@ v34 no `vm_reboot`, `vm_restore` or `sandbox_restore` either.
 | `observed_state` | Level-triggered `ObservedStateReport`: VM/sandbox observed state, resources, agent-update status, optional per-VM `guestInfo` from qga (issue #563), and optional per-VM balloon `memoryStats` (issue #567, incl. `balloonActualBytes` at v19) |
 | `vm_log`, `sandbox_log` | Log lines destined for Loki |
 | `console_connected`, `console_disconnected`, `console_data` | Console session lifecycle and output |
-| `guest_exec_started`, `guest_exec_output`, `guest_exec_exit`, `guest_exec_closed` | Guest exec stream responses |
+| `guest_exec_started`, `guest_exec_output`, `guest_exec_exit`, `guest_exec_closed` | Guest exec stream events |
+| `guest_exec_recorded_state` | Full bounded stdout/stderr and running, exited, or closed state for a recorded session; running inventory and terminal outcomes are re-offered after registration |
 
-Nothing in the agent → control plane direction is a *reply*. `success` and
-`error` travel control plane → agent only, unsolicited and uncorrelated
-(STR-152); the agent stopped sending them entirely at the same change.
+Nothing in the agent → control plane direction is a generic *reply*.
+`success` and `error` travel control plane → agent only, unsolicited and
+uncorrelated (STR-152); the agent stopped sending them entirely at the same
+change.
+
+### Recorded exec reconnect state (STR-260, wire v53)
+
+`GuestExecRecordedStateMessage` is a complete level-triggered snapshot, never
+an output delta. Its `stdout` and `stderr` fields contain the full base64-encoded
+capture retained by the agent, with a combined decoded ceiling of 1,048,576
+bytes. `truncated` is true when bytes exceeded that ceiling or when the channel
+closed without an authoritative `exec_exit`, so the capture may be incomplete.
+The agent advances a per-session `revision` whenever that authoritative state
+changes; PostgreSQL compare-and-write rules prevent a delayed replica from
+replacing a newer snapshot.
+Status determines the terminal fields: `running` has neither `exitCode` nor
+`reason`; `exited` has an exit code and no reason; `closed` has a normalized
+reason and no exit code.
+
+After registration, an agent offers every recorded session it still holds.
+Running state lets the control plane know the command survived the socket
+interruption. An exited or closed snapshot is replayed until
+`guest_exec_recorded_ack` says the control plane durably committed or
+deliberately discarded the terminal outcome. Only terminal snapshots are
+acknowledged and retired. The acknowledgement is keyed by `sessionId`; its
+fresh `requestId` remains a log handle and does not turn the exchange into a
+generic request/response RPC. This recovery is intentionally in-memory and
+same-agent-process only: agent or host restart survival is outside this
+contract.
 
 ## The reconciliation contract
 
@@ -516,5 +552,5 @@ The rest of the package is vocabulary used on both sides:
 
 `shared/Tests/StratoSharedTests/` (swift-testing) doubles as usage
 documentation — `MessageEnvelopeTests.swift`, `ReconciliationProtocolTests.swift`,
-`WireProtocolTests.swift`, and `SandboxExecMessageTests.swift` show the
+`WireProtocolTests.swift`, and `GuestExecMessageTests.swift` show the
 expected encode/decode flows and compatibility behavior.

@@ -113,12 +113,18 @@ many times it was asked for. The agent applies a nonce once, against a record it
 keeps in its own durable manifest, so the exchange needs neither a reply nor a
 socket.
 
-Live byte streams — console, exec, log forwarding — do stay imperative by
-design (ADR 0001: session lifetime is a browser tab, not cluster intent), but
-they are **not** correlated request/response and never travelled this path:
+Live frontend byte streams — console and interactive exec — do stay imperative
+by design (ADR 0001: session lifetime is a browser tab, not cluster intent),
+but they are **not** correlated request/response and never travelled this path:
 `ConsoleSessionManager` and `GuestExecSessionManager` write straight to the
 local socket and fail if this replica does not hold it, which is the
-single-replica limitation the guest-exec and console surfaces record.
+single-replica limitation the interactive guest-exec and console surfaces
+record. Recorded VM commands are different: the browser does not own their
+lifetime, PostgreSQL owns the operation, and the same agent process re-offers a
+bounded authoritative result after reconnect until whichever replica holds the
+socket durably commits and acknowledges it. A monotonic agent revision and a
+payload compare-and-write in PostgreSQL prevent a delayed replica from
+overwriting newer recorded state.
 
 v34 left the forwarding path with no sender at all, and STR-152 (ADR stage 11)
 deleted it: `AgentService.sendMessageToAgentWithResponse` and the

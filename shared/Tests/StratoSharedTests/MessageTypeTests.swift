@@ -31,6 +31,8 @@ struct MessageTypeTests {
         case .guestExecExit: return "guest_exec_exit"
         case .guestExecClose: return "guest_exec_close"
         case .guestExecClosed: return "guest_exec_closed"
+        case .guestExecRecordedState: return "guest_exec_recorded_state"
+        case .guestExecRecordedAck: return "guest_exec_recorded_ack"
         case .sandboxLog: return "sandbox_log"
         }
     }
@@ -42,6 +44,7 @@ struct MessageTypeTests {
         .success, .error, .vmLog,
         .guestExecStart, .guestExecStarted, .guestExecInput, .guestExecOutput,
         .guestExecResize, .guestExecExit, .guestExecClose, .guestExecClosed,
+        .guestExecRecordedState, .guestExecRecordedAck,
         .sandboxLog,
     ]
 

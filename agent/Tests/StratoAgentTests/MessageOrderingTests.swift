@@ -165,7 +165,8 @@ struct MessageOrderingTests {
             type: .guestExecStart,
             payload: payload([
                 "resourceKind": "virtual_machine", "resourceId": resourceId,
-                "sessionId": sessionId, "command": ["/bin/sh"],
+                "sessionKind": "interactive", "sessionId": sessionId,
+                "command": ["/bin/sh"],
             ])
         )
         let inputKeys = MessageEnvelope.serializationKeys(
@@ -177,12 +178,16 @@ struct MessageOrderingTests {
         let closeKeys = MessageEnvelope.serializationKeys(
             type: .guestExecClose, payload: payload(["sessionId": sessionId])
         )
+        let recordedAckKeys = MessageEnvelope.serializationKeys(
+            type: .guestExecRecordedAck, payload: payload(["sessionId": sessionId])
+        )
 
         // Input/resize/close are applied strictly after the session's start...
         #expect(startKeys == ["exec:\(sessionId)"])
         #expect(inputKeys == startKeys)
         #expect(resizeKeys == startKeys)
         #expect(closeKeys == startKeys)
+        #expect(recordedAckKeys == startKeys)
         // ...while staying off the resource's own lifecycle lane and the unkeyed lane.
         #expect(!startKeys.contains(resourceId))
         #expect(!startKeys.contains(MessageEnvelope.unkeyedSerializationLane))

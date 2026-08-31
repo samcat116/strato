@@ -22,6 +22,25 @@ import AppTestSupport
 @Suite("Agent WebSocket Integration", .serialized)
 struct AgentWebSocketIntegrationTests {
 
+    @Test("Recorded command output is excluded from raw trace previews regardless of JSON key order")
+    func recordedCommandStateSuppressesTracePreview() throws {
+        let state = GuestExecRecordedStateMessage(
+            sessionId: UUID().uuidString,
+            revision: 1,
+            status: .running,
+            rawStdout: Data(repeating: 65, count: 1_024),
+            rawStderr: Data(),
+            truncated: false)
+        let envelope = try MessageEnvelope(message: state)
+        let payloadFirstText =
+            #"{"payload":"\#(envelope.payload.base64EncodedString())","type":"guest_exec_recorded_state"}"#
+
+        #expect(!payloadFirstText.prefix(64).contains(MessageType.guestExecRecordedState.rawValue))
+        #expect(
+            AgentWebSocketController.rawTextPreview(
+                for: payloadFirstText, envelopeType: envelope.type) == nil)
+    }
+
     /// New agents take their owning organization from their enrollment row.
     private func makeOrg(app: Application) async throws -> Organization {
         let org = Organization(name: "WS Org", description: "org for WS tests")

@@ -1092,6 +1092,16 @@ and verifies every record against the boot nonce captured from `exec_started`.
 QEMU agents advertise `HypervisorSupport.supportsGuestExec` only when host
 vsock preflight passes.
 
+The control-plane wire labels each exec as `interactive` or `recorded`.
+Interactive channels are killed when their frontend becomes unreachable on a
+control-plane socket loss. A recorded VM command instead stays connected to
+the guest while the same agent process reconnects. The manager owns a bounded,
+authoritative stdout/stderr snapshot (1 MiB combined), advertises running state
+after registration, and retries an immutable terminal snapshot until the
+control plane acknowledges that its database result is durable. Agent or host
+restart recovery is outside this contract; no recorded exec state is written
+to the host filesystem.
+
 ## Networking
 
 `NetworkOrchestrator` (executable target) resolves a VM's `[NetworkSpec]`

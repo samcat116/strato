@@ -46,6 +46,11 @@ enum AgentError: Error, LocalizedError {
 }
 
 actor Agent {
+    private struct GuestExecSessionRoute: Sendable {
+        let resourceKind: GuestResourceKind
+        let sessionKind: GuestExecSessionKind
+    }
+
     private let initialAgentID: String  // ID used for registration (hostname or CLI arg)
     private var assignedAgentID: String?  // UUID assigned by control plane after registration
     // The URL to dial. It carries no credential — the agent authenticates with
@@ -79,6 +84,8 @@ actor Agent {
     private var storageBackend: (any StorageBackend)?
     private var consoleSocketManager: ConsoleSocketManager?
     private var reconnectTask: Task<Void, Never>?
+    private var reconnectState = ControlPlaneReconnectState()
+    private var interactiveSessionFence = ControlPlaneInteractiveSessionFence()
     private var isRunning = false
     // Set once a graceful shutdown has been requested (e.g. by a signal
     // handler calling stop()). Guards start() against parking if stop() ran
@@ -100,8 +107,8 @@ actor Agent {
     // `inboundContinuation` in arrival order; `messageConsumerTask` drains the stream and
     // routes each frame onto a per-resource serial lane in `messageQueue`, so operations on
     // the same VM/volume are applied in the order the control plane sent them (issue #179).
-    private nonisolated let inboundMessages: AsyncStream<MessageEnvelope>
-    private nonisolated let inboundContinuation: AsyncStream<MessageEnvelope>.Continuation
+    private nonisolated let inboundMessages: AsyncStream<ControlPlaneInboundFrame>
+    private nonisolated let inboundContinuation: AsyncStream<ControlPlaneInboundFrame>.Continuation
     private let messageQueue = SerialTaskQueue()
     private var messageConsumerTask: Task<Void, Never>?
 
@@ -177,7 +184,9 @@ actor Agent {
     // QEMU VM exec sessions use the same guest protocol as sandboxes but reach
     // it through the host kernel's AF_VSOCK transport (STR-82).
     private let vmExecSessionManager: VMExecSessionManager
-    private var guestExecSessionKinds: [String: GuestResourceKind] = [:]
+    private var guestExecSessions: [String: GuestExecSessionRoute] = [:]
+    private var recordedResultSendInProgress = false
+    private var lastOfferedRecordedResultSessionId: String?
 
     // Virtual size per volume, so the reconciler can tell a volume that needs
     // growing from one that is already the size the sync asks for (STR-148).
@@ -512,7 +521,7 @@ actor Agent {
         self.metadataHopLimit = metadataHopLimit
         self.vmExecSessionManager = VMExecSessionManager(logger: logger)
 
-        let (stream, continuation) = AsyncStream.makeStream(of: MessageEnvelope.self)
+        let (stream, continuation) = AsyncStream.makeStream(of: ControlPlaneInboundFrame.self)
         self.inboundMessages = stream
         self.inboundContinuation = continuation
 
@@ -969,18 +978,30 @@ actor Agent {
             spiffePinning: controlPlanePinning,
             inboundContinuation: inboundContinuation)
 
-        if let client = websocketClient {
-            try await client.connect()
+        guard let client = websocketClient else {
+            throw AgentError.registrationFailed("WebSocket client was not initialized")
         }
+        let connectionGeneration = try await client.connect()
 
         // Register with control plane
         try await registerWithControlPlane()
+
+        // A registration response proves only that the control plane accepted
+        // the handshake. The socket can still close while replaying recorded
+        // commands or sending the observed-state baseline. Activate frontend-
+        // bound work only after all of that finishes on the same connection.
+        let connectionActivated = await restoreConnectionScopedState(
+            generation: connectionGeneration, attempt: nil)
+        let startupConnectionWasLost = reconnectState.consumeStartupConnectionLoss()
 
         // Heartbeats are driven by the WebSocket client's connection-scoped loop
         // (see WebSocketClient.startHeartbeat), so it stops firing while
         // disconnected and restarts on reconnect — no separate agent-side loop.
 
         isRunning = true
+        if !connectionActivated || startupConnectionWasLost {
+            await handleConnectionLost()
+        }
         logger.info("Agent started successfully")
 
         // Park until stop() (typically from a SIGINT/SIGTERM handler) or a
@@ -1025,6 +1046,7 @@ actor Agent {
 
         reconnectTask?.cancel()
         reconnectTask = nil
+        reconnectState.finishLoop()
 
         networkConnectTask?.cancel()
         networkConnectTask = nil
@@ -1060,7 +1082,7 @@ actor Agent {
         // End VM exec channels before stopping their event pump. Closing a
         // channel before exec_exit is also the guest-side process-group kill.
         await vmExecSessionManager.closeAll(reason: "agent stopping")
-        guestExecSessionKinds.removeAll()
+        guestExecSessions.removeAll()
 
         // Stop the sandbox exec/log pumps the same way.
         sandboxExecEventsContinuation.finish()
@@ -1493,17 +1515,18 @@ actor Agent {
         self.assignedAgentID = assignedId
         logger.info("Registration complete, assigned ID: \(assignedId)")
 
+        // Re-advertise every recorded VM command this same agent process still
+        // owns. Running entries are positive inventory; terminal entries stay
+        // retained and are re-offered until the control plane acknowledges a
+        // durable disposition.
+        await replayRecordedExecSessionsAfterRegistration()
+
         // Give the control plane a fresh baseline right away — it will also
         // serve us its desired state on the first poll, and the two together
         // converge any drift accumulated while disconnected.
         _ = await storageDeviceInventory.refreshForRegistration()
         await sendObservedStateReport()
 
-        // Resume sandbox log shipping suspended while disconnected (issue
-        // #423): follows pick up from their seq checkpoints, so output the
-        // workloads produced during the gap ships from the guest ring buffers
-        // now. Idempotent on the initial registration.
-        await self.sandboxRuntime?.controlPlaneConnected()
     }
 
     /// Parks the given continuation as the pending registration wait and arms a
@@ -2037,43 +2060,120 @@ actor Agent {
     // MARK: - Reconnection
 
     /// Called by the WebSocket client when the connection to the control plane drops
-    /// unexpectedly. Starts a single reconnection loop (guarded against duplicates).
+    /// unexpectedly. Every loss invalidates the attempt currently restoring
+    /// connection-scoped state, while only the first starts the reconnect loop.
     func handleConnectionLost() async {
-        guard isRunning else { return }
-        guard reconnectTask == nil else {
-            logger.debug("Reconnection already in progress; ignoring duplicate signal")
+        guard !shutdownRequested else { return }
+
+        // This is actor-local and happens before any cleanup suspension. A
+        // frontend frame already queued from the dead socket therefore cannot
+        // start while console/runtime/session teardown is still in progress.
+        interactiveSessionFence.quiesce()
+
+        // Startup is still unwinding its initial registration. Remember the
+        // edge rather than starting a competing registration attempt; start()
+        // hands it to the ordinary reconnect loop after post-registration work
+        // has returned.
+        guard isRunning else {
+            reconnectState.recordStartupConnectionLoss()
             return
         }
 
-        logger.warning("Lost connection to control plane; beginning reconnection with backoff")
+        let disposition = reconnectState.recordConnectionLoss()
 
-        // The control plane tears down this agent's console sessions when our
-        // socket drops (otherwise browser terminals freeze), and browsers must
-        // re-establish once we reconnect. Close our side's console pty channels
-        // now so they don't leak — the eventual browser-socket close on the
-        // control plane no-ops on the already-deleted session and never sends
-        // us a disconnect for them.
-        await consoleSocketManager?.disconnectAll()
+        switch disposition {
+        case .startLoop:
+            logger.warning("Lost connection to control plane; beginning reconnection with backoff")
+        case .loopAlreadyActive:
+            logger.warning(
+                "Control-plane connection dropped during reconnect recovery; the active loop will retry")
+        }
 
-        // Quiesce sandbox streams for the gap (issue #423): live exec sessions
-        // end (their frontends are unreachable and the control plane cannot
-        // close them over a dead socket), and log follows suspend so workload
-        // output waits in the guest ring buffers instead of being consumed
-        // toward a socket that cannot deliver it. Registration restarts the
-        // follows.
-        await sandboxRuntime?.controlPlaneDisconnected()
-        await vmExecSessionManager.closeAll(reason: "control plane disconnected")
-        guestExecSessionKinds.removeAll()
+        await quiesceConnectionScopedState()
+
+        guard disposition == .startLoop else { return }
+        // stop() can run while one of the cleanup awaits above has this actor
+        // suspended. Do not resurrect a reconnect loop after shutdown.
+        guard isRunning else {
+            reconnectState.finishLoop()
+            return
+        }
 
         reconnectTask = Task { [weak self] in
             await self?.runReconnectLoop()
         }
     }
 
+    /// Tear down state whose frontend lives on one control-plane socket. This
+    /// is idempotent because a newer loss can arrive while an older cleanup is
+    /// suspended. Recorded VM commands deliberately remain outside this set.
+    private func quiesceConnectionScopedState() async {
+        interactiveSessionFence.quiesce()
+
+        // The control plane tears down this agent's console sessions when our
+        // socket drops. Close our side now so their pty channels do not leak.
+        await consoleSocketManager?.disconnectAll()
+
+        // Sandbox exec is interactive-only today. Log follows suspend so
+        // workload output waits in the guest ring buffers instead of being
+        // consumed toward a socket that cannot deliver it.
+        await sandboxRuntime?.controlPlaneDisconnected()
+        await vmExecSessionManager.closeInteractive(reason: "control plane disconnected")
+        guestExecSessions = guestExecSessions.filter { $0.value.sessionKind == .recorded }
+    }
+
+    /// Restore connection-scoped state only while the socket and reconnect
+    /// attempt that completed registration are still current. The frontend
+    /// frame fence is activated last, after every suspension; a loss at any
+    /// earlier point leaves queued work unable to enter the guest.
+    private func restoreConnectionScopedState(
+        generation: ControlPlaneWebSocketState.Generation,
+        attempt: ControlPlaneReconnectState.Attempt?
+    ) async -> Bool {
+        guard await connectionRecoveryIsCurrent(generation: generation, attempt: attempt) else {
+            await quiesceConnectionScopedState()
+            return false
+        }
+
+        // Resume sandbox log shipping suspended while disconnected (issue
+        // #423). Follows pick up from their seq checkpoints.
+        await sandboxRuntime?.controlPlaneConnected()
+        guard await connectionRecoveryIsCurrent(generation: generation, attempt: attempt) else {
+            await quiesceConnectionScopedState()
+            return false
+        }
+
+        await vmExecSessionManager.resumeInteractive()
+        guard await connectionRecoveryIsCurrent(generation: generation, attempt: attempt) else {
+            await quiesceConnectionScopedState()
+            return false
+        }
+
+        interactiveSessionFence.activate(generation: generation)
+        return true
+    }
+
+    private func connectionRecoveryIsCurrent(
+        generation: ControlPlaneWebSocketState.Generation,
+        attempt: ControlPlaneReconnectState.Attempt?
+    ) async -> Bool {
+        guard !shutdownRequested,
+            await websocketClient?.isCurrentConnection(generation) == true
+        else { return false }
+
+        if let attempt {
+            return isRunning && reconnectState.canFinish(attempt)
+        }
+        return !reconnectState.connectionWasLostDuringStartup
+    }
+
     /// Repeatedly attempts to reconnect to the control plane with exponential backoff
     /// and jitter, re-registering on success. Runs until reconnected or the agent stops.
     private func runReconnectLoop() async {
-        defer { reconnectTask = nil }
+        defer {
+            reconnectState.finishLoop()
+            reconnectTask = nil
+        }
 
         var delaySeconds = 1.0
         let maxDelaySeconds = 30.0
@@ -2089,9 +2189,21 @@ actor Agent {
 
             guard isRunning else { return }
 
+            let attempt = reconnectState.beginAttempt()
             do {
-                try await websocketClient?.connect()
+                guard let websocketClient else {
+                    throw WebSocketClientError.notConnected
+                }
+                let generation = try await websocketClient.connect()
                 try await registerWithControlPlane()
+                guard
+                    await restoreConnectionScopedState(
+                        generation: generation, attempt: attempt)
+                else {
+                    logger.warning(
+                        "Control-plane connection dropped before reconnect recovery completed; retrying")
+                    continue
+                }
                 logger.info("Successfully reconnected and re-registered with control plane")
                 return
             } catch AgentError.registrationRejected(let reason) {
@@ -2159,6 +2271,11 @@ actor Agent {
             try await client.sendMessage(message)
         }
         logger.debug("Heartbeat sent", metadata: ["agentId": .string(effectiveAgentID)])
+
+        // A successfully written result can still lose its ACK with the
+        // socket. Re-offer the oldest terminal snapshot on every heartbeat;
+        // the control plane's idempotent persistence makes duplicates safe.
+        await sendNextRecordedExecTerminalState()
 
         // The beat is already on the wire before this bounded host probe runs,
         // so a slow lsblk cannot make the control plane mark the agent offline.
@@ -2518,21 +2635,39 @@ extension Agent {
         guard messageConsumerTask == nil else { return }
         let stream = inboundMessages
         messageConsumerTask = Task { [weak self] in
-            for await envelope in stream {
-                await self?.routeInboundMessage(envelope)
+            for await frame in stream {
+                await self?.routeInboundMessage(frame)
             }
+        }
+    }
+
+    /// Socket frames carry the generation that decoded them. Validate that
+    /// generation only when their serial-lane work actually begins: a frame can
+    /// otherwise wait behind a slow predecessor until after reconnect.
+    private func routeInboundMessage(_ frame: ControlPlaneInboundFrame) async {
+        let envelope = frame.envelope
+        await messageQueue.enqueue(keys: envelope.serializationKeys) { [weak self] in
+            guard let self,
+                await self.websocketClient?.isCurrentConnection(frame.generation) == true
+            else { return }
+            await self.handleMessage(envelope, sourceGeneration: frame.generation)
         }
     }
 
     /// Route a decoded inbound frame onto its per-resource serial lane. Frames for the same
     /// resource run in arrival order; frames for unrelated resources run concurrently.
+    /// Used by the desired-state HTTP poller, whose responses are not scoped to
+    /// a WebSocket generation.
     private func routeInboundMessage(_ envelope: MessageEnvelope) async {
         await messageQueue.enqueue(keys: envelope.serializationKeys) { [weak self] in
             await self?.handleMessage(envelope)
         }
     }
 
-    func handleMessage(_ envelope: MessageEnvelope) async {
+    func handleMessage(
+        _ envelope: MessageEnvelope,
+        sourceGeneration: ControlPlaneWebSocketState.Generation? = nil
+    ) async {
         logger.debug(
             "Handling message from control plane",
             metadata: [
@@ -2731,7 +2866,7 @@ extension Agent {
             // Guest exec sessions (STR-78).
             case .guestExecStart:
                 let message = try envelope.decode(as: GuestExecStartMessage.self)
-                await handleGuestExecStart(message)
+                await handleGuestExecStart(message, sourceGeneration: sourceGeneration)
             case .guestExecInput:
                 let message = try envelope.decode(as: GuestExecInputMessage.self)
                 await handleGuestExecInput(message)
@@ -2741,6 +2876,9 @@ extension Agent {
             case .guestExecClose:
                 let message = try envelope.decode(as: GuestExecCloseMessage.self)
                 await handleGuestExecClose(message)
+            case .guestExecRecordedAck:
+                let message = try envelope.decode(as: GuestExecRecordedAckMessage.self)
+                await handleGuestExecRecordedAck(message)
             // No sandbox lifecycle frames remain either: `sandbox_restore`
             // became `DesiredSandboxState.restore` at wire v34 (STR-151), and
             // capture/delete/export became desired artifacts at v33 (STR-150).
@@ -3476,13 +3614,38 @@ extension Agent {
         await observedStateTrigger?.signal()
     }
 
-    private func handleGuestExecStart(_ message: GuestExecStartMessage) async {
+    private func handleGuestExecStart(
+        _ message: GuestExecStartMessage,
+        sourceGeneration: ControlPlaneWebSocketState.Generation?
+    ) async {
+        if message.sessionKind == .interactive {
+            guard let sourceGeneration else {
+                logger.debug(
+                    "Discarding interactive guest exec start without a control-plane connection generation",
+                    metadata: ["sessionId": .string(message.sessionId)])
+                return
+            }
+            guard interactiveSessionFence.accepts(generation: sourceGeneration) else {
+                if await websocketClient?.isCurrentConnection(sourceGeneration) == true {
+                    await sendGuestExecClosed(
+                        sessionId: message.sessionId,
+                        reason: "interactive guest exec is unavailable while agent registration completes")
+                } else {
+                    logger.debug(
+                        "Discarding interactive guest exec start from an inactive control-plane connection",
+                        metadata: ["sessionId": .string(message.sessionId)])
+                }
+                return
+            }
+        }
+
         logger.info(
             "Guest exec start request received",
             metadata: [
                 "resourceKind": .string(message.resourceKind.rawValue),
                 "resourceId": .string(message.resourceId),
                 "sessionId": .string(message.sessionId),
+                "sessionKind": .string(message.sessionKind.rawValue),
                 "tty": .stringConvertible(message.tty),
             ])
 
@@ -3490,16 +3653,31 @@ extension Agent {
             command: message.command, env: message.env, workingDir: message.workingDir,
             tty: message.tty, rows: message.rows, cols: message.cols)
 
-        guard guestExecSessionKinds[message.sessionId] == nil else {
+        if let existing = guestExecSessions[message.sessionId] {
+            if existing.sessionKind == .recorded, message.sessionKind == .recorded,
+                let snapshot = await vmExecSessionManager.recordedSessionSnapshot(
+                    sessionId: message.sessionId)
+            {
+                await sendRecordedExecState(snapshot)
+                return
+            }
             await sendGuestExecClosed(
                 sessionId: message.sessionId, reason: "exec session already exists")
+            return
+        }
+
+        guard message.sessionKind == .interactive || message.resourceKind == .virtualMachine else {
+            await sendGuestExecClosed(
+                sessionId: message.sessionId,
+                reason: "recorded guest exec is supported only for virtual machines")
             return
         }
 
         // Register the route before starting. A guest can emit exec_started
         // immediately; pre-registration keeps a terminal event racing the
         // handshake from leaving a stale route behind.
-        guestExecSessionKinds[message.sessionId] = message.resourceKind
+        guestExecSessions[message.sessionId] = GuestExecSessionRoute(
+            resourceKind: message.resourceKind, sessionKind: message.sessionKind)
         let continuation = sandboxExecEventsContinuation
         let sessionId = message.sessionId
         do {
@@ -3524,7 +3702,8 @@ extension Agent {
                 let vmId = message.resourceId
                 let cid = placement.vsockCID
                 try await vmExecSessionManager.startExec(
-                    placement: placement, sessionId: sessionId, request: request,
+                    placement: placement, sessionId: sessionId,
+                    sessionKind: message.sessionKind, request: request,
                     placementIsCurrent: { [weak self] in
                         await self?.isCurrentVMExecPlacement(vmId: vmId, vsockCID: cid) == true
                     }
@@ -3533,7 +3712,6 @@ extension Agent {
                 }
             }
         } catch {
-            guestExecSessionKinds.removeValue(forKey: sessionId)
             logger.error(
                 "Failed to start guest exec session",
                 metadata: [
@@ -3542,7 +3720,17 @@ extension Agent {
                     "sessionId": .string(sessionId),
                     "error": .string(error.localizedDescription),
                 ])
-            await sendGuestExecClosed(sessionId: sessionId, reason: error.localizedDescription)
+            if message.sessionKind == .recorded {
+                // Placement resolution can fail before startExec creates its
+                // capture. Give even that earliest failure the same retained,
+                // reconnect-and-ACK lifecycle as every other recorded result.
+                await vmExecSessionManager.retainRecordedStartFailure(
+                    sessionId: sessionId, reason: error.localizedDescription)
+                await sendNextRecordedExecTerminalState()
+            } else {
+                guestExecSessions.removeValue(forKey: sessionId)
+                await sendGuestExecClosed(sessionId: sessionId, reason: error.localizedDescription)
+            }
         }
     }
 
@@ -3554,6 +3742,15 @@ extension Agent {
     }
 
     private func handleGuestExecInput(_ message: GuestExecInputMessage) async {
+        // Recorded commands deliberately expose no live stdin surface. Ignore
+        // a stale or invalid interactive frame without turning it into a
+        // process-group kill for a durable command.
+        if guestExecSessions[message.sessionId]?.sessionKind == .recorded {
+            logger.warning(
+                "Ignoring interactive input for a recorded guest exec session",
+                metadata: ["sessionId": .string(message.sessionId)])
+            return
+        }
         if message.data != nil && message.rawData == nil {
             // The payload is present but not decodable base64: the stream is
             // corrupt, and forwarding nothing would silently swallow
@@ -3568,7 +3765,7 @@ extension Agent {
             return
         }
         do {
-            switch guestExecSessionKinds[message.sessionId] {
+            switch guestExecSessions[message.sessionId]?.resourceKind {
             case .sandbox:
                 guard let runtime = sandboxRuntime else { throw SandboxRuntimeError.runtimeUnavailable }
                 try await runtime.sendExecInput(
@@ -3592,8 +3789,16 @@ extension Agent {
     }
 
     private func handleGuestExecResize(_ message: GuestExecResizeMessage) async {
+        // Recorded commands are non-TTY and have no frontend geometry. A
+        // stray resize must not terminate work that can have side effects.
+        if guestExecSessions[message.sessionId]?.sessionKind == .recorded {
+            logger.warning(
+                "Ignoring resize for a recorded guest exec session",
+                metadata: ["sessionId": .string(message.sessionId)])
+            return
+        }
         do {
-            switch guestExecSessionKinds[message.sessionId] {
+            switch guestExecSessions[message.sessionId]?.resourceKind {
             case .sandbox:
                 guard let runtime = sandboxRuntime else { throw SandboxRuntimeError.runtimeUnavailable }
                 try await runtime.resizeExec(
@@ -3626,17 +3831,23 @@ extension Agent {
         // The control plane already tore its side down; closing is terminal
         // and needs no reply. Guest-side, this kills the exec process group if
         // exec_exit has not arrived.
-        await closeGuestExec(sessionId: message.sessionId)
+        await closeGuestExec(sessionId: message.sessionId, reason: message.reason)
     }
 
-    private func closeGuestExec(sessionId: String) async {
-        switch guestExecSessionKinds.removeValue(forKey: sessionId) {
+    private func closeGuestExec(sessionId: String, reason: String? = nil) async {
+        guard let route = guestExecSessions[sessionId] else { return }
+        switch route.resourceKind {
         case .sandbox:
+            guestExecSessions.removeValue(forKey: sessionId)
             await sandboxRuntime?.closeExec(sessionId: sessionId)
         case .virtualMachine:
-            await vmExecSessionManager.closeExec(sessionId: sessionId)
-        case nil:
-            return
+            if route.sessionKind == .interactive {
+                guestExecSessions.removeValue(forKey: sessionId)
+            }
+            await vmExecSessionManager.closeExec(sessionId: sessionId, reason: reason)
+            if route.sessionKind == .recorded {
+                await sendNextRecordedExecTerminalState()
+            }
         }
     }
 
@@ -3646,12 +3857,33 @@ extension Agent {
     private func sendGuestExecEvent(
         sessionId: String, resourceKind: GuestResourceKind, event: SandboxExecEvent
     ) async {
-        if case .exited = event {
-            if guestExecSessionKinds[sessionId] == resourceKind {
-                guestExecSessionKinds.removeValue(forKey: sessionId)
+        guard let route = guestExecSessions[sessionId], route.resourceKind == resourceKind else {
+            return
+        }
+
+        if route.sessionKind == .recorded {
+            // The VM manager owns the bounded byte capture. It emits only
+            // started/terminal signals for recorded sessions; every wire frame
+            // is an authoritative snapshot rather than an append-only delta.
+            switch event {
+            case .started:
+                if let snapshot = await vmExecSessionManager.recordedSessionSnapshot(
+                    sessionId: sessionId)
+                {
+                    await sendRecordedExecState(snapshot)
+                }
+            case .exited, .closed:
+                await sendNextRecordedExecTerminalState()
+            case .output:
+                return
             }
-        } else if case .closed = event, guestExecSessionKinds[sessionId] == resourceKind {
-            guestExecSessionKinds.removeValue(forKey: sessionId)
+            return
+        }
+
+        if case .exited = event {
+            guestExecSessions.removeValue(forKey: sessionId)
+        } else if case .closed = event {
+            guestExecSessions.removeValue(forKey: sessionId)
         }
         guard let websocketClient else {
             // No control-plane socket: the event (possibly the session's
@@ -3686,6 +3918,83 @@ extension Agent {
                     "error": .string(error.localizedDescription),
                 ])
         }
+    }
+
+    private func sendRecordedExecState(_ snapshot: RecordedVMExecSessionSnapshot) async {
+        guard let websocketClient else { return }
+        do {
+            try await websocketClient.sendMessage(
+                GuestExecRecordedStateMessage(
+                    sessionId: snapshot.sessionId,
+                    revision: snapshot.revision,
+                    status: snapshot.status,
+                    rawStdout: snapshot.stdout,
+                    rawStderr: snapshot.stderr,
+                    exitCode: snapshot.exitCode,
+                    reason: snapshot.reason,
+                    truncated: snapshot.truncated))
+        } catch {
+            let level: Logger.Level =
+                (error as? WebSocketClientError)?.isNotConnected == true ? .debug : .warning
+            logger.log(
+                level: level,
+                "Could not offer recorded VM command state; it remains retained for replay",
+                metadata: [
+                    "sessionId": .string(snapshot.sessionId),
+                    "status": .string(snapshot.status.rawValue),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
+
+    /// Registration inventory is positive-only: every running command this
+    /// process still holds is reported, but omission never tells the control
+    /// plane to fail a row. Terminal results use the ACK-gated queue below.
+    private func replayRecordedExecSessionsAfterRegistration() async {
+        let running = await vmExecSessionManager.recordedSessionSnapshots()
+            .filter { !$0.isTerminal }
+        for snapshot in running {
+            await sendRecordedExecState(snapshot)
+        }
+        await sendNextRecordedExecTerminalState()
+    }
+
+    /// Send at most one unacknowledged terminal snapshot at a time. Selection
+    /// rotates after every offer so one poison result cannot head-of-line block
+    /// later commands. If an ACK arrives while the socket write suspends this
+    /// actor, the loop observes that retirement and advances immediately.
+    private func sendNextRecordedExecTerminalState() async {
+        guard !recordedResultSendInProgress else { return }
+        recordedResultSendInProgress = true
+        defer { recordedResultSendInProgress = false }
+
+        while let snapshot = await vmExecSessionManager.recordedTerminalSnapshot(
+            after: lastOfferedRecordedResultSessionId)
+        {
+            lastOfferedRecordedResultSessionId = snapshot.sessionId
+            await sendRecordedExecState(snapshot)
+            guard
+                await vmExecSessionManager.recordedSessionSnapshot(
+                    sessionId: snapshot.sessionId) == nil
+            else {
+                return
+            }
+        }
+        lastOfferedRecordedResultSessionId = nil
+    }
+
+    private func handleGuestExecRecordedAck(_ message: GuestExecRecordedAckMessage) async {
+        guard
+            await vmExecSessionManager.acknowledgeRecordedSession(
+                sessionId: message.sessionId)
+        else {
+            logger.debug(
+                "Ignoring recorded VM command ACK without retained terminal state",
+                metadata: ["sessionId": .string(message.sessionId)])
+            return
+        }
+        guestExecSessions.removeValue(forKey: message.sessionId)
+        await sendNextRecordedExecTerminalState()
     }
 
     private func sendGuestExecClosed(sessionId: String, reason: String?) async {

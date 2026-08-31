@@ -300,6 +300,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
         let message = GuestExecStartMessage(
             resourceKind: session.resourceKind,
             resourceId: session.resourceId,
+            sessionKind: .interactive,
             sessionId: session.sessionId,
             command: session.command,
             env: session.env,

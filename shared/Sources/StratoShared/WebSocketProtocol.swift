@@ -64,10 +64,11 @@ public enum MessageType: String, Codable, Sendable {
     // VM Logs
     case vmLog = "vm_log"
 
-    // Guest exec/attach and sandbox workload logs. Exec messages are a stream,
-    // not request/response: they are
-    // correlated by `sessionId`, ordered by the WebSocket, and never answered
-    // with `success`/`error`.
+    // Guest exec/attach and sandbox workload logs. Interactive exec frames are
+    // a stream correlated by `sessionId`, ordered by the WebSocket, and never
+    // answered with `success`/`error`. Recorded exec reconnect state is a full
+    // level-triggered snapshot; its typed terminal ACK is also keyed by
+    // `sessionId`, not correlated through `requestId`.
     case guestExecStart = "guest_exec_start"
     case guestExecStarted = "guest_exec_started"
     case guestExecInput = "guest_exec_input"
@@ -76,6 +77,8 @@ public enum MessageType: String, Codable, Sendable {
     case guestExecExit = "guest_exec_exit"
     case guestExecClose = "guest_exec_close"
     case guestExecClosed = "guest_exec_closed"
+    case guestExecRecordedState = "guest_exec_recorded_state"
+    case guestExecRecordedAck = "guest_exec_recorded_ack"
 
     case sandboxLog = "sandbox_log"
 
@@ -88,8 +91,8 @@ public enum MessageType: String, Codable, Sendable {
     // `DesiredStateMessage.snapshots`.
     //
     // What is left in this enum, beyond registration and the two reconciliation
-    // frames, is exactly the category ADR 0001 always meant to keep imperative:
-    // live byte pipes with a human on the end.
+    // frames, is transport state that cannot be expressed as workload desired
+    // state: logs, live byte pipes, and bounded recorded-command outcome replay.
 }
 
 // MARK: - Base Message Protocol

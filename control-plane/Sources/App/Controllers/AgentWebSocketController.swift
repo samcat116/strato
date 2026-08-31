@@ -8,12 +8,20 @@ import Fluent
 struct AgentWebSocketController: RouteCollection {
     /// Message types whose bodies are base64 payload rather than anything worth
     /// reading in a log, and which arrive at a rate no log should try to keep
-    /// up with. Matched against the envelope's leading bytes, where `type` is.
+    /// up with. Classification happens only after decoding the envelope; JSON
+    /// object key order is not stable, so inspecting a raw prefix can expose a
+    /// payload that happened to encode before `type`.
     private static let streamingFrameTypes = [
         MessageType.consoleData.rawValue,
         MessageType.guestExecOutput.rawValue,
+        MessageType.guestExecRecordedState.rawValue,
         MessageType.sandboxLog.rawValue,
     ]
+
+    static func rawTextPreview(for text: String, envelopeType: MessageType) -> String? {
+        guard !streamingFrameTypes.contains(envelopeType.rawValue) else { return nil }
+        return String(text.prefix(500))
+    }
 
     func boot(routes: RoutesBuilder) throws {
         let agentRoutes = routes.grouped("agent")
@@ -276,23 +284,6 @@ struct AgentWebSocketController: RouteCollection {
         // lands here (issue #705). The raw-frame dump is noisier still, so it
         // sits a level below the decoded envelope.
         //
-        // Streaming frames are logged by length alone, mirroring the agent's
-        // own send path: a graphics console (issue #566) reads up to 64 KiB at
-        // a time and streams continuously while the screen changes, so even a
-        // 500-character slice of each frame is enough to swamp a journal for
-        // anyone who turns trace on with a Display tab open. The envelope
-        // encodes `type` first, so a short leading window identifies the frame
-        // without scanning an 88 KiB body.
-        let isStreamingFrame = Self.streamingFrameTypes.contains { text.prefix(64).contains($0) }
-        var traceMetadata: Logger.Metadata = [
-            "agentName": .string(agentName),
-            "messageLength": .string("\(text.count)"),
-        ]
-        if !isStreamingFrame {
-            traceMetadata["rawTextPreview"] = .string(String(text.prefix(500)))
-        }
-        req.logger.trace("Processing WebSocket message", metadata: traceMetadata)
-
         guard let data = text.data(using: .utf8) else {
             req.logger.error("Failed to convert WebSocket text to data")
             return
@@ -300,6 +291,18 @@ struct AgentWebSocketController: RouteCollection {
 
         do {
             let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
+            // Streaming frames are logged by length alone, mirroring the
+            // agent's send path. Decode first: JSONEncoder does not guarantee
+            // key order, and a payload-first recorded-state envelope can carry
+            // a full MiB of command output before its `type` key.
+            var traceMetadata: Logger.Metadata = [
+                "agentName": .string(agentName),
+                "messageLength": .string("\(text.count)"),
+            ]
+            if let preview = Self.rawTextPreview(for: text, envelopeType: envelope.type) {
+                traceMetadata["rawTextPreview"] = .string(preview)
+            }
+            req.logger.trace("Processing WebSocket message", metadata: traceMetadata)
             req.logger.debug(
                 "Decoded message envelope",
                 metadata: ["type": .string("\(envelope.type)"), "agentName": .string(agentName)])
@@ -514,6 +517,19 @@ struct AgentWebSocketController: RouteCollection {
                     req.guestExecSessionManager.handleClosed(
                         sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
                 }
+
+            case .guestExecRecordedState:
+                let message = try envelope.decode(as: GuestExecRecordedStateMessage.self)
+                _ = await req.vmCommandExecutionService.handleRecordedState(
+                    message, fromAgentKey: agentKey)
+
+            case .guestExecRecordedAck:
+                // Acknowledgements flow control plane -> agent only. Treat an
+                // inbound ACK as an uncorrelated frame rather than reflecting
+                // an error into the recorded-session stream.
+                req.logger.debug(
+                    "Ignoring recorded-session acknowledgement from agent",
+                    metadata: ["agentName": .string(agentName)])
 
             case .sandboxLog:
                 // Sandbox workload stdout/stderr line from the agent — push to

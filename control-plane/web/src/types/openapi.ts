@@ -420,7 +420,7 @@ export interface paths {
         put?: never;
         /**
          * Run a captured command in a virtual machine
-         * @description Requires `vm:runCommand`. Accepts a non-interactive guest command and returns an operation immediately. Poll the operation until terminal; a succeeded operation includes stdout, stderr, and the process exit code. Captured output is limited to 1 MiB across both streams.
+         * @description Requires `vm:runCommand`. Accepts a non-interactive guest command and returns an operation immediately. Poll the operation until terminal; a succeeded operation includes stdout, stderr, and the process exit code. A failed operation can include bounded partial stdout and stderr with `truncated: true`; `exitCode` is omitted when no authoritative guest exit was received. Captured output is limited to 1 MiB across both streams.
          */
         post: operations["runVMCommand"];
         delete?: never;
@@ -5579,7 +5579,9 @@ export interface components {
         VMCommandResult: {
             stdout: string;
             stderr: string;
-            exitCode: number;
+            /** @description The guest-reported process exit code. Omitted when execution failed or closed before an authoritative exec-exit event was recorded. */
+            exitCode?: number;
+            /** @description True when the result may be incomplete because output exceeded the combined 1 MiB capture limit or the session closed without an authoritative exec-exit event. */
             truncated: boolean;
         };
         /**

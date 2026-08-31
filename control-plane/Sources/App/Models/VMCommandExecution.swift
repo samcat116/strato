@@ -46,6 +46,9 @@ final class VMCommandPayload: Model, @unchecked Sendable {
     @OptionalField(key: "stderr") var stderr: Data?
     @OptionalField(key: "exit_code") var exitCode: Int?
     @OptionalField(key: "truncated") var truncated: Bool?
+    /// Agent-owned monotonic revision for authoritative recorded-command
+    /// snapshots. Nil identifies the legacy incremental-frame fallback.
+    @OptionalField(key: "result_revision") var resultRevision: Int64?
 
     init() {}
 
@@ -54,10 +57,14 @@ final class VMCommandPayload: Model, @unchecked Sendable {
         self.command = command
     }
 
-    func recordResult(stdout: Data, stderr: Data, exitCode: Int, truncated: Bool) {
+    func recordResult(
+        stdout: Data, stderr: Data, exitCode: Int?, truncated: Bool,
+        resultRevision: Int64? = nil
+    ) {
         self.stdout = stdout
         self.stderr = stderr
         self.exitCode = exitCode
         self.truncated = truncated
+        self.resultRevision = resultRevision
     }
 }
