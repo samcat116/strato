@@ -18,10 +18,10 @@ extension Application {
 
         try await reconcileCedarPolicySet()
 
-        // Converge any plaintext stored secrets (OIDC client secrets, SSF auth
-        // tokens) to encrypted form. Runs every startup (not a one-shot migration)
-        // so a key added after upgrade still picks up rows written before it
-        // existed. No-op without a key.
+        // Audit all recoverable stored secrets and seal plaintext/previous-key rows
+        // to the primary. The pass is an every-boot convergence boundary, not a
+        // one-shot migration: it validates already-primary ciphertext too, records
+        // unknown rows for readiness/metrics, and refuses ciphertext-without-key.
         try await secretsEncryption.encryptStoredSecrets(on: db, logger: logger)
 
         // Initialize the WebAuthn decoy credential key (generates if not exists),
