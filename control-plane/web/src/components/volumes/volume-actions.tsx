@@ -70,7 +70,8 @@ export function VolumeActions({ volume, onActionComplete, allowedActions }: Volu
   // converged, not from the 202 that only says the request was recorded.
   const handleDetach = () =>
     run({
-      request: () => volumesApi.detach(volume.id!),
+      intentKey: JSON.stringify(["POST", `/api/volumes/${volume.id}/detach`]),
+      request: (idempotencyKey) => volumesApi.detach(volume.id!, idempotencyKey),
       watch: {
         kind: "detach",
         resourceKind: "volume",
@@ -83,7 +84,8 @@ export function VolumeActions({ volume, onActionComplete, allowedActions }: Volu
 
   const handleDelete = () =>
     run({
-      request: () => volumesApi.delete(volume.id!),
+      intentKey: JSON.stringify(["DELETE", `/api/volumes/${volume.id}`]),
+      request: (idempotencyKey) => volumesApi.delete(volume.id!, idempotencyKey),
       watch: {
         kind: "delete",
         resourceKind: "volume",

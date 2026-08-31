@@ -35,44 +35,63 @@ export const volumesApi = {
     return api.get<Volume>(`/api/volumes/${id}`, undefined, signal);
   },
 
-  create(data: CreateVolumeRequest): Promise<AcceptedMutation<Volume>> {
-    return api.post<AcceptedMutation<Volume>>("/api/volumes", data);
+  create(data: CreateVolumeRequest, idempotencyKey?: string): Promise<AcceptedMutation<Volume>> {
+    return api.post<AcceptedMutation<Volume>>(
+      "/api/volumes", data, undefined, idempotencyKey
+    );
   },
 
-  delete(id: string): Promise<AcceptedMutation<Volume>> {
-    return api.delete<AcceptedMutation<Volume>>(`/api/volumes/${id}`);
+  delete(id: string, idempotencyKey?: string): Promise<AcceptedMutation<Volume>> {
+    return api.delete<AcceptedMutation<Volume>>(
+      `/api/volumes/${id}`, undefined, idempotencyKey
+    );
   },
 
   attach(
     id: string,
-    data: AttachVolumeRequest
+    data: AttachVolumeRequest,
+    idempotencyKey?: string
   ): Promise<AcceptedMutation<Volume>> {
-    return api.post<AcceptedMutation<Volume>>(`/api/volumes/${id}/attach`, data);
+    return api.post<AcceptedMutation<Volume>>(
+      `/api/volumes/${id}/attach`, data, undefined, idempotencyKey
+    );
   },
 
-  detach(id: string): Promise<AcceptedMutation<Volume>> {
-    return api.post<AcceptedMutation<Volume>>(`/api/volumes/${id}/detach`);
+  detach(id: string, idempotencyKey?: string): Promise<AcceptedMutation<Volume>> {
+    return api.post<AcceptedMutation<Volume>>(
+      `/api/volumes/${id}/detach`, undefined, undefined, idempotencyKey
+    );
   },
 
   resize(
     id: string,
-    data: ResizeVolumeRequest
+    data: ResizeVolumeRequest,
+    idempotencyKey?: string
   ): Promise<AcceptedMutation<Volume>> {
-    return api.post<AcceptedMutation<Volume>>(`/api/volumes/${id}/resize`, data);
+    return api.post<AcceptedMutation<Volume>>(
+      `/api/volumes/${id}/resize`, data, undefined, idempotencyKey
+    );
   },
 
   snapshot(
     id: string,
-    data: CreateVolumeSnapshotRequest
+    data: CreateVolumeSnapshotRequest,
+    idempotencyKey?: string
   ): Promise<AcceptedMutation<VolumeSnapshot>> {
     return api.post<AcceptedMutation<VolumeSnapshot>>(
       `/api/volumes/${id}/snapshot`,
-      data
+      data,
+      undefined,
+      idempotencyKey
     );
   },
 
-  clone(id: string, data: CloneVolumeRequest): Promise<AcceptedMutation<Volume>> {
-    return api.post<AcceptedMutation<Volume>>(`/api/volumes/${id}/clone`, data);
+  clone(
+    id: string, data: CloneVolumeRequest, idempotencyKey?: string
+  ): Promise<AcceptedMutation<Volume>> {
+    return api.post<AcceptedMutation<Volume>>(
+      `/api/volumes/${id}/clone`, data, undefined, idempotencyKey
+    );
   },
 
   listSnapshots(id: string, signal?: AbortSignal): Promise<VolumeSnapshot[]> {
@@ -87,10 +106,11 @@ export const volumesApi = {
 
   deleteSnapshot(
     volumeId: string,
-    snapshotId: string
+    snapshotId: string,
+    idempotencyKey?: string
   ): Promise<AcceptedMutation<VolumeSnapshot>> {
     return api.delete<AcceptedMutation<VolumeSnapshot>>(
-      `/api/volumes/${volumeId}/snapshots/${snapshotId}`
+      `/api/volumes/${volumeId}/snapshots/${snapshotId}`, undefined, idempotencyKey
     );
   },
 };

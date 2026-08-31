@@ -144,6 +144,11 @@ extension Application {
         // sync and owns the ordinary convergence-error columns.
         migrations.add(AddDesiredStateAssemblyFailureToVM())
 
+        // STR-289: caller-scoped, expiring replay claims for HTTP mutations. The
+        // durable audit event remains permanent; only this deduplication window is
+        // swept.
+        migrations.add(CreateIdempotencyKeys())
+
         // Agent enrollment now hands the host one opaque bearer and derives every
         // identity/network value server-side when it is redeemed. Existing rows
         // stay on their issued bootstrap commands; no secret can be backfilled.
