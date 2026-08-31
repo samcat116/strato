@@ -1,0 +1,126 @@
+control-plane/web/src/components/networks/network-acl-dialog.tsx
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1-646
+control-plane/web/src/lib/api/networks.ts
+  s_97aa0ae9838634::t_b2fe8a65344cfc 3,7-8,10,37-82
+control-plane/web/src/lib/hooks/index.ts
+  s_97aa0ae9838634::t_b2fe8a65344cfc 170-178
+docs/architecture/wire-protocol.md
+  s_97aa0ae9838634::t_b2fe8a65344cfc 53,105-111
+  s_97aa0ae9838634::t_56407c6ce6a12f 112
+agent/Tests/StratoAgentTests/AgentLogLevelTests.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1-2,4-12,14-67,74-75,77-111,113-115
+  s_97aa0ae9838634::t_69209bdfec9f89 3
+  s_97aa0ae9838634::t_36cf4741c0135f 13,68-73,76,112
+control-plane/Sources/App/Migrations/CreateNetworkACLs.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1-129
+control-plane/Sources/App/openapi.yaml
+  s_97aa0ae9838634::t_b2fe8a65344cfc 170,1824-1921,8615-8622,11528-11620,11622,11625
+  s_97aa0ae9838634::t_40fb73dfae22cf 11621,11623-11624,11626-11627
+agent/Tests/StratoAgentTests/NetworkACLReconcilerTests.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1-596
+control-plane/web/src/components/networks/network-table.tsx
+  s_97aa0ae9838634::t_b2fe8a65344cfc 4,26,34,41,94,105,183-194
+agent/Sources/StratoAgent/Agent.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 103-104,515,2519-2520,2525-2528,2531,2533,2537-2554,2556,2562-2565,2584-2587,2744-2747,2750-2753,2756-2759,2763-2766,2769-2772,2775-2778,2781-2784,2794-2800,2802-2805,2811
+control-plane/web/src/types/api.ts
+  s_97aa0ae9838634::t_b2fe8a65344cfc 2148-2188
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 717-781,1056-1060,1080-1081,1101
+control-plane/Sources/App/routes.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 73
+control-plane/Sources/App/Models/NetworkACLRule.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1-169
+control-plane/web/src/components/networks/index.ts
+  s_97aa0ae9838634::t_b2fe8a65344cfc 4
+docs/architecture/networking.md
+  s_97aa0ae9838634::t_b2fe8a65344cfc 36-37,600-602,652-654,667-675,682-683,686-688,717-718,785-788,809-815,888-889,900-997
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 8-10,540,547-583,1067,1092,1098-1121
+  s_97aa0ae9838634::t_41288bf10cd7a7 1122
+agent/Sources/StratoAgent/MetadataServerCommand.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 61-67
+control-plane/web/src/app/(dashboard)/networks/page.tsx
+  s_97aa0ae9838634::t_b2fe8a65344cfc 13,22-25,81-83,102-109
+  s_97aa0ae9838634::t_4e26b0cea7be75 110
+control-plane/Sources/App/Models/NetworkACL.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1-74
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 286,450,598-607,1144,1175
+control-plane/Sources/App/Services/NetworkACLService.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1-141
+docs/adr/0010-layer-network-acls-with-ovn-tiers.md
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1-130
+agent/Package.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 168
+agent/Sources/StratoAgentCore/WireMessageLogger.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1-156
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 136-137,139
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 280-281,308-312,1045-1085
+  s_97aa0ae9838634::t_c0148d2e52321d 1086-1087
+control-plane/Sources/App/Controllers/NetworkACLController.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1-221
+control-plane/web/src/lib/hooks/use-networks.ts
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1,3,16-65
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1614,1617,1625-1650,3149,3164-3167,3203-3204,3229-3233,3312-3447
+  s_97aa0ae9838634::t_fd64a9cd99cfbc 3448-3449
+agent/Sources/StratoAgentCore/NetworkACLReconciler.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1-619
+shared/Tests/StratoSharedTests/NetworkACLProtocolTests.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1-76
+CONTEXT.md
+  s_97aa0ae9838634::t_b2fe8a65344cfc 332-348
+shared/Sources/StratoShared/WireProtocol.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 14-16,23
+control-plane/web/src/components/networks/network-acl-permissions.test.tsx
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1-132
+agent/Sources/StratoAgent/WebSocketClient.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 8,47-53,83,92,175-177,189,191-194,333-343,351-355
+agent/Sources/StratoAgentCore/AgentLogLevel.swift
+  s_97aa0ae9838634::t_9b430831e08361 59,61-64,66,70-72,78-81
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1-58,60,65,67-69,73-77,82-83
+agent/Tests/StratoAgentTests/SecurityGroupReconcilerTests.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 88,200,208,280,288,290-295,350,525-556,666,679,699,718,720-729,734,798
+control-plane/web/src/types/openapi.ts
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1298-1373,6649-6706,10185-10186,12321-12447
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_97aa0ae9838634::t_9b430831e08361 94-95,213-215
+  s_97aa0ae9838634::t_b2fe8a65344cfc 91-93,97-99,111,116-125,211-212,216-217,239,365-371
+  s_539a40c6da65a7::t_3afd75ae077bdb 372-373
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 20
+agent/Sources/StratoAgentCore/SecurityGroupReconciler.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 65-76,84,86-87,104,114,128-129,181-183,267,353,360,403,408,452,481,486,491,496,503,508,518,523,529,534,677-679,716-733,746-750,765,770,772,781-783,785,800,806-811
+agent/Tests/StratoAgentTests/WireMessageLoggingTests.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1-336
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 138-141
+control-plane/Tests/AppPlatformTests/NetworkACLControllerTests.swift
+  s_97aa0ae9838634::t_b2fe8a65344cfc 1-459
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "8a7b34aa4a3750e9b154fe0bd62d297cc65174f1",
+  "prompts": {},
+  "sessions": {
+    "s_539a40c6da65a7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a054b0-8ac0-74a0-9d98-faaf8cbd1c05",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_97aa0ae9838634": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05538-8017-7a21-aac4-876e35e96be4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
