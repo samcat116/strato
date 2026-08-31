@@ -12,13 +12,7 @@ extension Request {
     /// - Throws: `.unauthorized` if unauthenticated, `.notFound` if the VM does not
     ///   exist, `.forbidden` if the user lacks `action` on this VM.
     func authorizedVM(_ vmID: UUID, action: String) async throws -> VM {
-        guard let vm = try await VM.find(vmID, on: db) else {
-            throw Abort(.notFound)
-        }
-
-        try await authorize(action, on: IAMNode(type: .virtualMachine, id: vmID))
-
-        return vm
+        try await authorizedResource(vmID, as: VM.self, nodeType: .virtualMachine, action: action)
     }
 
     /// Resolve a VM id supplied in another resource's request body. Returns

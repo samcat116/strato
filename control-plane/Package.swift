@@ -11,73 +11,34 @@ let package = Package(
     dependencies: [
         // StratoShared for common models and protocols
         .package(path: "../shared"),
-        // 💧 A server-side Swift web framework.
         .package(url: "https://github.com/vapor/vapor.git", from: "4.122.0"),
-        // 🗄 An ORM for SQL and NoSQL databases.
         .package(url: "https://github.com/vapor/fluent.git", from: "4.13.0"),
-        // 🐘 Fluent driver for Postgres.
         .package(url: "https://github.com/vapor/fluent-postgres-driver.git", from: "2.12.0"),
-        // 🔵 Non-blocking, event-driven networking for Swift. Used for custom executors
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.101.0"),
-        // 🔐 WebAuthn/Passkey authentication
         .package(url: "https://github.com/swift-server/webauthn-swift.git", branch: "main"),
         .package(url: "https://github.com/samcat116/swift-scim.git", branch: "main"),
-        // 🔐 JWT token handling and HTTP client functionality
         .package(url: "https://github.com/vapor/jwt.git", from: "5.1.0"),
-        // 📡 Shared Signals Framework receiver (SSF/CAEP/RISC security events,
-        // issue #38). No tagged releases yet, so pin by revision.
         .package(
             url: "https://github.com/samcat116/swift-ssf.git",
             revision: "5fe0c0247c02922876a8a76f93f42102625ba635"),
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.24.0"),
-        // 🔐 Swift Crypto for cryptographic operations
         .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
-        // Typed, composable configuration providers. Environment values are
-        // resolved once at startup through the throwing fetch APIs so malformed
-        // overrides cannot silently fall back to defaults.
         .package(url: "https://github.com/apple/swift-configuration.git", from: "1.2.0"),
-        // X.509 parsing and chain verification (SPIFFE SVID validation). Keep in
-        // lockstep with agent/ and shared/.
         .package(url: "https://github.com/apple/swift-certificates.git", from: "1.19.4"),
-        // OpenAPI generator and Vapor bindings (spec-first)
         .package(url: "https://github.com/apple/swift-openapi-generator.git", from: "1.2.0"),
         .package(url: "https://github.com/apple/swift-openapi-runtime.git", from: "1.0.0"),
         .package(url: "https://github.com/swift-server/swift-openapi-vapor.git", from: "1.0.0"),
-        // 📊 OpenTelemetry observability (metrics, logging, tracing)
         .package(url: "https://github.com/swift-otel/swift-otel.git", from: "1.0.0"),
-        // 📈 swift-metrics facade (backed by swift-otel when OTEL_METRICS_ENABLED)
         .package(url: "https://github.com/apple/swift-metrics.git", from: "2.0.0"),
-        // 🧵 swift-distributed-tracing facade (backed by swift-otel when
-        // OTEL_TRACES_ENABLED; a no-op tracer otherwise, so `withSpan` call
-        // sites need no feature gating). Already pulled transitively by
-        // swift-otel and Vapor; declared here so the App target can `import
-        // Tracing` directly.
         .package(url: "https://github.com/apple/swift-distributed-tracing.git", from: "1.4.0"),
-        // 🔴 Valkey client (coordination, rate limiting, sessions)
         .package(url: "https://github.com/valkey-io/valkey-swift.git", from: "1.4.0"),
-        // SPIRE Server registration API (gRPC over Unix socket / loopback TCP)
         .package(url: "https://github.com/grpc/grpc-swift-2.git", from: "2.0.0"),
         .package(url: "https://github.com/grpc/grpc-swift-nio-transport.git", from: "2.0.0"),
         .package(url: "https://github.com/grpc/grpc-swift-protobuf.git", from: "2.0.0"),
         .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.28.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
-        // TLS primitives for the SPIRE server mTLS verification callback
-        // (already in the graph transitively via grpc-swift-nio-transport).
-        // 2.37.1+ leads its default TLS group list with X25519MLKEM768, giving
-        // hybrid post-quantum key exchange. Do not lower this floor.
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.37.1"),
-        // ☁️ S3-compatible object storage for images (IMAGE_STORAGE_BACKEND=s3).
-        // Any S3 API implementation works — AWS, MinIO, Garage, R2, Ceph RGW —
-        // via IMAGE_S3_ENDPOINT; we don't bundle a service.
         .package(url: "https://github.com/soto-project/soto.git", from: "7.0.0"),
-        // 🌲 Cedar policy engine (IAM phases 3-5): Swift wrapper over the
-        // cedar-policy crate, shipping prebuilt binaries for Linux and Apple.
-        //
-        // Pinned to a revision, not a version, until swift-cedar cuts the
-        // release carrying `SymbolicCompiler` — the symbolic analysis IAM
-        // phase 7 (#484) runs on policy writes. Move back to `from:` on the
-        // tag; leaving a revision pin here means dependency updates stop
-        // reaching us silently.
         .package(url: "https://github.com/samcat116/swift-cedar.git", from: "0.2.0"),
     ],
     targets: [
@@ -218,6 +179,7 @@ let package = Package(
                 .product(name: "VaporTesting", package: "vapor"),
                 .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
                 .product(name: "MetricsTestKit", package: "swift-metrics"),
+                .product(name: "Logging", package: "swift-log"),
                 // Mints the throwaway server certificate GuardedHTTPClientTests
                 // uses to prove TLS is still verified against the hostname when
                 // the connection is pinned to an address.

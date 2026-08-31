@@ -506,6 +506,8 @@ opentelemetry:
   metrics:
     enabled: true
   logs:
+    # The control plane always logs to its local console/stdout sink. Enabling
+    # this adds OTLP export as a second sink; it never replaces console output.
     enabled: true
   traces:
     enabled: true
