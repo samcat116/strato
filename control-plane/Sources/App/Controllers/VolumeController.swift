@@ -900,7 +900,7 @@ struct VolumeController: RouteCollection {
         // (STR-181): an overlay grows toward it with no API call to refuse along
         // the way, so the pool has to be able to absorb it fully grown.
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
-            try await QuotaEnforcementService.reserveVolumeSnapshot(
+            try await QuotaEnforcementService.reserveSnapshotStorage(
                 for: project, environment: volume.environment, size: volume.size, on: db)
             try await snapshot.save(on: db)
             try await RoleBindingService.grant(

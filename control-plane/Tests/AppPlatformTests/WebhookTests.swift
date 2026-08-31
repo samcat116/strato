@@ -751,6 +751,69 @@ struct WebhookDeliverySweepTests {
         await origin.shutdown()
     }
 
+    @Test("A missing signing-secret key blocks without consuming attempts or auto-disable budget")
+    func missingEncryptionKeyIsNonPunitive() async throws {
+        let origin = try await HookOrigin.start()
+        do {
+            try await withTestApp { app in
+                let fixture = try await makeFixture(app)
+                let openingService = SecretsEncryptionService(
+                    key: try SecretsEncryptionService.parseKey(
+                        String(repeating: "cd", count: 32)))
+                app.secretsEncryption = SecretsEncryptionService(
+                    key: try SecretsEncryptionService.parseKey(
+                        String(repeating: "ab", count: 32)))
+                let subscription = try await makeSubscription(
+                    app, fixture: fixture,
+                    url: "http://127.0.0.1:\(origin.port)/hook")
+                subscription.signingSecret = try openingService.encrypt("whsec_blocked")
+                let originalFailingSince = Date().addingTimeInterval(-86_400 * 4)
+                subscription.failingSince = originalFailingSince
+                try await subscription.save(on: app.db)
+
+                let delivery = WebhookDelivery(
+                    subscriptionID: subscription.id!, eventID: UUID(),
+                    eventType: .webhookTest, payload: "{}")
+                try await delivery.save(on: app.db)
+
+                await app.webhookDelivery.sweepOnce(acquiringLock: false)
+
+                var blocked = try #require(
+                    try await WebhookDelivery.find(delivery.id, on: app.db))
+                #expect(blocked.statusValue == .pending)
+                #expect(blocked.attempts == 0)
+                #expect(blocked.lastAttemptAt == nil)
+                #expect(blocked.lastError?.contains("does not have") == true)
+                #expect(origin.captured.withLockedValue { $0.isEmpty })
+                let unchangedSubscription = try #require(
+                    try await WebhookSubscription.find(subscription.id, on: app.db))
+                #expect(unchangedSubscription.isActive)
+                #expect(unchangedSubscription.disabledReason == nil)
+                #expect(
+                    abs(
+                        try #require(unchangedSubscription.failingSince)
+                            .timeIntervalSince(originalFailingSince)) < 0.01)
+
+                // Restoring the key is sufficient: make the pending row due and
+                // the ordinary sweep delivers it without a manual redelivery.
+                app.secretsEncryption = openingService
+                blocked.nextAttemptAt = Date()
+                try await blocked.save(on: app.db)
+                await app.webhookDelivery.sweepOnce(acquiringLock: false)
+
+                blocked = try #require(
+                    try await WebhookDelivery.find(delivery.id, on: app.db))
+                #expect(blocked.statusValue == .succeeded)
+                #expect(blocked.attempts == 1)
+                #expect(origin.captured.withLockedValue { $0.count } == 1)
+            }
+        } catch {
+            await origin.shutdown()
+            throw error
+        }
+        await origin.shutdown()
+    }
+
     @Test("A delivery out of attempts goes dead")
     func exhaustedDeliveriesGoDead() async throws {
         let origin = try await HookOrigin.start()

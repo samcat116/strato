@@ -93,6 +93,19 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "last_error_at")
     var lastErrorAt: Date?
 
+    /// A control-plane assembly failure is independent of the convergence
+    /// progress an agent reports. Keeping it in its own columns prevents a
+    /// heartbeat for the VM's last successfully received generation from
+    /// clearing the reason while the VM is still omitted from every new sync.
+    @OptionalField(key: "desired_state_assembly_error")
+    var desiredStateAssemblyError: String?
+
+    @OptionalField(key: "desired_state_assembly_error_generation")
+    var desiredStateAssemblyErrorGeneration: Int64?
+
+    @OptionalField(key: "desired_state_assembly_error_at")
+    var desiredStateAssemblyErrorAt: Date?
+
     /// Internal claim for the sustained-divergence warning. Nil starts a new
     /// episode; the sweep atomically stamps it before logging.
     @OptionalField(key: "divergence_detected_at")

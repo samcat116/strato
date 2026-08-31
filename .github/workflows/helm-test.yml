@@ -85,6 +85,19 @@ jobs:
           helm template strato-test helm/strato-control-plane/ > /tmp/default-template.yaml
           echo "Default template generated successfully"
 
+      - name: Assert control-plane build identity
+        run: |
+          if grep -q 'name: STRATO_GIT_SHA' /tmp/default-template.yaml; then
+            echo "Default chart must preserve the full SHA baked into the image"
+            exit 1
+          fi
+
+          git_sha=0123456789abcdef0123456789abcdef01234567
+          helm template strato-git-sha helm/strato-control-plane/ \
+            --set-string strato.gitSHA="$git_sha" > /tmp/git-sha-template.yaml
+          grep -A 1 'name: STRATO_GIT_SHA' /tmp/git-sha-template.yaml \
+            | grep -q "value: \"$git_sha\""
+
       - name: Template every checked-in values scenario
         run: |
           for values in helm/strato-control-plane/ci/*.yaml; do

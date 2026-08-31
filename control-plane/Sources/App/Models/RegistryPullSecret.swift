@@ -32,7 +32,8 @@ final class RegistryPullSecret: Model, @unchecked Sendable {
     var username: String
 
     /// The password or long-lived token, encrypted at rest with
-    /// `SecretsEncryptionService` (`enc:v1:` prefix) like OIDC client secrets.
+    /// `SecretsEncryptionService` (`enc:v2:<key-id>:` envelope; legacy v1 is
+    /// still readable) like OIDC client secrets.
     /// Always store through `req.secretsEncryption.encrypt`.
     @Field(key: "secret")
     var secret: String

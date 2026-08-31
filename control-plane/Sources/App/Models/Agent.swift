@@ -87,14 +87,6 @@ final class Agent: Model, Content, @unchecked Sendable {
     @Parent(key: "site_id")
     var site: Site
 
-    /// Wire protocol version the agent last registered with; nil for rows that
-    /// predate this column. Sync assembly keys site topology authority on it:
-    /// a pre-v4 agent ignores `networksAuthoritative` and would misread a
-    /// non-authoritative empty sync as a full L3 teardown, so it must stay on
-    /// legacy per-node scoping even when assigned to a site.
-    @OptionalField(key: "wire_protocol_version")
-    var wireProtocolVersion: Int?
-
     /// Whether the agent advertised the sandbox runtime at its last
     /// registration (issue #415): Firecracker + KVM usable and the sandbox
     /// guest base image present on its disk. The scheduler gates sandbox

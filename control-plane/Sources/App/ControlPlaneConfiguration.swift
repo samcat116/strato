@@ -239,6 +239,7 @@ enum ControlPlaneStringKey: String, CaseIterable, Sendable {
     case ssfTransmitterAllowedSuffixes = "SSF_TRANSMITTER_ALLOWED_SUFFIXES"
     case ssfCallbackBaseURL = "SSF_CALLBACK_BASE_URL"
     case stratoSecretEncryptionKey = "STRATO_SECRET_ENCRYPTION_KEY"
+    case stratoSecretEncryptionKeysPrevious = "STRATO_SECRET_ENCRYPTION_KEYS_PREVIOUS"
     case iamDecisionLogMaxConcurrency = "IAM_DECISION_LOG_MAX_CONCURRENCY"
     case iamSymCCSolverPath = "IAM_SYMCC_SOLVER_PATH"
 
@@ -272,7 +273,8 @@ enum ControlPlaneStringKey: String, CaseIterable, Sendable {
             .spireServerAPIAddress, .spireServerPublicAddress, .spiffeEndpointSocket,
             .spiffeJWTAudience, .spireMetricsPrometheusURL, .guestIdentityAudiences,
             .ssfTransmitterAllowedHosts, .ssfTransmitterAllowedSuffixes, .ssfCallbackBaseURL,
-            .stratoSecretEncryptionKey, .iamDecisionLogMaxConcurrency, .iamSymCCSolverPath:
+            .stratoSecretEncryptionKey, .stratoSecretEncryptionKeysPrevious,
+            .iamDecisionLogMaxConcurrency, .iamSymCCSolverPath:
             nil
         }
     }
@@ -297,7 +299,7 @@ enum ControlPlaneStringKey: String, CaseIterable, Sendable {
         switch self {
         case .databasePassword, .valkeyPassword, .sessionValkeyPassword,
             .imageS3AccessKeyID, .imageS3SecretAccessKey, .imageS3SessionToken,
-            .stratoSecretEncryptionKey:
+            .stratoSecretEncryptionKey, .stratoSecretEncryptionKeysPrevious:
             true
         default:
             false
