@@ -1,0 +1,59 @@
+control-plane/Sources/App/Bootstrap/StartupReconciliation.swift
+  s_14cd71c8010725::t_9688811bac1bf4 21-24
+control-plane/Sources/App/Bootstrap/StateStoresBootstrap.swift
+  s_14cd71c8010725::t_0323447d8a5346 59-62,67
+control-plane/Sources/App/ControlPlaneConfiguration.swift
+  s_14cd71c8010725::t_ab1bef6a1459d9 237,271-272,297
+control-plane/Sources/App/Controllers/HealthController.swift
+  s_14cd71c8010725::t_355211493690f7 67-69,161-172
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_14cd71c8010725::t_e324537c91b2e4 22
+control-plane/Sources/App/Models/RegistryPullSecret.swift
+  s_14cd71c8010725::t_4e253230bfeaff 35-36
+control-plane/Sources/App/Services/SecretsEncryptionService.swift
+  s_14cd71c8010725::t_82244d80215bef 4-5,10-16,18-22,24-25,27-30,32-35,37-40,43-119,122-131,135-140,149,155,161,163-174,176-180,182-183,186-189,191-238,241-303,305-385,388,390-398,401,406-418,420-446,448,450-458,460-467,469-492,494-525,527-534,536-537,539-556,558-600,602
+control-plane/Sources/App/Services/WebhookDeliveryService.swift
+  s_14cd71c8010725::t_b882aacad718a1 232-264,269-270,305-309,312
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_14cd71c8010725::t_fd501fdffaf546 249-258
+control-plane/Tests/AppIdentityTests/SecretsEncryptionServiceTests.swift
+  s_14cd71c8010725::t_d59cea87c765e4 13,19-24,54-77,88-92,108,122-131,161-175,283-429
+control-plane/Tests/AppPlatformTests/HealthControllerTests.swift
+  s_14cd71c8010725::t_c5a8562ed0c01f 210-243
+control-plane/Tests/AppPlatformTests/WebhookTests.swift
+  s_14cd71c8010725::t_ddb874e472a86e 754-816
+deploy/compose/.env.example
+  s_14cd71c8010725::t_9f2d174ef9d79a 14-17
+deploy/compose/docker-compose.yml
+  s_14cd71c8010725::t_02bfcf73c7bf0e 319-320
+deploy/compose/setup.sh
+  s_14cd71c8010725::t_a10670a344ee8d 107-108,111-113,115-116
+docs/deployment/docker-compose.md
+  s_14cd71c8010725::t_0f4d8100a82293 177-178,182-221
+docs/deployment/kubernetes.md
+  s_14cd71c8010725::t_84c01e04720cda 149
+docs/deployment/observability.md
+  s_14cd71c8010725::t_59b3b496e2ba03 166
+helm/strato-control-plane/README.md
+  s_14cd71c8010725::t_d1e27a9c4ad92b 151-153
+helm/strato-control-plane/templates/deployment.yaml
+  s_14cd71c8010725::t_919c8eb0d721d2 196,202-209
+helm/strato-control-plane/values.yaml
+  s_14cd71c8010725::t_7266738071e8ca 367-372,376
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "a0a88b09fe1580d0aa799bd948ec349c66175cbb",
+  "prompts": {},
+  "sessions": {
+    "s_14cd71c8010725": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04f88-bfb7-7ad1-a1e8-14771fb6a857",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
