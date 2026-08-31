@@ -7,6 +7,42 @@ import StratoShared
 /// agent-derived networking, queue sizing, or machine configuration. Agents
 /// translate those details into their driver-native configuration.
 struct VMSpecBuilder {
+    /// A persisted per-VM invariant that prevents this VM's wire spec from
+    /// being assembled. The code is deliberately bounded for telemetry; the
+    /// human-readable description may carry the row-specific detail instead.
+    enum AssemblyError: Error, LocalizedError, Equatable, Sendable {
+        case bootVolumeCount(Int)
+        case nonCanonicalBootVolume
+        case terminatingBootVolume
+        case attachedVolumeMissingIdentity
+        case invalidAttachmentDeviceName(volumeID: UUID)
+
+        var code: String {
+            switch self {
+            case .bootVolumeCount: return "boot_volume_count"
+            case .nonCanonicalBootVolume: return "non_canonical_boot_volume"
+            case .terminatingBootVolume: return "terminating_boot_volume"
+            case .attachedVolumeMissingIdentity: return "missing_volume_identity"
+            case .invalidAttachmentDeviceName: return "invalid_volume_device_name"
+            }
+        }
+
+        var errorDescription: String? {
+            switch self {
+            case .bootVolumeCount(let count):
+                return "expected exactly one managed boot volume, found \(count)"
+            case .nonCanonicalBootVolume:
+                return "the managed boot volume is not the canonical writable disk0 at boot order 0"
+            case .terminatingBootVolume:
+                return "a live VM has a terminating boot volume"
+            case .attachedVolumeMissingIdentity:
+                return "an attached volume is missing its managed identity"
+            case .invalidAttachmentDeviceName(let volumeID):
+                return "managed volume \(volumeID) has no valid attachment device name"
+            }
+        }
+    }
+
     /// Upper bound on a guest kernel cmdline, in unicode scalars. The VM-create
     /// API applies the same 4096 bound in UTF-8 bytes; the two agree for the
     /// ASCII a cmdline is made of, and where they diverge this sink is the
@@ -159,9 +195,11 @@ struct VMSpecBuilder {
         }
     }
 
-    /// Builds the canonical VM spec. Every VM must carry exactly one managed
-    /// boot volume; a missing or ambiguous boot disk is a persisted-data
-    /// invariant violation, never a reason to reconstruct a path-only disk.
+    /// Builds the canonical VM spec. Every live VM must carry exactly one
+    /// managed boot volume; a missing or ambiguous boot disk is a persisted-
+    /// data invariant violation, never a reason to reconstruct a path-only
+    /// disk. A terminating VM needs no boot volume to describe its teardown:
+    /// the VM row itself is the level-triggered instruction to remove it.
     /// - Parameters:
     ///   - vm: The VM to build the spec for (must have volumes eager-loaded with .with(\.$volumes))
     ///   - image: Image defaults used for CPU, memory, and direct-kernel boot metadata
@@ -201,24 +239,20 @@ struct VMSpecBuilder {
 
         let attachedVolumes = volumes.filter { $0.$vm.id != nil }
         let bootVolumes = attachedVolumes.filter { $0.volumeType == .boot }
-        guard bootVolumes.count == 1 else {
-            throw Abort(
-                .internalServerError,
-                reason: "VM \(vm.id?.uuidString ?? "unsaved") must have exactly one managed boot volume")
-        }
-        let bootVolume = bootVolumes[0]
-        guard bootVolume.deviceName == VolumeDeviceName.disk(0).rawValue,
-            bootVolume.bootOrder == 0,
-            !bootVolume.readonly
-        else {
-            throw Abort(
-                .internalServerError,
-                reason: "VM \(vm.id?.uuidString ?? "unsaved") has a non-canonical boot volume")
-        }
-        if vm.desiredStatus != .absent, bootVolume.desiredStatus != .present {
-            throw Abort(
-                .internalServerError,
-                reason: "Live VM \(vm.id?.uuidString ?? "unsaved") has a terminating boot volume")
+        if vm.desiredStatus != .absent {
+            guard bootVolumes.count == 1 else {
+                throw AssemblyError.bootVolumeCount(bootVolumes.count)
+            }
+            let bootVolume = bootVolumes[0]
+            guard bootVolume.deviceName == VolumeDeviceName.disk(0).rawValue,
+                bootVolume.bootOrder == 0,
+                !bootVolume.readonly
+            else {
+                throw AssemblyError.nonCanonicalBootVolume
+            }
+            guard bootVolume.desiredStatus == .present else {
+                throw AssemblyError.terminatingBootVolume
+            }
         }
         let desiredVolumes =
             vm.desiredStatus == .absent
@@ -290,21 +324,20 @@ struct VMSpecBuilder {
         // list is the boot-time convenience that rebuilds the same disk set.
         for volume in sortedVolumes where volume.$vm.id != nil && volume.desiredStatus == .present {
             guard let volumeID = volume.id else {
-                throw Abort(.internalServerError, reason: "Attached volume is missing its managed identity")
+                throw AssemblyError.attachedVolumeMissingIdentity
             }
             // An attached row without a legal device name cannot exist: the API
             // validates one on the way in, and the schema has a
             // `vm_id IS NULL OR device_name IS NOT NULL` check plus the
-            // `(vm_id, device_name)` unique index. Skipped rather than given a
+            // `(vm_id, device_name)` unique index. Failed rather than given a
             // synthesized `disk<n>` if one somehow does — that fallback could
             // collide with an explicit name on the same VM, and a duplicate id
-            // is what stops the VM booting at all.
+            // is what stops the VM booting at all. The desired-state assembler
+            // catches this per VM and omits only that entry.
             guard let rawDeviceName = volume.deviceName,
                 let deviceName = VolumeDeviceName(rawDeviceName)
             else {
-                throw Abort(
-                    .internalServerError,
-                    reason: "Managed volume \(volumeID) has no valid attachment device name")
+                throw AssemblyError.invalidAttachmentDeviceName(volumeID: volumeID)
             }
             specs.append(
                 VolumeSpec(

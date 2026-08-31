@@ -1,5 +1,5 @@
 {
-  "originHash" : "a924df599fcb47cb1ac15afa00ba9cd9980d951865f044fc089028deddd01534",
+  "originHash" : "77327b0e5c5265a833cb52254b880bb705bbe0afe9a0fb40f169a04059493660",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -69,8 +69,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/grpc/grpc-swift-nio-transport.git",
       "state" : {
-        "revision" : "c46f77c07c3ae4fce4734e7af03fcb35ab544428",
-        "version" : "2.9.1"
+        "revision" : "eaad084d6c26ff1f2e96f9c2ab76ef84d7165ab6",
+        "version" : "2.9.2"
       }
     },
     {
@@ -482,8 +482,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/valkey-io/valkey-swift.git",
       "state" : {
-        "revision" : "e93f72554e0961e056243dae0b204d5c7d843f49",
-        "version" : "1.4.0"
+        "revision" : "59d04ff34b513410e0a6d48d917e95bce7032ae3",
+        "version" : "1.5.0"
       }
     },
     {

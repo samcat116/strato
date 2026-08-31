@@ -120,8 +120,8 @@ final class WorkloadSizeValidationTests {
 
     // MARK: - Admission through the service
 
-    @Test("reserveSandboxSnapshot answers 403 when the size would overflow the storage counter")
-    func reserveSandboxSnapshotRejectsOverflow() async throws {
+    @Test("reserveSnapshotStorage answers 403 when the size would overflow the storage counter")
+    func reserveSnapshotStorageRejectsOverflow() async throws {
         try await withApp { app, project, _, _ in
             let builder = TestDataBuilder(db: app.db)
             // A VM's disk gives the quota a non-zero measured storage baseline,
@@ -130,7 +130,7 @@ final class WorkloadSizeValidationTests {
             _ = try await builder.createResourceQuota(name: "snapshots", project: project)
 
             let error = await #expect(throws: Abort.self) {
-                try await QuotaEnforcementService.reserveSandboxSnapshot(
+                try await QuotaEnforcementService.reserveSnapshotStorage(
                     for: project, environment: "development", size: Int64.max, on: app.db)
             }
             #expect(error?.status == .forbidden)

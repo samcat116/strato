@@ -9,7 +9,7 @@ import Vapor
 
 @Suite("Current schema baseline", .serialized)
 struct CurrentSchemaBaselineTests {
-    private static let expectedCatalogMD5 = "f8bbc7d3517564dcaed47194f25349f7"
+    private static let expectedCatalogMD5 = "836f85a4a909c640e9cf46f62f39845a"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -30,7 +30,7 @@ struct CurrentSchemaBaselineTests {
 
             let counts = try await catalogCounts(on: app.db)
             #expect(counts.tables == 65)
-            #expect(counts.columns == 846)
+            #expect(counts.columns == 849)
             #expect(counts.constraints == 297)
             #expect(counts.indexes == 194)
             #expect(counts.enums == 3)
