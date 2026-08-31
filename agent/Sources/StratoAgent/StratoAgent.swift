@@ -88,8 +88,7 @@ extension StratoAgent {
 /// Launch path for `run`.
 private func launchAgent(options: AgentOptions) async throws {
     let debug = options.debug
-    let baseLoggingMetadata = AgentLoggingMetadata.base()
-    let baseMetadataProvider = Logger.MetadataProvider { baseLoggingMetadata }
+    let processLoggingMetadata = DynamicLogMetadata(AgentLoggingMetadata.base())
     LoggingSystem.bootstrap(
         { label, metadataProvider in
             var handler = CustomLogHandler(
@@ -98,7 +97,7 @@ private func launchAgent(options: AgentOptions) async throws {
             handler.logLevel = debug ? .debug : .info
             return handler
         },
-        metadataProvider: baseMetadataProvider)
+        metadataProvider: processLoggingMetadata.provider)
 
     var logger = Logger(label: "strato-agent")
     logger.logLevel = debug ? .debug : .info
@@ -205,7 +204,7 @@ private func launchAgent(options: AgentOptions) async throws {
 
     // Update log level based on final configuration
     logger.logLevel = debug ? .debug : Logger.Level(rawValue: finalLogLevel) ?? .info
-    logger[metadataKey: LogMetadata.Key.agentName] = .string(finalAgentID)
+    processLoggingMetadata[metadataKey: LogMetadata.Key.agentName] = .string(finalAgentID)
 
     logger.info(
         "Starting Strato Agent",

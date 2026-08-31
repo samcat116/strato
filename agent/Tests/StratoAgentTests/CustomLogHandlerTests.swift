@@ -190,12 +190,14 @@ struct CustomLogHandlerTests {
             [
                 "vm_id": "provider-vm",
                 "request_id": "provider-request",
+                LogMetadata.Key.serviceName: "provider-service",
             ]
         }
         var handler = makeHandler(metadataProvider: provider, destination: destination)
         handler.metadata = [
             LogMetadata.Key.vmID: "base-vm",
             LogMetadata.Key.requestID: "base-request",
+            LogMetadata.Key.serviceName: "logger-service",
         ]
 
         handler.log(
@@ -213,10 +215,38 @@ struct CustomLogHandlerTests {
         #expect(metadata[LogMetadata.Key.vmID] as? String == "event-vm")
         #expect(metadata[LogMetadata.Key.requestID] as? String == "event-request")
         #expect(metadata[LogMetadata.Key.projectID] as? String == "canonical-project")
+        #expect(metadata[LogMetadata.Key.serviceName] as? String == "logger-service")
         #expect(metadata["vmId"] == nil)
         #expect(metadata["vm_id"] == nil)
         #expect(metadata["request-id"] == nil)
         #expect(metadata["projectId"] == nil)
+    }
+
+    @Test("Dynamic process metadata reaches existing and newly created handlers")
+    func dynamicProcessMetadata() throws {
+        let processMetadata = DynamicLogMetadata([
+            LogMetadata.Key.serviceName: "strato-agent"
+        ])
+        let firstDestination = RecordingLogDestination()
+        let firstHandler = makeHandler(
+            metadataProvider: processMetadata.provider,
+            destination: firstDestination)
+
+        processMetadata[metadataKey: LogMetadata.Key.agentName] = "agent-284"
+        firstHandler.log(event: event(message: "existing"))
+
+        let secondDestination = RecordingLogDestination()
+        let secondHandler = makeHandler(
+            metadataProvider: processMetadata.provider,
+            destination: secondDestination)
+        secondHandler.log(event: event(message: "new"))
+
+        for destination in [firstDestination, secondDestination] {
+            let record = try parseRecord(try #require(destination.records.first))
+            let metadata = try #require(record["metadata"] as? [String: Any])
+            #expect(metadata[LogMetadata.Key.serviceName] as? String == "strato-agent")
+            #expect(metadata[LogMetadata.Key.agentName] as? String == "agent-284")
+        }
     }
 
     @Test("A canonical spelling wins over its alias regardless of insertion order")

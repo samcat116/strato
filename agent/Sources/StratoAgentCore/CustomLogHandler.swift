@@ -3,6 +3,34 @@ import Logging
 import StratoShared
 import Synchronization
 
+/// Synchronized process metadata shared by every handler created through
+/// `LoggingSystem`.
+///
+/// Values can be added after bootstrap when startup resolves them. Existing and
+/// subsequently created handlers read the latest snapshot for every event.
+public final class DynamicLogMetadata: Sendable {
+    private let storage: Mutex<Logger.Metadata>
+
+    public init(_ metadata: Logger.Metadata = [:]) {
+        storage = Mutex(metadata)
+    }
+
+    public var provider: Logger.MetadataProvider {
+        Logger.MetadataProvider { [self] in
+            storage.withLock { $0 }
+        }
+    }
+
+    public subscript(metadataKey key: String) -> Logger.Metadata.Value? {
+        get { storage.withLock { $0[key] } }
+        set {
+            storage.withLock { metadata in
+                metadata[key] = newValue
+            }
+        }
+    }
+}
+
 /// A JSON Lines handler for the agent's process log.
 ///
 /// Every record is encoded completely before it is handed to the shared writer. The
@@ -52,10 +80,8 @@ public struct CustomLogHandler: LogHandler {
     public func log(event: LogEvent) {
         // Canonicalize before each merge. Otherwise an event-level `vmId` would
         // coexist with, rather than override, a handler-level `strato.vm.id`.
-        var mergedMetadata = Self.canonicalized(metadata)
-        if let providedMetadata = metadataProvider?.get() {
-            mergedMetadata.merge(Self.canonicalized(providedMetadata)) { _, provided in provided }
-        }
+        var mergedMetadata = Self.canonicalized(metadataProvider?.get() ?? [:])
+        mergedMetadata.merge(Self.canonicalized(metadata)) { _, logger in logger }
         if let eventMetadata = event.metadata {
             mergedMetadata.merge(Self.canonicalized(eventMetadata)) { _, event in event }
         }
