@@ -42,7 +42,7 @@ spec:
             - sh
             - -c
             - |
-              until nc -w 1 -z {{ include "strato-control-plane.databaseWaitHost" . }} {{ .Values.strato.database.port }}; do echo waiting for database; sleep 2; done
+              until nc -w 1 -z {{ include "strato-control-plane.databaseWaitHost" . }} {{ include "strato-control-plane.databasePort" . }}; do echo waiting for database; sleep 2; done
       containers:
         - name: spire-db-init
           image: {{ .Values.spire.database.initImage | quote }}
@@ -50,7 +50,7 @@ spec:
             - name: PGHOST
               value: "{{ include "strato-control-plane.databaseWaitHost" . }}"
             - name: PGPORT
-              value: "{{ .Values.strato.database.port }}"
+              value: "{{ include "strato-control-plane.databasePort" . }}"
             - name: PGUSER
               value: postgres
             - name: PGDATABASE

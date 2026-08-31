@@ -213,7 +213,7 @@ public actor FirecrackerClient {
         logger.info(
             "Starting Firecracker process",
             metadata: [
-                "vm_id": "\(vmId)",
+                "strato.vm.id": "\(vmId)",
                 "socket": "\(socketPath)",
                 "binary": "\(firecrackerBinaryPath)",
                 "jailed": "\(jail != nil)",
@@ -302,7 +302,7 @@ public actor FirecrackerClient {
             if trackedPID == nil {
                 logger.error(
                     "Could not resolve the jailed VMM pid after spawn; the process will survive destroy",
-                    metadata: ["vm_id": "\(vmId)"])
+                    metadata: ["strato.vm.id": "\(vmId)"])
             }
         }
 
@@ -329,7 +329,7 @@ public actor FirecrackerClient {
             manager: manager
         )
 
-        logger.info("VM created successfully", metadata: ["vm_id": "\(vmId)"])
+        logger.info("VM created successfully", metadata: ["strato.vm.id": "\(vmId)"])
         return manager
     }
 
@@ -443,7 +443,7 @@ public actor FirecrackerClient {
         logger.info(
             "Re-adopted Firecracker VM via existing API socket",
             metadata: [
-                "vm_id": "\(vmId)",
+                "strato.vm.id": "\(vmId)",
                 "socket": "\(socketPath)",
                 "state": "\(info.state.rawValue)",
                 "pid": "\(pid.map(String.init) ?? "unknown")",
@@ -484,7 +484,7 @@ public actor FirecrackerClient {
             throw FirecrackerError.vmNotFound(vmId)
         }
 
-        logger.info("Destroying VM", metadata: ["vm_id": "\(vmId)"])
+        logger.info("Destroying VM", metadata: ["strato.vm.id": "\(vmId)"])
 
         // Disconnect manager
         await vm.manager.disconnect()
@@ -506,7 +506,7 @@ public actor FirecrackerClient {
                     if process.isRunning {
                         logger.warning(
                             "VMM ignored SIGTERM; escalating to SIGKILL",
-                            metadata: ["vm_id": "\(vmId)"])
+                            metadata: ["strato.vm.id": "\(vmId)"])
                         Self.forceKill(pid: process.processIdentifier)
                         await latch.wait(upTo: .seconds(5))
                     }
@@ -527,14 +527,14 @@ public actor FirecrackerClient {
                 if identity.matches(pid: pid) {
                     logger.warning(
                         "VMM ignored SIGTERM; escalating to SIGKILL",
-                        metadata: ["vm_id": "\(vmId)", "pid": "\(pid)"])
+                        metadata: ["strato.vm.id": "\(vmId)", "pid": "\(pid)"])
                     Self.forceKill(pid: pid)
                     await Self.waitForExit(pid: pid, identity: identity, timeout: .seconds(5))
                 }
             } else {
                 logger.info(
                     "Tracked VMM pid no longer names this VM; skipping termination",
-                    metadata: ["vm_id": "\(vmId)", "pid": "\(pid)"])
+                    metadata: ["strato.vm.id": "\(vmId)", "pid": "\(pid)"])
             }
         }
 
@@ -573,7 +573,7 @@ public actor FirecrackerClient {
         // Remove from tracking
         runningVMs.removeValue(forKey: vmId)
 
-        logger.info("VM destroyed", metadata: ["vm_id": "\(vmId)"])
+        logger.info("VM destroyed", metadata: ["strato.vm.id": "\(vmId)"])
     }
 
     // MARK: - Adopted-process helpers

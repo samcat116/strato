@@ -33,9 +33,9 @@ struct ConsoleWebSocketController: RouteCollection {
             req.logger.info(
                 "Console WebSocket connection established",
                 metadata: [
-                    "vmId": .string(vmIdString),
-                    "sessionId": .string(sessionId),
-                    "agentKey": .string(agentKey),
+                    "strato.vm.id": .string(vmIdString),
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
                 ])
 
             // Create session in ConsoleSessionManager
@@ -91,15 +91,15 @@ struct ConsoleWebSocketController: RouteCollection {
                     req.logger.info(
                         "Console WebSocket connection closed normally",
                         metadata: [
-                            "vmId": .string(vmIdString),
-                            "sessionId": .string(sessionId),
+                            "strato.vm.id": .string(vmIdString),
+                            "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
                         ])
                 case .failure(let error):
                     req.logger.error(
                         "Console WebSocket connection closed with error: \(error)",
                         metadata: [
-                            "vmId": .string(vmIdString),
-                            "sessionId": .string(sessionId),
+                            "strato.vm.id": .string(vmIdString),
+                            "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
                         ])
                 }
 
@@ -174,7 +174,7 @@ struct ConsoleWebSocketController: RouteCollection {
                 req.logger.warning(
                     "Console access denied",
                     metadata: [
-                        "vmId": .string(vmId.uuidString),
+                        "strato.vm.id": .string(vmId.uuidString),
                         "userId": .string(userId),
                     ])
                 try? await ws.send("error: You do not have permission to access this VM console")

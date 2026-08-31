@@ -48,21 +48,12 @@ struct DesiredStateAssembler {
     /// identical syncs diff to nothing on the agent.
     func assemble(agentId: String) async throws -> DesiredStateMessage {
         let db = app.db
-        // Capability, site, and rollout decisions all read the same agent
-        // row. Load it once instead of issuing four point queries during one
-        // assembly. Unknown ids retain the legacy permissive behavior used by
-        // empty/backstop syncs.
-        let agent: Agent?
-        if let agentUUID = UUID(uuidString: agentId) {
-            agent = try await Agent.find(agentUUID, on: db)
-        } else {
-            agent = nil
+        guard let agentUUID = UUID(uuidString: agentId),
+            let agent = try await Agent.find(agentUUID, on: db)
+        else {
+            throw Abort(.notFound, reason: "Agent not found")
         }
-        // The agent's site, loaded here rather than inside
-        // `networkAssemblyScope` because two things need it now: topology
-        // authority, and the `region` every VM's instance metadata carries. One
-        // row read either way; a missing agent still queries no site.
-        let site = try await Site.find(agent?.$site.id, on: db)
+        let site = try await agent.$site.get(on: db)
         let vms = try await VM.query(on: db)
             .filter(\.$hypervisorId == agentId)
             .with(\.$volumes)
@@ -96,15 +87,11 @@ struct DesiredStateAssembler {
         // Whether this agent can realize a sandbox NIC at all (STR-103), which
         // is what decides if `SandboxSpec.network` goes on the wire to it.
         //
-        // Defaults to *false* for an unknown agent id: this asks "did a host
-        // prove it has OVN, the jailer, and a guest image that configures an
-        // interface". Absence of proof is not proof, and the cost of guessing
-        // wrong is a sandbox that never boots on that host again.
-        let sendSandboxNetwork = agent?.sandboxNetworkingCapable ?? false
+        let sendSandboxNetwork = agent.sandboxNetworkingCapable
 
-        // The per-network resolver (STR-40). Nil for an agent that predates the
-        // field — the `sendMetadataPort: false` posture — and otherwise whether
-        // this agent's *site* can answer on the resolver address at all.
+        // The per-network resolver (STR-40). Nil when the agent row is missing;
+        // otherwise, whether this agent's *site* can answer on the resolver
+        // address at all.
         //
         // The site, not the agent, because the two halves of this feature have
         // different reach: the DHCP option pointing guests at the resolver is
@@ -114,20 +101,7 @@ struct DesiredStateAssembler {
         // DNS that works until a VM lands on the wrong hypervisor — a failure
         // that looks like a flaky network rather than a missing dependency. So
         // the whole site converges or none of it does.
-        let siteResolverCapable: Bool?
-        if let agent {
-            siteResolverCapable = try await resolverCapableSiteWide(agent: agent, site: site, on: db)
-        } else {
-            // Nil for an agent this assembly could not load at all — the
-            // synthetic and backstop syncs — rather than the permissive `?? true`
-            // the version gates above use, and rather than `false`. The other
-            // gates decide whether a *field* is understood; this one would be an
-            // opinion, and `false` is a teardown instruction: it strips the
-            // resolver's addresses from the localport, reverts the DHCP row, and
-            // stops CoreDNS. Silence is the only honest answer about a host we
-            // know nothing about.
-            siteResolverCapable = nil
-        }
+        let siteResolverCapable = try await resolverCapableSiteWide(site: site, on: db)
         let securityGroupsByInterface: [UUID: [UUID]]
         let sandboxSecurityGroupsByInterface: [UUID: [UUID]]
         securityGroupsByInterface = try await nicSecurityGroupMemberships(
@@ -141,8 +115,8 @@ struct DesiredStateAssembler {
         // so falling back to the name would make the field's namespace depend
         // on whether someone filled it in. Whether a guest is *told* either
         // half is the renderer's call, not this one.
-        let region = site?.name
-        let availabilityZone = agent?.name
+        let region = site.name
+        let availabilityZone = agent.name
 
         // The VMs' instance identities (STR-55), resolved in one query for the
         // whole sync — mirroring `securityGroupsByInterface` above, and for the
@@ -212,7 +186,7 @@ struct DesiredStateAssembler {
                     app.logger.warning(
                         "Failed to build image info for desired-state sync",
                         metadata: [
-                            "vmId": .string(vmId.uuidString),
+                            "strato.vm.id": .string(vmId.uuidString),
                             "imageId": .string(image.id?.uuidString ?? ""),
                             "error": .string(error.localizedDescription),
                         ])
@@ -220,7 +194,7 @@ struct DesiredStateAssembler {
             } else if vm.$sourceImage.id != nil {
                 app.logger.warning(
                     "VM references an image that is missing or not ready; syncing without image info",
-                    metadata: ["vmId": .string(vmId.uuidString)])
+                    metadata: ["strato.vm.id": .string(vmId.uuidString)])
             }
 
             let metadata = InstanceMetadata.build(
@@ -266,16 +240,15 @@ struct DesiredStateAssembler {
         // (issue #343); see `networkAssemblyScope`.
         // Floating IPs attached to NICs of VMs the receiving agent's topology
         // writes cover (issue #344): every site VM for the site's controller.
-        // Keyed by network id, matching
-        // how the NAT rule lands on that network's router. Omitted entirely
-        // for pre-v12 agents — they would decode and silently ignore the
-        // field, so sending it only misstates what the sync achieved; the
-        // attach API refuses new attachments against such agents.
+        // Keyed by network id, matching how the NAT rule lands on that
+        // network's router.
         let floatingIPsByNetwork = try await desiredFloatingIPs(
             forAgentIDs: scope.floatingIPAgentIDs,
             networkIDs: scope.networkIDs,
             on: db)
         let loadBalancersByNetwork = try await desiredLoadBalancers(
+            networkIDs: scope.networkIDs, on: db)
+        let networkACLsByNetwork = try await desiredNetworkACLs(
             networkIDs: scope.networkIDs, on: db)
         // Sorted by id: names are no longer unique, so only the id gives the
         // topology list a stable, total order.
@@ -298,12 +271,16 @@ struct DesiredStateAssembler {
                     domainName: network.domainName,
                     leaseTime: network.leaseTime,
                     metadataEnabled: network.metadataEnabled,
-                    resolverEnabled: siteResolverCapable.map { $0 && network.resolverEnabled },
+                    resolverEnabled: siteResolverCapable && network.resolverEnabled,
                     resolverAddresses: network.resolverAddressesIfEnabled(
                         siteCapable: siteResolverCapable),
                     generation: Int64(network.generation),
                     floatingIPs: floatingIPsByNetwork[networkId] ?? [],
-                    loadBalancers: loadBalancersByNetwork[networkId] ?? []
+                    loadBalancers: loadBalancersByNetwork[networkId] ?? [],
+                    // The current lockstep wire always carries an
+                    // authoritative opinion: [] tears down managed switch
+                    // ACLs, while the schema limits this list to one entry.
+                    networkACLs: networkACLsByNetwork[networkId].map { [$0] } ?? []
                 )
             }
 
@@ -363,7 +340,7 @@ struct DesiredStateAssembler {
                         app.logger.warning(
                             "Fork is placed off its snapshot's agent but the exported copy is unavailable",
                             metadata: [
-                                "sandboxId": .string(sandboxId.uuidString),
+                                "strato.sandbox.id": .string(sandboxId.uuidString),
                                 "snapshotId": .string(snapshotID.uuidString),
                             ])
                     }
@@ -416,8 +393,8 @@ struct DesiredStateAssembler {
                 app.logger.debug(
                     "Withholding a sandbox's NIC: its host does not advertise sandbox networking",
                     metadata: [
-                        "sandboxId": .string(sandboxId.uuidString),
-                        "agentId": .string(agentId),
+                        "strato.sandbox.id": .string(sandboxId.uuidString),
+                        "strato.agent.id": .string(agentId),
                     ])
             }
             // The restore *edge* (STR-151), as distinct from the fork create
@@ -435,7 +412,7 @@ struct DesiredStateAssembler {
                         app.logger.warning(
                             "Sandbox restore targets a snapshot on another agent whose exported copy is unavailable",
                             metadata: [
-                                "sandboxId": .string(sandboxId.uuidString),
+                                "strato.sandbox.id": .string(sandboxId.uuidString),
                                 "snapshotId": .string(snapshotID.uuidString),
                             ])
                     }
@@ -460,8 +437,8 @@ struct DesiredStateAssembler {
         // + ACLs: groups attached to NICs of VMs and sandboxes on the hosts
         // whose topology the receiving agent authors, plus the transitive
         // closure of groups their rules reference (so `$pg_…` address-set
-        // references always resolve). Nil for non-authoritative agents — they
-        // only consume the per-NIC membership above — and for pre-v20 agents.
+        // references always resolve). Nil for non-authoritative agents; they
+        // only consume the per-NIC membership above.
         let securityGroups: [DesiredSecurityGroup]?
         if scope.authoritative {
             securityGroups = try await desiredSecurityGroups(
@@ -493,9 +470,7 @@ struct DesiredStateAssembler {
         // Local NICs only count toward zone selection once the agent can
         // actually run a resolver for them; without that this would widen
         // the fan-out of a query that reads every VM in a zone, for nothing.
-        let resolverNetworkIDs =
-            (siteResolverCapable ?? false)
-            ? ownVMNetworkIDs.union(sandboxNetworkIDs) : []
+        let resolverNetworkIDs = siteResolverCapable ? ownVMNetworkIDs.union(sandboxNetworkIDs) : []
         let zoneNetworkIDs =
             (scope.authoritative ? scope.networkIDs : []).union(resolverNetworkIDs)
         let dnsZones: [DesiredDNSZone]? =
@@ -530,7 +505,7 @@ struct DesiredStateAssembler {
         app.logger.error(
             "Omitting an unassemblable VM from desired state",
             metadata: [
-                "vmId": .string(vmId.uuidString),
+                "strato.vm.id": .string(vmId.uuidString),
                 "reason": .string(reasonCode),
                 "error": .string(detail),
             ])
@@ -548,7 +523,7 @@ struct DesiredStateAssembler {
         guard let sql = db as? any SQLDatabase else {
             app.logger.error(
                 "Could not record the VM desired-state assembly failure: SQL database required",
-                metadata: ["vmId": .string(vmId.uuidString)])
+                metadata: ["strato.vm.id": .string(vmId.uuidString)])
             return
         }
         do {
@@ -578,7 +553,7 @@ struct DesiredStateAssembler {
             app.logger.error(
                 "Could not record the VM desired-state assembly failure",
                 metadata: [
-                    "vmId": .string(vmId.uuidString),
+                    "strato.vm.id": .string(vmId.uuidString),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -604,7 +579,7 @@ struct DesiredStateAssembler {
             app.logger.error(
                 "Could not clear a repaired VM desired-state assembly failure",
                 metadata: [
-                    "vmId": .string(vmId.uuidString),
+                    "strato.vm.id": .string(vmId.uuidString),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -675,12 +650,8 @@ struct DesiredStateAssembler {
     /// An agent this assembly could not load at all is not asked — the caller
     /// sends nil rather than an opinion, because `false` here is a teardown
     /// instruction rather than silence.
-    private func resolverCapableSiteWide(agent: Agent, site: Site?, on db: any Database)
-        async throws -> Bool
-    {
-        guard let site, let siteID = site.id else {
-            throw Abort(.internalServerError, reason: "Agent references a missing site")
-        }
+    private func resolverCapableSiteWide(site: Site, on db: any Database) async throws -> Bool {
+        let siteID = try site.requireID()
         // One query returning the offending names rather than a count plus a
         // second lookup on failure: the common answer materializes zero rows, so
         // this costs the hot path nothing, and the names are what makes the
@@ -976,11 +947,9 @@ struct DesiredStateAssembler {
     /// enrollment governs whether the *sweep* may assign this agent, not
     /// whether an assignment is delivered — and withdrawing enrollment clears
     /// the assignment anyway. Nil whenever there is nothing actionable: not
-    /// assigned, already converged, an agent too old to act on the field (a
-    /// pre-v7 agent would wait out the health budget against silence), or an
-    /// artifact that cannot currently be resolved (best effort — the sync also
-    /// carries workload state and must not fail on the release host being
-    /// down).
+    /// assigned, already converged, or an artifact that cannot currently be
+    /// resolved. Artifact lookup is best effort because the sync also carries
+    /// workload state and must not fail when the release host is down.
     private func desiredAgentUpdateForSync(agent: Agent?) async -> DesiredAgentUpdate? {
         guard let agent,
             let assigned = agent.updateDesiredVersion,
@@ -1015,7 +984,7 @@ struct DesiredStateAssembler {
             app.logger.warning(
                 "Could not resolve the agent update artifact for the sync; omitting it",
                 metadata: [
-                    "agentName": .string(agent.name),
+                    "strato.agent.name": .string(agent.name),
                     "targetVersion": .string(assigned),
                     "error": .string(String(describing: error)),
                 ])
@@ -1034,6 +1003,49 @@ struct DesiredStateAssembler {
                 .filter(\.$id ~~ Array(ids))
                 .all()
                 .compactMap { network in network.id.map { ($0, network) } })
+    }
+
+    /// The optional ACL attached to each authoritative logical network. One
+    /// bounded eager load avoids a rule query per switch, and both the outer
+    /// index and each rule list are made deterministic before they reach the
+    /// desired-state digest.
+    private func desiredNetworkACLs(
+        networkIDs: Set<UUID>, on db: any Database
+    ) async throws -> [UUID: DesiredNetworkACL] {
+        guard !networkIDs.isEmpty else { return [:] }
+        let rows = try await NetworkACL.query(on: db)
+            .filter(\.$logicalNetwork.$id ~~ Array(networkIDs))
+            .with(\.$rules)
+            .all()
+
+        var byNetwork: [UUID: DesiredNetworkACL] = [:]
+        for acl in rows {
+            guard let aclID = acl.id else { continue }
+            let rules = acl.rules
+                .compactMap { rule -> DesiredNetworkACLRule? in
+                    guard let ruleID = rule.id else { return nil }
+                    return DesiredNetworkACLRule(
+                        id: ruleID,
+                        ruleNumber: rule.ruleNumber,
+                        direction: rule.direction.rawValue,
+                        ethertype: rule.ethertype.rawValue,
+                        action: rule.action.rawValue,
+                        protocolName: rule.protocolName,
+                        portRangeMin: rule.portRangeMin,
+                        portRangeMax: rule.portRangeMax,
+                        remoteCIDR: rule.remoteCIDR)
+                }
+                .sorted { lhs, rhs in
+                    let lhsDirection = lhs.direction == "ingress" ? 0 : 1
+                    let rhsDirection = rhs.direction == "ingress" ? 0 : 1
+                    if lhsDirection != rhsDirection { return lhsDirection < rhsDirection }
+                    if lhs.ruleNumber != rhs.ruleNumber { return lhs.ruleNumber < rhs.ruleNumber }
+                    return lhs.id.uuidString < rhs.id.uuidString
+                }
+            byNetwork[acl.$logicalNetwork.id] = DesiredNetworkACL(
+                id: aclID, generation: acl.generation, rules: rules)
+        }
+        return byNetwork
     }
 
     /// Per-sandbox registry work at sync assembly (issue #414): pins an
@@ -1059,12 +1071,13 @@ struct DesiredStateAssembler {
         guard sandbox.desiredStatus != .absent else { return nil }
 
         guard let ref = OCIImageReference.parse(sandbox.image) else {
+            var metadata: Logger.Metadata = ["image": .string(sandbox.image)]
+            if let sandboxID = sandbox.id {
+                metadata["strato.sandbox.id"] = .string(sandboxID.uuidString)
+            }
             app.logger.warning(
                 "Sandbox image reference is unparseable; syncing without digest or credential",
-                metadata: [
-                    "sandboxId": .string(sandbox.id?.uuidString ?? ""),
-                    "image": .string(sandbox.image),
-                ])
+                metadata: metadata)
             return nil
         }
 
@@ -1109,7 +1122,7 @@ struct DesiredStateAssembler {
                     app.logger.info(
                         "Pinned sandbox image tag to digest",
                         metadata: [
-                            "sandboxId": .string(sandboxId.uuidString),
+                            "strato.sandbox.id": .string(sandboxId.uuidString),
                             "image": .string(sandbox.image),
                             "digest": .string(digest),
                         ])
@@ -1123,7 +1136,7 @@ struct DesiredStateAssembler {
                 app.logger.warning(
                     "Failed to resolve sandbox image tag to a digest; syncing unpinned",
                     metadata: [
-                        "sandboxId": .string(sandboxId.uuidString),
+                        "strato.sandbox.id": .string(sandboxId.uuidString),
                         "image": .string(sandbox.image),
                         "error": .string(error.localizedDescription),
                     ])
@@ -1220,21 +1233,18 @@ struct DesiredStateAssembler {
     /// Which networks an agent's sync should carry, and whether the agent is
     /// the topology authority for the NB it writes to (issue #343).
     ///
-    /// - Site-less agent (legacy single-node model): it owns a private local
-    ///   NB, so it is always authoritative, scoped to the networks its own
-    ///   VMs reference — a network with no VM on the host needn't exist there.
-    /// - Sited agent designated as the site's network controller: the whole
+    /// - The agent designated as the site's network controller: the whole
     ///   site shares one NB and this agent is its single topology writer, so
     ///   it gets every network referenced by any VM in the site plus every
     ///   network pinned to the site (pinned-but-unused networks are realized
     ///   ahead of their first VM).
-    /// - Any other sited agent: non-authoritative and empty. It still binds
+    /// - Any other agent: non-authoritative and empty. It still binds
     ///   its own VMs' ports to the shared NB, but topology belongs to the
     ///   controller — two level-triggered writers would fight over teardown.
     private func networkAssemblyScope(
         agentId: String,
-        agent: Agent?,
-        site: Site?,
+        agent: Agent,
+        site: Site,
         ownVMs: [VM],
         ownSandboxes: [Sandbox],
         on db: any Database
@@ -1244,16 +1254,7 @@ struct DesiredStateAssembler {
         var ownReferences = Set(ownVMs.flatMap { $0.networkInterfaces.map(\.logicalNetworkID) })
         ownReferences.formUnion(ownSandboxes.flatMap { $0.networkInterfaces.map(\.logicalNetworkID) })
 
-        // `site` is loaded by the caller, which also names the metadata's
-        // region. Today's only caller resolves it from this same `$site.id`, so
-        // the equality below cannot fail; it is here so a future caller that
-        // resolves a site some other way can't grant this agent topology
-        // authority over a site that isn't its own. A mismatch falls through to
-        // the legacy per-node scope, which is what a missing row already does.
-        guard let agent,
-            let agentUUID = agent.id,
-            let site, site.id == agent.$site.id
-        else {
+        guard let agentUUID = agent.id, site.id == agent.$site.id else {
             throw Abort(.internalServerError, reason: "Cannot assemble topology without an agent site")
         }
         let siteID = agent.$site.id
@@ -1264,7 +1265,7 @@ struct DesiredStateAssembler {
             // this is a misconfiguration, not a transient.
             app.logger.warning(
                 "Site has no network controller; its networks will not be reconciled",
-                metadata: ["site": .string(site.name), "agentName": .string(agent.name)])
+                metadata: ["site": .string(site.name), "strato.agent.name": .string(agent.name)])
             return NetworkAssemblyScope(
                 networkIDs: [],
                 authoritative: false,
@@ -1446,8 +1447,7 @@ struct DesiredStateAssembler {
     /// Floating IPs (issue #344) the desired-state sync should carry, keyed by
     /// the attached NIC's network name: each becomes a `dnat_and_snat` rule on
     /// that network's router. Only attachments to VMs placed on `agentIDs` —
-    /// the hosts whose topology the receiving agent authors — so a site-less
-    /// agent never NATs for a VM on some other node's private NB.
+    /// the hosts whose topology the receiving agent authors.
     private func desiredLoadBalancers(
         networkIDs: Set<UUID>, on db: any Database
     ) async throws -> [UUID: [DesiredLoadBalancer]] {

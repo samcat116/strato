@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 import Vapor
 
 extension Application {
@@ -28,15 +29,22 @@ extension Application {
         // and the /health endpoints can report exactly who is answering. Two control
         // planes on the same port will report different instanceIds — the tell we
         // lacked when a stale duplicate silently intercepted port 8080.
-        let identity = InstanceIdentity(environment: environment.name)
+        let identity = InstanceIdentity(
+            instanceId: UUID(uuidString: replicaID)!,
+            environment: environment.name)
         instanceIdentity = identity
+        let baseLoggingMetadata = ControlPlaneLoggingMetadata.base(
+            serviceName: controlPlaneConfiguration.string(.otelServiceName)!,
+            serviceInstanceID: identity.instanceId.uuidString,
+            environmentName: identity.environment,
+            serviceVersion: BuildInfo.version(configuration: controlPlaneConfiguration))
+        for (key, value) in baseLoggingMetadata {
+            logger[metadataKey: key] = value
+        }
         logger.info(
             "Control plane booting",
             metadata: [
-                "instanceId": .string(identity.instanceId.uuidString),
-                "version": .string(BuildInfo.version(configuration: controlPlaneConfiguration)),
-                "gitSHA": .string(BuildInfo.gitSHA(configuration: controlPlaneConfiguration)),
-                "environment": .string(identity.environment),
+                "vcs.revision": .string(BuildInfo.gitSHA(configuration: controlPlaneConfiguration))
             ])
 
         try bootstrapObservability(preparedObservability)

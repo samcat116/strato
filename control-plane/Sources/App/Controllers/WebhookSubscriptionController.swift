@@ -189,7 +189,7 @@ struct WebhookSubscriptionController: RouteCollection {
             // A ceiling drop changes an old row. Sort by its latest transition
             // so that verdict is visible within the bounded history page instead
             // of remaining behind thousands of newer pending rows.
-            .sort(\.$updatedAt, .descending)
+            .sort(\.$updatedAt, .sql(unsafeRaw: "DESC NULLS LAST"))
             .sort(\.$createdAt, .descending)
             .limit(limit)
             .all()

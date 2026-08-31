@@ -27,7 +27,6 @@ final class DesiredStateAssemblerTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             _ = try await builder.createUser(
@@ -53,23 +52,12 @@ final class DesiredStateAssemblerTests {
         resolverCapable: Bool? = nil,
         protocolVersion: Int = WireProtocol.currentVersion
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: name,
-            hostname: "host-\(name)",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
+        try await TestDataBuilder(db: app.db).registerAgent(
+            on: app,
+            named: name,
             protocolVersion: protocolVersion,
-            resolverCapable: resolverCapable
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let uuid = try await app.agentService.registerAgent(
-            message, agentName: name, siteID: siteID,
-            organizationScope: orgID.map { .organization($0) })
-        return uuid.uuidString
+            resolverCapable: resolverCapable,
+            siteID: siteID)
     }
 
     private func placeVM(
@@ -326,9 +314,9 @@ final class DesiredStateAssemblerTests {
             #expect(metadata.projectId == project.id)
             #expect(metadata.sshAuthorizedKeys.isEmpty)
             #expect(metadata.userData == nil)
-            // Site-less agent (the legacy single-node model): no region to
-            // report, but the host is still named.
-            #expect(metadata.region == nil)
+            let agent = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.db))
+            let site = try await agent.$site.get(on: app.db)
+            #expect(metadata.region == site.name)
             #expect(metadata.availabilityZone == "bare-agent")
         }
     }
@@ -654,7 +642,7 @@ final class DesiredStateAssemblerTests {
                         try await self.attachNIC(
                             app: app, vm: vm, network: network, deviceName: "net\(nic)",
                             orderIndex: nic,
-                            mac: VMNetworkInterface.generateMACAddress(),
+                            mac: MACAllocator.generateCandidate().description,
                             ipv4: ("10.50.\(index % 250).\(10 + nic)", 24, "10.50.\(index % 250).1"))
                     }
                 }

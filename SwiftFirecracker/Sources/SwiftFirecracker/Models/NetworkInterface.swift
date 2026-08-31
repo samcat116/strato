@@ -3,10 +3,8 @@ import Foundation
 /// Network interface configuration
 /// Maps to PUT /network-interfaces/{iface_id} API endpoint
 public struct NetworkInterface: Codable, Sendable {
-    /// Unique identifier for the network interface
     let ifaceId: String
 
-    /// Name of the TAP device on the host
     let hostDevName: String
 
     /// MAC address for the guest interface (optional, auto-generated if not provided)
@@ -28,7 +26,6 @@ public struct NetworkInterface: Codable, Sendable {
         self.guestMac = guestMac
     }
 
-    /// Creates a network interface with a TAP device
     public static func tap(
         id: String = "eth0",
         tapName: String,

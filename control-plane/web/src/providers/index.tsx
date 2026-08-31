@@ -7,16 +7,41 @@ import { AuthProvider } from "./auth-provider";
 import { OrganizationProvider } from "./organization-provider";
 import { ProjectProvider } from "./project-provider";
 import { Toaster } from "@/components/ui/sonner";
+import type { FrontendBootstrap } from "@/lib/bootstrap-data";
+import { ConfirmationProvider } from "./confirmation-provider";
 
-export function Providers({ children }: { children: ReactNode }) {
+export function Providers({
+  bootstrap,
+  children,
+}: {
+  bootstrap: FrontendBootstrap;
+  children: ReactNode;
+}) {
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
       <QueryProvider>
-        <AuthProvider>
-          <OrganizationProvider>
-            <ProjectProvider>
-              {children}
-              <Toaster />
+        <AuthProvider
+          initialUser={bootstrap.user}
+          initialError={bootstrap.sessionError}
+          refreshOnMount={bootstrap.source === "client"}
+        >
+          <OrganizationProvider
+            initialOrganizations={
+              bootstrap.user ? bootstrap.organizations ?? undefined : undefined
+            }
+          >
+            <ProjectProvider
+              initialProjects={
+                bootstrap.user ? bootstrap.projects ?? undefined : undefined
+              }
+              initialOrganizationId={
+                bootstrap.user ? bootstrap.projectOrganizationId : null
+              }
+            >
+              <ConfirmationProvider>
+                {children}
+                <Toaster />
+              </ConfirmationProvider>
             </ProjectProvider>
           </OrganizationProvider>
         </AuthProvider>

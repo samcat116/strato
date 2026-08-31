@@ -23,6 +23,62 @@ enum Telemetry {
         case dead
     }
 
+    // MARK: - PostgreSQL advisory locks (STR-275)
+
+    /// One successful lock acquisition and the time spent waiting for it.
+    /// Namespace is the only dimension: resource identifiers would create an
+    /// unbounded time series at exactly the fleet sizes this signal diagnoses.
+    static func advisoryLockAcquired(
+        namespace: AdvisoryLockNamespace,
+        waitSeconds: Double,
+        factory: (any MetricsFactory)? = nil
+    ) {
+        let dimensions = [("namespace", namespace.name)]
+        if let factory {
+            Counter(
+                label: "strato_advisory_lock_acquisitions_total",
+                dimensions: dimensions,
+                factory: factory
+            ).increment()
+            Timer(
+                label: "strato_advisory_lock_wait_duration_seconds",
+                dimensions: dimensions,
+                factory: factory
+            ).recordSeconds(waitSeconds)
+        } else {
+            Counter(
+                label: "strato_advisory_lock_acquisitions_total",
+                dimensions: dimensions
+            ).increment()
+            Timer(
+                label: "strato_advisory_lock_wait_duration_seconds",
+                dimensions: dimensions
+            ).recordSeconds(waitSeconds)
+        }
+    }
+
+    /// A session lock could not be confirmed released. This is a counter, not
+    /// a gauge: the paired critical log carries the object id/digest needed to
+    /// investigate without putting either into metric labels.
+    static func advisoryLockReleaseFailed(
+        namespace: AdvisoryLockNamespace,
+        factory: (any MetricsFactory)? = nil
+    ) {
+        let dimensions = [("namespace", namespace.name)]
+        if let factory {
+            Counter(
+                label: "strato_advisory_lock_release_failures_total",
+                dimensions: dimensions,
+                factory: factory
+            ).increment()
+        } else {
+            Counter(
+                label: "strato_advisory_lock_release_failures_total",
+                dimensions: dimensions
+            ).increment()
+        }
+    }
+
     /// The two request shapes the desired-state endpoint accepts. Keeping the
     /// metric dimension typed prevents validators or other request data from
     /// becoming labels and bounds the series to these two values.
@@ -357,6 +413,16 @@ enum Telemetry {
         Gauge(label: "strato_diverged_workloads", dimensions: [("kind", kind)]).record(count)
     }
 
+    /// Stored secrets the configured primary/previous keyring cannot open.
+    /// This is level-triggered and records zero at every startup so a repaired
+    /// rotation clears the prior series. `table` is one of four fixed columns.
+    static func recordUnopenableStoredSecrets(table: String, count: Int) {
+        Gauge(
+            label: "strato_secrets_encryption_unopenable",
+            dimensions: [("table", table)]
+        ).record(count)
+    }
+
     // MARK: - Teardown safety (STR-98)
 
     /// A workload an agent holds was confirmed to have no control-plane row,
@@ -489,6 +555,12 @@ enum Telemetry {
             label: "strato_ipam_allocation_failures_total",
             dimensions: [("family", family), ("reason", reason)]
         ).increment()
+    }
+
+    /// Number of canonical MAC addresses currently assigned to more than one
+    /// VM or sandbox interface. Recorded by the startup audit; zero is healthy.
+    static func recordDuplicateMACAddressGroups(_ count: Int) {
+        Gauge(label: "strato_network_interface_duplicate_mac_addresses").record(Double(count))
     }
 
     // MARK: - Desired-state polling

@@ -6,7 +6,10 @@ import {
   type TransferProjectData,
 } from "@/lib/api/projects";
 
-export function useProjectsForOrganization(organizationId: string | undefined) {
+export function useProjectsForOrganization(
+  organizationId: string | undefined,
+  initialData?: Awaited<ReturnType<typeof projectsApi.listForOrganization>>
+) {
   return useQuery({
     queryKey: ["projects", "organization", organizationId],
     queryFn: ({ signal }) =>
@@ -14,6 +17,7 @@ export function useProjectsForOrganization(organizationId: string | undefined) {
         ? projectsApi.listForOrganization(organizationId, signal)
         : Promise.resolve([]),
     enabled: !!organizationId,
+    initialData,
   });
 }
 

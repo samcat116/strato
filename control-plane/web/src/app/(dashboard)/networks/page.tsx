@@ -6,10 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import { ResourceListControls, useResourceList } from "@/components/ui/resource-list-controls";
+import { ProjectRequiredState } from "@/components/ui/project-required-state";
 import {
   NetworkTable,
   CreateNetworkDialog,
   EditNetworkDialog,
+  NetworkACLDialog,
 } from "@/components/networks";
 import { useNetworks, useInvalidateNetworks, usePermissions } from "@/lib/hooks";
 import { useProjectContext } from "@/providers";
@@ -18,7 +20,11 @@ import type { Network } from "@/types/api";
 export default function NetworksPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Network | null>(null);
-  const { currentProject } = useProjectContext();
+  const [aclSelection, setACLSelection] = useState<{
+    network: Network;
+    canManage: boolean;
+  } | null>(null);
+  const { currentProject, isLoading: projectsLoading } = useProjectContext();
   const networksQuery = useNetworks(currentProject?.id);
   const { data: networks = [], isLoading } = networksQuery;
   const invalidateNetworks = useInvalidateNetworks();
@@ -62,18 +68,31 @@ export default function NetworksPage() {
       <Card className="bg-card border-border">
         <CardHeader>
           <CardTitle className="text-lg font-semibold text-foreground">
-            {currentProject ? currentProject.name : "All"} Networks (
-            {networks.length})
+            {projectsLoading
+              ? "Loading project…"
+              : currentProject
+                ? `${currentProject.name} Networks (${networks.length})`
+                : "Networks"
+            }
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <ResourceListControls label="networks" query={list.query} onQueryChange={list.setQuery} page={list.page} onPageChange={list.setPage} totalPages={list.totalPages} filteredCount={list.filteredCount} totalCount={list.totalCount} pageSize={list.pageSize} />
-          <NetworkTable
-            networks={list.pageItems}
-            isLoading={isLoading}
-            onRefresh={invalidateNetworks}
-            onEdit={setEditing}
-          />
+          {!projectsLoading && !currentProject ? (
+            <ProjectRequiredState resource="Networks" />
+          ) : (
+            <>
+              <ResourceListControls label="networks" query={list.query} onQueryChange={list.setQuery} page={list.page} onPageChange={list.setPage} totalPages={list.totalPages} filteredCount={list.filteredCount} totalCount={list.totalCount} pageSize={list.pageSize} />
+              <NetworkTable
+                networks={list.pageItems}
+                isLoading={isLoading || projectsLoading}
+                onRefresh={invalidateNetworks}
+                onEdit={setEditing}
+                onManageACL={(network, canManage) =>
+                  setACLSelection({ network, canManage })
+                }
+              />
+            </>
+          )}
         </CardContent>
       </Card>
 
@@ -90,6 +109,15 @@ export default function NetworksPage() {
           if (!open) setEditing(null);
         }}
         onUpdated={invalidateNetworks}
+      />
+
+      <NetworkACLDialog
+        network={aclSelection?.network ?? null}
+        canManage={aclSelection?.canManage ?? false}
+        open={aclSelection !== null}
+        onOpenChange={(open) => {
+          if (!open) setACLSelection(null);
+        }}
       />
     </div>
   );

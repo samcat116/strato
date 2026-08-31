@@ -419,9 +419,8 @@ extension Volume {
 struct CreateVolumeRequest: Content, ValidatedRequestBody {
     var name: String
     let description: String?
-    /// Required: there is no default project (issue #1059). Optional here so
-    /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
-    /// rather than a `Codable` decode failure that names neither.
+    /// Required by project resolution; optional at decode time so the API can
+    /// return a useful error.
     let projectId: UUID?
     /// Which of the project's environments the volume's bytes are charged to
     /// (STR-181). Omitted takes the project's default, exactly as VM and sandbox

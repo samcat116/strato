@@ -1,7 +1,9 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useState } from "react";
-import { Loader2, Pencil, Trash2 } from "lucide-react";
+import { Loader2, Pencil, Shield, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -23,6 +25,7 @@ interface NetworkTableProps {
   isLoading?: boolean;
   onRefresh?: () => void;
   onEdit?: (network: Network) => void;
+  onManageACL?: (network: Network, canManage: boolean) => void;
 }
 
 export function NetworkTable({
@@ -30,12 +33,14 @@ export function NetworkTable({
   isLoading,
   onRefresh,
   onEdit,
+  onManageACL,
 }: NetworkTableProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const { permissions } = usePermissions(
     networks.flatMap((network): ActionCheckItem[] =>
       network.id
         ? [
+            { key: `read:${network.id}`, action: "network:read", node: { type: "network", id: network.id } },
             { key: `update:${network.id}`, action: "network:update", node: { type: "network", id: network.id } },
             { key: `delete:${network.id}`, action: "network:delete", node: { type: "network", id: network.id } },
           ]
@@ -45,7 +50,7 @@ export function NetworkTable({
 
   const handleDelete = async (network: Network) => {
     if (!network.id) return;
-    if (!confirm(`Delete network "${network.name}"? This cannot be undone.`)) {
+    if (!await confirmAction(`Delete network "${network.name}"? This cannot be undone.`)) {
       return;
     }
     setBusyId(network.id);
@@ -88,6 +93,7 @@ export function NetworkTable({
           <TableHead className="text-muted-foreground font-medium">Subnet</TableHead>
           <TableHead className="text-muted-foreground font-medium">Gateway</TableHead>
           <TableHead className="text-muted-foreground font-medium">DHCP / DNS</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Scope</TableHead>
           <TableHead className="text-muted-foreground font-medium">Interfaces</TableHead>
           <TableHead className="text-muted-foreground font-medium text-right">
             Actions
@@ -98,6 +104,7 @@ export function NetworkTable({
         {networks.map((network) => {
           const inUse = network.attachedInterfaceCount > 0;
           const deletable = !inUse;
+          const canManageACL = Boolean(permissions[`update:${network.id}`]);
           const disabledReason = inUse
             ? "Detach all interfaces before deleting"
             : undefined;
@@ -175,6 +182,18 @@ export function NetworkTable({
                 {network.attachedInterfaceCount}
               </TableCell>
               <TableCell className="text-right">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-foreground/80 hover:text-foreground hover:bg-accent"
+                  onClick={() => onManageACL?.(network, canManageACL)}
+                  disabled={busyId === network.id}
+                  title={canManageACL ? "Manage stateless network ACL" : "View stateless network ACL"}
+                  aria-label={`${canManageACL ? "Manage" : "View"} ACL for ${network.name}`}
+                  hidden={!permissions[`read:${network.id}`]}
+                >
+                  <Shield className="h-4 w-4" />
+                </Button>
                 <Button
                   size="sm"
                   variant="ghost"

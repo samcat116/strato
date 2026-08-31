@@ -1,23 +1,15 @@
 import Foundation
 import Logging
 
-/// High-level manager for Firecracker microVM lifecycle operations
-/// Provides a simple interface for creating, configuring, and managing microVMs
 public actor FirecrackerManager {
-    private let socketPath: String
     private let httpClient: UnixSocketHTTPClient
     private let logger: Logger
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
-    /// Current state of the VM
     private var vmState: InstanceState = .notStarted
 
-    /// Creates a new FirecrackerManager
-    /// - Parameters:
-    ///   - socketPath: Path to the Firecracker API Unix socket
-    ///   - logger: Logger instance for debug output
-    ///   - requestTimeout: Ceiling on one API round trip. The default is sized
+    /// - Parameter requestTimeout: Ceiling on one API round trip. The default is sized
     ///     for the calls that wait on the vCPUs; reads that do not take
     ///     ``UnixSocketHTTPClient/defaultReadTimeout`` per call instead.
     init(
@@ -25,7 +17,6 @@ public actor FirecrackerManager {
         logger: Logger = Logger(label: "SwiftFirecracker.Manager"),
         requestTimeout: TimeInterval = UnixSocketHTTPClient.defaultRequestTimeout
     ) {
-        self.socketPath = socketPath
         self.httpClient = UnixSocketHTTPClient(
             socketPath: socketPath, logger: logger, requestTimeout: requestTimeout)
         self.logger = logger
@@ -35,19 +26,16 @@ public actor FirecrackerManager {
 
     // MARK: - Connection Management
 
-    /// Connects to the Firecracker API socket
     func connect() async throws {
         try await httpClient.connect()
     }
 
-    /// Disconnects from the Firecracker API socket
     func disconnect() async {
         await httpClient.disconnect()
     }
 
     // MARK: - Machine Configuration
 
-    /// Configures the machine (vCPUs, memory)
     /// Must be called before starting the VM
     public func configureMachine(_ config: MachineConfig) async throws {
         let body = try encoder.encode(config)
@@ -63,7 +51,6 @@ public actor FirecrackerManager {
 
     // MARK: - Boot Configuration
 
-    /// Configures the boot source (kernel and initramfs)
     /// Must be called before starting the VM
     public func configureBootSource(_ bootSource: BootSource) async throws {
         let body = try encoder.encode(bootSource)
@@ -78,7 +65,6 @@ public actor FirecrackerManager {
 
     // MARK: - Drive Management
 
-    /// Adds or updates a drive
     public func configureDrive(_ drive: Drive) async throws {
         let body = try encoder.encode(drive)
         let response = try await httpClient.request(method: .PUT, path: "/drives/\(drive.driveId)", body: body)
@@ -94,7 +80,6 @@ public actor FirecrackerManager {
 
     // MARK: - Network Configuration
 
-    /// Adds or updates a network interface
     public func configureNetwork(_ networkInterface: NetworkInterface) async throws {
         let body = try encoder.encode(networkInterface)
         let response = try await httpClient.request(
@@ -180,7 +165,6 @@ public actor FirecrackerManager {
 
     // MARK: - VM Lifecycle
 
-    /// Starts the VM
     /// All configuration (machine, boot, drives) must be set before calling this
     public func start() async throws {
         if vmState != .notStarted {
@@ -202,7 +186,6 @@ public actor FirecrackerManager {
         logger.info("VM started")
     }
 
-    /// Pauses the VM
     public func pause() async throws {
         try await requireState(.running)
 
@@ -215,7 +198,6 @@ public actor FirecrackerManager {
         logger.info("VM paused")
     }
 
-    /// Resumes a paused VM
     public func resume() async throws {
         try await requireState(.paused)
 
@@ -290,7 +272,6 @@ public actor FirecrackerManager {
             ])
     }
 
-    /// Sends Ctrl+Alt+Del to the VM (triggers reboot if configured)
     public func sendCtrlAltDel() async throws {
         let action = VMAction(actionType: .sendCtrlAltDel)
         let body = try encoder.encode(action)
@@ -342,7 +323,6 @@ public actor FirecrackerManager {
         }
     }
 
-    /// Handles HTTP response and throws on error
     private func handleResponse(_ response: HTTPResponse) throws {
         guard response.isSuccess else {
             var message = "HTTP \(response.statusCode)"

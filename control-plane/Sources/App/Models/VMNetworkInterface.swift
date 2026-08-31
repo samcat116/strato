@@ -93,11 +93,6 @@ final class VMNetworkInterface: Model, @unchecked Sendable {
         self.detachGeneration = nil
     }
 
-    /// Generates a random MAC address with VMware OUI (00:0c:29)
-    static func generateMACAddress() -> String {
-        let randomBytes = (0..<3).map { _ in String(format: "%02x", Int.random(in: 0...255)) }
-        return "00:0c:29:\(randomBytes.joined(separator: ":"))"
-    }
 }
 
 extension VMNetworkInterface {

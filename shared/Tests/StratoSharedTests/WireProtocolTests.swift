@@ -17,7 +17,7 @@ struct WireProtocolTests {
 
     @Test("the current wire contract is exact")
     func currentContractVersion() {
-        #expect(WireProtocol.currentVersion == 52)
+        #expect(WireProtocol.currentVersion == 53)
     }
     @Test("the sandbox guest control contract is exact")
     func sandboxGuestControlContract() {

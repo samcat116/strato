@@ -15,6 +15,66 @@ public enum IPFamily: String, Codable, Sendable {
     case ipv6
 }
 
+// MARK: - MAC
+
+/// A canonical unicast Ethernet MAC address.
+///
+/// Parsing accepts hexadecimal octets in either case, but requires the wire
+/// shape Strato stores and sends: six two-digit octets separated by colons.
+/// `description` is always lowercase. The all-zero address and every group
+/// address (the I/G bit, including broadcast) are rejected because neither may
+/// identify a workload port.
+///
+/// Globally administered unicast addresses remain parseable for legacy rows
+/// and externally supplied hardware identities. New Strato allocations must
+/// use `init(allocated:)`, which additionally requires the U/L bit.
+public struct MACAddress: CustomStringConvertible, Equatable, Hashable, Sendable {
+    /// The low 48 bits contain the address in network byte order.
+    public let raw: UInt64
+
+    public init?(_ string: String) {
+        let parts = string.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 6 else { return nil }
+
+        var raw: UInt64 = 0
+        for part in parts {
+            let isHexOctet =
+                part.utf8.count == 2
+                && part.utf8.allSatisfy { byte in
+                    switch byte {
+                    case 0x30...0x39, 0x41...0x46, 0x61...0x66:
+                        return true
+                    default:
+                        return false
+                    }
+                }
+            guard isHexOctet, let octet = UInt8(part, radix: 16) else { return nil }
+            raw = (raw << 8) | UInt64(octet)
+        }
+
+        guard raw != 0, raw & 0x01_00_00_00_00_00 == 0 else { return nil }
+        self.raw = raw
+    }
+
+    /// Parses an address intended for allocation to a Strato-managed port.
+    /// Allocated addresses must be locally administered as well as unicast.
+    public init?(allocated string: String) {
+        guard let address = MACAddress(string), address.isLocallyAdministered else { return nil }
+        self = address
+    }
+
+    /// Whether the U/L bit in the first octet is set.
+    public var isLocallyAdministered: Bool {
+        raw & 0x02_00_00_00_00_00 != 0
+    }
+
+    public var description: String {
+        stride(from: 40, through: 0, by: -8)
+            .map { String(format: "%02x", Int((raw >> UInt64($0)) & 0xff)) }
+            .joined(separator: ":")
+    }
+}
+
 // MARK: - IPv4
 
 /// Minimal IPv4 address value for subnet math.

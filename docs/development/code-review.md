@@ -238,11 +238,11 @@ review as a security review. `/security-review` covers this in depth.
 - **Blast radius.** Who else calls this? A changed function signature, a
   changed default, or a changed error type is only safe once every call site
   is checked — including `agent/`, `cli/`, `clients/swift/`, and the frontend.
-- **Wire-protocol compatibility.** `shared/` is consumed by both the control
-  plane and agents that upgrade independently. A new field must be optional
-  or defaulted; a removed/renamed field is a breaking change that needs a
-  deprecation window. Ask: does an old agent still work against a new control
-  plane, and vice versa?
+- **Wire-protocol contract.** Registration requires an exact match with
+  `WireProtocol.currentVersion`; control plane and agent changes ship together.
+  Any schema change must update both consumers and increment the version.
+  Optional fields represent real optionality or allow registration to decode
+  far enough to return a useful version rejection, not a compatibility window.
 - **API compatibility.** Removing a field, tightening validation, or changing
   a status code breaks existing clients and the frontend.
 - **Migration safety.** Migrations run against live data. Adding a non-null

@@ -244,7 +244,7 @@ struct NetworkController: RouteCollection {
                 "networkId": .string(network.id!.uuidString),
                 "name": .string(network.name),
                 "subnet": .string(network.subnet),
-                "projectId": .string(projectId.uuidString),
+                "strato.project.id": .string(projectId.uuidString),
             ])
 
         // Nil rather than computed: a network created a moment ago has no zone

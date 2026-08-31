@@ -18,7 +18,7 @@ struct SteadyStateDivergenceTests {
                 organization: organization)
 
             let now = Date(timeIntervalSince1970: 2_000_000_000)
-            let cutoff = now.addingTimeInterval(-AgentService.steadyStateDivergenceGrace)
+            let cutoff = now.addingTimeInterval(-AgentMaintenanceLoop.steadyStateDivergenceGrace)
 
             func vm(
                 _ name: String,
@@ -58,7 +58,7 @@ struct SteadyStateDivergenceTests {
             divergedSandbox.observedGeneration = 7
             try await divergedSandbox.save(on: app.db)
 
-            let first = await app.agentService.sweepSteadyStateDivergence(now: now)
+            let first = await app.agentMaintenance.sweepSteadyStateDivergence(now: now)
             #expect(first == .init(vms: 1, sandboxes: 1, newlyDetected: 2))
             #expect(try #require(await VM.find(divergedVM.id, on: app.db)).divergenceDetectedAt == now)
             #expect(
@@ -67,7 +67,7 @@ struct SteadyStateDivergenceTests {
 
             // The standing gauge counts remain, while the per-episode claims
             // prevent a second replica/pass from producing duplicate warnings.
-            let second = await app.agentService.sweepSteadyStateDivergence(now: now)
+            let second = await app.agentMaintenance.sweepSteadyStateDivergence(now: now)
             #expect(second == .init(vms: 1, sandboxes: 1, newlyDetected: 0))
 
             // A recovered status starts a fresh episode and clears the claim.
@@ -79,13 +79,13 @@ struct SteadyStateDivergenceTests {
             #expect(
                 try #require(await Sandbox.find(divergedSandbox.id, on: app.db))
                     .divergenceDetectedAt == nil)
-            let recovered = await app.agentService.sweepSteadyStateDivergence(now: now)
+            let recovered = await app.agentMaintenance.sweepSteadyStateDivergence(now: now)
             #expect(recovered == .init(vms: 0, sandboxes: 0, newlyDetected: 0))
 
             // The exact 15-minute boundary is inclusive.
             recentVM.statusChangedAt = cutoff
             try await recentVM.save(on: app.db)
-            let boundary = await app.agentService.sweepSteadyStateDivergence(now: now)
+            let boundary = await app.agentMaintenance.sweepSteadyStateDivergence(now: now)
             #expect(boundary == .init(vms: 1, sandboxes: 0, newlyDetected: 1))
         }
     }

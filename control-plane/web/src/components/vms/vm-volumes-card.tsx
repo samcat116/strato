@@ -60,8 +60,11 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
       return;
     }
     const attaching = volumes.find((v) => v.id === attachVolumeId);
+    const payload = { vmId: vm.id };
     await runAttach({
-      request: () => volumesApi.attach(attachVolumeId, { vmId: vm.id }),
+      intentKey: JSON.stringify(["POST", `/api/volumes/${attachVolumeId}/attach`, payload]),
+      request: (idempotencyKey) =>
+        volumesApi.attach(attachVolumeId, payload, idempotencyKey),
       watch: {
         kind: "attach",
         resourceKind: "volume",
@@ -80,7 +83,8 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
   const handleDetach = (volumeId: string, name: string) =>
     runDetach({
       busyKey: volumeId,
-      request: () => volumesApi.detach(volumeId),
+      intentKey: JSON.stringify(["POST", `/api/volumes/${volumeId}/detach`, null]),
+      request: (idempotencyKey) => volumesApi.detach(volumeId, idempotencyKey),
       watch: {
         kind: "detach",
         resourceKind: "volume",

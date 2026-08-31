@@ -22,7 +22,6 @@ final class ResourceConditionsTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -56,28 +55,16 @@ final class ResourceConditionsTests {
         named agentName: String,
         hypervisorType: HypervisorType
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: agentName,
+        try await TestDataBuilder(db: app.db).registerAgent(
+            on: app,
+            named: agentName,
             hostname: "test-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
             hypervisors: [
                 HypervisorSupport(
                     type: hypervisorType, available: true, accelerated: true,
                     capabilities: .capabilities(for: hypervisorType))
             ],
-            protocolVersion: WireProtocol.currentVersion,
-            sandboxCapable: hypervisorType == .firecracker
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: agentName,
-            organizationScope: orgID.map { .organization($0) })
-        return agentUUID.uuidString
+            sandboxCapable: hypervisorType == .firecracker)
     }
 
     private func report(

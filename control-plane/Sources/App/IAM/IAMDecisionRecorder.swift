@@ -33,10 +33,10 @@ struct IAMDecisionLogConfig: Sendable {
 
     static func fromConfiguration(_ configuration: ControlPlaneConfiguration) -> IAMDecisionLogConfig {
         IAMDecisionLogConfig(
-            recordDecisions: configuration.bool(.iamDecisionLogEnabled)!,
-            retentionDays: configuration.int(.iamDecisionLogRetentionDays)!,
-            maxQueueDepth: configuration.int(.iamDecisionLogMaxQueueDepth)!,
-            maxBatchSize: configuration.int(.iamDecisionLogMaxBatchSize)!
+            recordDecisions: configuration.bool(.iamDecisionLogEnabled),
+            retentionDays: configuration.int(.iamDecisionLogRetentionDays),
+            maxQueueDepth: configuration.int(.iamDecisionLogMaxQueueDepth),
+            maxBatchSize: configuration.int(.iamDecisionLogMaxBatchSize)
         )
     }
 }

@@ -31,7 +31,6 @@ final class RegistryPullSecretTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -66,24 +65,11 @@ final class RegistryPullSecretTests {
     /// Registers an in-memory Firecracker-capable agent and places the
     /// sandbox on it, so the desired-state assembly carries it.
     private func registerAgent(app: Application, sandbox: Sandbox) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: "pull-secret-agent",
-            hostname: "test-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
-            protocolVersion: WireProtocol.currentVersion
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: "pull-secret-agent",
-            organizationScope: orgID.map { .organization($0) })
-        sandbox.hypervisorId = agentUUID.uuidString
+        let agentID = try await TestDataBuilder(db: app.db).registerAgent(
+            on: app, named: "pull-secret-agent", hostname: "test-host")
+        sandbox.hypervisorId = agentID
         try await sandbox.save(on: app.db)
-        return agentUUID.uuidString
+        return agentID
     }
 
     private func credentialsPath(_ project: Project) -> String {

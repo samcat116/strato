@@ -57,13 +57,6 @@ struct SandboxController: RouteCollection {
         return try AcceptedMutation(await detailResponse(for: sandbox, on: req), accepted).acceptedResponse()
     }
 
-    // `beginOperation` and `completeOperation` — the sandbox-flavored front of
-    // `ResourceOperation.begin` and its verdict half — went with the last
-    // mutation that needed them. Snapshot capture, delete and export became
-    // desired artifacts at wire v33 (STR-150) and restore became an edge-nonce
-    // at v34 (STR-151), so every sandbox mutation now goes through
-    // `ResourceMutation.accept` and answers from the sandbox's own `conditions`.
-
     // MARK: - Reads
 
     /// GET /api/sandboxes
@@ -148,16 +141,19 @@ struct SandboxController: RouteCollection {
     /// enforcement verdict resolved. Single-sandbox only — the list path uses
     /// `enforcementBySandbox`, which memoizes the host and site lookups this
     /// makes per call.
-    private static func detailResponse(for sandbox: Sandbox, on req: Request) async throws
+    static func detailResponse(
+        for sandbox: Sandbox, on req: Request, database: (any Database)? = nil
+    ) async throws
         -> SandboxDetailResponse
     {
-        try await loadNICDetail(sandbox, on: req.db)
+        let database = database ?? req.db
+        try await loadNICDetail(sandbox, on: database)
         return SandboxDetailResponse(
             from: sandbox,
             securityGroupsEnforced: try await SecurityGroupService.sandboxEnforcement(
                 for: sandbox,
                 offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
-                on: req.db))
+                on: database))
     }
 
     func show(req: Request) async throws -> SandboxDetailResponse {
@@ -198,9 +194,8 @@ struct SandboxController: RouteCollection {
             /// Ready sandbox snapshot to restore into a new identity (issue
             /// #427). Mutually exclusive with image/machine/process fields.
             let restoreFrom: UUID?
-            /// Required: there is no default project (issue #1059). Optional here so
-            /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
-            /// rather than a `Codable` decode failure that names neither.
+            /// Required by project resolution; optional at decode time so the API can
+            /// return a useful error.
             let projectId: UUID?
             let environment: String?
             let cpus: Int?
@@ -561,6 +556,8 @@ struct SandboxController: RouteCollection {
                 sandbox.$id.exists = false
                 sandbox.generation = initialGeneration
                 return try await req.db.transaction { db -> ResourceMutation.Accepted in
+                    try await IdempotencyService.reserve(
+                        req.idempotencyContext, actor: .user(userID), on: db)
                     if let restoreSnapshotID {
                         try await Self.requireSnapshotAvailableForFork(
                             restoreSnapshotID, on: db)
@@ -638,8 +635,16 @@ struct SandboxController: RouteCollection {
                         on: db
                     )
 
-                    return ResourceMutation.Accepted(
+                    let accepted = ResourceMutation.Accepted(
                         mutationID: try event.requireID(), targetGeneration: sandbox.generation)
+                    try await IdempotencyService.complete(
+                        req.idempotencyContext,
+                        actor: .user(userID),
+                        resourceKind: .sandbox,
+                        resourceID: sandboxID,
+                        accepted: accepted,
+                        on: db)
+                    return accepted
                 }
             }
         } catch let error as IPAMService.IPAMError {
@@ -658,22 +663,22 @@ struct SandboxController: RouteCollection {
             .create, resourceType: Sandbox.self, resourceID: sandboxID,
             targetGeneration: accepted.targetGeneration, agentIDs: [],
             strategy: .placement { @Sendable [app = req.application] db in
-                try await app.agentService.createSandbox(sandbox: sandbox, db: db)
+                try await app.workloadPlacement.createSandbox(sandbox: sandbox, db: db)
             }, app: req.application)
 
         req.logger.info(
             "Sandbox creation accepted",
             metadata: [
-                "sandbox_id": .string(sandboxID.uuidString),
-                "mutation_id": .string(accepted.mutationID.uuidString),
+                "strato.sandbox.id": .string(sandboxID.uuidString),
+                "strato.operation.id": .string(accepted.mutationID.uuidString),
                 "image": .string(imageRef),
             ])
 
         return try await Self.acceptedResponse(for: sandbox, accepted, on: req)
     }
 
-    /// Allocates and persists the sandbox's single NIC (issue #416), reusing the
-    /// VM NIC's MAC generation and IPAM. Must run inside the create transaction
+    /// Allocates and persists the sandbox's single NIC (issue #416), sharing
+    /// fleet-wide MAC allocation and per-network IPAM with VMs. Must run inside the create transaction
     /// so the address is reserved before the `202` returns and before placement.
     ///
     /// A named network is resolved within the sandbox's own project, exactly as
@@ -713,13 +718,16 @@ struct SandboxController: RouteCollection {
         // Dual-stack network: the NIC gets one address per family.
         let allocation6 = try await IPAMService.allocateIPv6(for: logicalNetwork, on: db)
 
+        let interfaceID = UUID()
+        let macAddress = try await MACAllocator.allocate(
+            for: .sandboxInterface, ownerID: interfaceID, on: db)
         let networkInterface = SandboxNetworkInterface(
+            id: interfaceID,
             sandboxID: sandboxID,
             logicalNetworkID: logicalNetworkID,
-            macAddress: VMNetworkInterface.generateMACAddress()
+            macAddress: macAddress.description
         )
         try await networkInterface.save(on: db)
-        let interfaceID = try networkInterface.requireID()
 
         let groupIDs: [UUID]
         if securityGroupIDs.isEmpty {
@@ -960,7 +968,12 @@ struct SandboxController: RouteCollection {
 
         let accepted = try await req.resourceMutation.accept(
             .delete, on: sandbox, actor: .user(userID), dispatch: strategy,
-            on: req.db, app: app
+            on: req.db, app: app,
+            idempotencyResponseBody: { @Sendable sandbox, accepted, db in
+                try await AcceptedMutation(
+                    Self.detailResponse(for: sandbox, on: req, database: db), accepted
+                ).encodedBody()
+            }
         ) { @Sendable db in
             try await Self.requireSnapshotLineageDeletable(for: sandboxID, on: db)
             // Stamp before the mark — see the VM delete path for why.
@@ -993,7 +1006,7 @@ struct SandboxController: RouteCollection {
         if sandbox.hypervisorId != nil {
             app.logger.warning(
                 "Deleting sandbox record without agent teardown; agent is offline",
-                metadata: ["sandbox_id": .string(sandboxID.uuidString)])
+                metadata: ["strato.sandbox.id": .string(sandboxID.uuidString)])
         }
 
         let outcome: ResourceFinalizerService.ClearOutcome
@@ -1010,7 +1023,7 @@ struct SandboxController: RouteCollection {
             app.logger.info(
                 "Sandbox delete is waiting on finalizers other than the agent's",
                 metadata: [
-                    "sandbox_id": .string(sandboxID.uuidString),
+                    "strato.sandbox.id": .string(sandboxID.uuidString),
                     "finalizers": .string(remaining.joined(separator: ",")),
                 ])
         }

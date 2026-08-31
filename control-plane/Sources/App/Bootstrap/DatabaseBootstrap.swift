@@ -18,7 +18,16 @@ extension Application {
         // commits each migration with its log row.
         var schemaMigrationOptions = SchemaMigrator.Options.fromConfiguration(controlPlaneConfiguration)
         schemaMigrationOptions.statementTimeouts = databaseStatementTimeouts
-        try await SchemaMigrator.run(on: self, options: schemaMigrationOptions)
+        do {
+            try await SchemaMigrator.run(on: self, options: schemaMigrationOptions)
+        } catch {
+            // In particular, let a legacy MAC collision name every affected NIC
+            // before the ledger migration refuses to install only half its safety
+            // constraints. Schemas too old to have both interface tables simply
+            // make this best-effort diagnostic unavailable.
+            try? await MACAddressAudit.warnAboutDuplicates(on: db, logger: logger)
+            throw error
+        }
     }
 
     private func configureDatabaseDriver() throws -> SchemaMigrator.StatementTimeouts? {
@@ -34,19 +43,19 @@ extension Application {
         let databaseTLS = try makeDatabaseTLS(
             configuration: controlPlaneConfiguration, logger: logger)
         let statementTimeout = try DatabaseStatementTimeout(
-            milliseconds: controlPlaneConfiguration.int(.databaseStatementTimeoutMS)!)
+            milliseconds: controlPlaneConfiguration.int(.databaseStatementTimeoutMS))
         let migrationStatementTimeout = try DatabaseStatementTimeout(
-            milliseconds: controlPlaneConfiguration.int(.databaseMigrationStatementTimeoutMS)!)
+            milliseconds: controlPlaneConfiguration.int(.databaseMigrationStatementTimeoutMS))
         let statementTimeouts = SchemaMigrator.StatementTimeouts(
             normal: statementTimeout,
             migration: migrationStatementTimeout
         )
         let databaseConfiguration = SQLPostgresConfiguration(
-            hostname: controlPlaneConfiguration.string(.databaseHost)!,
-            port: controlPlaneConfiguration.int(.databasePort)!,
-            username: controlPlaneConfiguration.string(.databaseUsername)!,
-            password: controlPlaneConfiguration.string(.databasePassword)!,
-            database: controlPlaneConfiguration.string(.databaseName)!,
+            hostname: controlPlaneConfiguration.requiredString(.databaseHost),
+            port: controlPlaneConfiguration.int(.databasePort),
+            username: controlPlaneConfiguration.requiredString(.databaseUsername),
+            password: controlPlaneConfiguration.requiredString(.databasePassword),
+            database: controlPlaneConfiguration.requiredString(.databaseName),
             tls: databaseTLS
         )
         logger.info(
@@ -110,6 +119,9 @@ extension Application {
         // STR-79: durable captured VM command state with cold output payloads.
         migrations.add(CreateVMCommandExecutions())
 
+        // STR-84: append-only guest command and interactive execution facts.
+        migrations.add(AddVMGuestExecutionAudit())
+
         // STR-154: preserve the attachment case and its coordinates instead of
         // interpreting every agent-owned storage reference as a host path.
         migrations.add(ReplaceVolumeReplicaDatasetPath())
@@ -118,10 +130,24 @@ extension Application {
         // eligibility intent. Missing disks remain rows until their agent is removed.
         migrations.add(CreateStorageDevices())
 
+        // STR-288: one fleet-wide ledger owns VM and sandbox NIC MAC uniqueness.
+        // Existing addresses are retained exactly; incompatible legacy rows make
+        // this migration fail closed with their interface ids.
+        migrations.add(CreateMACAddressLedger())
+
+        // STR-33: optional one-per-network stateless ACLs with ordered ingress and
+        // egress rules. Existing logical networks intentionally keep no ACL row.
+        migrations.add(CreateNetworkACLs())
+
         // STR-287: keep a per-VM assembly failure visible even though the agent's
         // heartbeat still reports convergence for its last successfully received
         // sync and owns the ordinary convergence-error columns.
         migrations.add(AddDesiredStateAssemblyFailureToVM())
+
+        // STR-289: caller-scoped, expiring replay claims for HTTP mutations. The
+        // durable audit event remains permanent; only this deduplication window is
+        // swept.
+        migrations.add(CreateIdempotencyKeys())
 
         // Agent enrollment now hands the host one opaque bearer and derives every
         // identity/network value server-side when it is redeemed. Existing rows

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, Save } from "lucide-react";
@@ -20,6 +20,14 @@ import { useOrganization } from "@/providers";
 import { toast } from "sonner";
 
 export default function OrganizationSettingsPage() {
+  return (
+    <Suspense fallback={<Skeleton className="h-96 w-full bg-muted" />}>
+      <OrganizationSettingsContent />
+    </Suspense>
+  );
+}
+
+function OrganizationSettingsContent() {
   const searchParams = useSearchParams();
   const idParam = searchParams.get("id");
   const { currentOrg } = useOrganization();

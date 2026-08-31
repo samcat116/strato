@@ -131,7 +131,7 @@ struct DNSController: RouteCollection {
             metadata: [
                 "dnsZoneId": .string(zone.id!.uuidString),
                 "name": .string(name),
-                "projectId": .string(projectID.uuidString),
+                "strato.project.id": .string(projectID.uuidString),
             ])
         return try DNSZoneResponse(from: zone, networks: [], recordCount: 0)
     }

@@ -12,7 +12,7 @@ final class GroupTests: BaseTestCase {
 
     @Test("Create group successfully")
     func testCreateGroup() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/groups") { req in
@@ -36,7 +36,7 @@ final class GroupTests: BaseTestCase {
 
     @Test("Create group with duplicate name fails")
     func testCreateDuplicateGroup() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             // Create first group
@@ -63,7 +63,7 @@ final class GroupTests: BaseTestCase {
 
     @Test("Create group without admin access fails")
     func testCreateGroupWithoutAdminAccess() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             // Create member user: a bare "member" with no admin binding, so
@@ -101,7 +101,7 @@ final class GroupTests: BaseTestCase {
 
     @Test("List groups in organization")
     func testListGroups() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             // Create test groups
@@ -136,7 +136,7 @@ final class GroupTests: BaseTestCase {
 
     @Test("Add members to group")
     func testAddMembersToGroup() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             let group = Group(
@@ -190,7 +190,7 @@ final class GroupTests: BaseTestCase {
 
     @Test("Remove member from group")
     func testRemoveMemberFromGroup() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             let group = Group(
@@ -237,7 +237,7 @@ final class GroupTests: BaseTestCase {
 
     @Test("Update group details")
     func testUpdateGroup() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             let group = Group(
@@ -268,7 +268,7 @@ final class GroupTests: BaseTestCase {
 
     @Test("Delete group")
     func testDeleteGroup() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             let group = Group(

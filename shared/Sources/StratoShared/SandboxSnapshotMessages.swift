@@ -1,23 +1,6 @@
 import Foundation
 
-// MARK: - Sandbox snapshot / checkpoint messages (protocol version >= 9, issue #426)
-//
-// Creating, deleting and exporting a checkpoint were imperative RPCs until wire
-// v33 (ADR 0001 stage 8, STR-150). They are desired state now: a checkpoint's
-// *existence* rides `DesiredStateMessage.snapshots`, and so does *where* it
-// exists — an export is the placement fact "this snapshot also lives in the
-// control plane's object store", with the byte transfer beneath left as a
-// transport concern (`SnapshotArtifactTransfer`), exactly like a console pipe.
-//
-// `sandbox_restore` went at wire v34 (stage 9, STR-151), for `vm_restore`'s
-// reason and by its route: an edge becomes a state once it is counted, so it
-// rides `DesiredSandboxState.restore` as a monotonic nonce naming the snapshot
-// to load — with the exported artifacts' transfer descriptors alongside it when
-// the sandbox has moved off the host that captured it.
-//
-// What is left here is the vocabulary those desired entries are written in:
-// capture mode, fork-layout versioning, artifact kinds and their transfer
-// descriptors.
+// MARK: - Sandbox snapshot vocabulary
 
 /// How the sandbox proceeds once its checkpoint is captured.
 public enum SandboxSnapshotMode: String, Codable, CaseIterable, Sendable {
@@ -43,7 +26,7 @@ public enum SandboxSnapshotForkLayout {
     }
 }
 
-// MARK: - Snapshot artifact transfer (protocol version >= 14, issue #428)
+// MARK: - Snapshot artifact transfer
 
 /// The artifacts that make up one checkpoint archive. Raw values are stable
 /// wire/object-key identifiers; `filename` is the canonical name inside a
@@ -64,13 +47,9 @@ public enum SandboxSnapshotArtifactKind: String, Codable, CaseIterable, Sendable
     }
 }
 
-/// Where an agent fetches one exported snapshot artifact and what the bytes
-/// must verify to. `downloadURL` is a control-plane-relative path the agent
-/// resolves against the base URL it already dials — the Envoy mTLS listener —
-/// and fetches with its SVID-backed TLS client (the v13 image-download
-/// model; issue #493). The size and SHA-256 were recorded by the control
-/// plane while the export streamed through it, so a corrupt or truncated
-/// download can never be restored.
+/// Where an agent fetches an exported artifact and how it verifies the bytes.
+/// The control plane records size and SHA-256 while streaming the export, so
+/// integrity metadata is not agent-supplied.
 public struct SandboxSnapshotArtifactDescriptor: Codable, Equatable, Sendable {
     public let kind: SandboxSnapshotArtifactKind
     /// Control-plane-relative download path
@@ -93,11 +72,8 @@ public struct SandboxSnapshotArtifactDescriptor: Codable, Equatable, Sendable {
     }
 }
 
-/// One upload slot for a snapshot export: the agent streams the named
-/// artifact's bytes to the control-plane-relative `uploadURL` with an mTLS
-/// HTTP PUT, presenting its SVID. The control plane hashes and sizes the
-/// stream itself as it lands in object storage — the recorded integrity
-/// material is never agent-supplied.
+/// An mTLS upload slot for one snapshot artifact. The control plane hashes and
+/// sizes the stream as it lands in object storage.
 public struct SandboxSnapshotArtifactUploadTarget: Codable, Equatable, Sendable {
     public let kind: SandboxSnapshotArtifactKind
     /// Control-plane-relative upload path (same route as the download,
@@ -109,9 +85,3 @@ public struct SandboxSnapshotArtifactUploadTarget: Codable, Equatable, Sendable 
         self.uploadURL = uploadURL
     }
 }
-
-// `SandboxSnapshotStatusResponse` went with `sandbox_snapshot_create` at wire
-// v33. Everything it carried now travels on `ObservedSnapshotFacts`, which is
-// re-sent on every heartbeat rather than delivered once: the old shape forced
-// the control plane to treat a lost reply as a protocol error and mark a
-// checkpoint that in fact existed `.error`.

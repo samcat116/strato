@@ -228,25 +228,42 @@ struct VolumeController: RouteCollection {
         // first, then commit the insert, creator binding, and attribution
         // together. Create cannot use `ResourceMutation.accept`, because that
         // service operates on a row that already exists.
-        let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
-            try await QuotaEnforcementService.reserveVolume(
-                for: project, environment: environment, size: sizeBytes, on: db)
-            try await volume.save(on: db)
-            let volumeID = try volume.requireID()
-            try await RoleBindingService.grant(
-                principalType: .user,
-                principalID: userID,
-                role: .admin,
-                nodeType: .volume,
-                nodeID: volumeID,
-                createdBy: userID,
-                on: db
-            )
-            let event = try await ResourceEvent.record(
-                .create, resourceKind: .volume, resourceID: volumeID,
-                actor: .user(userID), on: db)
-            return ResourceMutation.Accepted(
-                mutationID: try event.requireID(), targetGeneration: volume.generation)
+        let accepted: ResourceMutation.Accepted
+        do {
+            accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+                try await IdempotencyService.reserve(
+                    req.idempotencyContext, actor: .user(userID), on: db)
+                try await QuotaEnforcementService.reserveVolume(
+                    for: project, environment: environment, size: sizeBytes, on: db)
+                try await volume.save(on: db)
+                let volumeID = try volume.requireID()
+                try await RoleBindingService.grant(
+                    principalType: .user,
+                    principalID: userID,
+                    role: .admin,
+                    nodeType: .volume,
+                    nodeID: volumeID,
+                    createdBy: userID,
+                    on: db
+                )
+                let event = try await ResourceEvent.record(
+                    .create, resourceKind: .volume, resourceID: volumeID,
+                    actor: .user(userID), on: db)
+                let accepted = ResourceMutation.Accepted(
+                    mutationID: try event.requireID(), targetGeneration: volume.generation)
+                try await IdempotencyService.complete(
+                    req.idempotencyContext,
+                    actor: .user(userID),
+                    resourceKind: .volume,
+                    resourceID: volumeID,
+                    accepted: accepted,
+                    on: db)
+                return accepted
+            }
+        } catch let error as any DatabaseError where error.isConstraintFailure {
+            throw Abort(
+                .conflict,
+                reason: "A volume named '\(volume.name)' already exists in this project")
         }
 
         let volumeId = try volume.requireID()
@@ -281,7 +298,7 @@ struct VolumeController: RouteCollection {
             metadata: [
                 "volumeId": .string(volumeId.uuidString),
                 "name": .string(volume.name),
-                "projectId": .string(projectId.uuidString),
+                "strato.project.id": .string(projectId.uuidString),
                 "sizeGB": .stringConvertible(request.sizeGB),
                 "sourceImageId": .string(sourceImage?.id?.uuidString ?? ""),
             ])
@@ -400,7 +417,12 @@ struct VolumeController: RouteCollection {
 
         let accepted = try await req.resourceMutation.accept(
             .delete, on: volume, actor: .user(userID), dispatch: strategy,
-            on: req.db, app: app
+            on: req.db, app: app,
+            idempotencyResponseBody: { @Sendable volume, accepted, db in
+                try await AcceptedMutation(
+                    VolumeService.response(for: volume, on: db), accepted
+                ).encodedBody()
+            }
         ) { @Sendable db in
             // Volume teardown is scoped to every physical replica, not only
             // the healthy/provisioning set used by generic placement. Stamp
@@ -581,7 +603,7 @@ struct VolumeController: RouteCollection {
             "Volume attachment requested",
             metadata: [
                 "volumeId": .string(volume.id!.uuidString),
-                "vmId": .string(vmID.uuidString),
+                "strato.vm.id": .string(vmID.uuidString),
                 "deviceName": .string(volume.deviceName ?? ""),
             ])
 
@@ -638,7 +660,7 @@ struct VolumeController: RouteCollection {
             "Volume detachment requested",
             metadata: [
                 "volumeId": .string(volume.id!.uuidString),
-                "previousVmId": .string(vmId.uuidString),
+                "strato.vm.previous.id": .string(vmId.uuidString),
             ])
 
         return try await AcceptedMutation(
@@ -884,7 +906,7 @@ struct VolumeController: RouteCollection {
             agentId: agentId,
             expiresAt: try SnapshotRetention.expiry(
                 requested: request.ttlSeconds,
-                defaultTTLSeconds: req.controlPlaneConfiguration.int(.snapshotDefaultTTLSeconds)),
+                defaultTTLSeconds: req.controlPlaneConfiguration.optionalInt(.snapshotDefaultTTLSeconds)),
             createdByID: userID
         )
         snapshot.extendConvergenceDeadline(
@@ -900,6 +922,8 @@ struct VolumeController: RouteCollection {
         // (STR-181): an overlay grows toward it with no API call to refuse along
         // the way, so the pool has to be able to absorb it fully grown.
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+            try await IdempotencyService.reserve(
+                req.idempotencyContext, actor: .user(userID), on: db)
             try await QuotaEnforcementService.reserveSnapshotStorage(
                 for: project, environment: volume.environment, size: volume.size, on: db)
             try await snapshot.save(on: db)
@@ -913,7 +937,7 @@ struct VolumeController: RouteCollection {
                 on: db
             )
             return try await SnapshotArtifactMutation.recordCapture(
-                snapshot, actor: .user(userID), on: db)
+                snapshot, actor: .user(userID), idempotencyContext: req.idempotencyContext, on: db)
         }
 
         try SnapshotArtifactMutation.dispatchCapture(snapshot, app: req.application)
@@ -992,6 +1016,8 @@ struct VolumeController: RouteCollection {
             throw Abort(.internalServerError, reason: "The volume's project no longer exists")
         }
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+            try await IdempotencyService.reserve(
+                req.idempotencyContext, actor: .user(userID), on: db)
             try await QuotaEnforcementService.reserveVolume(
                 for: sourceProject, environment: sourceVolume.environment,
                 size: sourceVolume.size, on: db)
@@ -1009,8 +1035,16 @@ struct VolumeController: RouteCollection {
             let event = try await ResourceEvent.record(
                 .create, resourceKind: .volume, resourceID: newVolumeID,
                 actor: .user(userID), on: db)
-            return ResourceMutation.Accepted(
+            let accepted = ResourceMutation.Accepted(
                 mutationID: try event.requireID(), targetGeneration: newVolume.generation)
+            try await IdempotencyService.complete(
+                req.idempotencyContext,
+                actor: .user(userID),
+                resourceKind: .volume,
+                resourceID: newVolumeID,
+                accepted: accepted,
+                on: db)
+            return accepted
         }
 
         // The clone is a create *strategy* on the new volume's desired entry,
@@ -1133,7 +1167,12 @@ struct VolumeController: RouteCollection {
         }
 
         let accepted = try await SnapshotArtifactMutation.delete(
-            snapshot, actor: .user(try user.requireID()), on: req.db, app: req.application)
+            snapshot, actor: .user(try user.requireID()),
+            idempotencyContext: req.idempotencyContext,
+            idempotencyResponseBody: { @Sendable snapshot, accepted, _ in
+                try AcceptedMutation(SnapshotResponse(from: snapshot), accepted).encodedBody()
+            },
+            on: req.db, app: req.application)
 
         req.logger.info(
             "Volume snapshot deletion requested",

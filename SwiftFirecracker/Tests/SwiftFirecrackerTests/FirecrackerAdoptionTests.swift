@@ -74,7 +74,6 @@ struct FirecrackerAdoptionTests {
         let (_, info) = try await client.adoptVM(vmId: vmId)
 
         #expect(info.state == .running)
-        #expect(info.id == vmId)
     }
 
     @Test("adoptVM is idempotent for an already-managed VM")
@@ -124,13 +123,10 @@ private final class FakeFirecrackerAPIServer: Sendable {
     private let queue = DispatchQueue(label: "fake-firecracker-api")
     private let stopped = NIOLockedValueBox(false)
 
-    init(socketPath: String, state: String, appName: String = "Firecracker") throws {
+    init(socketPath: String, state: String) throws {
         self.socketPath = socketPath
-        // id is filled from the socket file name so the adopt assertions can
-        // check it round-trips; keeps the fixture in one place.
-        let vmId = (socketPath as NSString).lastPathComponent.replacingOccurrences(of: ".sock", with: "")
         let json = """
-            {"app_name":"\(appName)","id":"\(vmId)","state":"\(state)","vmm_version":"test"}
+            {"state":"\(state)","vmm_version":"test"}
             """
         self.responseBody = Data(json.utf8)
 

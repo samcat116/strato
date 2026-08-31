@@ -156,7 +156,7 @@ public struct SPIRERegistrationService: Sendable {
             logger.error(
                 "SPIRE workload entry creation failed",
                 metadata: [
-                    "agentName": .string(agentName),
+                    "strato.agent.name": .string(agentName),
                     "error": .string("\(error)"),
                 ])
             throw error
@@ -183,7 +183,7 @@ public struct SPIRERegistrationService: Sendable {
                 logger.error(
                     "Failed to reconcile federation on a reused SPIRE entry",
                     metadata: [
-                        "agentName": .string(agentName),
+                        "strato.agent.name": .string(agentName),
                         "entryID": .string(entryResult.entryID),
                         "federatesWith": .string(federatesWith.joined(separator: ",")),
                         "error": .string("\(error)"),
@@ -195,8 +195,8 @@ public struct SPIRERegistrationService: Sendable {
         logger.info(
             "Provisioned agent in SPIRE",
             metadata: [
-                "agentName": .string(agentName),
-                "spiffeID": .string(spiffeID),
+                "strato.agent.name": .string(agentName),
+                "strato.agent.identity": .string(spiffeID),
                 "entryID": .string(entryResult.entryID),
                 "entryReused": .string(entryReused ? "yes" : "no"),
                 // The set now in effect on the entry, not merely the one asked
@@ -239,7 +239,7 @@ public struct SPIRERegistrationService: Sendable {
             logger.warning(
                 "Failed to roll back SPIRE provisioning; the entry will be reused on retry",
                 metadata: [
-                    "agentName": .string(agentName),
+                    "strato.agent.name": .string(agentName),
                     "error": .string("\(error)"),
                 ])
         }
@@ -274,8 +274,8 @@ public struct SPIRERegistrationService: Sendable {
         logger.info(
             "Deprovisioned agent in SPIRE",
             metadata: [
-                "agentName": .string(agentName),
-                "spiffeID": .string(spiffeID),
+                "strato.agent.name": .string(agentName),
+                "strato.agent.identity": .string(spiffeID),
                 "workloadEntriesDeleted": .string("\(workloadDeleted)"),
                 "nodeAliasesDeleted": .string("\(aliasesDeleted)"),
                 "attestedAgentEvicted": .string(evicted ? "yes" : "no"),
@@ -443,7 +443,7 @@ public struct SPIRERegistrationConfig: Sendable {
         else { return nil }
 
         let apiAddress = try SPIREServerAPIAddress(parsing: apiAddressString)
-        let trustDomain = configuration.string(.spireTrustDomain)!
+        let trustDomain = configuration.requiredString(.spireTrustDomain)
 
         // SPIFFE Workload API socket of a local SPIRE agent, enabling the
         // mTLS admin path. Standard SPIFFE env var; both `unix:///path` and
@@ -470,7 +470,7 @@ public struct SPIRERegistrationConfig: Sendable {
             publicAddress = "localhost:8085"
         }
 
-        let selectorsString = configuration.string(.spireAgentSelectors)!
+        let selectorsString = configuration.requiredString(.spireAgentSelectors)
         var selectors: [SPIRESelector] = []
         for part in selectorsString.split(separator: ",") {
             let trimmed = part.trimmingCharacters(in: .whitespaces)
@@ -490,7 +490,7 @@ public struct SPIRERegistrationConfig: Sendable {
             workloadAPISocketPath: workloadSocketPath,
             serverPublicAddress: publicAddress,
             agentSelectors: selectors,
-            svidTTLSeconds: configuration.int(.spireSVIDTTL)!
+            svidTTLSeconds: configuration.int(.spireSVIDTTL)
         )
     }
 }

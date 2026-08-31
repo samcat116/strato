@@ -252,7 +252,7 @@ struct OpenAPISpecDriftTests {
             if let key { expectedKeys.insert(key) }
         }
 
-        try await withApp { app in
+        try await withTestApp { app in
             // Reverse: the routes the generated transport registered are exactly
             // those operations — no more (a stale handler) and no fewer (an
             // operation whose route never got registered).
@@ -290,7 +290,7 @@ struct OpenAPISpecDriftTests {
         let specKeys = Self.specOperationKeys(from: yaml)
         #expect(!specKeys.isEmpty, "Failed to parse any operations out of openapi.yaml")
 
-        try await withApp { app in
+        try await withTestApp { app in
             let routes = app.routes.all.map { Self.registeredRoute($0) }
             let registeredKeys = Set(routes.map { $0.key })
 

@@ -61,8 +61,8 @@ struct OrgSPIREClientRegistry: Sendable {
             platform: platform,
             platformConfig: platform.registrationConfig,
             logger: app.logger,
-            orgTrustDomainsEnabled: app.controlPlaneConfiguration.bool(.spireOrgTrustDomainsEnabled)!,
-            legacyEnrollmentsAllowed: app.controlPlaneConfiguration.bool(.spireLegacyEnrollments)!)
+            orgTrustDomainsEnabled: app.controlPlaneConfiguration.bool(.spireOrgTrustDomainsEnabled),
+            legacyEnrollmentsAllowed: app.controlPlaneConfiguration.bool(.spireLegacyEnrollments))
     }
 
     /// The platform trust domain, taken from the service that actually

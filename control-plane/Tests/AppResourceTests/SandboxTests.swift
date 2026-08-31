@@ -29,7 +29,6 @@ final class SandboxTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -76,15 +75,10 @@ final class SandboxTests {
         // older one; everything else wants a host that is simply current.
         firecrackerVersion: String? = FirecrackerSnapshotFeatures.networkOverridesMinimumVersion
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: agentName,
+        let agentID = try await TestDataBuilder(db: app.db).registerAgent(
+            on: app,
+            named: agentName,
             hostname: "test-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
             architecture: architecture,
             hypervisors: [
                 HypervisorSupport(
@@ -97,17 +91,12 @@ final class SandboxTests {
             networkCapability: (sandboxNetworkingCapable ?? false) ? .overlay : nil,
             protocolVersion: protocolVersion,
             sandboxCapable: sandboxCapable,
-            sandboxNetworkingCapable: sandboxNetworkingCapable
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: agentName,
-            organizationScope: orgID.map { .organization($0) })
+            sandboxNetworkingCapable: sandboxNetworkingCapable)
         if let sandbox {
-            sandbox.hypervisorId = agentUUID.uuidString
+            sandbox.hypervisorId = agentID
             try await sandbox.save(on: app.db)
         }
-        return agentUUID.uuidString
+        return agentID
     }
 
     private func report(
@@ -226,7 +215,7 @@ final class SandboxTests {
         try await withSandboxTestApp { app, _, _, sandbox, _ in
             let agentId = try await registerAgent(app: app, named: "runtime-agent", sandboxCapable: true)
 
-            try await app.agentService.createSandbox(sandbox: sandbox, db: app.db)
+            try await app.workloadPlacement.createSandbox(sandbox: sandbox, db: app.db)
 
             let placed = try await Sandbox.find(sandbox.id, on: app.db)
             #expect(placed?.hypervisorId == agentId)
@@ -241,7 +230,7 @@ final class SandboxTests {
             _ = try await registerAgent(app: app, named: "runtimeless-agent", sandboxCapable: nil)
 
             do {
-                try await app.agentService.createSandbox(sandbox: sandbox, db: app.db)
+                try await app.workloadPlacement.createSandbox(sandbox: sandbox, db: app.db)
                 Issue.record("Expected schedulingFailed error")
             } catch let error as AgentServiceError {
                 guard case .schedulingFailed(let reason) = error else {
@@ -293,7 +282,7 @@ final class SandboxTests {
             ).save(on: app.db)
 
             do {
-                try await app.agentService.createSandbox(sandbox: sandbox, db: app.db)
+                try await app.workloadPlacement.createSandbox(sandbox: sandbox, db: app.db)
                 Issue.record("Expected schedulingFailed error")
             } catch let error as AgentServiceError {
                 guard case .schedulingFailed(let reason) = error else {
@@ -318,7 +307,7 @@ final class SandboxTests {
             let agentId = try await registerAgent(
                 app: app, named: "no-sandbox-net", sandboxCapable: true, sandboxNetworkingCapable: nil)
 
-            try await app.agentService.createSandbox(sandbox: sandbox, db: app.db)
+            try await app.workloadPlacement.createSandbox(sandbox: sandbox, db: app.db)
 
             let placed = try await Sandbox.find(sandbox.id, on: app.db)
             #expect(placed?.hypervisorId == agentId)
@@ -339,7 +328,7 @@ final class SandboxTests {
                 macAddress: "00:0c:29:ab:cd:33"
             ).save(on: app.db)
 
-            try await app.agentService.createSandbox(sandbox: sandbox, db: app.db)
+            try await app.workloadPlacement.createSandbox(sandbox: sandbox, db: app.db)
 
             let placed = try await Sandbox.find(sandbox.id, on: app.db)
             #expect(placed?.hypervisorId == capableId)
@@ -1403,7 +1392,8 @@ final class SandboxTests {
             let nic = try #require(interfaces.first)
             #expect(nic.logicalNetworkID == network.id)
             #expect(nic.deviceName == "net0")
-            #expect(nic.macAddress.hasPrefix("00:0c:29:"))
+            #expect(nic.macAddress.hasPrefix("02:"))
+            #expect(MACAddress(allocated: nic.macAddress) != nil)
 
             let v4 = try #require(nic.ipv4Address)
             #expect(v4.address == "192.168.1.2")  // .1 is the gateway
@@ -1451,7 +1441,7 @@ final class SandboxTests {
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "peer-vm", project: project)
             let vmNIC = VMNetworkInterface(
                 vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress())
+                macAddress: MACAllocator.generateCandidate().description)
             try await vmNIC.save(on: app.db)
             try await VMInterfaceAddress(
                 interfaceID: try vmNIC.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
@@ -1460,14 +1450,16 @@ final class SandboxTests {
 
             let sbNIC = SandboxNetworkInterface(
                 sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress())
+                macAddress: MACAllocator.generateCandidate().description)
             try await sbNIC.save(on: app.db)
             try await SandboxInterfaceAddress(
                 interfaceID: try sbNIC.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
                 address: "192.168.1.3", prefixLength: 24, gateway: network.gateway
             ).save(on: app.db)
 
-            let allocation = try await IPAMService.allocateIP(for: network, on: app.db)
+            let allocation = try await app.db.transaction { transaction in
+                try await IPAMService.allocateIP(for: network, on: transaction)
+            }
             #expect(allocation.ipAddress == "192.168.1.4")
         }
     }
@@ -1669,7 +1661,7 @@ final class SandboxTests {
             for (deviceName, group) in [("net1", other), ("net0", defaultGroup)] {
                 let nic = SandboxNetworkInterface(
                     sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
-                    macAddress: VMNetworkInterface.generateMACAddress(), deviceName: deviceName)
+                    macAddress: MACAllocator.generateCandidate().description, deviceName: deviceName)
                 try await nic.save(on: app.db)
                 try await SandboxInterfaceSecurityGroup(
                     interfaceID: try nic.requireID(), securityGroupID: try group.requireID()
@@ -1920,7 +1912,7 @@ final class SandboxTests {
                 .delete, resourceKind: .sandbox, resourceID: try sandbox.requireID(),
                 actor: .user(try user.requireID()), on: app.db)
 
-            await app.agentService.sweepStuckConvergence()
+            await app.agentMaintenance.sweepStuckConvergence()
 
             // The timeout must not abandon the deletion (issue #734) — a live
             // desired state would have the agent recreate a blank sandbox.

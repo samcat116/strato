@@ -52,7 +52,6 @@ final class CrossProjectContainmentTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let admin = try await builder.createUser(
@@ -140,7 +139,7 @@ final class CrossProjectContainmentTests {
         let networkID = try network.requireID()
         let nic = VMNetworkInterface(
             vmID: try vm.requireID(), logicalNetworkID: networkID,
-            macAddress: VMNetworkInterface.generateMACAddress())
+            macAddress: MACAllocator.generateCandidate().description)
         try await nic.save(on: app.db)
         if let address {
             try await VMInterfaceAddress(
