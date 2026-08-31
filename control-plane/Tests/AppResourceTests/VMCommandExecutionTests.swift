@@ -519,6 +519,38 @@ struct VMCommandExecutionTests {
         }
     }
 
+    @Test("a deadline sweep marks a persisted running snapshot as truncated")
+    func deadlineSweepMarksPersistedRunningSnapshotTruncated() async throws {
+        try await withTestApp { app in
+            let snapshotService = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
+            let sweepService = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
+            let execution = execution(deadline: Date().addingTimeInterval(-1))
+            try await execution.create(command: ["/usr/bin/sleep", "600"], on: app.db)
+            let id = try execution.requireID()
+
+            let running = GuestExecRecordedStateMessage(
+                sessionId: id.uuidString,
+                revision: 1,
+                status: .running,
+                rawStdout: Data("partly done".utf8),
+                rawStderr: Data(),
+                truncated: false)
+            #expect(
+                await snapshotService.handleRecordedState(
+                    running, fromAgentKey: execution.agentKey))
+            #expect(try await VMCommandPayload.find(id, on: app.db)?.truncated == false)
+
+            await sweepService.sweepStuck()
+
+            let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
+            let response = try await stored.operationResponse(on: app.db)
+            #expect(stored.status == .failed)
+            #expect(response.result?.stdout == "partly done")
+            #expect(response.result?.exitCode == nil)
+            #expect(response.result?.truncated == true)
+        }
+    }
+
     @Test("a terminal snapshot from the wrong agent is discarded and acknowledged")
     func recordedStateCannotCompleteAnotherAgentExecution() async throws {
         try await withTestApp { app in

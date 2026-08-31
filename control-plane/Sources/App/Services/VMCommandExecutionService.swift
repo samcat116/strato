@@ -546,6 +546,23 @@ actor VMCommandExecutionService {
                 ).all(decoding: TimedOut.self)
                 let newlyTimedOut = Dictionary(
                     uniqueKeysWithValues: timedOut.map { ($0.id, $0.agentKey) })
+                // A running authoritative snapshot may have been persisted by
+                // another replica, so do not rely on this actor still holding
+                // its Capture to identify incomplete output. Mark every
+                // durable partial result claimed by this sweep in the same
+                // transaction as the execution failure.
+                for execution in timedOut {
+                    try await sql.raw(
+                        """
+                        UPDATE vm_command_payloads
+                        SET truncated = TRUE
+                        WHERE execution_id = \(bind: execution.id)
+                          AND stdout IS NOT NULL
+                          AND stderr IS NOT NULL
+                          AND exit_code IS NULL
+                        """
+                    ).run()
+                }
                 var payloadWrites: Set<UUID> = []
                 for (id, originalCapture) in expiredCaptures {
                     var capture = originalCapture
