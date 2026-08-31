@@ -1,0 +1,24 @@
+control-plane/Sources/App/Controllers/NetworkACLController.swift
+  s_3cd6d370aba786::t_d185db67a098f8 100,127,130
+control-plane/Tests/AppPlatformTests/NetworkACLControllerTests.swift
+  s_3cd6d370aba786::t_d185db67a098f8 250-272,275-284
+  s_3cd6d370aba786::t_b0247bab6f9bc8 273-274
+control-plane/Sources/App/Services/NetworkACLService.swift
+  s_3cd6d370aba786::t_d185db67a098f8 11-15,61,64,69,71,76,79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "43ccf18e76820e8c2ce08d6e888fddeeb87bf095",
+  "prompts": {},
+  "sessions": {
+    "s_3cd6d370aba786": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0551c-59f6-7911-8455-6ed9f39029b9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
