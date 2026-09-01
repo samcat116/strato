@@ -1,0 +1,29 @@
+control-plane/Sources/App/Middleware/RateLimitMiddleware.swift
+  s_9f7fc43caa62d9::t_c0936fb8e25cbb 155
+control-plane/Sources/App/Middleware/RequestLoggingMiddleware.swift
+  s_9f7fc43caa62d9::t_c0936fb8e25cbb 31,56-77,79
+control-plane/Sources/App/Bootstrap/HTTPPipelineBootstrap.swift
+  s_9f7fc43caa62d9::t_c0936fb8e25cbb 47-49,53
+control-plane/Tests/AppPlatformTests/LoggingContractTests.swift
+  s_9f7fc43caa62d9::t_c0936fb8e25cbb 1,44-97,101
+  s_9f7fc43caa62d9::t_b9cf31899ffbf5 98-100
+  s_9f7fc43caa62d9::t_9c39090a67cb5b 102-103
+control-plane/Sources/App/Middleware/SecretSafeErrorLogPathMiddleware.swift
+  s_9f7fc43caa62d9::t_c0936fb8e25cbb 1-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "2e53b1bb88e7422d17f2d2ba3d18555be5b765a5",
+  "prompts": {},
+  "sessions": {
+    "s_9f7fc43caa62d9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05a87-9574-7791-b770-468d753dc14d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
