@@ -461,6 +461,16 @@ struct VolumeController: RouteCollection {
                 ).encodedBody()
             }
         ) { @Sendable db in
+            // `accept` refreshes the model after acquiring the row lock. An
+            // attach may have committed since the request's initial guard, so
+            // deletion must be authorized again against that serialized state.
+            guard volume.canDelete else {
+                throw Abort(
+                    .conflict,
+                    reason: "Volume is attached to a VM and cannot be deleted. Detach it first."
+                )
+            }
+
             // Volume teardown is scoped to every physical replica, not only
             // the healthy/provisioning set used by generic placement. Stamp
             // before the mark, and never re-stamp a terminating volume: doing

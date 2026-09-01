@@ -147,7 +147,7 @@ enum DNSZoneService {
         if derivedTypes.contains(type) {
             throw Abort(
                 .conflict,
-                reason: "'\(fqdn)' already has a \(type.rawValue) record derived from a VM on this zone's "
+                reason: "'\(fqdn)' already has \(type.recordDescription()) derived from a VM on this zone's "
                     + "primary network; rename the VM's hostname or choose another record name")
         }
         // RFC 1034 §3.6.2: a CNAME owner may hold no other data.
@@ -165,7 +165,7 @@ enum DNSZoneService {
         if type == .cname, let other = siblings.first {
             throw Abort(
                 .conflict,
-                reason: "'\(fqdn)' already has a \(other.type.rawValue) record; a CNAME cannot share an "
+                reason: "'\(fqdn)' already has \(other.type.recordDescription()); a CNAME cannot share an "
                     + "owner name with other data")
         }
         if type != .cname, siblings.contains(where: { $0.type == .cname }) {
@@ -342,7 +342,7 @@ enum DNSZoneService {
         if let clashing {
             throw Abort(
                 .conflict,
-                reason: "Zone '\(zone.name)' already has a \(clashing.type.rawValue) record at "
+                reason: "Zone '\(zone.name)' already has \(clashing.type.recordDescription()) at "
                     + "'\(clashing.name)', which a VM on this network would register as; delete the "
                     + "record or rename the VM first")
         }

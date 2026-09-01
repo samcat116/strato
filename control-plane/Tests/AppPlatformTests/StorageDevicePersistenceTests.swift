@@ -11,6 +11,78 @@ import Vapor
 
 @Suite("Storage device persistence", .serialized)
 struct StorageDevicePersistenceTests {
+    @Test("structured device uses round-trip through PostgreSQL")
+    func structuredUsesRoundTrip() async throws {
+        try await withStorageSchema { database, sql in
+            let agentID = try await insertAgent(using: sql)
+            let device = makeDevice(
+                agentID: agentID,
+                identityValue: "5000cca0",
+                uses: [.partitionTable, .filesystem, .mounted])
+
+            try await device.save(on: database)
+
+            let stored = try #require(try await StorageDevice.find(device.id, on: database))
+            #expect(stored.uses == [.partitionTable, .filesystem, .mounted])
+        }
+    }
+
+    @Test("legacy JSON usage arrays migrate without losing values")
+    func legacyUsesMigrateToTextArray() async throws {
+        try await withStorageSchema { database, sql in
+            try await sql.raw(
+                """
+                ALTER TABLE storage_devices
+                    ALTER COLUMN uses DROP DEFAULT,
+                    ALTER COLUMN uses TYPE jsonb[] USING '{}'::jsonb[],
+                    ALTER COLUMN uses SET DEFAULT '{}'::jsonb[]
+                """
+            ).run()
+            let agentID = try await insertAgent(using: sql)
+            let deviceID = UUID()
+            try await sql.raw(
+                """
+                INSERT INTO storage_devices
+                    (id, agent_id, identity_kind, identity_value, device_path,
+                     size_bytes, rotational, uses, role, state, present, last_seen_at)
+                VALUES
+                    (
+                        \(bind: deviceID), \(bind: agentID), 'wwn', '5000cca9', '/dev/sdz',
+                        1000000, false,
+                        ARRAY['"partitionTable"'::jsonb, '"filesystem"'::jsonb, '"mounted"'::jsonb],
+                        'unassigned', 'inUse', true, NOW()
+                    )
+                """
+            ).run()
+
+            try await FixStorageDeviceUsesArrayType().prepare(on: database)
+
+            let columnType = try #require(
+                try await sql.raw(
+                    """
+                    SELECT udt_name
+                    FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'storage_devices'
+                      AND column_name = 'uses'
+                    """
+                ).first(decodingColumn: "udt_name", as: String.self))
+            #expect(columnType == "_text")
+            let stored = try #require(try await StorageDevice.find(deviceID, on: database))
+            #expect(stored.uses == [.partitionTable, .filesystem, .mounted])
+
+            let reported = makeDevice(
+                agentID: agentID,
+                identityValue: "5000ccaa",
+                path: "/dev/sdy",
+                uses: [.swap])
+            try await reported.save(on: database)
+            let roundTripped = try #require(
+                try await StorageDevice.find(reported.id, on: database))
+            #expect(roundTripped.uses == [.swap])
+        }
+    }
+
     @Test("stable identities are unique per agent, not across agents")
     func identityUniquenessIsAgentScoped() async throws {
         try await withStorageSchema { database, sql in
@@ -137,7 +209,8 @@ struct StorageDevicePersistenceTests {
         agentID: UUID,
         identityKind: StorageDeviceIdentityKind? = .wwn,
         identityValue: String?,
-        path: String = "/dev/sdb"
+        path: String = "/dev/sdb",
+        uses: [StorageDeviceUse] = []
     ) -> StorageDevice {
         StorageDevice(
             agentID: agentID,
@@ -149,7 +222,7 @@ struct StorageDevicePersistenceTests {
             serial: "SERIAL-1",
             wwn: "0x5000CCA1",
             rotational: false,
-            uses: [],
+            uses: uses,
             role: .unassigned,
             state: .available,
             present: true,

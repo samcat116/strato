@@ -633,11 +633,10 @@ struct DomainRedefinitionTests {
         #expect(widening.refusals[0].contains("2 memory devices"))
     }
 
-    /// `memoryDeviceNode` names node 0, and so does the resize fragment built
-    /// from the same function — so a device added against a cell numbered
-    /// anything else is one libvirt refuses to back and no later resize could
-    /// match. Only a *new* device is affected; an existing one keeps whatever
-    /// `<node>` it already had.
+    /// `memoryDeviceNode` names node 0, so a device added to a domain whose only
+    /// cell has another id would point at a guest NUMA node that does not exist.
+    /// Only a *new* device is affected; an existing one keeps whatever `<node>`
+    /// it already had.
     @Test("a lone NUMA cell that is not node 0 refuses a new memory device")
     func nonZeroNUMACellRefusesANewDevice() throws {
         let document = Self.definedDomain(bootGiB: 4, headroomGiB: nil).replacingOccurrences(

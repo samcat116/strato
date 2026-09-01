@@ -54,6 +54,7 @@ struct DomainMemoryInventoryTests {
                   <requested unit='KiB'>1048576</requested>
                   <current unit='KiB'>1048576</current>
                 </target>
+                <alias name='virtiomem0'/>
                 <address type='pci' domain='0x0000' bus='0x05' slot='0x00' function='0x0'/>
               </memory>
         """
@@ -70,6 +71,30 @@ struct DomainMemoryInventoryTests {
         #expect(layout.virtioMem?.sizeBytes == 6 * Self.gib)
         #expect(layout.virtioMem?.blockBytes == 2 * Self.mib)
         #expect(layout.virtioMem?.requestedBytes == 1 * Self.gib)
+    }
+
+    /// Application metadata is opaque to the memory inventory. Parsing the
+    /// whole domain through the redefiner's intentionally strict tree parser
+    /// would reject both constructs here before it ever reached the ordinary
+    /// virtio-mem device (PR #1344 review).
+    @Test("unrelated mixed and CDATA metadata does not block device identity")
+    func unrelatedApplicationMetadata() throws {
+        let metadata = """
+                  <metadata>
+                    <app:state xmlns:app='urn:strato:test'>before<app:value/>after</app:state>
+                    <app:opaque xmlns:app='urn:strato:test'><![CDATA[<opaque>&value]]></app:opaque>
+                  </metadata>
+            """
+        let domain = Self.domain(Self.virtioMemDevice).replacingOccurrences(
+            of: "  <maxMemory", with: metadata + "\n  <maxMemory")
+
+        let layout = try DomainMemoryInventory.memoryLayout(inDomainXML: domain)
+        let virtioMem = try #require(layout.virtioMem)
+        let fragment = try DomainDeviceXML.memoryDevice(
+            virtioMem, requestedBytes: 3 * Self.gib)
+
+        #expect(fragment.contains("<alias name='virtiomem0'/>") == true)
+        #expect(fragment.contains("<address bus='0x05'") == true)
     }
 
     /// `<memory>` under `<domain>` is the domain's total and `<memory>` under
@@ -238,13 +263,15 @@ struct DomainMemoryInventoryTests {
         #expect(layout.shortfall(forTotal: 4 * Self.gib) == 2 * Self.gib)
     }
 
-    /// The fragment libvirt matches an update against. It has to reproduce the
-    /// device's identity — model, node, size and block — or it describes a
-    /// different device and the update finds nothing.
+    /// The fragment libvirt matches an update against. It has to preserve the
+    /// complete live device, including the alias and address libvirt assigned,
+    /// while changing only the requested allocation.
     @Test("the update fragment reproduces the device it means to grow")
-    func memoryFragment() {
-        let xml = DomainDeviceXML.memoryDevice(
-            sizeBytes: 6 * Self.gib, blockBytes: 2 * Self.mib, requestedBytes: 3 * Self.gib)
+    func memoryFragment() throws {
+        let layout = try DomainMemoryInventory.memoryLayout(
+            inDomainXML: Self.domain(Self.virtioMemDevice))
+        let virtioMem = try #require(layout.virtioMem)
+        let xml = try DomainDeviceXML.memoryDevice(virtioMem, requestedBytes: 3 * Self.gib)
 
         #expect(
             xml == """
@@ -254,7 +281,10 @@ struct DomainMemoryInventoryTests {
                     <node>0</node>
                     <block unit='KiB'>2048</block>
                     <requested unit='KiB'>3145728</requested>
+                    <current unit='KiB'>1048576</current>
                   </target>
+                  <alias name='virtiomem0'/>
+                  <address bus='0x05' domain='0x0000' function='0x0' slot='0x00' type='pci'/>
                 </memory>
 
                 """)

@@ -8,6 +8,36 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
+private actor MutationTableLockGate {
+    private var isLocked = false
+    private var isReleased = false
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func markLocked() {
+        isLocked = true
+    }
+
+    func waitUntilLocked() async {
+        while !isLocked { await Task.yield() }
+    }
+
+    func waitForRelease() async {
+        guard !isReleased else { return }
+        await withCheckedContinuation { releaseContinuation = $0 }
+    }
+
+    func release() {
+        isReleased = true
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
+private struct MutationHTTPResponse: Sendable {
+    let status: HTTPStatus
+    let body: String
+}
+
 /// STR-129: the volume↔VM attachment used to be four independent columns with
 /// no constraint, no transaction and no validation tying them together.
 ///
@@ -91,6 +121,171 @@ struct VolumeAttachmentTests {
             if let reason {
                 #expect(res.body.string.contains(reason))
             }
+        }
+    }
+
+    private func attachResponse(
+        volumeID: UUID, to vmID: UUID, deviceName: String,
+        token: String, on app: Application
+    ) async throws -> MutationHTTPResponse {
+        var response: MutationHTTPResponse?
+        try await app.test(.POST, "/api/volumes/\(volumeID)/attach") { req in
+            req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            try req.content.encode(
+                AttachVolumeRequest(
+                    vmId: vmID, deviceName: deviceName, bootOrder: nil, readonly: nil))
+        } afterResponse: { res in
+            response = MutationHTTPResponse(status: res.status, body: res.body.string)
+        }
+        return try #require(response)
+    }
+
+    private func deleteResponse(
+        volumeID: UUID, token: String, on app: Application
+    ) async throws -> MutationHTTPResponse {
+        var response: MutationHTTPResponse?
+        try await app.test(.DELETE, "/api/volumes/\(volumeID)") { req in
+            req.headers.bearerAuthorization = BearerAuthorization(token: token)
+        } afterResponse: { res in
+            response = MutationHTTPResponse(status: res.status, body: res.body.string)
+        }
+        return try #require(response)
+    }
+
+    private func registerAgent(
+        named name: String, for project: Project, on app: Application
+    ) async throws -> String {
+        let builder = TestDataBuilder(db: app.db)
+        let siteID = try await builder.placementSite(for: project).requireID()
+        let organizationID = try #require(try await project.getRootOrganizationId(on: app.db))
+        return try await builder.registerAgent(
+            on: app, named: name, hostname: "\(name).test",
+            siteID: siteID, organizationScope: .organization(organizationID))
+    }
+
+    private func blockResourceEventWrites(
+        on coordinator: Application, gate: MutationTableLockGate
+    ) -> Task<Void, any Error> {
+        Task {
+            try await coordinator.db.transaction { tx in
+                let sql = try #require(tx as? any SQLDatabase)
+                try await sql.raw("LOCK TABLE resource_events IN ACCESS EXCLUSIVE MODE").run()
+                await gate.markLocked()
+                await gate.waitForRelease()
+            }
+        }
+    }
+
+    private func waitForDatabaseLock(
+        _ predicate: String, on coordinator: Application
+    ) async throws {
+        let sql = try #require(coordinator.db as? any SQLDatabase)
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(10))
+        while clock.now < deadline {
+            let waiting = try await sql.raw(
+                "SELECT EXISTS (\(unsafeRaw: predicate)) AS waiting"
+            ).first(decodingColumn: "waiting", as: Bool.self)
+            if waiting == true { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw TestSetupError.message("Timed out waiting for the mutation database lock")
+    }
+
+    private func waitForResourceEventWriter(on app: Application) async throws {
+        try await waitForDatabaseLock(
+            """
+            SELECT 1 FROM pg_locks AS waiting_lock
+            JOIN pg_stat_activity AS activity USING (pid)
+            WHERE activity.datname = current_database()
+              AND waiting_lock.relation = 'resource_events'::regclass
+              AND waiting_lock.mode = 'RowExclusiveLock'
+              AND NOT waiting_lock.granted
+            """,
+            on: app)
+    }
+
+    private func waitForVolumeRowWriter(on coordinator: Application) async throws {
+        try await waitForDatabaseLock(
+            """
+            SELECT 1 FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND wait_event_type = 'Lock'
+              AND query ILIKE '%FROM "volumes"%FOR UPDATE%'
+            """,
+            on: coordinator)
+    }
+
+    private func resourceEvents(
+        for volumeID: UUID, on app: Application
+    ) async throws -> [ResourceEvent] {
+        try await ResourceEvent.query(on: app.db)
+            .filter(\.$resourceID == volumeID)
+            .sort(\.$createdAt)
+            .all()
+    }
+
+    private func runSerializedMutationRace(
+        on app: Application,
+        first: @escaping @Sendable (Application) async throws -> MutationHTTPResponse,
+        second: @escaping @Sendable (Application) async throws -> MutationHTTPResponse
+    ) async throws -> (first: MutationHTTPResponse, second: MutationHTTPResponse) {
+        let databaseName = try #require(app.storage[TestDatabaseNameKey.self])
+        let gate = MutationTableLockGate()
+        var coordinator: Application?
+        var observer: Application?
+        var secondApp: Application?
+        var eventTableLock: Task<Void, any Error>?
+        var firstTask: Task<MutationHTTPResponse, any Error>?
+        var secondTask: Task<MutationHTTPResponse, any Error>?
+
+        do {
+            let lockApp = try await Application.makeForTesting(
+                database: databaseName, owningDatabase: false)
+            coordinator = lockApp
+            let lockObserver = try await Application.makeForTesting(
+                database: databaseName, owningDatabase: false)
+            observer = lockObserver
+            let contender = try await Application.makeForTesting(
+                database: databaseName, owningDatabase: false)
+            secondApp = contender
+            try await configure(contender)
+            contender.guardrailAnalyzer = PermissiveGuardrailAnalyzer()
+
+            let tableLock = blockResourceEventWrites(on: lockApp, gate: gate)
+            eventTableLock = tableLock
+            await gate.waitUntilLocked()
+
+            let winner = Task { try await first(app) }
+            firstTask = winner
+            try await waitForResourceEventWriter(on: lockObserver)
+
+            let loser = Task { try await second(contender) }
+            secondTask = loser
+            try await waitForVolumeRowWriter(on: lockObserver)
+            await gate.release()
+
+            let responses = try await (winner.value, loser.value)
+            try await tableLock.value
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+            await contender.backgroundTasks.drain(timeout: .seconds(10))
+            try? await contender.asyncShutdown()
+            try? await lockObserver.asyncShutdown()
+            try? await lockApp.asyncShutdown()
+            return responses
+        } catch {
+            await gate.release()
+            if let eventTableLock { _ = try? await eventTableLock.value }
+            if let firstTask { _ = try? await firstTask.value }
+            if let secondTask { _ = try? await secondTask.value }
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+            if let secondApp {
+                await secondApp.backgroundTasks.drain(timeout: .seconds(10))
+                try? await secondApp.asyncShutdown()
+            }
+            if let observer { try? await observer.asyncShutdown() }
+            if let coordinator { try? await coordinator.asyncShutdown() }
+            throw error
         }
     }
 
@@ -284,6 +479,98 @@ struct VolumeAttachmentTests {
 
             let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
             #expect(reloaded.$vm.id == vm.id)
+        }
+    }
+
+    @Test("A delete waiting behind an attach is rejected after the row refresh")
+    func attachWinsTheDeleteRace() async throws {
+        try await withAttachmentApp { app, _, admin, project, vm, token in
+            let agentID = try await registerAgent(
+                named: "attach-delete-race-agent", for: project, on: app)
+            vm.hypervisorId = agentID
+            try await vm.save(on: app.db)
+            let volume = try await makeVolume(
+                named: "attach-delete-race", on: app, user: admin, project: project)
+            try await placeVolume(volume, on: agentID, using: app.db)
+
+            let volumeID = try volume.requireID()
+            let vmID = try vm.requireID()
+            let initialGeneration = volume.generation
+            let responses = try await runSerializedMutationRace(
+                on: app,
+                first: { app in
+                    try await attachResponse(
+                        volumeID: volumeID, to: vmID, deviceName: "disk0",
+                        token: token, on: app)
+                },
+                second: { app in
+                    try await deleteResponse(volumeID: volumeID, token: token, on: app)
+                })
+
+            #expect(responses.first.status == .accepted)
+            #expect(responses.second.status == .conflict)
+            #expect(responses.second.body.contains("Volume is attached to a VM"))
+
+            let stored = try #require(try await Volume.find(volumeID, on: app.db))
+            #expect(stored.$vm.id == vmID)
+            #expect(stored.deviceName == "disk0")
+            #expect(stored.desiredStatus == .present)
+            #expect(stored.generation == initialGeneration + 1)
+            #expect(stored.finalizers.isEmpty)
+            #expect(
+                try await VolumeReplica.query(on: app.db)
+                    .filter(\.$volume.$id == volumeID).count() == 1)
+
+            let events = try await resourceEvents(for: volumeID, on: app)
+            #expect(events.count == 1)
+            #expect(events.first?.mutation == .attach)
+            #expect(events.first?.targetGeneration == initialGeneration + 1)
+        }
+    }
+
+    @Test("An attach waiting behind a delete is rejected after the row refresh")
+    func deleteWinsTheAttachRace() async throws {
+        try await withAttachmentApp { app, _, admin, project, vm, token in
+            let agentID = try await registerAgent(
+                named: "delete-attach-race-agent", for: project, on: app)
+            vm.hypervisorId = agentID
+            try await vm.save(on: app.db)
+            let volume = try await makeVolume(
+                named: "delete-attach-race", on: app, user: admin, project: project)
+            try await placeVolume(volume, on: agentID, using: app.db)
+
+            let volumeID = try volume.requireID()
+            let vmID = try vm.requireID()
+            let initialGeneration = volume.generation
+            let responses = try await runSerializedMutationRace(
+                on: app,
+                first: { app in
+                    try await deleteResponse(volumeID: volumeID, token: token, on: app)
+                },
+                second: { app in
+                    try await attachResponse(
+                        volumeID: volumeID, to: vmID, deviceName: "disk0",
+                        token: token, on: app)
+                })
+
+            #expect(responses.first.status == .accepted)
+            #expect(responses.second.status == .conflict)
+            #expect(responses.second.body.contains("Volume is already attached to a VM"))
+
+            let stored = try #require(try await Volume.find(volumeID, on: app.db))
+            #expect(stored.$vm.id == nil)
+            #expect(stored.deviceName == nil)
+            #expect(stored.desiredStatus == .absent)
+            #expect(stored.generation == initialGeneration + 1)
+            #expect(stored.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
+            #expect(
+                try await VolumeReplica.query(on: app.db)
+                    .filter(\.$volume.$id == volumeID).count() == 1)
+
+            let events = try await resourceEvents(for: volumeID, on: app)
+            #expect(events.count == 1)
+            #expect(events.first?.mutation == .delete)
+            #expect(events.first?.targetGeneration == initialGeneration + 1)
         }
     }
 

@@ -726,8 +726,8 @@ public enum DomainXMLBuilder {
         devices.append(DomainXMLNode("memballoon", [("model", "virtio"), ("freePageReporting", "on")]))
 
         if hotplugBytes > 0 {
-            // Nothing plugged in at boot; a resize raises `<requested>` through
-            // `virDomainUpdateDeviceFlags` with the same element.
+            // Nothing plugged in at boot; a resize raises `<requested>` by
+            // editing the identity-bearing element libvirt reports back.
             devices.append(
                 memoryDeviceNode(
                     sizeBytes: hotplugBytes,
@@ -740,14 +740,10 @@ public enum DomainXMLBuilder {
 
     /// The `<memory model='virtio-mem'>` device.
     ///
-    /// Shared with the resize path (`DomainDeviceXML.memoryDevice`), which
-    /// updates the device by handing libvirt this same element with a new
-    /// `<requested>`. libvirt matches an update against the device's *identity*
-    /// — model, target node, size and block size — so a fragment assembled
-    /// anywhere but here would silently fail to match the device it meant to
-    /// grow. Sizes are parameters rather than derived for the same reason: the
-    /// resize path reads the domain's real ones back rather than recomputing
-    /// what a newer spec would have asked for.
+    /// This is the create-time shape. libvirt completes its identity with an
+    /// alias and address when it defines the domain; the resize path reads that
+    /// resulting element back and edits only `<requested>` rather than calling
+    /// this builder again.
     static func memoryDeviceNode(
         sizeBytes: Int64, blockBytes: Int64, requestedBytes: Int64
     ) -> DomainXMLNode {

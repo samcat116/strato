@@ -17,6 +17,20 @@ enum DNSRecordType: String, Codable, Sendable, CaseIterable {
     case txt = "TXT"
     case srv = "SRV"
     case ptr = "PTR"
+
+    /// A user-facing description that follows how the record type is spoken.
+    /// Looking only at the first letter is not enough: `SRV` takes "an", while
+    /// `CNAME`, `TXT`, and `PTR` take "a".
+    func recordDescription(capitalized: Bool = false) -> String {
+        let article: String
+        switch self {
+        case .a, .aaaa, .srv:
+            article = capitalized ? "An" : "an"
+        case .cname, .txt, .ptr:
+            article = capitalized ? "A" : "a"
+        }
+        return "\(article) \(rawValue) record"
+    }
 }
 
 /// Which side of a split horizon a record belongs to.
