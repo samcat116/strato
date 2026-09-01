@@ -1,0 +1,36 @@
+agent/Tests/StratoAgentTests/DomainBootOrderTests.swift
+  s_01730cdafc8446::t_d2ef2026dec024 5,104-111,113-118
+  s_01730cdafc8446::t_f18c0ed722f362 1-2,81-97,149-156
+  s_01730cdafc8446::t_1f8a6778e10a7e 112
+  s_01730cdafc8446::t_8f036315d77431 98-103,119-120,157
+agent/Sources/StratoAgentCore/DomainRedefinition.swift
+  s_01730cdafc8446::t_f18c0ed722f362 144-161
+agent/Sources/StratoAgent/Agent+StorageReconciliation.swift
+  s_01730cdafc8446::t_14dc406af982fe 47
+  s_01730cdafc8446::t_d2ef2026dec024 18-46,48-54,642-644,648-650,657
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_01730cdafc8446::t_f18c0ed722f362 129-130,135-138
+agent/Sources/StratoAgent/Agent.swift
+  s_01730cdafc8446::t_d2ef2026dec024 404-407
+agent/Sources/StratoAgent/Agent+Reconciliation.swift
+  s_01730cdafc8446::t_d2ef2026dec024 388-390
+  s_01730cdafc8446::t_f18c0ed722f362 586-587,607,681-682
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_01730cdafc8446::t_f18c0ed722f362 88-93,708-710,712-713,733,735,741-744,747,750
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "e72c5f2cdbcef08dfbbc941a105f6780920698cc",
+  "prompts": {},
+  "sessions": {
+    "s_01730cdafc8446": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ae2-d8cf-7de3-97c1-67f2dad45e55",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
