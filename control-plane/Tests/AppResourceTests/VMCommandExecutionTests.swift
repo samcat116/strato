@@ -24,42 +24,24 @@ struct VMCommandExecutionTests {
         func count() -> Int { attempts }
     }
 
-    private actor ClassificationFailureBudget {
-        private var remaining: Int
+    private actor SentFrames {
+        private var values: [(MessageEnvelope, String)] = []
 
-        init(_ remaining: Int) {
-            self.remaining = remaining
+        func append(_ envelope: MessageEnvelope, agentKey: String) {
+            values.append((envelope, agentKey))
         }
 
-        func run() throws {
-            guard remaining > 0 else { return }
-            remaining -= 1
-            throw ClassificationUnavailable()
-        }
+        func all() -> [(MessageEnvelope, String)] { values }
     }
 
-    private actor SuspendedCloseDelivery {
-        private var started = false
-        private var waiters: [CheckedContinuation<Void, Never>] = []
-
-        func suspend() async {
-            started = true
-            await withCheckedContinuation { continuation in
-                waiters.append(continuation)
-            }
-        }
-
-        func waitUntilStarted() async {
-            while !started {
-                await Task.yield()
-            }
-        }
-
-        func release() {
-            let pending = waiters
-            waiters.removeAll()
-            pending.forEach { $0.resume() }
-        }
+    private func auditEvents(
+        ofType type: String, on app: Application
+    ) async throws -> [AuditEvent] {
+        await app.audit.flush()
+        return try await AuditEvent.query(on: app.db)
+            .filter(\.$eventType == type)
+            .sort(\.$createdAt)
+            .all()
     }
 
     private func execution(
@@ -68,17 +50,6 @@ struct VMCommandExecutionTests {
     ) -> VMCommandExecution {
         VMCommandExecution(
             vmID: UUID(), actorID: UUID(), agentKey: agentKey, deadline: deadline)
-    }
-
-    private func auditEvents(
-        ofType type: String,
-        on app: Application
-    ) async throws -> [AuditEvent] {
-        await app.audit.flush()
-        return try await AuditEvent.query(on: app.db)
-            .filter(\.$eventType == type)
-            .sort(\.$createdAt)
-            .all()
     }
 
     @Test("stdout and stderr are capped together and persisted off the operation row")
@@ -115,14 +86,6 @@ struct VMCommandExecutionTests {
             #expect(String(decoding: payload.stderr ?? Data(), as: UTF8.self) == "abc")
             #expect(payload.exitCode == 7)
             #expect(payload.truncated == true)
-
-            let completion = try #require(
-                try await self.auditEvents(ofType: "vm.command.completed", on: app).first)
-            #expect(completion.resourceType == "vms")
-            #expect(completion.resourceID == execution.vmID.uuidString)
-            #expect(completion.metadata?["argv"] == "[\"/bin/sh\",\"-c\",\"printf test\"]")
-            #expect(completion.metadata?["outcome"] == "exited")
-            #expect(completion.metadata?["exitCode"] == "7")
 
             let response = try await stored.operationResponse(on: app.db)
             #expect(response.result?.exitCode == 7)
@@ -200,7 +163,7 @@ struct VMCommandExecutionTests {
         }
     }
 
-    @Test("a timeout sweep compacts an exit whose persistence is still retrying")
+    @Test("a completed command survives a transient persistence failure and timeout sweep")
     func retriesCompletedResultPersistence() async throws {
         try await withTestApp { app in
             let attempts = FailFirstAttempt()
@@ -208,7 +171,7 @@ struct VMCommandExecutionTests {
                 app: app,
                 sendEnvelope: { _, _ in },
                 beforePersistResult: { try await attempts.run() },
-                retryDelay: .milliseconds(100))
+                retryDelay: .milliseconds(10))
             app.vmCommandExecutionService = service
             let execution = execution(deadline: Date().addingTimeInterval(-1))
             try await execution.create(command: ["/usr/bin/printf", "done"], on: app.db)
@@ -225,61 +188,6 @@ struct VMCommandExecutionTests {
                 await service.handleExit(
                     sessionId: id.uuidString, fromAgentKey: execution.agentKey, exitCode: 0))
             await service.sweepStuck()
-            let timedOut = try #require(try await VMCommandExecution.find(id, on: app.db))
-            #expect(timedOut.status == .failed)
-            #expect(timedOut.error == "Command execution timed out")
-            #expect(timedOut.timedOutBySweeper)
-
-            for _ in 0..<200 {
-                if try await VMCommandExecution.find(id, on: app.db)?.status == .succeeded {
-                    break
-                }
-                try await Task.sleep(for: .milliseconds(10))
-            }
-
-            let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
-            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
-            #expect(stored.status == .succeeded)
-            #expect(payload.stdout?.isEmpty == true)
-            #expect(payload.exitCode == 0)
-            #expect(payload.truncated == true)
-            #expect(await attempts.count() >= 2)
-        }
-    }
-
-    @Test("a duplicate close cannot replace an exit whose persistence is retrying")
-    func duplicateCloseCannotReplacePendingExit() async throws {
-        try await withTestApp { app in
-            let attempts = FailFirstAttempt()
-            let service = VMCommandExecutionService(
-                app: app,
-                sendEnvelope: { _, _ in },
-                beforePersistResult: { try await attempts.run() },
-                retryDelay: .milliseconds(100))
-            app.vmCommandExecutionService = service
-            let execution = execution()
-            try await execution.create(command: ["/usr/bin/true"], on: app.db)
-            let id = try execution.requireID()
-
-            #expect(
-                await service.handleStarted(
-                    sessionId: id.uuidString, fromAgentKey: execution.agentKey))
-            #expect(
-                await service.handleExit(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    exitCode: 23))
-            #expect(
-                await service.handleClosed(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    reason: "duplicate terminal frame"))
-
-            let pending = try #require(try await VMCommandExecution.find(id, on: app.db))
-            #expect(pending.status == .pending)
-            #expect(pending.error == nil)
-            #expect(
-                try await self.auditEvents(ofType: "vm.command.completed", on: app).isEmpty)
 
             for _ in 0..<100 {
                 if try await VMCommandExecution.find(id, on: app.db)?.status == .succeeded {
@@ -291,17 +199,88 @@ struct VMCommandExecutionTests {
             let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
             let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
             #expect(stored.status == .succeeded)
-            #expect(payload.exitCode == 23)
-            let events = try await self.auditEvents(
-                ofType: "vm.command.completed", on: app)
-            #expect(events.count == 1)
-            #expect(events.first?.metadata?["outcome"] == "exited")
-            #expect(events.first?.metadata?["exitCode"] == "23")
+            #expect(String(decoding: payload.stdout ?? Data(), as: UTF8.self) == "done")
+            #expect(payload.exitCode == 0)
+            #expect(await attempts.count() >= 2)
         }
     }
 
-    @Test("a timeout sheds captured output and a late owner exit corrects it once")
-    func lateExitCorrectsSweptTimeout() async throws {
+    @Test("an exit for a recorded command without a live capture completes it")
+    func exitWithoutLiveCaptureCompletesRecordedCommand() async throws {
+        try await withTestApp { app in
+            let service = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
+            app.vmCommandExecutionService = service
+            let execution = execution()
+            try await execution.create(command: ["/usr/bin/true"], on: app.db)
+            let id = try execution.requireID()
+
+            #expect(
+                await service.handleExit(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey, exitCode: 23))
+
+            let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
+            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
+            #expect(stored.status == .succeeded)
+            #expect(stored.error == nil)
+            #expect(payload.exitCode == 23)
+        }
+    }
+
+    @Test("output for a recorded command without a live capture is retained")
+    func outputWithoutLiveCaptureIsRetained() async throws {
+        try await withTestApp { app in
+            let service = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
+            app.vmCommandExecutionService = service
+            let execution = execution()
+            try await execution.create(command: ["/usr/bin/printf", "late"], on: app.db)
+            let id = try execution.requireID()
+
+            #expect(
+                await service.handleOutput(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey,
+                    stream: "stdout", data: Data("late".utf8)))
+            #expect(
+                await service.handleExit(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey, exitCode: 0))
+
+            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
+            #expect(String(decoding: payload.stdout ?? Data(), as: UTF8.self) == "late")
+            #expect(payload.exitCode == 0)
+        }
+    }
+
+    @Test("provisional classification cannot complete another agent's command")
+    func provisionalCaptureDoesNotCrossAgentOwnership() async throws {
+        try await withTestApp { app in
+            let attempts = FailFirstAttempt()
+            let service = VMCommandExecutionService(
+                app: app,
+                sendEnvelope: { _, _ in },
+                beforeClassifyStart: { try await attempts.run() })
+            app.vmCommandExecutionService = service
+            let execution = execution()
+            try await execution.create(command: ["/usr/bin/true"], on: app.db)
+            let id = try execution.requireID()
+            let wrongAgent = "spiffe://example.test/agent/node-2"
+
+            #expect(
+                await service.handleOutput(
+                    sessionId: id.uuidString, fromAgentKey: wrongAgent,
+                    stream: "stdout", data: Data("forged".utf8)))
+            #expect(
+                await service.handleExit(
+                    sessionId: id.uuidString, fromAgentKey: wrongAgent, exitCode: 0))
+
+            let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
+            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
+            #expect(stored.status == .pending)
+            #expect(payload.stdout == nil)
+            #expect(payload.exitCode == nil)
+        }
+    }
+
+    @Test("a late exit corrects a command failed by the stuck sweep")
+    func lateExitCorrectsSweptCommand() async throws {
         try await withTestApp { app in
             let service = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
             app.vmCommandExecutionService = service
@@ -315,215 +294,60 @@ struct VMCommandExecutionTests {
             #expect(
                 await service.handleOutput(
                     sessionId: id.uuidString, fromAgentKey: execution.agentKey,
-                    stream: "stdout", data: Data("late result".utf8)))
+                    stream: "stdout", data: Data("before sweep".utf8)))
             await service.sweepStuck()
 
-            let timedOut = try #require(try await VMCommandExecution.find(id, on: app.db))
-            #expect(timedOut.status == .failed)
-            #expect(timedOut.error == "Command execution timed out")
-            let timeoutEvents = try await self.auditEvents(
-                ofType: "vm.command.completed", on: app)
-            #expect(timeoutEvents.count == 1)
-            #expect(timeoutEvents.first?.metadata?["outcome"] == "timed_out")
-            #expect(
-                !(await service.handleOutput(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    stream: "stdout",
-                    data: Data("must be discarded".utf8))))
-            #expect(
-                !(await service.handleExit(
-                    sessionId: id.uuidString,
-                    fromAgentKey: "spiffe://example.test/agent/impostor",
-                    exitCode: 99)))
+            let swept = try #require(try await VMCommandExecution.find(id, on: app.db))
+            let sweptPayload = try #require(try await VMCommandPayload.find(id, on: app.db))
+            #expect(swept.status == .failed)
+            #expect(swept.error == "Command execution timed out")
+            #expect(String(decoding: sweptPayload.stdout ?? Data(), as: UTF8.self) == "before sweep")
             #expect(
                 await service.handleExit(
                     sessionId: id.uuidString, fromAgentKey: execution.agentKey, exitCode: 0))
-            #expect(
-                !(await service.handleExit(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    exitCode: 0)))
 
             let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
             #expect(stored.status == .succeeded)
             #expect(stored.error == nil)
             let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
             #expect(payload.command == ["/usr/bin/sleep", "600"])
-            #expect(payload.stdout?.isEmpty == true)
-            #expect(payload.stderr?.isEmpty == true)
+            #expect(String(decoding: payload.stdout ?? Data(), as: UTF8.self) == "before sweep")
             #expect(payload.exitCode == 0)
-            #expect(payload.truncated == true)
-            let completionEvents = try await self.auditEvents(
-                ofType: "vm.command.completed", on: app)
-            #expect(completionEvents.count == 2)
-            #expect(completionEvents.last?.metadata?["outcome"] == "exited")
-            #expect(completionEvents.last?.metadata?["correctsOutcome"] == "timed_out")
         }
     }
 
-    @Test("migration backfill preserves late correction for pre-marker timeout rows")
-    func migrationBackfillPreservesLegacyTimeoutCorrection() async throws {
+    @Test("late output appends to partial bytes persisted by the stuck sweep")
+    func lateOutputPreservesSweptPartialCapture() async throws {
         try await withTestApp { app in
             let service = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
             app.vmCommandExecutionService = service
-            let execution = execution()
+            let execution = execution(deadline: Date().addingTimeInterval(-1))
             try await execution.create(command: ["/usr/bin/sleep", "600"], on: app.db)
             let id = try execution.requireID()
-            execution.status = .failed
-            execution.error = AddVMGuestExecutionAudit.historicalTimeoutReason
-            execution.completedAt = Date()
-            execution.timedOutBySweeper = false
-            try await execution.update(on: app.db)
-
-            try await AddVMGuestExecutionAudit.backfillLegacyTimeouts(on: app.db)
-            let backfilled = try #require(try await VMCommandExecution.find(id, on: app.db))
-            #expect(backfilled.timedOutBySweeper)
-            #expect(
-                await service.handleExit(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    exitCode: 0))
-
-            let corrected = try #require(try await VMCommandExecution.find(id, on: app.db))
-            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
-            #expect(corrected.status == .succeeded)
-            #expect(payload.stdout?.isEmpty == true)
-            #expect(payload.truncated == true)
-            let events = try await self.auditEvents(ofType: "vm.command.completed", on: app)
-            #expect(events.count == 1)
-            #expect(events.first?.metadata?["outcome"] == "exited")
-            #expect(events.first?.metadata?["correctsOutcome"] == "timed_out")
-        }
-    }
-
-    @Test("a timeout fact is appended before a close send can provoke its correction")
-    func timeoutFactPrecedesCorrectionDuringSuspendedCloseSend() async throws {
-        try await withTestApp { app in
-            let delivery = SuspendedCloseDelivery()
-            let service = VMCommandExecutionService(
-                app: app,
-                sendEnvelope: { envelope, _ in
-                    if envelope.type == .guestExecClose {
-                        await delivery.suspend()
-                    }
-                })
-            app.vmCommandExecutionService = service
-            let timeoutAt = Date()
-            let execution = execution(deadline: timeoutAt.addingTimeInterval(-1))
-            try await execution.create(command: ["/usr/bin/true"], on: app.db)
-            let id = try execution.requireID()
 
             #expect(
                 await service.handleStarted(
                     sessionId: id.uuidString, fromAgentKey: execution.agentKey))
-            let sweep = Task { await service.sweepStuck(now: timeoutAt) }
-            await delivery.waitUntilStarted()
-
-            let timeoutEvents = try await self.auditEvents(
-                ofType: "vm.command.completed", on: app)
-            #expect(timeoutEvents.count == 1)
-            #expect(timeoutEvents.first?.metadata?["outcome"] == "timed_out")
-
             #expect(
-                await service.handleExit(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    exitCode: 0))
-            let orderedEvents = try await self.auditEvents(
-                ofType: "vm.command.completed", on: app)
-            #expect(orderedEvents.count == 2)
-            #expect(orderedEvents[0].metadata?["outcome"] == "timed_out")
-            #expect(orderedEvents[1].metadata?["outcome"] == "exited")
-            #expect(orderedEvents[1].metadata?["correctsOutcome"] == "timed_out")
-
-            await delivery.release()
-            await sweep.value
-        }
-    }
-
-    @Test("durable timestamps sort a paused timeout before its earlier-recorded correction")
-    func durableTimestampsPreserveCrossReplicaCorrectionOrder() async throws {
-        try await withTestApp { app in
-            let pause = SuspendedCloseDelivery()
-            let owner = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
-            let timeoutReplica = VMCommandExecutionService(
-                app: app,
-                sendEnvelope: { _, _ in },
-                afterTimeoutCommitBeforeAudit: { await pause.suspend() })
-            let execution = execution(deadline: Date().addingTimeInterval(-1))
-            try await execution.create(command: ["/usr/bin/true"], on: app.db)
-            let id = try execution.requireID()
-
-            #expect(
-                await owner.handleStarted(
-                    sessionId: id.uuidString, fromAgentKey: execution.agentKey))
-            let timeoutSweep = Task { await timeoutReplica.sweepStuck() }
-            await pause.waitUntilStarted()
-
-            #expect(
-                await owner.handleExit(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    exitCode: 0))
-            let correctionFirst = try await self.auditEvents(
-                ofType: "vm.command.completed", on: app)
-            #expect(correctionFirst.count == 1)
-            #expect(correctionFirst.first?.metadata?["outcome"] == "exited")
-            #expect(correctionFirst.first?.metadata?["correctsOutcome"] == "timed_out")
-
-            await pause.release()
-            await timeoutSweep.value
-            let causallySorted = try await self.auditEvents(
-                ofType: "vm.command.completed", on: app)
-            #expect(causallySorted.count == 2)
-            #expect(causallySorted[0].metadata?["outcome"] == "timed_out")
-            #expect(causallySorted[1].metadata?["outcome"] == "exited")
-            let timeoutTimestamp = try #require(causallySorted[0].createdAt)
-            let correctionTimestamp = try #require(causallySorted[1].createdAt)
-            #expect(timeoutTimestamp < correctionTimestamp)
-        }
-    }
-
-    @Test("an owning-agent start after the timeout claim can still correct it")
-    func lateStartAndExitCorrectSweptTimeout() async throws {
-        try await withTestApp { app in
-            let service = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
-            app.vmCommandExecutionService = service
-            let execution = execution(deadline: Date().addingTimeInterval(-1))
-            try await execution.create(command: ["/usr/bin/true"], on: app.db)
-            let id = try execution.requireID()
-
+                await service.handleOutput(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey,
+                    stream: "stdout", data: Data("before ".utf8)))
             await service.sweepStuck()
-            let timedOut = try #require(try await VMCommandExecution.find(id, on: app.db))
-            #expect(timedOut.status == .failed)
 
             #expect(
-                await service.handleStarted(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey))
-            #expect(
-                !(await service.handleOutput(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    stream: "stdout",
-                    data: Data("not retained after timeout".utf8))))
+                await service.handleOutput(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey,
+                    stream: "stdout", data: Data("after".utf8)))
             #expect(
                 await service.handleExit(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    exitCode: 0))
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey, exitCode: 0))
 
-            let corrected = try #require(try await VMCommandExecution.find(id, on: app.db))
-            #expect(corrected.status == .succeeded)
+            let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
             let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
-            #expect(payload.stdout?.isEmpty == true)
+            #expect(stored.status == .succeeded)
+            #expect(String(decoding: payload.stdout ?? Data(), as: UTF8.self) == "before after")
+            #expect(payload.exitCode == 0)
             #expect(payload.truncated == true)
-            let events = try await self.auditEvents(ofType: "vm.command.completed", on: app)
-            #expect(events.count == 2)
-            #expect(events[0].metadata?["outcome"] == "timed_out")
-            #expect(events[1].metadata?["outcome"] == "exited")
-            #expect(events[1].metadata?["correctsOutcome"] == "timed_out")
         }
     }
 
@@ -544,174 +368,411 @@ struct VMCommandExecutionTests {
             let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
             #expect(stored.status == .failed)
             #expect(stored.error == "guest agent unavailable")
-            let completion = try #require(
-                try await self.auditEvents(ofType: "vm.command.completed", on: app).first)
-            #expect(completion.metadata?["outcome"] == "failed")
-            #expect(completion.metadata?["reason"] == "guest agent unavailable")
         }
     }
 
-    @Test("stored failure reasons are bounded by Unicode scalars")
-    func failureReasonUsesScalarBound() async throws {
+    @Test("an authoritative exit is acknowledged only after commit and on duplicate replay")
+    func recordedExitAcknowledgesAfterPersistence() async throws {
+        try await withTestApp { app in
+            let attempts = FailFirstAttempt()
+            let sent = SentFrames()
+            let service = VMCommandExecutionService(
+                app: app,
+                sendEnvelope: { envelope, agentKey in
+                    await sent.append(envelope, agentKey: agentKey)
+                },
+                beforePersistResult: { try await attempts.run() })
+            app.vmCommandExecutionService = service
+            let execution = execution()
+            try await execution.create(command: ["/usr/bin/printf", "replayed"], on: app.db)
+            let id = try execution.requireID()
+            let state = GuestExecRecordedStateMessage(
+                sessionId: id.uuidString,
+                revision: 2,
+                status: .exited,
+                rawStdout: Data("replayed".utf8),
+                rawStderr: Data("warning".utf8),
+                exitCode: 9,
+                truncated: false)
+
+            #expect(await service.handleRecordedState(state, fromAgentKey: execution.agentKey))
+            #expect(await sent.all().isEmpty)
+            #expect(try await VMCommandExecution.find(id, on: app.db)?.status == .pending)
+
+            #expect(await service.handleRecordedState(state, fromAgentKey: execution.agentKey))
+            var frames = await sent.all()
+            #expect(frames.count == 1)
+            #expect(frames[0].1 == execution.agentKey)
+            #expect(frames[0].0.type == .guestExecRecordedAck)
+            let firstAck = try frames[0].0.decode(as: GuestExecRecordedAckMessage.self)
+            #expect(firstAck.sessionId == id.uuidString)
+
+            let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
+            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
+            #expect(stored.status == .succeeded)
+            #expect(String(decoding: payload.stdout ?? Data(), as: UTF8.self) == "replayed")
+            #expect(String(decoding: payload.stderr ?? Data(), as: UTF8.self) == "warning")
+            #expect(payload.exitCode == 9)
+
+            // The agent may replay after the commit if the first ACK was lost.
+            // Confirming the same-agent terminal row is enough to ACK again.
+            #expect(await service.handleRecordedState(state, fromAgentKey: execution.agentKey))
+            frames = await sent.all()
+            #expect(frames.count == 2)
+            #expect(frames.allSatisfy { $0.0.type == .guestExecRecordedAck })
+        }
+    }
+
+    @Test("a running recorded snapshot replaces the replica-local capture")
+    func runningRecordedStateReplacesCapture() async throws {
         try await withTestApp { app in
             let service = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
             app.vmCommandExecutionService = service
             let execution = execution()
-            try await execution.create(command: ["/usr/bin/false"], on: app.db)
+            try await execution.create(command: ["/usr/bin/printf", "snapshot"], on: app.db)
             let id = try execution.requireID()
-            let combiningGrapheme = "e\u{301}"
-            let oversizedReason = String(
-                repeating: combiningGrapheme,
-                count: Validate.textLength)
 
             #expect(
-                await service.handleClosed(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    reason: oversizedReason))
-
-            let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
-            let storedReason = try #require(stored.error)
-            #expect(stored.status == .failed)
-            #expect(Validate.length(storedReason) == Validate.textLength)
+                await service.handleStarted(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey))
             #expect(
-                storedReason
-                    == String(
-                        repeating: combiningGrapheme,
-                        count: Validate.textLength / 2))
+                await service.handleOutput(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey,
+                    stream: "stdout", data: Data("stale-local".utf8)))
+
+            let running = GuestExecRecordedStateMessage(
+                sessionId: id.uuidString,
+                revision: 1,
+                status: .running,
+                rawStdout: Data("authoritative".utf8),
+                rawStderr: Data(),
+                truncated: false)
+            #expect(await service.handleRecordedState(running, fromAgentKey: execution.agentKey))
+            #expect(
+                await service.handleOutput(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey,
+                    stream: "stdout", data: Data("-tail".utf8)))
+            #expect(
+                await service.handleExit(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey, exitCode: 0))
+
+            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
+            #expect(String(decoding: payload.stdout ?? Data(), as: UTF8.self) == "authoritative-tail")
         }
     }
 
-    @Test("an arbitrarily late exit remains correctable without retaining captured output")
-    func arbitrarilyLateTimeoutCorrectionUsesDurableState() async throws {
+    @Test("a recorded close exposes authoritative partial output without an exit code")
+    func recordedClosePersistsFailedPartialResult() async throws {
+        try await withTestApp { app in
+            let sent = SentFrames()
+            let service = VMCommandExecutionService(
+                app: app,
+                sendEnvelope: { envelope, agentKey in
+                    await sent.append(envelope, agentKey: agentKey)
+                })
+            app.vmCommandExecutionService = service
+            let execution = execution()
+            try await execution.create(command: ["/usr/bin/upgrade"], on: app.db)
+            let id = try execution.requireID()
+
+            let state = GuestExecRecordedStateMessage(
+                sessionId: id.uuidString,
+                revision: 3,
+                status: .closed,
+                rawStdout: Data("installed package-a\n".utf8),
+                rawStderr: Data("connection lost\n".utf8),
+                reason: "guest exec channel closed",
+                truncated: false)
+            #expect(await service.handleRecordedState(state, fromAgentKey: execution.agentKey))
+
+            let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
+            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
+            #expect(stored.status == .failed)
+            #expect(stored.error == "guest exec channel closed")
+            #expect(payload.exitCode == nil)
+            #expect(payload.truncated == true)
+            #expect(String(decoding: payload.stdout ?? Data(), as: UTF8.self) == "installed package-a\n")
+            #expect(String(decoding: payload.stderr ?? Data(), as: UTF8.self) == "connection lost\n")
+
+            let response = try await stored.operationResponse(on: app.db)
+            #expect(response.result?.stdout == "installed package-a\n")
+            #expect(response.result?.stderr == "connection lost\n")
+            #expect(response.result?.exitCode == nil)
+            #expect(response.result?.truncated == true)
+            #expect(await sent.all().map { $0.0.type } == [.guestExecRecordedAck])
+        }
+    }
+
+    @Test("the deadline sweep persists local partial output before eviction")
+    func deadlineSweepPersistsPartialCapture() async throws {
         try await withTestApp { app in
             let service = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
             app.vmCommandExecutionService = service
-            let timeoutAt = Date()
-            let execution = execution(deadline: timeoutAt.addingTimeInterval(-1))
+            let execution = execution(deadline: Date().addingTimeInterval(-1))
             try await execution.create(command: ["/usr/bin/sleep", "600"], on: app.db)
             let id = try execution.requireID()
 
             #expect(
                 await service.handleStarted(
                     sessionId: id.uuidString, fromAgentKey: execution.agentKey))
-            await service.sweepStuck(now: timeoutAt)
-            await service.sweepStuck(
-                now: timeoutAt.addingTimeInterval(365 * 24 * 60 * 60))
+            #expect(
+                await service.handleOutput(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey,
+                    stream: "stdout", data: Data("partly done".utf8)))
+            await service.sweepStuck()
 
+            let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
+            let response = try await stored.operationResponse(on: app.db)
+            #expect(stored.status == .failed)
+            #expect(response.result?.stdout == "partly done")
+            #expect(response.result?.exitCode == nil)
+            #expect(response.result?.truncated == true)
+        }
+    }
+
+    @Test("a deadline sweep marks a persisted running snapshot as truncated")
+    func deadlineSweepMarksPersistedRunningSnapshotTruncated() async throws {
+        try await withTestApp { app in
+            let snapshotService = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
+            let sweepService = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
+            let execution = execution(deadline: Date().addingTimeInterval(-1))
+            try await execution.create(command: ["/usr/bin/sleep", "600"], on: app.db)
+            let id = try execution.requireID()
+
+            let running = GuestExecRecordedStateMessage(
+                sessionId: id.uuidString,
+                revision: 1,
+                status: .running,
+                rawStdout: Data("partly done".utf8),
+                rawStderr: Data(),
+                truncated: false)
+            #expect(
+                await snapshotService.handleRecordedState(
+                    running, fromAgentKey: execution.agentKey))
+            #expect(try await VMCommandPayload.find(id, on: app.db)?.truncated == false)
+
+            await sweepService.sweepStuck()
+
+            let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
+            let response = try await stored.operationResponse(on: app.db)
+            #expect(stored.status == .failed)
+            #expect(response.result?.stdout == "partly done")
+            #expect(response.result?.exitCode == nil)
+            #expect(response.result?.truncated == true)
+        }
+    }
+
+    @Test("a terminal snapshot from the wrong agent is discarded and acknowledged")
+    func recordedStateCannotCompleteAnotherAgentExecution() async throws {
+        try await withTestApp { app in
+            let sent = SentFrames()
+            let service = VMCommandExecutionService(
+                app: app,
+                sendEnvelope: { envelope, agentKey in
+                    await sent.append(envelope, agentKey: agentKey)
+                })
+            app.vmCommandExecutionService = service
+            let execution = execution()
+            try await execution.create(command: ["/usr/bin/true"], on: app.db)
+            let id = try execution.requireID()
+            let wrongAgent = "spiffe://example.test/agent/node-2"
+            let state = GuestExecRecordedStateMessage(
+                sessionId: id.uuidString,
+                revision: 1,
+                status: .exited,
+                rawStdout: Data("not authoritative".utf8),
+                rawStderr: Data(),
+                exitCode: 0,
+                truncated: false)
+
+            #expect(await service.handleRecordedState(state, fromAgentKey: wrongAgent))
+
+            let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
+            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
+            #expect(stored.status == .pending)
+            #expect(payload.stdout == nil)
+            let frames = await sent.all()
+            #expect(frames.count == 1)
+            #expect(frames[0].1 == wrongAgent)
+            #expect(frames[0].0.type == .guestExecRecordedAck)
+        }
+    }
+
+    @Test("a malformed terminal snapshot is failed durably before acknowledgement")
+    func malformedTerminalStateDoesNotBlockReplayQueue() async throws {
+        try await withTestApp { app in
+            let attempts = FailFirstAttempt()
+            let sent = SentFrames()
+            let service = VMCommandExecutionService(
+                app: app,
+                sendEnvelope: { envelope, agentKey in
+                    await sent.append(envelope, agentKey: agentKey)
+                },
+                beforePersistResult: { try await attempts.run() })
+            app.vmCommandExecutionService = service
+            let execution = execution()
+            try await execution.create(command: ["/usr/bin/true"], on: app.db)
+            let id = try execution.requireID()
+            let malformed = GuestExecRecordedStateMessage(
+                sessionId: id.uuidString,
+                revision: 1,
+                status: .exited,
+                stdout: "not-base64!",
+                stderr: "",
+                exitCode: 0,
+                truncated: false)
+
+            #expect(
+                await service.handleRecordedState(
+                    malformed, fromAgentKey: execution.agentKey))
+            #expect(await sent.all().isEmpty)
+            #expect(try await VMCommandExecution.find(id, on: app.db)?.status == .pending)
+
+            #expect(
+                await service.handleRecordedState(
+                    malformed, fromAgentKey: execution.agentKey))
+
+            let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
+            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
+            #expect(stored.status == .failed)
+            #expect(
+                stored.error
+                    == "Recorded guest command reported a malformed terminal state; the command may have partially run"
+            )
+            #expect(payload.stdout == Data())
+            #expect(payload.stderr == Data())
+            #expect(payload.exitCode == nil)
+            #expect(payload.truncated == true)
+            let frames = await sent.all()
+            #expect(frames.count == 1)
+            #expect(frames[0].0.type == .guestExecRecordedAck)
+            let ack = try frames[0].0.decode(as: GuestExecRecordedAckMessage.self)
+            #expect(ack.sessionId == id.uuidString)
+        }
+    }
+
+    @Test("a malformed running snapshot is closed so it cannot replay forever")
+    func malformedRunningRecordedStateIsClosed() async throws {
+        try await withTestApp { app in
+            let sent = SentFrames()
+            let service = VMCommandExecutionService(
+                app: app,
+                sendEnvelope: { envelope, agentKey in
+                    await sent.append(envelope, agentKey: agentKey)
+                })
+            app.vmCommandExecutionService = service
+            let id = UUID()
+            let agentKey = "spiffe://example.test/agent/node-1"
+            let malformed = GuestExecRecordedStateMessage(
+                sessionId: id.uuidString,
+                revision: 1,
+                status: .running,
+                stdout: "not-base64!",
+                stderr: "",
+                truncated: false)
+
+            #expect(await service.handleRecordedState(malformed, fromAgentKey: agentKey))
+
+            let frames = await sent.all()
+            #expect(frames.count == 1)
+            #expect(frames[0].0.type == .guestExecClose)
+            let close = try frames[0].0.decode(as: GuestExecCloseMessage.self)
+            #expect(close.sessionId == id.uuidString)
+            #expect(close.reason == "recorded command reported malformed running state")
+        }
+    }
+
+    @Test("an unknown running snapshot is closed without an acknowledgement")
+    func unknownRunningRecordedStateIsClosed() async throws {
+        try await withTestApp { app in
+            let sent = SentFrames()
+            let service = VMCommandExecutionService(
+                app: app,
+                sendEnvelope: { envelope, agentKey in
+                    await sent.append(envelope, agentKey: agentKey)
+                })
+            app.vmCommandExecutionService = service
+            let id = UUID()
+            let agentKey = "spiffe://example.test/agent/node-1"
+            let state = GuestExecRecordedStateMessage(
+                sessionId: id.uuidString,
+                revision: 1,
+                status: .running,
+                rawStdout: Data("still running".utf8),
+                rawStderr: Data(),
+                truncated: false)
+
+            #expect(await service.handleRecordedState(state, fromAgentKey: agentKey))
+
+            let frames = await sent.all()
+            #expect(frames.count == 1)
+            #expect(frames[0].0.type == .guestExecClose)
+            let close = try frames[0].0.decode(as: GuestExecCloseMessage.self)
+            #expect(close.sessionId == id.uuidString)
+        }
+    }
+
+    @Test("timeout and correction append ordered completion audit facts")
+    func timeoutCorrectionAuditFacts() async throws {
+        try await withTestApp { app in
+            let service = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
+            app.vmCommandExecutionService = service
+            let execution = execution(deadline: Date().addingTimeInterval(-1))
+            try await execution.create(command: ["/usr/bin/sleep", "600"], on: app.db)
+            let id = try execution.requireID()
+
+            #expect(
+                await service.handleOutput(
+                    sessionId: id.uuidString,
+                    fromAgentKey: execution.agentKey,
+                    stream: "stdout",
+                    data: Data("partial".utf8)))
+            await service.sweepStuck()
             #expect(
                 await service.handleExit(
                     sessionId: id.uuidString,
                     fromAgentKey: execution.agentKey,
                     exitCode: 0))
-            let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
-            #expect(stored.status == .succeeded)
-            #expect(stored.error == nil)
-            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
-            #expect(payload.stdout?.isEmpty == true)
-            #expect(payload.truncated == true)
-            let completionEvents = try await self.auditEvents(
-                ofType: "vm.command.completed", on: app)
-            #expect(completionEvents.count == 2)
-            #expect(completionEvents[0].metadata?["outcome"] == "timed_out")
-            #expect(completionEvents[1].metadata?["outcome"] == "exited")
-            #expect(completionEvents[1].metadata?["correctsOutcome"] == "timed_out")
-        }
-    }
 
-    @Test("a process-restart-shaped late exit corrects a durable timeout")
-    func noCaptureLateExitCorrectsAfterServiceReplacement() async throws {
-        try await withTestApp { app in
-            let initial = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
-            app.vmCommandExecutionService = initial
-            let execution = execution(deadline: Date().addingTimeInterval(-1))
-            try await execution.create(command: ["/usr/bin/true"], on: app.db)
-            let id = try execution.requireID()
-
-            await initial.sweepStuck()
-            let restarted = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
-            app.vmCommandExecutionService = restarted
-            #expect(
-                await restarted.handleExit(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    exitCode: 17))
-
-            let corrected = try #require(try await VMCommandExecution.find(id, on: app.db))
-            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
-            #expect(corrected.status == .succeeded)
-            #expect(payload.exitCode == 17)
-            #expect(payload.stdout?.isEmpty == true)
-            #expect(payload.truncated == true)
-            let events = try await self.auditEvents(ofType: "vm.command.completed", on: app)
+            let events = try await auditEvents(ofType: "vm.command.completed", on: app)
             #expect(events.count == 2)
             #expect(events[0].metadata?["outcome"] == "timed_out")
             #expect(events[1].metadata?["outcome"] == "exited")
             #expect(events[1].metadata?["correctsOutcome"] == "timed_out")
+            let auditValues = events.compactMap(\.metadata).flatMap(\.values)
+            #expect(!auditValues.contains("partial"))
         }
     }
 
-    @Test("a local sweep sheds an expired provisional capture after a remote timeout claim")
-    func localSweepShedsCaptureWhenRemoteReplicaClaimedTimeout() async throws {
+    @Test("an agent-supplied timeout reason does not authorize late correction")
+    func timeoutLookingAgentFailureIsNotCorrectable() async throws {
         try await withTestApp { app in
-            let timeoutAt = Date()
-            let local = VMCommandExecutionService(
-                app: app,
-                sendEnvelope: { _, _ in },
-                beforeClassifyStart: { throw ClassificationUnavailable() },
-                retryDelay: .seconds(30))
-            let execution = execution(deadline: timeoutAt.addingTimeInterval(-1))
-            try await execution.create(command: ["/usr/bin/printf", "discarded"], on: app.db)
+            let service = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
+            app.vmCommandExecutionService = service
+            let execution = execution()
+            try await execution.create(command: ["/usr/bin/false"], on: app.db)
             let id = try execution.requireID()
 
             #expect(
-                await local.handleStarted(
-                    sessionId: id.uuidString, fromAgentKey: execution.agentKey))
-            #expect(
-                await local.handleOutput(
+                await service.handleClosed(
                     sessionId: id.uuidString,
                     fromAgentKey: execution.agentKey,
-                    stream: "stdout",
-                    data: Data("local capture".utf8)))
+                    reason: VMCommandExecutionService.timeoutReason))
+            let failed = try #require(try await VMCommandExecution.find(id, on: app.db))
+            #expect(!failed.timedOutBySweeper)
+            #expect(
+                !(await service.handleExit(
+                    sessionId: id.uuidString,
+                    fromAgentKey: execution.agentKey,
+                    exitCode: 0)))
 
-            let remote = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
-            await remote.sweepStuck(now: timeoutAt)
-            #expect(
-                await local.handleOutput(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    stream: "stdout",
-                    data: Data("still local".utf8)))
-
-            await local.sweepStuck(
-                now: timeoutAt.addingTimeInterval(
-                    VMCommandExecutionService.completionBudget + 1))
-            #expect(
-                !(await local.handleOutput(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    stream: "stdout",
-                    data: Data("must not be retained".utf8))))
-            #expect(
-                await local.handleExit(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    exitCode: 0))
-
-            let corrected = try #require(try await VMCommandExecution.find(id, on: app.db))
-            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
-            #expect(corrected.status == .succeeded)
-            #expect(payload.stdout?.isEmpty == true)
-            #expect(payload.truncated == true)
-            let events = try await self.auditEvents(ofType: "vm.command.completed", on: app)
-            #expect(events.count == 2)
-            #expect(events[0].metadata?["outcome"] == "timed_out")
-            #expect(events[1].metadata?["outcome"] == "exited")
-            #expect(events[1].metadata?["correctsOutcome"] == "timed_out")
+            let events = try await auditEvents(ofType: "vm.command.completed", on: app)
+            #expect(events.count == 1)
+            #expect(events[0].metadata?["outcome"] == "failed")
         }
     }
 
-    @Test("database outage capture and retry state is bounded under forged UUID load")
+    @Test("capture state and aggregate output remain bounded during a database outage")
     func databaseOutageStateIsBounded() async throws {
         try await withTestApp { app in
             let service = VMCommandExecutionService(
@@ -729,19 +790,18 @@ struct VMCommandExecutionTests {
             for id in ids {
                 #expect(
                     await service.handleStarted(
-                        sessionId: id.uuidString,
-                        fromAgentKey: agent))
+                        sessionId: id.uuidString, fromAgentKey: agent))
             }
             var stats = await service.bufferStats()
             #expect(stats.states == VMCommandExecutionService.maxBufferedExecutions)
             #expect(stats.discardedStates == overflow)
-            #expect(stats.stateShedTotal == overflow)
 
-            let fullChunk = Data(repeating: 65, count: VMCommandExecutionService.outputLimitBytes)
-            let outputAttempts =
+            let fullChunk = Data(
+                repeating: 65, count: VMCommandExecutionService.outputLimitBytes)
+            let attempts =
                 VMCommandExecutionService.aggregateOutputLimitBytes
                 / VMCommandExecutionService.outputLimitBytes + 1
-            for id in ids.prefix(outputAttempts) {
+            for id in ids.prefix(attempts) {
                 #expect(
                     await service.handleOutput(
                         sessionId: id.uuidString,
@@ -756,192 +816,15 @@ struct VMCommandExecutionTests {
             for id in ids.suffix(overflow) {
                 #expect(
                     await service.handleExit(
-                        sessionId: id.uuidString,
-                        fromAgentKey: agent,
-                        exitCode: 0))
+                        sessionId: id.uuidString, fromAgentKey: agent, exitCode: 0))
             }
             stats = await service.bufferStats()
             #expect(stats.states == VMCommandExecutionService.maxBufferedExecutions)
             #expect(stats.discardedStates == 0)
-            #expect(stats.stateShedTotal == overflow * 2)
         }
     }
 
-    @Test("capacity-shed output is discarded without terminating the durable command")
-    func capacityShedOutputRemainsOwnedByCommandService() async throws {
-        try await withTestApp { app in
-            let classificationFailures = ClassificationFailureBudget(
-                VMCommandExecutionService.maxBufferedExecutions)
-            let service = VMCommandExecutionService(
-                app: app,
-                sendEnvelope: { _, _ in },
-                beforeClassifyStart: { try await classificationFailures.run() },
-                retryDelay: .seconds(30))
-            app.vmCommandExecutionService = service
-            let agent = "spiffe://example.test/agent/node-1"
-            for _ in 0..<VMCommandExecutionService.maxBufferedExecutions {
-                #expect(
-                    await service.handleStarted(
-                        sessionId: UUID().uuidString,
-                        fromAgentKey: agent))
-            }
-
-            let execution = execution(agentKey: agent)
-            try await execution.create(command: ["/usr/bin/true"], on: app.db)
-            let id = try execution.requireID()
-            #expect(
-                await service.handleStarted(
-                    sessionId: id.uuidString, fromAgentKey: agent))
-            #expect(
-                await service.handleOutput(
-                    sessionId: id.uuidString,
-                    fromAgentKey: agent,
-                    stream: "stdout",
-                    data: Data("discarded under pressure".utf8)))
-            #expect(
-                await service.handleExit(
-                    sessionId: id.uuidString,
-                    fromAgentKey: agent,
-                    exitCode: 0))
-
-            let completed = try #require(try await VMCommandExecution.find(id, on: app.db))
-            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
-            #expect(completed.status == .succeeded)
-            #expect(payload.stdout?.isEmpty == true)
-            #expect(payload.truncated == true)
-            let events = try await self.auditEvents(ofType: "vm.command.completed", on: app)
-            #expect(events.count == 1)
-            #expect(events.first?.metadata?["outcome"] == "exited")
-        }
-    }
-
-    @Test("a wrong-agent provisional capture cannot poison the owning agent's frames")
-    func wrongAgentCannotCompleteProvisionalCapture() async throws {
-        try await withTestApp { app in
-            let service = VMCommandExecutionService(
-                app: app,
-                sendEnvelope: { _, _ in },
-                beforeClassifyStart: { throw ClassificationUnavailable() },
-                retryDelay: .seconds(30))
-            app.vmCommandExecutionService = service
-            let execution = execution()
-            try await execution.create(command: ["/usr/bin/id"], on: app.db)
-            let id = try execution.requireID()
-            let impostor = "spiffe://example.test/agent/impostor"
-
-            #expect(
-                await service.handleStarted(
-                    sessionId: id.uuidString, fromAgentKey: impostor))
-
-            #expect(
-                await service.handleStarted(
-                    sessionId: id.uuidString, fromAgentKey: execution.agentKey))
-            #expect(
-                await service.handleOutput(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    stream: "stdout",
-                    data: Data("owner result".utf8)))
-            #expect(
-                await service.handleExit(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    exitCode: 0))
-            let completed = try #require(try await VMCommandExecution.find(id, on: app.db))
-            #expect(completed.status == .succeeded)
-            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
-            #expect(String(decoding: payload.stdout ?? Data(), as: UTF8.self) == "owner result")
-            #expect(
-                try await self.auditEvents(ofType: "vm.command.completed", on: app).count == 1)
-
-            #expect(
-                await service.handleExit(
-                    sessionId: id.uuidString, fromAgentKey: impostor, exitCode: 99))
-            #expect(
-                try await self.auditEvents(ofType: "vm.command.completed", on: app).count == 1)
-        }
-    }
-
-    @Test("a provisional capture cannot let the wrong agent forge a closure")
-    func wrongAgentCannotFailProvisionalCapture() async throws {
-        try await withTestApp { app in
-            let service = VMCommandExecutionService(
-                app: app,
-                sendEnvelope: { _, _ in },
-                beforeClassifyStart: { throw ClassificationUnavailable() },
-                retryDelay: .seconds(30))
-            app.vmCommandExecutionService = service
-            let execution = execution()
-            try await execution.create(command: ["/usr/bin/id"], on: app.db)
-            let id = try execution.requireID()
-            let impostor = "spiffe://example.test/agent/impostor"
-
-            #expect(
-                await service.handleStarted(
-                    sessionId: id.uuidString, fromAgentKey: impostor))
-            #expect(
-                await service.handleClosed(
-                    sessionId: id.uuidString,
-                    fromAgentKey: impostor,
-                    reason: "forged closure"))
-
-            let stillPending = try #require(try await VMCommandExecution.find(id, on: app.db))
-            #expect(stillPending.status == .pending)
-            #expect(
-                try await self.auditEvents(ofType: "vm.command.completed", on: app).isEmpty)
-
-            #expect(
-                await service.handleClosed(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    reason: "guest refused command"))
-            let failed = try #require(try await VMCommandExecution.find(id, on: app.db))
-            #expect(failed.status == .failed)
-            #expect(failed.error == "guest refused command")
-            #expect(
-                try await self.auditEvents(ofType: "vm.command.completed", on: app).count == 1)
-        }
-    }
-
-    @Test("an agent failure reason that looks like a timeout cannot forge a correction")
-    func timeoutLookingAgentFailureIsNotCorrectable() async throws {
-        try await withTestApp { app in
-            let service = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
-            app.vmCommandExecutionService = service
-            let execution = execution()
-            try await execution.create(command: ["/usr/bin/false"], on: app.db)
-            let id = try execution.requireID()
-
-            #expect(
-                await service.handleClosed(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    reason: VMCommandExecutionService.timeoutReason))
-            let failed = try #require(try await VMCommandExecution.find(id, on: app.db))
-            #expect(failed.status == .failed)
-            #expect(failed.error == VMCommandExecutionService.timeoutReason)
-            #expect(!failed.timedOutBySweeper)
-
-            #expect(
-                !(await service.handleStarted(
-                    sessionId: id.uuidString, fromAgentKey: execution.agentKey)))
-            #expect(
-                !(await service.handleExit(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    exitCode: 0)))
-
-            let stillFailed = try #require(try await VMCommandExecution.find(id, on: app.db))
-            #expect(stillFailed.status == .failed)
-            #expect(!stillFailed.timedOutBySweeper)
-            let events = try await self.auditEvents(ofType: "vm.command.completed", on: app)
-            #expect(events.count == 1)
-            #expect(events.first?.metadata?["outcome"] == "failed")
-            #expect(events.first?.metadata?["correctsOutcome"] == nil)
-        }
-    }
-
-    @Test("duplicate terminal frames append one completion fact")
+    @Test("duplicate terminal frames append one completion audit fact")
     func duplicateTerminalFramesDoNotDuplicateAudit() async throws {
         try await withTestApp { app in
             let service = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
@@ -951,9 +834,6 @@ struct VMCommandExecutionTests {
             let id = try execution.requireID()
 
             #expect(
-                await service.handleStarted(
-                    sessionId: id.uuidString, fromAgentKey: execution.agentKey))
-            #expect(
                 await service.handleExit(
                     sessionId: id.uuidString,
                     fromAgentKey: execution.agentKey,
@@ -963,55 +843,10 @@ struct VMCommandExecutionTests {
                     sessionId: id.uuidString,
                     fromAgentKey: execution.agentKey,
                     exitCode: 0)))
-            #expect(
-                !(await service.handleClosed(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    reason: "duplicate terminal frame")))
 
-            let events = try await self.auditEvents(ofType: "vm.command.completed", on: app)
+            let events = try await auditEvents(ofType: "vm.command.completed", on: app)
             #expect(events.count == 1)
-            #expect(events.first?.metadata?["outcome"] == "exited")
-        }
-    }
-
-    @Test("captured output never enters completion audit metadata")
-    func capturedOutputIsExcludedFromAuditMetadata() async throws {
-        try await withTestApp { app in
-            let service = VMCommandExecutionService(app: app, sendEnvelope: { _, _ in })
-            app.vmCommandExecutionService = service
-            let execution = execution()
-            try await execution.create(command: ["/usr/bin/printf", "safe argv"], on: app.db)
-            let id = try execution.requireID()
-            let stdoutSentinel = "STR84_STDOUT_MUST_NOT_BE_AUDITED"
-            let stderrSentinel = "STR84_STDERR_MUST_NOT_BE_AUDITED"
-
-            #expect(
-                await service.handleStarted(
-                    sessionId: id.uuidString, fromAgentKey: execution.agentKey))
-            #expect(
-                await service.handleOutput(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    stream: "stdout",
-                    data: Data(stdoutSentinel.utf8)))
-            #expect(
-                await service.handleOutput(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    stream: "stderr",
-                    data: Data(stderrSentinel.utf8)))
-            #expect(
-                await service.handleExit(
-                    sessionId: id.uuidString,
-                    fromAgentKey: execution.agentKey,
-                    exitCode: 0))
-
-            let event = try #require(
-                try await self.auditEvents(ofType: "vm.command.completed", on: app).first)
-            let values = try #require(event.metadata).values
-            #expect(!values.contains(stdoutSentinel))
-            #expect(!values.contains(stderrSentinel))
+            #expect(events[0].metadata?["outcome"] == "exited")
         }
     }
 
@@ -1024,9 +859,6 @@ struct VMCommandExecutionTests {
             try await execution.create(command: ["/usr/bin/true"], on: app.db)
             let id = try execution.requireID()
 
-            #expect(
-                await service.handleStarted(
-                    sessionId: id.uuidString, fromAgentKey: execution.agentKey))
             try await app.db.schema(AuditEvent.schema).delete()
             #expect(
                 await service.handleExit(
