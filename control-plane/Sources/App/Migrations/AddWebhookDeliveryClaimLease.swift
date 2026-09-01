@@ -1,8 +1,9 @@
 import Fluent
 import SQLKit
 
-/// Separates an active drainer's lease from retry scheduling so queue shedding
-/// can never turn an in-flight POST into a dropped delivery (STR-264).
+/// Separates an active drainer's lease from retry scheduling and preserves the
+/// immutable enqueue time while `created_at` protects dropped history from the
+/// previous version's broad retention query (STR-264).
 struct AddWebhookDeliveryClaimLease: AsyncMigration, UntransactedMigration {
     private struct IndexState: Decodable {
         let isValid: Bool
@@ -12,6 +13,7 @@ struct AddWebhookDeliveryClaimLease: AsyncMigration, UntransactedMigration {
         guard let sql = database as? SQLDatabase else {
             try await database.schema("webhook_deliveries")
                 .field("claimed_until", .datetime)
+                .field("enqueued_at", .datetime)
                 .update()
             return
         }
@@ -19,6 +21,18 @@ struct AddWebhookDeliveryClaimLease: AsyncMigration, UntransactedMigration {
             """
             ALTER TABLE webhook_deliveries
             ADD COLUMN IF NOT EXISTS claimed_until timestamptz
+            """
+        ).run()
+        try await sql.raw(
+            """
+            ALTER TABLE webhook_deliveries
+            ADD COLUMN IF NOT EXISTS enqueued_at timestamptz
+            """
+        ).run()
+        try await sql.raw(
+            """
+            ALTER TABLE webhook_deliveries
+            ALTER COLUMN enqueued_at SET DEFAULT now()
             """
         ).run()
 
@@ -85,6 +99,7 @@ struct AddWebhookDeliveryClaimLease: AsyncMigration, UntransactedMigration {
     func revert(on database: Database) async throws {
         guard let sql = database as? SQLDatabase else {
             try await database.schema("webhook_deliveries")
+                .deleteField("enqueued_at")
                 .deleteField("claimed_until")
                 .update()
             return
@@ -107,6 +122,12 @@ struct AddWebhookDeliveryClaimLease: AsyncMigration, UntransactedMigration {
         try await sql.raw(
             """
             DROP INDEX CONCURRENTLY IF EXISTS idx_webhook_deliveries_pending_subscription_due
+            """
+        ).run()
+        try await sql.raw(
+            """
+            ALTER TABLE webhook_deliveries
+            DROP COLUMN IF EXISTS enqueued_at
             """
         ).run()
         try await sql.raw(

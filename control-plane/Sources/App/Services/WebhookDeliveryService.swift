@@ -356,7 +356,7 @@ final class WebhookDeliveryService: Sendable {
     }
 
     private struct AttemptResult: Sendable {
-        let attempted: Bool
+        let httpAttempted: Bool
         let outcome: AttemptOutcome
     }
 
@@ -369,7 +369,7 @@ final class WebhookDeliveryService: Sendable {
 
         mutating func add(_ result: AttemptResult) {
             claimed += 1
-            if result.attempted { attempted += 1 }
+            if result.httpAttempted { attempted += 1 }
             switch result.outcome {
             case .succeeded: succeeded += 1
             case .failed: failed += 1
@@ -422,7 +422,7 @@ final class WebhookDeliveryService: Sendable {
                     .filter(\.$id == deliveryID)
                     .with(\.$subscription)
                     .first()
-            else { return AttemptResult(attempted: false, outcome: .unresolved) }
+            else { return AttemptResult(httpAttempted: false, outcome: .unresolved) }
             delivery = loaded
         } catch {
             logger.error(
@@ -431,7 +431,7 @@ final class WebhookDeliveryService: Sendable {
                     "deliveryId": .string(deliveryID.uuidString),
                     "error": .string("\(error)"),
                 ])
-            return AttemptResult(attempted: false, outcome: .unresolved)
+            return AttemptResult(httpAttempted: false, outcome: .unresolved)
         }
         let subscription = delivery.subscription
 
@@ -444,7 +444,7 @@ final class WebhookDeliveryService: Sendable {
             delivery.claimedUntil = nil
             do {
                 try await delivery.save(on: db)
-                return AttemptResult(attempted: false, outcome: .dead)
+                return AttemptResult(httpAttempted: false, outcome: .dead)
             } catch {
                 logger.error(
                     "Could not park webhook delivery for a disabled subscription",
@@ -452,7 +452,7 @@ final class WebhookDeliveryService: Sendable {
                         "deliveryId": .string(deliveryID.uuidString),
                         "error": .string("\(error)"),
                     ])
-                return AttemptResult(attempted: false, outcome: .unresolved)
+                return AttemptResult(httpAttempted: false, outcome: .unresolved)
             }
         }
 
@@ -478,7 +478,7 @@ final class WebhookDeliveryService: Sendable {
                     "subscriptionId": .string(delivery.$subscription.id.uuidString),
                     "error": .string(error.reason),
                 ])
-            return AttemptResult(attempted: false, outcome: .unresolved)
+            return AttemptResult(httpAttempted: false, outcome: .unresolved)
         } catch {
             // Malformed ciphertext is durable row corruption, not a missing-key
             // configuration fault. Keep ordinary failure visibility/accounting.
@@ -487,7 +487,8 @@ final class WebhookDeliveryService: Sendable {
             delivery.responseStatus = nil
             return await recordFailureResult(
                 delivery, subscriptionID: delivery.$subscription.id,
-                error: String("\(error)".prefix(500)), at: now, on: db)
+                error: String("\(error)".prefix(500)), at: now,
+                httpAttempted: false, on: db)
         }
 
         delivery.attempts += 1
@@ -531,7 +532,7 @@ final class WebhookDeliveryService: Sendable {
         do {
             try await delivery.save(on: db)
             await recordSuccess(subscriptionID: delivery.$subscription.id, on: db)
-            return AttemptResult(attempted: true, outcome: .succeeded)
+            return AttemptResult(httpAttempted: true, outcome: .succeeded)
         } catch {
             logger.error(
                 "Could not record successful webhook delivery",
@@ -539,7 +540,7 @@ final class WebhookDeliveryService: Sendable {
                     "deliveryId": .string(deliveryID.uuidString),
                     "error": .string("\(error)"),
                 ])
-            return AttemptResult(attempted: true, outcome: .unresolved)
+            return AttemptResult(httpAttempted: true, outcome: .unresolved)
         }
     }
 
@@ -548,11 +549,13 @@ final class WebhookDeliveryService: Sendable {
         subscriptionID: UUID,
         error: String,
         at now: Date,
+        httpAttempted: Bool = true,
         on db: Database
     ) async -> AttemptResult {
         do {
             return try await recordFailure(
-                delivery, subscriptionID: subscriptionID, error: error, at: now, on: db)
+                delivery, subscriptionID: subscriptionID, error: error, at: now,
+                httpAttempted: httpAttempted, on: db)
         } catch {
             logger.error(
                 "Could not record failed webhook delivery",
@@ -560,7 +563,7 @@ final class WebhookDeliveryService: Sendable {
                     "deliveryId": .string(delivery.id?.uuidString ?? ""),
                     "error": .string("\(error)"),
                 ])
-            return AttemptResult(attempted: true, outcome: .unresolved)
+            return AttemptResult(httpAttempted: httpAttempted, outcome: .unresolved)
         }
     }
 
@@ -635,6 +638,7 @@ final class WebhookDeliveryService: Sendable {
         subscriptionID: UUID,
         error: String,
         at now: Date,
+        httpAttempted: Bool,
         on db: Database
     ) async throws -> AttemptResult {
         delivery.lastError = error
@@ -663,7 +667,7 @@ final class WebhookDeliveryService: Sendable {
         try await delivery.save(on: db)
 
         guard let sql = db as? SQLDatabase else {
-            return AttemptResult(attempted: true, outcome: outcome)
+            return AttemptResult(httpAttempted: httpAttempted, outcome: outcome)
         }
         let cutoff = now.addingTimeInterval(-Double(autoDisableDays) * 86_400)
         let disabledReason =
@@ -709,7 +713,7 @@ final class WebhookDeliveryService: Sendable {
                     "error": .string("\(error)"),
                 ])
         }
-        return AttemptResult(attempted: true, outcome: outcome)
+        return AttemptResult(httpAttempted: httpAttempted, outcome: outcome)
     }
 
     /// Delete terminal deliveries after their terminal transition has remained

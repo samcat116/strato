@@ -97,6 +97,12 @@ and can be manually redelivered. A capacity drop is not an endpoint failure and
 does not advance the subscription's auto-disable streak. The ceiling is a fixed
 safety invariant, not an operator-tunable setting.
 
+The drop transition preserves the original enqueue time in `enqueued_at` and
+refreshes the legacy `created_at` retention anchor. This keeps an older replica's
+pre-STR-264 retention query from deleting a newly dropped old backlog row during
+a rolling deployment; current replicas still return the immutable enqueue time
+through the API and retain terminal history from its latest transition.
+
 Only rows with no active explicit lease are eligible for shedding. A future
 retry schedule also receives one 120-second claim-lease grace period after its
 last update. During a rolling upgrade, an older worker claims by advancing the

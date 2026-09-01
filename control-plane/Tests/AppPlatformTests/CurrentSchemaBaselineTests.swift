@@ -9,7 +9,7 @@ import Vapor
 
 @Suite("Current schema baseline", .serialized)
 struct CurrentSchemaBaselineTests {
-    private static let expectedCatalogMD5 = "9d2008309dc825de7cae9bcab4ac0b25"
+    private static let expectedCatalogMD5 = "761825f13e3fd5f59aaef29cd1e311b5"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -30,7 +30,7 @@ struct CurrentSchemaBaselineTests {
 
             let counts = try await catalogCounts(on: app.db)
             #expect(counts.tables == 65)
-            #expect(counts.columns == 850)
+            #expect(counts.columns == 851)
             #expect(counts.constraints == 297)
             #expect(counts.indexes == 198)
             #expect(counts.enums == 3)
@@ -110,6 +110,15 @@ struct CurrentSchemaBaselineTests {
 
             try await sql.raw(
                 "DROP INDEX idx_webhook_deliveries_pending_subscription_due"
+            ).run()
+            #expect(try await catalogMD5(on: app.db) != catalogBeforeUpgrade)
+
+            try await migration.prepare(on: app.db)
+            try await migration.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == catalogBeforeUpgrade)
+
+            try await sql.raw(
+                "ALTER TABLE webhook_deliveries DROP COLUMN enqueued_at"
             ).run()
             #expect(try await catalogMD5(on: app.db) != catalogBeforeUpgrade)
 

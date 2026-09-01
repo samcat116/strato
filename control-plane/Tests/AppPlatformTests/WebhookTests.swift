@@ -394,7 +394,7 @@ struct WebhookOutboxTests {
 
                 let rows = try await WebhookDelivery.query(on: app.db)
                     .filter(\.$subscription.$id == subscription.id!)
-                    .sort(\.$createdAt)
+                    .sort(\.$enqueuedAt)
                     .all()
                 #expect(rows.map(\.statusValue) == [.dropped, .pending, .pending])
                 #expect(rows[0].lastError == WebhookOutbox.droppedReason(limit: 2))
@@ -426,6 +426,62 @@ struct WebhookOutboxTests {
             let rows = try await WebhookDelivery.query(on: app.db).all()
             #expect(rows.filter { $0.statusValue == .pending }.count == 2)
             #expect(rows.filter { $0.statusValue == .dropped }.count == 2)
+        }
+    }
+
+    @Test("A legacy retention sweep preserves a newly dropped old delivery")
+    func legacyRetentionPreservesNewDrop() async throws {
+        try await withTestApp { app in
+            let fixture = try await makeFixture(app)
+            let subscription = try await makeSubscription(app, fixture: fixture)
+            let old = WebhookDelivery(
+                subscriptionID: subscription.id!, eventID: UUID(),
+                eventType: .webhookTest, payload: "{\"old\":true}")
+            try await old.save(on: app.db)
+            let recent = WebhookDelivery(
+                subscriptionID: subscription.id!, eventID: UUID(),
+                eventType: .webhookTest, payload: "{\"recent\":true}")
+            try await recent.save(on: app.db)
+
+            let sql = try #require(app.db as? any SQLDatabase)
+            let originalEnqueueTime = Date().addingTimeInterval(
+                -Double(WebhookDeliveryService.historyRetentionDays + 1) * 86_400)
+            try await sql.raw(
+                """
+                UPDATE webhook_deliveries
+                SET created_at = \(bind: originalEnqueueTime),
+                    enqueued_at = \(bind: originalEnqueueTime)
+                WHERE id = \(bind: old.id!)
+                """
+            ).run()
+
+            try await app.db.transaction { tx in
+                try await WebhookOutbox.lockSubscriptions([subscription.id!], on: tx)
+                try await WebhookOutbox.enforcePendingCeiling(
+                    for: [subscription.id!], pendingLimit: 1, on: tx)
+            }
+
+            let dropped = try #require(try await WebhookDelivery.find(old.id, on: app.db))
+            #expect(dropped.statusValue == .dropped)
+            #expect(try #require(dropped.enqueuedAt) < Date().addingTimeInterval(-7 * 86_400))
+            #expect(try #require(dropped.createdAt) > Date().addingTimeInterval(-60))
+            #expect(
+                abs(
+                    try #require(WebhookDeliveryResponse(from: dropped).createdAt)
+                        .timeIntervalSince(originalEnqueueTime)) < 0.01)
+
+            // This is the exact retention predicate used by the previous
+            // release during a rolling deployment.
+            let legacyCutoff = Date().addingTimeInterval(
+                -Double(WebhookDeliveryService.historyRetentionDays) * 86_400)
+            try await sql.raw(
+                """
+                DELETE FROM webhook_deliveries
+                WHERE status <> 'pending'
+                  AND created_at < \(bind: legacyCutoff)
+                """
+            ).run()
+            #expect(try await WebhookDelivery.find(old.id, on: app.db) != nil)
         }
     }
 
@@ -1020,6 +1076,43 @@ struct WebhookDeliverySweepTests {
                 #expect(blocked.statusValue == .succeeded)
                 #expect(blocked.attempts == 1)
                 #expect(origin.captured.withLockedValue { $0.count } == 1)
+            }
+        } catch {
+            await origin.shutdown()
+            throw error
+        }
+        await origin.shutdown()
+    }
+
+    @Test("Malformed signing-secret ciphertext fails without starting an HTTP attempt")
+    func malformedEncryptionCiphertextIsNotHTTPAttempt() async throws {
+        let origin = try await HookOrigin.start()
+        do {
+            try await withTestApp { app in
+                let fixture = try await makeFixture(app)
+                app.secretsEncryption = SecretsEncryptionService(
+                    key: try SecretsEncryptionService.parseKey(
+                        String(repeating: "ab", count: 32)))
+                let subscription = try await makeSubscription(
+                    app, fixture: fixture,
+                    url: "http://127.0.0.1:\(origin.port)/hook")
+                subscription.signingSecret = "enc:v2:not-a-key-id:not-base64"
+                try await subscription.save(on: app.db)
+
+                let delivery = WebhookDelivery(
+                    subscriptionID: subscription.id!, eventID: UUID(),
+                    eventType: .webhookTest, payload: "{}")
+                try await delivery.save(on: app.db)
+
+                await app.webhookDelivery.sweepOnce()
+
+                let failed = try #require(
+                    try await WebhookDelivery.find(delivery.id, on: app.db))
+                #expect(failed.statusValue == .pending)
+                #expect(failed.attempts == 1)
+                #expect(failed.lastAttemptAt != nil)
+                #expect(failed.lastError?.contains("malformed") == true)
+                #expect(origin.captured.withLockedValue { $0.isEmpty })
             }
         } catch {
             await origin.shutdown()

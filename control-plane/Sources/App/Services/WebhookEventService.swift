@@ -213,6 +213,12 @@ enum WebhookOutbox {
                 SET status = \(bind: WebhookDeliveryStatus.dropped.rawValue),
                     claimed_until = NULL,
                     last_error = \(bind: Self.droppedReason(limit: pendingLimit)),
+                    -- The previous version prunes every non-pending row by
+                    -- created_at. Preserve the real enqueue time separately
+                    -- and advance its retention anchor so a rolling replica
+                    -- cannot erase a newly visible drop verdict.
+                    enqueued_at = COALESCE(delivery.enqueued_at, delivery.created_at),
+                    created_at = now(),
                     updated_at = now()
                 FROM overflow
                 WHERE delivery.id = overflow.id

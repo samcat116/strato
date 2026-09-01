@@ -1476,6 +1476,7 @@ CREATE TABLE public.webhook_deliveries (
     response_status bigint,
     last_error text,
     delivered_at timestamp with time zone,
+    enqueued_at timestamp with time zone DEFAULT now(),
     created_at timestamp with time zone,
     updated_at timestamp with time zone
 );

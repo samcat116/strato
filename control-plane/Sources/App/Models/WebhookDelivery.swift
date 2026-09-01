@@ -71,6 +71,12 @@ final class WebhookDelivery: Model, @unchecked Sendable {
     @OptionalField(key: "delivered_at")
     var deliveredAt: Date?
 
+    /// The immutable enqueue time presented through the delivery API. During
+    /// the `dropped` rollout, `created_at` is also a compatibility retention
+    /// anchor for older replicas, so it can advance when pending work is shed.
+    @Timestamp(key: "enqueued_at", on: .create)
+    var enqueuedAt: Date?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -134,7 +140,7 @@ struct WebhookDeliveryResponse: Content {
         self.responseStatus = delivery.responseStatus
         self.lastError = delivery.lastError
         self.deliveredAt = delivery.deliveredAt
-        self.createdAt = delivery.createdAt
+        self.createdAt = delivery.enqueuedAt ?? delivery.createdAt
         self.payload = delivery.payload
     }
 }
