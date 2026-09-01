@@ -17,7 +17,7 @@ struct CreateStorageDevices: AsyncMigration {
             .field("serial", .string)
             .field("wwn", .string)
             .field("rotational", .bool, .required)
-            .field("uses", .array(of: .json), .required, .custom("DEFAULT '{}'"))
+            .field("uses", .array(of: .string), .required, .custom("DEFAULT '{}'"))
             .field("role", .string, .required)
             .field("state", .string, .required)
             .field("osd_id", .int)

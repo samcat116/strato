@@ -1,11 +1,93 @@
+import AppTestSupport
+import Fluent
 import Foundation
 import StratoShared
 import Testing
+import Vapor
+import VaporTesting
 
 @testable import App
 
 @Suite("Storage device controller")
 struct StorageDeviceControllerTests {
+    @Test("agent usage observations insert, update, and list through the API")
+    func reportedUsesRoundTripThroughAPI() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let admin = try await builder.createUser(
+                username: "storage-reader",
+                email: "storage-reader@example.com",
+                displayName: "Storage Reader",
+                isSystemAdmin: true)
+            let token = try await admin.generateAPIKey(on: app.db)
+            let organization = try await builder.createOrganization(name: "Storage Inventory Org")
+            let organizationID = try organization.requireID()
+            let site = Site(
+                name: "Storage Inventory Site",
+                organizationScope: .organization(organizationID))
+            try await site.save(on: app.db)
+            let agent = Agent(
+                name: "storage-inventory-agent",
+                hostname: "storage-inventory-agent.example",
+                version: "1.0.0",
+                siteID: try site.requireID(),
+                status: .online,
+                resources: AgentResources(
+                    totalCPU: 8,
+                    availableCPU: 8,
+                    totalMemory: 16_000,
+                    availableMemory: 16_000,
+                    totalDisk: 100_000,
+                    availableDisk: 100_000),
+                lastHeartbeat: Date())
+            agent.organizationScope = .organization(organizationID)
+            try await agent.save(on: app.db)
+
+            let identity = StorageDeviceIdentity(kind: .wwn, value: "5000cca1")
+            let reconciler = StorageDeviceInventoryReconciler(database: app.db)
+            try await reconciler.apply(
+                [
+                    ObservedStorageDevice(
+                        identity: identity,
+                        devicePath: "/dev/sdb",
+                        sizeBytes: 1_000_000,
+                        wwn: "5000cca1",
+                        rotational: false,
+                        state: .inUse,
+                        uses: [.partitionTable])
+                ],
+                for: agent,
+                receivedAt: Date())
+            try await reconciler.apply(
+                [
+                    ObservedStorageDevice(
+                        identity: identity,
+                        devicePath: "/dev/sdb",
+                        sizeBytes: 1_000_000,
+                        wwn: "5000cca1",
+                        rotational: false,
+                        state: .inUse,
+                        uses: [.filesystem, .mounted])
+                ],
+                for: agent,
+                receivedAt: Date())
+
+            try await app.test(
+                .GET,
+                "/api/storage-devices?agent_id=\(try agent.requireID())"
+            ) { request in
+                request.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { response in
+                #expect(response.status == .ok)
+                let page = try response.content.decode(
+                    PagedResponse<StorageDeviceResponse>.self)
+                let item = try #require(page.items.first)
+                #expect(page.total == 1)
+                #expect(item.uses == [.filesystem, .mounted])
+            }
+        }
+    }
+
     @Test("OSD eligibility blockers use a stable safety-first order")
     func eligibilityBlockerOrder() {
         let now = Date(timeIntervalSince1970: 1_000)
