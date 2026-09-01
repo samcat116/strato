@@ -1,0 +1,29 @@
+agent/Sources/StratoAgent/Agent.swift
+  s_7d1f19f0e9619e::t_a8fa08722128c8 396,452
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_7d1f19f0e9619e::t_320133f59b7cb2 435
+agent/Sources/StratoAgentCore/CoalescingTrigger.swift
+  s_7d1f19f0e9619e::t_60f3126b70efc7 39-43
+agent/Sources/StratoAgentCore/DesiredStatePoller.swift
+  s_7d1f19f0e9619e::t_222d2922f1ad93 43-60,71-82,88,93-94,100-105,111-116,123,130,160,165,176,182-191,197,199-208,211-218,220,224-226,230,234,237-241,245-287,290-308
+agent/Tests/StratoAgentTests/DesiredStatePollerTests.swift
+  s_7d1f19f0e9619e::t_c06328674c8ebb 4,13-14,67-86,89-91,96-97,109,124,148-150,153,165-166,186,207,222,225,239,242,259-261,263-264,286-288,292,308,316-489,494-496,509-547
+docs/architecture/agent.md
+  s_7d1f19f0e9619e::t_6861438ae26c94 100-116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "22c3d4be4281986aa4d15c844ede08ca3b8a37e8",
+  "prompts": {},
+  "sessions": {
+    "s_7d1f19f0e9619e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1cb2e549-06ea-4795-b05f-85ff1369a7b6",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
