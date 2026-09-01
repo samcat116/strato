@@ -1,0 +1,33 @@
+agent/Tests/StratoAgentTests/CloudInitUserDataDocumentTests.swift
+  s_a08da5d54f9fb3::t_b0386358305da9 19-51,108-129
+  s_9f7fc43caa62d9::t_d4401641871b0d 130
+  s_a08da5d54f9fb3::t_2a1443ebc27524 96-97,99-104
+docs/architecture/agent.md
+  s_a08da5d54f9fb3::t_f0e620956af107 637-643
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_a08da5d54f9fb3::t_57c0be150036a2 422-425,427-431,460-463,546-549,556-567
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "1ae88f52f65ab8e1faae06f0a6be038ed14fc36c",
+  "prompts": {},
+  "sessions": {
+    "s_9f7fc43caa62d9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05a87-9574-7791-b770-468d753dc14d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_a08da5d54f9fb3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05a8a-79a1-7c71-8a5d-9730134c8301",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": null
+    }
+  }
+}
