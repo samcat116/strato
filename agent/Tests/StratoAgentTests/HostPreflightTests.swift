@@ -595,6 +595,27 @@ struct HostPreflightTests {
         #expect(gated[1].unavailabilityReason?.contains("cannot create") == true)
     }
 
+    @Test("Unavailable pidfds gate Firecracker with a host remediation")
+    func unavailablePIDFDGatesFirecracker() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.firecrackerSocketDirectory = "\(root)/firecracker"
+        inputs.firecrackerPIDFDSupport = .unavailable("pidfd_open failed with errno 38")
+        let report = HostPreflight.run(inputs)
+        let check = try #require(report.check(.firecrackerPIDFDSupport))
+        #expect(!check.passed)
+        #expect(check.detail?.contains("Linux kernel 5.3 or newer") == true)
+
+        let firecracker = HypervisorSupport(
+            type: .firecracker, available: true, accelerated: true,
+            capabilities: .firecracker)
+        let gated = try #require(report.gate([firecracker]).first)
+        #expect(!gated.available)
+        #expect(gated.unavailabilityReason == check.detail)
+    }
+
     // MARK: - libvirt
 
     @Test("No libvirt probe result skips both libvirt checks")

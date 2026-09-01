@@ -79,6 +79,28 @@ struct SandboxJailUIDAllocatorTests {
         #expect(allocator.uid(for: "sandbox-b") == 101)
     }
 
+    @Test("An unjailed runtime does not consume a jail uid")
+    func unjailedPolicySkipsLease() throws {
+        var allocator = SandboxJailUIDAllocator(first: 100, last: 101)
+        let policy = SandboxJailUIDPolicy(jailsNewSandboxes: false)
+
+        #expect(!policy.requiresLease)
+        #expect(try policy.lease(for: "sandbox-a", from: &allocator) == nil)
+        #expect(allocator.uid(for: "sandbox-a") == nil)
+        #expect(allocator.count == 0)
+    }
+
+    @Test("A jailed runtime consumes a jail uid")
+    func jailedPolicyLeasesIdentity() throws {
+        var allocator = SandboxJailUIDAllocator(first: 100, last: 101)
+        let policy = SandboxJailUIDPolicy(jailsNewSandboxes: true)
+
+        let lease = try #require(policy.lease(for: "sandbox-a", from: &allocator))
+        #expect(policy.requiresLease)
+        #expect(lease.uid == 100)
+        #expect(allocator.uid(for: "sandbox-a") == 100)
+    }
+
     @Test("Manifest reload reserves readable, unreadable-kind, and prior-range uids")
     func reserveAllRestoresEveryPersistedAssignment() throws {
         var allocator = SandboxJailUIDAllocator(first: 100, last: 101)

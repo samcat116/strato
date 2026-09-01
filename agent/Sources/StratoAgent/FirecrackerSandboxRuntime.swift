@@ -33,7 +33,7 @@ import SwiftFirecracker
 /// consistent with the manifest-based, state-independent reservation model.
 /// Cold-boot stop (releasing memory) is future work.
 actor FirecrackerSandboxRuntime: SandboxRuntimeService {
-    nonisolated var requiresJailUID: Bool { true }
+    nonisolated let requiresJailUID: Bool
 
     private let logger: Logger
     private let client: FirecrackerClient
@@ -65,6 +65,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// Whether newly created sandboxes get the jailer barrier
     /// (`sandbox_jailer_mode` resolution — see `SandboxJailerMode`).
     private let jailNewSandboxes: Bool
+    /// Keeps direct (unjailed) Firecracker processes out of the host jail UID
+    /// namespace while retaining allocations for actual jailer launches.
+    private let jailUIDPolicy: SandboxJailUIDPolicy
     /// Non-nil when `sandbox_jailer_mode = "required"` is unmet on this host:
     /// creating a sandbox is refused (running one unjailed is not an option),
     /// while everything an *existing* sandbox needs — adoption, status, stop,
@@ -290,6 +293,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         self.jailUIDs = jailUIDAllocator
         self.legacyJailerUIDBase = legacyJailerUIDBase
         self.jailNewSandboxes = jailNewSandboxes
+        self.jailUIDPolicy = SandboxJailUIDPolicy(jailsNewSandboxes: jailNewSandboxes)
+        self.requiresJailUID = jailNewSandboxes
         self.jailerBlockedReason = jailerBlockedReason
         self.snapshotTransfer = snapshotTransfer
         // Unjailed warm start cannot work (see `warmStartActive`); requesting
@@ -322,7 +327,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     func leaseJailUID(for sandboxId: String) async throws -> SandboxJailUIDLease? {
         try await ensureWarmTemplateSweep()
         jailUIDReleaseReady.remove(sandboxId)
-        return try jailUIDs.lease(for: sandboxId)
+        return try jailUIDPolicy.lease(for: sandboxId, from: &jailUIDs)
     }
 
     func commitJailUID(_ lease: SandboxJailUIDLease) async {
@@ -343,7 +348,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             throw SandboxRuntimeError.jailSetupFailed(
                 "refusing to release sandbox jail uid without proven process and artifact cleanup")
         }
-        guard jailUIDs.release(sandboxId) != nil else {
+        let releasedUID = jailUIDs.release(sandboxId)
+        guard releasedUID != nil || !requiresJailUID else {
             throw SandboxRuntimeError.jailIdentityUnavailable(
                 "allocator has no jail uid claim for sandbox \(sandboxId)")
         }
@@ -401,7 +407,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             return
         }
 
-        guard jailUIDs.uid(for: sandboxId) != nil else {
+        guard !requiresJailUID || jailUIDs.uid(for: sandboxId) != nil else {
             throw SandboxRuntimeError.jailIdentityUnavailable(
                 "sandbox \(sandboxId) has no exclusive allocation; persist a fresh jailUID before creating it")
         }

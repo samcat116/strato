@@ -142,7 +142,8 @@ one deliberate asymmetry:
   contain the runtime driver (`SandboxRuntimeProbe.runtimeBuilt` — true now
   that #421's runtime ships; a runtime-less agent would silently ignore
   desired sandboxes), Firecracker must be usable (binary + KVM, from the hypervisor
-  probe), **and** the sandbox guest base image (#419) must be present at
+  probe, including working `pidfd_open` and `pidfd_send_signal` process
+  supervision), **and** the sandbox guest base image (#419) must be present at
   `sandbox_guest_image_path` (default `/var/lib/strato/sandbox/guest`) — so
   the capability lights up exactly when a runtime-carrying agent has the
   artifacts installed on a capable host.

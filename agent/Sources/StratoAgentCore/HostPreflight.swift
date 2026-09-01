@@ -28,6 +28,7 @@ public enum HostPreflight {
         case volumeStorageDirectory = "volume_storage_dir"
         case imageCacheDirectory = "image_cache_dir"
         case firecrackerSocketDirectory = "firecracker_socket_dir"
+        case firecrackerPIDFDSupport = "firecracker_pidfd"
         case sandboxJailerUIDRange = "sandbox_jailer_uid_range"
         case qemuImgBinary = "qemu-img"
         case uefiFirmware = "uefi_firmware"
@@ -90,6 +91,14 @@ public enum HostPreflight {
         case unsupportedPlatform(String)
     }
 
+    /// Whether Firecracker process supervision can pin process identities
+    /// against PID reuse with Linux pidfds.
+    public enum FirecrackerPIDFDSupport: Sendable, Equatable {
+        case available
+        case unavailable(String)
+        case unsupportedPlatform(String)
+    }
+
     /// One host identity database file, captured by the caller so the jailer
     /// range check stays pure and tests never inspect the machine running them.
     public enum HostIdentityFile: Sendable, Equatable {
@@ -139,6 +148,8 @@ public enum HostPreflight {
         public var qemuImgPath: String
         /// nil when Firecracker cannot exist on this platform (non-Linux).
         public var firecrackerSocketDirectory: String?
+        /// nil when Firecracker cannot exist on this platform (non-Linux).
+        public var firecrackerPIDFDSupport: FirecrackerPIDFDSupport?
         /// The resolved firmware path for this host's architecture — the CODE
         /// image of the split pair when one resolved, else the monolithic
         /// image — or nil when no candidate exists.
@@ -192,6 +203,7 @@ public enum HostPreflight {
             imageCachePath: String,
             qemuImgPath: String,
             firecrackerSocketDirectory: String? = nil,
+            firecrackerPIDFDSupport: FirecrackerPIDFDSupport? = nil,
             firmwarePath: String? = nil,
             tpmSupport: LibvirtProbe.TPMSupport = .unknown("not probed"),
             qemuFirmwareDescriptorPath: String? = nil,
@@ -214,6 +226,7 @@ public enum HostPreflight {
             self.imageCachePath = imageCachePath
             self.qemuImgPath = qemuImgPath
             self.firecrackerSocketDirectory = firecrackerSocketDirectory
+            self.firecrackerPIDFDSupport = firecrackerPIDFDSupport
             self.firmwarePath = firmwarePath
             self.tpmSupport = tpmSupport
             self.qemuFirmwareDescriptorPath = qemuFirmwareDescriptorPath
@@ -366,6 +379,10 @@ public enum HostPreflight {
                     !check.passed
                 {
                     reason = check.detail
+                } else if hypervisor.type == .firecracker,
+                    let check = check(.firecrackerPIDFDSupport), !check.passed
+                {
+                    reason = check.detail
                 }
 
                 guard let unavailabilityReason = reason else { return hypervisor }
@@ -399,6 +416,9 @@ public enum HostPreflight {
                 ensureWritableDirectory(
                     firecrackerSocketDir, kind: .firecrackerSocketDirectory,
                     configKey: "firecracker_socket_dir"))
+            if let pidfdSupport = inputs.firecrackerPIDFDSupport {
+                checks.append(checkFirecrackerPIDFD(pidfdSupport))
+            }
         }
         if let jailerUIDRange = inputs.sandboxJailerUIDRange {
             checks.append(checkSandboxJailerUIDRange(jailerUIDRange))
@@ -502,6 +522,20 @@ public enum HostPreflight {
     }
 
     // MARK: - Individual checks
+
+    public static func checkFirecrackerPIDFD(_ support: FirecrackerPIDFDSupport) -> Check {
+        switch support {
+        case .available:
+            return .pass(.firecrackerPIDFDSupport)
+        case .unavailable(let reason):
+            return .fail(
+                .firecrackerPIDFDSupport,
+                "Firecracker process supervision requires pidfd_open and pidfd_send_signal: \(reason). "
+                    + "Use Linux kernel 5.3 or newer and allow both system calls in the agent service sandbox")
+        case .unsupportedPlatform(let reason):
+            return .unsupported(.firecrackerPIDFDSupport, reason)
+        }
+    }
 
     /// Proves that `[uidBase, uidBase + 65536)` is not a host uid/gid or a
     /// delegated subordinate-id range. The snapshots are injected so this is a

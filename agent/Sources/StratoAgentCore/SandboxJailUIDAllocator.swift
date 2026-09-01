@@ -41,6 +41,28 @@ public struct SandboxJailUIDLease: Sendable, Equatable {
     let previousUID: UInt32?
 }
 
+/// Decides whether newly created sandboxes consume a host jail identity.
+///
+/// A runtime that launches Firecracker directly has no jail-owned files or
+/// process identity to protect. Giving it an allocation would persist an
+/// unrelated host uid and later make teardown depend on every process that
+/// happens to use that uid.
+public struct SandboxJailUIDPolicy: Sendable, Equatable {
+    public let requiresLease: Bool
+
+    public init(jailsNewSandboxes: Bool) {
+        self.requiresLease = jailsNewSandboxes
+    }
+
+    public func lease(
+        for sandboxId: String,
+        from allocator: inout SandboxJailUIDAllocator
+    ) throws -> SandboxJailUIDLease? {
+        guard requiresLease else { return nil }
+        return try allocator.lease(for: sandboxId)
+    }
+}
+
 /// Allocates unique host uid/gid identities for sandbox jailer processes.
 ///
 /// The allocation range is configured per host, but persisted assignments are

@@ -11,6 +11,12 @@ import Darwin
 /// Client for spawning and managing Firecracker processes
 /// Handles the full lifecycle including process creation, socket management, and cleanup
 public actor FirecrackerClient {
+    public enum PIDFDSupport: Sendable, Equatable {
+        case available
+        case unavailable(String)
+        case unsupportedPlatform(String)
+    }
+
     /// One live Firecracker or jailer process discovered in the Linux process
     /// table. `effectiveUID` is the second value from `/proc/<pid>/status`'s
     /// `Uid:` row — the host identity the process is actually running as.
@@ -199,6 +205,28 @@ public actor FirecrackerClient {
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.socketDirectory = socketDirectory
         self.logger = logger
+    }
+
+    /// Probes both pidfd syscalls process supervision relies on. Signal zero
+    /// checks the retained descriptor without delivering a signal, so this is
+    /// safe to run on every agent registration and catches service seccomp
+    /// policy independently of the host kernel version.
+    public nonisolated static func probePIDFDSupport() -> PIDFDSupport {
+        #if os(Linux)
+        let descriptor = swift_firecracker_pidfd_open(getpid())
+        guard descriptor >= 0 else {
+            let savedErrno = errno
+            return .unavailable("pidfd_open failed with errno \(savedErrno)")
+        }
+        defer { _ = Glibc.close(descriptor) }
+        guard swift_firecracker_pidfd_send_signal(descriptor, 0) == 0 else {
+            let savedErrno = errno
+            return .unavailable("pidfd_send_signal failed with errno \(savedErrno)")
+        }
+        return .available
+        #else
+        return .unsupportedPlatform("pidfds are available only on Linux")
+        #endif
     }
 
     /// Creates a new microVM with the given configuration

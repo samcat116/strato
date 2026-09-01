@@ -1823,12 +1823,23 @@ actor Agent {
     ) -> HostPreflight.Report {
         #if os(Linux)
         let firecrackerSocketDirectory: String? = firecrackerSocketDir
+        let firecrackerPIDFDSupport: HostPreflight.FirecrackerPIDFDSupport? = {
+            switch FirecrackerClient.probePIDFDSupport() {
+            case .available:
+                return .available
+            case .unavailable(let reason):
+                return .unavailable(reason)
+            case .unsupportedPlatform(let reason):
+                return .unsupportedPlatform(reason)
+            }
+        }()
         let qemuFirmwareDescriptorPath: String? = "/usr/share/qemu/firmware"
         let vhostVsock: HostPreflight.VhostVsockSupport = .device(path: "/dev/vhost-vsock")
         let sandboxJailerUIDRange: HostPreflight.SandboxJailerUIDRangeInputs? =
             sandboxJailerUIDRangeInputs()
         #else
         let firecrackerSocketDirectory: String? = nil
+        let firecrackerPIDFDSupport: HostPreflight.FirecrackerPIDFDSupport? = nil
         let qemuFirmwareDescriptorPath: String? = nil
         let vhostVsock: HostPreflight.VhostVsockSupport = .unsupportedPlatform(
             "virtio-vsock for QEMU is not supported on this platform")
@@ -1855,6 +1866,7 @@ actor Agent {
                 imageCachePath: imageCachePath ?? ImageCacheService.defaultCachePath,
                 qemuImgPath: FileSystemStorageBackend.defaultQemuImgPath,
                 firecrackerSocketDirectory: firecrackerSocketDirectory,
+                firecrackerPIDFDSupport: firecrackerPIDFDSupport,
                 firmwarePath: resolvedFirmwarePath,
                 tpmSupport: tpmSupport,
                 qemuFirmwareDescriptorPath: qemuFirmwareDescriptorPath,
@@ -5951,8 +5963,8 @@ extension Agent: ReconcileActuator {
             snapshot: raw, agentName: initialAgentID)
         defer { capacityAdmissionLedger.release(claim) }
 
-        // A real Firecracker runtime always returns a lease. The simulation
-        // runtime returns nil because it owns no host uid namespace.
+        // A jailed Firecracker runtime returns a lease. Direct Firecracker and
+        // simulation own no host jail-identity namespace, so both return nil.
         let jailUIDLease = try await runtime.leaseJailUID(for: item.id)
 
         // Persist the allocation before NIC ownership, chroot staging, or VMM
