@@ -4,7 +4,23 @@ import Fluent
 import VaporTesting
 import StratoShared
 import AppTestSupport
+import SQLKit
 @testable import App
+
+private actor ConcurrentResizeRequests {
+    private var cpu: Task<Void, Error>?
+    private var memory: Task<Void, Error>?
+
+    func store(cpu: Task<Void, Error>, memory: Task<Void, Error>) {
+        self.cpu = cpu
+        self.memory = memory
+    }
+
+    func waitForResponses() async throws {
+        try await cpu?.value
+        try await memory?.value
+    }
+}
 
 /// Tests for online CPU growth/memory resize (issue #568): `PUT /api/vms/:id`
 /// moves a VM's sizing, applying it as a desired-state change with a `resize`
@@ -104,6 +120,82 @@ final class VMResizeTests {
             req.body = ByteBuffer(data: try JSONSerialization.data(withJSONObject: body))
         } afterResponse: { res in
             try assertions(res)
+        }
+    }
+
+    /// Holds the VM row lock until both endpoint requests have read their
+    /// initial snapshot and are waiting at `lockAndRefresh`. Releasing the
+    /// transaction then guarantees the stale-snapshot interleaving STR-302
+    /// reproduces instead of relying on task scheduling to happen to expose it.
+    private func putDisjointSizingUpdatesAtLockBoundary(
+        _ app: Application, _ vm: VM, token: String, expectedStatus: HTTPResponseStatus
+    ) async throws {
+        let databaseName = try #require(app.storage[TestDatabaseNameKey.self])
+        let lockObserver = try await Application.makeForTesting(
+            database: databaseName, owningDatabase: false)
+        do {
+            let observerSQL = try #require(lockObserver.db as? any SQLDatabase)
+            let vmID = try vm.requireID()
+            let requests = ConcurrentResizeRequests()
+            try await lockObserver.db.transaction { db in
+                let sql = try #require(db as? any SQLDatabase)
+                try await sql.raw(
+                    "SELECT id FROM vms WHERE id = \(bind: vmID) FOR UPDATE"
+                ).run()
+
+                let cpuRequest = Task {
+                    _ = try await app.test(.PUT, "/api/vms/\(vmID)") { req in
+                        req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                        req.headers.contentType = .json
+                        req.body = ByteBuffer(
+                            data: try JSONSerialization.data(withJSONObject: ["cpu": 4]))
+                    } afterResponse: { res in
+                        #expect(res.status == expectedStatus)
+                    }
+                }
+                let memoryRequest = Task {
+                    _ = try await app.test(.PUT, "/api/vms/\(vmID)") { req in
+                        req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                        req.headers.contentType = .json
+                        req.body = ByteBuffer(
+                            data: try JSONSerialization.data(withJSONObject: [
+                                "memory": Int64(4 * 1024 * 1024 * 1024)
+                            ]))
+                    } afterResponse: { res in
+                        #expect(res.status == expectedStatus)
+                    }
+                }
+                await requests.store(cpu: cpuRequest, memory: memoryRequest)
+
+                let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+                while true {
+                    let waiting =
+                        try await observerSQL.raw(
+                            """
+                            SELECT COUNT(*)::int AS count
+                            FROM pg_stat_activity
+                            WHERE datname = current_database()
+                              AND wait_event_type = 'Lock'
+                              AND query ILIKE '%FOR UPDATE%'
+                            """
+                        ).first(decodingColumn: "count", as: Int.self) ?? 0
+                    if waiting >= 2 { break }
+                    guard ContinuousClock.now < deadline else {
+                        cpuRequest.cancel()
+                        memoryRequest.cancel()
+                        throw Abort(
+                            .internalServerError,
+                            reason: "Concurrent resize requests did not reach the VM row lock")
+                    }
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+            }
+
+            try await requests.waitForResponses()
+            try await lockObserver.asyncShutdown()
+        } catch {
+            try? await lockObserver.asyncShutdown()
+            throw error
         }
     }
 
@@ -472,6 +564,48 @@ final class VMResizeTests {
                 for: project, environment: vm.environment, on: app.db)
             let quota = try #require(quotas.first)
             #expect(quota.reservedVCPUs == 1)
+        }
+    }
+
+    @Test("Concurrent partial updates preserve disjoint sizing and quota on a stopped VM")
+    func stoppedDisjointPartialUpdatesMerge() async throws {
+        try await withResizeTestApp { app, _, vm, project, token in
+            vm.maxCpu = vm.cpu
+            vm.maxMemory = vm.memory
+            try await vm.save(on: app.db)
+            try await putDisjointSizingUpdatesAtLockBoundary(
+                app, vm, token: token, expectedStatus: .ok)
+
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let quota = try #require(
+                try await QuotaEnforcementService.applicableQuotas(
+                    for: project, environment: vm.environment, on: app.db
+                ).first)
+            #expect(refreshed.cpu == 4)
+            #expect(refreshed.memory == 4 * 1024 * 1024 * 1024)
+            #expect(refreshed.maxCpu == refreshed.cpu)
+            #expect(refreshed.maxMemory == refreshed.memory)
+            #expect(quota.reservedVCPUs == refreshed.cpu)
+            #expect(quota.reservedMemory == refreshed.memory)
+        }
+    }
+
+    @Test("Concurrent partial updates preserve disjoint sizing and quota on a running VM")
+    func runningDisjointPartialUpdatesMerge() async throws {
+        try await withResizeTestApp { app, _, vm, project, token in
+            try await running(vm, on: app.db)
+            try await putDisjointSizingUpdatesAtLockBoundary(
+                app, vm, token: token, expectedStatus: .accepted)
+
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let quota = try #require(
+                try await QuotaEnforcementService.applicableQuotas(
+                    for: project, environment: vm.environment, on: app.db
+                ).first)
+            #expect(refreshed.cpu == 4)
+            #expect(refreshed.memory == 4 * 1024 * 1024 * 1024)
+            #expect(quota.reservedVCPUs == refreshed.cpu)
+            #expect(quota.reservedMemory == refreshed.memory)
         }
     }
 
