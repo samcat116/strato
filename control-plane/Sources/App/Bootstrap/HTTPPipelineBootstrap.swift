@@ -5,6 +5,8 @@ extension Application {
     /// method is significant: authentication, tracing, auditing, and default-
     /// deny authorization depend on the effective middleware order.
     func bootstrapHTTPPipeline() throws {
+        installSecretSafeBaseMiddleware()
+
         // Vapor supplies `request-id` on every request logger. Mirror it into
         // the canonical taxonomy before request-aware middleware or controllers
         // log, retaining the legacy key for the bounded STR-284 transition.
@@ -37,6 +39,16 @@ extension Application {
         try bootstrapStateStores()
         installAuthenticationAndAuthorizationMiddleware()
         configureBrowserIdentity()
+    }
+
+    /// Replaces Vapor's default route logger, which renders the concrete URL
+    /// path before routing and can therefore expose credentials such as account
+    /// claim tokens. `RequestLoggingMiddleware` is the sole access log and emits
+    /// only the matched route pattern when request logging is enabled.
+    func installSecretSafeBaseMiddleware() {
+        var base = Middlewares()
+        base.use(ErrorMiddleware.default(environment: environment))
+        middleware = base
     }
 
     private func configureBrowserTransportSecurity() {

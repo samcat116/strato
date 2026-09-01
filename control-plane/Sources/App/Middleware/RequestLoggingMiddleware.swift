@@ -1,7 +1,9 @@
 import Vapor
 
 /// Emits exactly one structured `http_request` log line per request — method,
-/// path, status, duration — whether the request succeeded or failed.
+/// matched route, status, duration — whether the request succeeded or failed.
+/// Route parameters remain placeholders so credentials and resource identifiers
+/// in concrete paths never enter the process log.
 ///
 /// On the error path the request may be turned into its HTTP response by a
 /// downstream middleware (`ErrorMiddleware`) *after* it propagates back through
@@ -24,21 +26,22 @@ struct RequestLoggingMiddleware: AsyncMiddleware {
         }
 
         func log(status: HTTPResponseStatus, error: (any Error)? = nil) {
-            var metadata: Logger.Metadata = [
+            var routeSegments: [String]?
+            if let matchedRoute = request.route {
+                routeSegments = matchedRoute.path.map { "\($0)" }
+            }
+            let metadata: Logger.Metadata = [
                 "method": .string(request.method.rawValue),
-                "path": .string(request.url.path),
+                "path": .string(Self.routePath(fromSegments: routeSegments)),
                 "status": .stringConvertible(status.code),
                 "durationMs": .stringConvertible(elapsedMilliseconds()),
             ]
-            if let error {
-                metadata["error"] = .string(String(reflecting: error))
-            }
             // Server-side failures are worth surfacing at error level; everything
             // else (incl. expected 4xx) stays at info so it's one uniform line.
             if status.code >= 500 {
-                request.logger.error("http_request", metadata: metadata)
+                request.logger.error("http_request", error: error, metadata: metadata)
             } else {
-                request.logger.info("http_request", metadata: metadata)
+                request.logger.info("http_request", error: error, metadata: metadata)
             }
         }
 
@@ -53,5 +56,10 @@ struct RequestLoggingMiddleware: AsyncMiddleware {
             log(status: status, error: error)
             throw error
         }
+    }
+
+    static func routePath(fromSegments segments: [String]?) -> String {
+        guard let segments else { return "unmatched" }
+        return "/" + segments.joined(separator: "/")
     }
 }

@@ -1,3 +1,4 @@
+import Logging
 import StratoShared
 import Vapor
 
@@ -14,6 +15,8 @@ struct RequestLogMetadataMiddleware: AsyncMiddleware {
         var logger = request.logger
         logger[metadataKey: LogMetadata.Key.requestID] = .string(request.id)
         request.logger = logger
-        return try await next.respond(to: request)
+        return try await withLogger(logger) { _ in
+            try await next.respond(to: request)
+        }
     }
 }

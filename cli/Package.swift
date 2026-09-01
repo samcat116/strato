@@ -11,7 +11,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
-        .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.15.0"),
         .package(url: "https://github.com/samcat116/swift-toml.git", branch: "master"),
         // The generated API client (issue #583). Its `openapi.yaml` is a
         // symlink to the control plane's, so the CLI is compiled against the
