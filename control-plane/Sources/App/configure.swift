@@ -430,6 +430,11 @@ public func configure(
     // eligibility intent. Missing disks remain rows until their agent is removed.
     app.migrations.add(CreateStorageDevices())
 
+    // STR-297: creator references are attribution, not ownership. Deleting a
+    // user must never cascade their volumes, snapshots or images away — nor be
+    // blocked by an unhandled constraint on the tables that declared no rule.
+    app.migrations.add(MakeCreatorReferencesNullable())
+
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
     // that records it, so concurrent replica boots race the same migration and a

@@ -204,9 +204,10 @@ final class Volume: Model, @unchecked Sendable {
     @OptionalParent(key: "source_volume_id")
     var sourceVolume: Volume?
 
-    // Owner tracking
-    @Parent(key: "created_by_id")
-    var createdBy: User
+    // Attribution, not ownership (STR-297): survives its creator, nulled when
+    // the user row goes. Durable attribution lives in `resource_events`.
+    @OptionalParent(key: "created_by_id")
+    var createdBy: User?
 
     // Timestamps
     @Timestamp(key: "created_at", on: .create)

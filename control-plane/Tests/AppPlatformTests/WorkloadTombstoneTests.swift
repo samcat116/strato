@@ -166,6 +166,59 @@ final class WorkloadTombstoneTests {
         }
     }
 
+    @Test("A volume survives its creator's deletion and is never tombstoned")
+    func userDeletionDoesNotStrandVolumes() async throws {
+        try await withTombstoneApp { app, builder, org, project, token in
+            let agent = try await self.makeAgent(app: app, org: org, name: "ts-agent")
+            let agentId = try agent.requireID().uuidString
+            let creator = try await builder.createUser(
+                username: "vol-creator", email: "vol-creator@example.com",
+                displayName: "Volume Creator", isSystemAdmin: false)
+            let volume = Volume(
+                name: "survivor", description: "", projectID: try project.requireID(),
+                environment: "development", size: 1 << 30, createdByID: try creator.requireID())
+            try await volume.save(on: app.db)
+            let volumeID = try volume.requireID()
+            try await VolumeReplica(
+                volumeID: volumeID, agentId: agentId, diskAttachment: nil, state: .healthy
+            ).create(on: app.db)
+
+            // The request that used to cascade the volume row away (STR-297) —
+            // after which this very report would read "no row at all" and
+            // authorize unlinking the qcow2.
+            try await app.test(
+                .DELETE, "/api/users/\(creator.id!)",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                },
+                afterResponse: { res async in
+                    #expect(res.status == .noContent)
+                })
+
+            let authorized = try await app.observedStateApplier.apply(
+                self.report(
+                    agentId: agentId,
+                    unrecognized: [
+                        UnrecognizedWorkload(
+                            kind: .volume, workloadId: volumeID, observedGeneration: 1,
+                            status: "available")
+                    ]))
+            #expect(!authorized.authorizedTeardown)
+
+            let recorded = try await self.claims(for: agentId, on: app)
+            #expect(recorded.count == 1)
+            #expect(recorded[0].disposition == .held)
+            #expect(recorded[0].tombstoneGeneration == nil)
+
+            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            #expect(sync.tombstones.isEmpty)
+
+            // The row itself survives with attribution nulled, replica intact.
+            let survivor = try #require(await Volume.find(volumeID, on: app.db))
+            #expect(survivor.$createdBy.id == nil)
+        }
+    }
+
     @Test("A held workload placed on another agent record is flagged for re-pointing")
     func recordOnOtherAgentRecordsRepointCandidate() async throws {
         try await withTombstoneApp { app, builder, org, project, _ in

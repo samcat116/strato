@@ -73,9 +73,9 @@ final class Image: Model, @unchecked Sendable {
     @OptionalField(key: "default_cmdline")
     var defaultCmdline: String?
 
-    // Upload tracking
-    @Parent(key: "uploaded_by_id")
-    var uploadedBy: User
+    // Attribution, not ownership (STR-297): nulled when the uploader is deleted.
+    @OptionalParent(key: "uploaded_by_id")
+    var uploadedBy: User?
 
     // Timestamps
     @Timestamp(key: "created_at", on: .create)

@@ -380,6 +380,8 @@ struct UserController: RouteCollection {
             throw Abort(.notFound)
         }
 
+        try await requireDeletableCreatorReferences(userID, on: req.db)
+
         try await req.db.transaction { db in
             // Mirror rows (memberships, group memberships, project members)
             // cascade with the user row; role bindings have no FK by design
@@ -387,9 +389,59 @@ struct UserController: RouteCollection {
             // departing user's bindings do not live only in their own org
             // (cross-org bindings, issue #485).
             try await RoleBindingService.revokeAll(principalType: .user, principalID: userID, on: db)
-            try await user.delete(on: db)
+
+            // The pre-flight above and this delete are not one atomic step, so
+            // a token minted in between still fires `scim_tokens`' RESTRICT.
+            // Translate the database's refusal into the same answer the check
+            // gives — the deleteProject pattern — instead of a 500.
+            do {
+                try await user.delete(on: db)
+            } catch let error as any DatabaseError where error.isConstraintFailure {
+                throw Abort(
+                    .conflict,
+                    reason: "Cannot delete user: resources they created still reference them. "
+                        + "Delete those resources first.")
+            }
         }
         return .noContent
+    }
+
+    /// Refuses a delete that live infrastructure or an accountable credential
+    /// still hangs on (STR-297). Creator references are attribution and go
+    /// null with the user (`MakeCreatorReferencesNullable`), so most created
+    /// resources survive their creator untouched. Two cases stay a checked
+    /// `409` naming the remedy:
+    ///
+    /// * a volume the user created that is *attached to a VM* — live storage
+    ///   in active use should be dealt with deliberately, not have its
+    ///   attribution silently dropped while a guest runs against it;
+    /// * a SCIM token, whose FK is deliberately RESTRICT — a provisioning
+    ///   credential is something its creator is accountable for, and the raw
+    ///   constraint violation used to surface as a 500.
+    private func requireDeletableCreatorReferences(_ userID: UUID, on db: Database) async throws {
+        let attachedVolumes = try await Volume.query(on: db)
+            .filter(\.$createdBy.$id == userID)
+            .filter(\.$vm.$id != nil)
+            .count()
+        if attachedVolumes > 0 {
+            let noun = attachedVolumes == 1 ? "volume" : "volumes"
+            throw Abort(
+                .conflict,
+                reason: "Cannot delete user: \(attachedVolumes) \(noun) they created "
+                    + "\(attachedVolumes == 1 ? "is" : "are") attached to a VM. "
+                    + "Detach or delete those volumes first.")
+        }
+
+        let scimTokens = try await SCIMToken.query(on: db)
+            .filter(\.$createdBy.$id == userID)
+            .count()
+        if scimTokens > 0 {
+            let noun = scimTokens == 1 ? "token" : "tokens"
+            throw Abort(
+                .conflict,
+                reason: "Cannot delete user: they created \(scimTokens) SCIM provisioning \(noun). "
+                    + "Delete those tokens first.")
+        }
     }
 
     // MARK: - WebAuthn Registration
