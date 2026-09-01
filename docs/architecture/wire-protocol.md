@@ -50,7 +50,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 53). The required registration fields
+currently 56). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -109,6 +109,11 @@ remove managed switch ACLs or a one-element list for the schema-enforced policy.
 This is an exact-version payload change, not a `supportsNetworkACLs` capability:
 the existing live overlay-network capability already decides whether an agent
 may author OVN topology.
+
+Wire v56 adds the failure classification to reconciliation observations. This
+distinguishes a blocked refusal, which retains the desired state and retries,
+from a terminal failure, which ends the mutation. The exact-version handshake
+prevents an older control plane from treating a blocked report as terminal.
 
 Two consequences worth knowing:
 
