@@ -440,7 +440,7 @@ in both sinks. The default console handler renders metadata as a sorted,
 bracketed suffix:
 
 ```
-[ INFO ] http_request [method: GET, path: /api/vms, span_id: 5f3a…, trace_flags: 1, trace_id: 9c1e…]
+[ INFO ] http_request [http.route: /api/vms, method: GET, path: /api/vms, span_id: 5f3a…, trace_flags: 1, trace_id: 9c1e…]
 ```
 
 That is what makes a log line addressable from its trace. In Grafana, a Loki

@@ -12,10 +12,9 @@ extension Application {
         // log, retaining the legacy key for the bounded STR-284 transition.
         middleware.use(RequestLogMetadataMiddleware())
 
-        // Request logging: one structured line per HTTP request (method/path/status/
-        // duration). Registered immediately after metadata normalization so it
-        // times the full request. Default on outside production; override with
-        // REQUEST_LOGGING.
+        // Request logging: one structured line per HTTP request. Matched paths
+        // use route templates and unmatched paths use one bounded fallback.
+        // Default on outside production; override with REQUEST_LOGGING.
         let requestLoggingEnabled =
             controlPlaneConfiguration.bool(.requestLogging)
         if requestLoggingEnabled {
@@ -46,10 +45,10 @@ extension Application {
     /// claim tokens. `RequestLoggingMiddleware` is the sole access log and emits
     /// only the matched route pattern when request logging is enabled. The
     /// sanitizer immediately inside `ErrorMiddleware` also removes concrete
-    /// paths and queries before Vapor reports a thrown request error.
+    /// paths and queries before the always-on sanitized error event is emitted.
     func installSecretSafeBaseMiddleware() {
         var base = Middlewares()
-        base.use(ErrorMiddleware.default(environment: environment))
+        base.use(ErrorMiddleware.secretSafeDefault(environment: environment))
         base.use(SecretSafeErrorLogPathMiddleware())
         middleware = base
     }

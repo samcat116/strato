@@ -27,18 +27,7 @@ struct MetricsMiddleware: AsyncMiddleware {
             let method = request.method.rawValue
             let statusClass = "\(statusCode / 100)xx"
             let durationSeconds = (clock.now - start).asSeconds
-            // Derive the route pattern the way Vapor's own TracingMiddleware
-            // does — `route.path.map { "\($0)" }` — without ever naming
-            // `PathComponent`. That type is ambiguous in this module (RoutingKit,
-            // Soto, and OpenAPIKit each define one); annotating it tripped a
-            // type-checker diagnostic-engine failure ("failed to produce
-            // diagnostic for expression"). The helper then works on plain
-            // strings, keeping the pattern/fallback branch unit-testable.
-            var routeSegments: [String]?
-            if let matchedRoute = request.route {
-                routeSegments = matchedRoute.path.map { "\($0)" }
-            }
-            let route = MetricsMiddleware.routeLabel(fromSegments: routeSegments)
+            let route = request.secretSafeLogPath
             Telemetry.recordHTTPRequest(
                 method: method,
                 route: route,
