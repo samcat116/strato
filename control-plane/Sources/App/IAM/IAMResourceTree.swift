@@ -55,6 +55,12 @@ enum IAMResourceTree {
     struct Resolution: Sendable, Equatable {
         let chain: [IAMNode]
         let leaf: IAMLeafFacts
+        /// Whether the walk resolved the node it started from. A missing
+        /// resource stays in `chain` so authorization fails closed, so callers
+        /// that need find-before-authorize ordering cannot infer this fact from
+        /// the chain alone. For resource nodes, resolution requires loading the
+        /// backing row; parentless root node types may resolve synthetically.
+        let leafResolved: Bool
     }
 
     /// The chain from `node` up to its organization, `node` first.
@@ -79,7 +85,7 @@ enum IAMResourceTree {
         let resolved = try await resolve([node], cache: cache, on: db)
         // The batch is total over its inputs; the fallback is unreachable and
         // exists only so the single-node form need not force-unwrap.
-        return resolved[node] ?? Resolution(chain: [node], leaf: IAMLeafFacts())
+        return resolved[node] ?? Resolution(chain: [node], leaf: IAMLeafFacts(), leafResolved: false)
     }
 
     /// Resolve many nodes in one walk (#687).
@@ -123,7 +129,9 @@ enum IAMResourceTree {
                 let chain = resolution.chain
                 for index in chain.indices.dropFirst() where cache.chain(of: chain[index]) == nil {
                     cache.store(
-                        chain: Resolution(chain: Array(chain[index...]), leaf: IAMLeafFacts()), of: chain[index])
+                        chain: Resolution(
+                            chain: Array(chain[index...]), leaf: IAMLeafFacts(), leafResolved: true),
+                        of: chain[index])
                 }
             }
         }
@@ -137,6 +145,7 @@ enum IAMResourceTree {
         var chain: [IAMNode]
         var seen: Set<IAMNode>
         var leaf: IAMLeafFacts
+        var leafResolved: Bool
         var cursor: IAMNode?
     }
 
@@ -155,7 +164,8 @@ enum IAMResourceTree {
     ) async throws -> [IAMNode: Resolution] {
         var paths: [IAMNode: Path] = [:]
         for start in starts {
-            paths[start] = Path(chain: [start], seen: [start], leaf: IAMLeafFacts(), cursor: start)
+            paths[start] = Path(
+                chain: [start], seen: [start], leaf: IAMLeafFacts(), leafResolved: false, cursor: start)
         }
         // Folder rows are memoized across levels because their materialized
         // paths let one query pull an entire remaining chain — see `step`.
@@ -190,7 +200,10 @@ enum IAMResourceTree {
                     if cursor.type == .organizationalUnit { path.chain.removeLast() }
                     continue
                 }
-                if cursor == start { path.leaf = step.leaf }
+                if cursor == start {
+                    path.leaf = step.leaf
+                    path.leafResolved = true
+                }
                 guard let next = step.parent, path.chain.count < maxDepth else { continue }
                 // An earlier call already resolved the chain above this parent
                 // (#710) — splice its cycle-free suffix and stop, skipping the
@@ -213,7 +226,9 @@ enum IAMResourceTree {
             }
         }
 
-        return paths.mapValues { Resolution(chain: $0.chain, leaf: $0.leaf) }
+        return paths.mapValues {
+            Resolution(chain: $0.chain, leaf: $0.leaf, leafResolved: $0.leafResolved)
+        }
     }
 
     /// Folder rows already loaded by this walk.
