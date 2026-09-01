@@ -101,6 +101,14 @@ export type UpdateStorageDeviceRequest = Request<"UpdateStorageDeviceRequest", L
 export type Site = Response<"SiteDetail", Legacy.Site>;
 export type CreateSiteRequest = Request<"CreateSiteRequest", Legacy.CreateSiteRequest>;
 export type UpdateSiteRequest = Request<"UpdateSiteRequest", Legacy.UpdateSiteRequest>;
+export type StoragePoolMode = Schema<"StoragePoolMode"> & Legacy.StoragePoolMode;
+export type StoragePool = Response<"StoragePoolResponse", Legacy.StoragePool>;
+export type CephClusterHealth = Schema<"CephClusterHealth"> & Legacy.CephClusterHealth;
+export type CephCluster = Response<"CephClusterResponse", Legacy.CephCluster>;
+export type RegisterCephClusterRequest = Request<"CreateExternalCephClusterRequest", Legacy.RegisterCephClusterRequest>;
+export type UpdateCephClusterRequest = Request<"UpdateExternalCephClusterRequest", Legacy.UpdateCephClusterRequest>;
+export type CephProjectAccess = Response<"CephProjectAccessResponse", Legacy.CephProjectAccess>;
+export type ConfigureCephProjectAccessRequest = Request<"UpsertCephProjectAccessRequest", Legacy.ConfigureCephProjectAccessRequest>;
 
 export type ResourceQuota = Response<"ResourceQuota", Legacy.ResourceQuota>;
 export type CreateQuotaRequest = Request<"CreateResourceQuotaRequest", Legacy.CreateQuotaRequest>;

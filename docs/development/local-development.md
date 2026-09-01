@@ -23,8 +23,12 @@ Platform notes for running VMs:
 - **Linux**: KVM (`/dev/kvm`), libvirt ≥ 11.5 (`libvirt-daemon-system`,
   `libvirt-clients` — the agent drives QEMU through libvirtd at
   `qemu:///system`, plus `swtpm`/`swtpm-tools` for TPM-backed guests),
-  `qemu-utils`, and for real networking `ovn-host` / `openvswitch-switch`
+  `qemu-utils`, `ceph-common` for Ceph-backed volumes, and for real networking
+  `ovn-host` / `openvswitch-switch`
   (hypervisors run only the chassis side — see `deploy/ovn-central/`)
+  The 11.5 floor covers local QEMU disks. Namespaced RBD attached through QEMU
+  requires libvirt 11.6+; Firecracker/krbd-only Ceph clients do not require a
+  reachable libvirt daemon.
 - **macOS**: macOS 14+, Xcode Command Line Tools, `brew install qemu` for
   `qemu-img`. Best-effort only: no CI builds the agent for macOS, and without
   libvirt it registers a mock QEMU driver and reports the backend

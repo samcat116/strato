@@ -6,6 +6,16 @@ export {
 } from "./use-vms";
 export { useSites } from "./use-sites";
 export {
+  useCephCluster,
+  useRegisterCephCluster,
+  useUpdateCephCluster,
+  useDeleteCephCluster,
+  useCephProjectAccess,
+  useConfigureCephProjectAccess,
+  useDeleteCephProjectAccess,
+  useProjectStoragePools,
+} from "./use-ceph-storage";
+export {
   useStorageDevices,
   useSetStorageDeviceOsdEligibility,
 } from "./use-storage-devices";

@@ -62,7 +62,8 @@ struct SecurityGroupProtocolTests {
         // groups, which the agent must not read as "tear down all port groups".
         let nonAuthoritative = """
             {"requestId":"r","timestamp":0,"syncId":"s","vms":[],"sandboxes":[],
-             "networks":[],"networksAuthoritative":false,"tombstones":[],"volumes":[],"snapshots":[]}
+             "networks":[],"networksAuthoritative":false,"tombstones":[],"volumes":[],"snapshots":[],
+             "cephCredentialRevocations":[]}
             """
         let decoded = try WireProtocol.makeDecoder().decode(
             DesiredStateMessage.self, from: Data(nonAuthoritative.utf8))
