@@ -16,6 +16,39 @@ struct CloudInitUserDataDocumentTests {
             serviceEnabled: true)
     }
 
+    private func runQGASetup(fakeCommands: [String: Int32]) throws -> (status: Int32, log: String) {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory
+            .appendingPathComponent("strato-qga-setup-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directory) }
+
+        let logURL = directory.appendingPathComponent("commands.log")
+        for (name, exitCode) in fakeCommands {
+            let executable = directory.appendingPathComponent(name)
+            let script = """
+                #!/bin/sh
+                printf '\(name) %s\\n' "$*" >> "$STRATO_QGA_TEST_LOG"
+                exit \(exitCode)
+                """
+            try script.write(to: executable, atomically: true, encoding: .utf8)
+            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", CloudInitProvisioner.qgaSetupScript]
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = directory.path
+        environment["STRATO_QGA_TEST_LOG"] = logURL.path
+        process.environment = environment
+        try process.run()
+        process.waitUntilExit()
+
+        let log = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
+        return (process.terminationStatus, log)
+    }
+
     @Test("NoCloud-net user-data is byte-identical to the seed ISO renderer")
     func noCloudNetGoldenParity() {
         let keys = ["  ssh-ed25519 AAAA key@host  ", "", "   "]
@@ -61,13 +94,18 @@ struct CloudInitUserDataDocumentTests {
         #expect(!doc.contains("ssh_authorized_keys"))
     }
 
-    @Test("legacy document installs and enables the QEMU guest agent")
-    func legacyInstallsGuestAgent() {
+    @Test("default document keeps QGA installation best effort")
+    func defaultGuestAgentInstallIsBestEffort() {
         let doc = CloudInitProvisioner.userDataDocument(sshAuthorizedKeys: [], userData: nil)
-        // With no caller part to merge against, the native packages: key is safe.
-        #expect(doc.contains("packages:"))
-        #expect(doc.contains("- qemu-guest-agent"))
-        // And the service is brought up without a reboot.
+
+        // cloud-init treats a packages: failure as fatal to cloud-final. The
+        // default path must use the same best-effort script policy as the
+        // caller-user-data path instead.
+        #expect(!doc.contains("packages:"))
+        #expect(doc.contains("apt-get install -y qemu-guest-agent >/dev/null 2>&1 || true"))
+        #expect(
+            doc.contains(
+                "zypper --non-interactive install --auto-agree-with-licenses qemu-guest-agent"))
         #expect(doc.contains("systemctl enable --now qemu-guest-agent"))
     }
 
@@ -87,6 +125,40 @@ struct CloudInitUserDataDocumentTests {
             #expect(!document.contains("systemctl enable --now serial-getty@ttyAMA0.service"))
             #expect(!document.contains("systemctl enable --now serial-getty@hvc0.service"))
         }
+    }
+
+    @Test("QGA package and service failures do not fail setup")
+    func guestAgentSetupSurvivesPackageFailure() throws {
+        let result = try runQGASetup(fakeCommands: ["apt-get": 1, "systemctl": 1])
+
+        #expect(result.status == 0)
+        #expect(result.log.contains("apt-get update -y"))
+        #expect(result.log.contains("apt-get install -y qemu-guest-agent"))
+        #expect(result.log.contains("systemctl enable --now qemu-guest-agent"))
+    }
+
+    @Test("QGA setup skips package repositories when the image already contains QGA")
+    func guestAgentSetupSkipsInstallWhenPresent() throws {
+        let result = try runQGASetup(fakeCommands: [
+            "qemu-ga": 0,
+            "apt-get": 1,
+            "systemctl": 0,
+        ])
+
+        #expect(result.status == 0)
+        #expect(!result.log.contains("apt-get"))
+        #expect(result.log.contains("systemctl enable --now qemu-guest-agent"))
+    }
+
+    @Test("QGA setup uses zypper when it is the available package manager")
+    func guestAgentSetupUsesZypper() throws {
+        let result = try runQGASetup(fakeCommands: ["zypper": 1, "systemctl": 1])
+
+        #expect(result.status == 0)
+        #expect(
+            result.log.contains(
+                "zypper --non-interactive install --auto-agree-with-licenses qemu-guest-agent"))
+        #expect(result.log.contains("systemctl enable --now qemu-guest-agent"))
     }
 
     @Test("legacy document installs the hot-plug onlining udev rules")
