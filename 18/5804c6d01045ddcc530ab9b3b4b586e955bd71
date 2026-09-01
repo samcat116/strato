@@ -1,0 +1,48 @@
+control-plane/Sources/App/openapi.yaml
+  s_bd67073331cbe0::t_6996fa83294487 2871-2875,2883
+control-plane/Sources/App/Models/Image.swift
+  s_bd67073331cbe0::t_958e833247e91d 76-78
+control-plane/Sources/App/Models/SSFStream.swift
+  s_bd67073331cbe0::t_c93c434d303807 87-89
+control-plane/Sources/App/Migrations/MakeCreatorReferencesNullable.swift
+  s_bd67073331cbe0::t_a6d2bfac6edde6 1-120
+control-plane/Sources/App/configure.swift
+  s_bd67073331cbe0::t_1045c0e984cded 433-437
+control-plane/Sources/App/Controllers/UserController.swift
+  s_bd67073331cbe0::t_2a6751fc0c6981 383-384,392-404,409-444
+  s_bd67073331cbe0::t_bdf3ffffbf474e 445-446
+control-plane/Sources/App/Models/VMSnapshot.swift
+  s_bd67073331cbe0::t_dd3a2367600d96 117-119
+control-plane/Sources/App/Models/Volume.swift
+  s_bd67073331cbe0::t_514314d8a6a96c 207-210
+control-plane/Tests/AppPlatformTests/WorkloadTombstoneTests.swift
+  s_bd67073331cbe0::t_c6dc55dc2cb675 169-221
+control-plane/Sources/App/Models/SandboxSnapshot.swift
+  s_bd67073331cbe0::t_5f171097181074 174-176
+control-plane/Sources/App/Models/WebhookSubscription.swift
+  s_bd67073331cbe0::t_5b2a6720b58ee0 60-62
+control-plane/Sources/App/Models/VolumeSnapshot.swift
+  s_bd67073331cbe0::t_d7c0332db5a68c 124-126
+control-plane/Tests/AppIdentityTests/UserControllerTests.swift
+  s_bd67073331cbe0::t_a36037beb8f021 200-408
+CONTEXT.md
+  s_bd67073331cbe0::t_504622b01e8b67 101-111
+control-plane/web/src/types/openapi.ts
+  s_bd67073331cbe0::t_ac2fba888a6864 1944,13553
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "185804c6d01045ddcc530ab9b3b4b586e955bd71",
+  "prompts": {},
+  "sessions": {
+    "s_bd67073331cbe0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2d63a8f9-ada9-44c9-9928-c6955658bdbf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
