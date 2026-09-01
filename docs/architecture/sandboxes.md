@@ -443,21 +443,34 @@ control connections report.
 
 ### Host bridging and the wire
 
-The agent bridges vsock streams to **guest exec stream messages** — correlated by
-`sessionId`, ordered by the WebSocket, never answered with `success`/`error`:
-`guest_exec_start/started/input/output/resize/exit/close/closed`. A
-`guest_exec_start` is answered by `started` on success or `closed` (with a
-reason) on failure.
+The agent bridges vsock streams to **guest exec messages** correlated by
+`sessionId`. Every `guest_exec_start` carries a required `sessionKind` rather
+than inferring lifetime from `tty`: browser/CLI attach sessions are
+`interactive`, while `POST /api/vms/:id/actions/run` is `recorded`.
+Interactive frames remain ordered WebSocket stream messages and are never
+answered with `success`/`error`:
+`guest_exec_start/started/input/output/resize/exit/close/closed`. A start is
+answered by `started` on success or `closed` (with a reason) on failure.
+
+A recorded VM command has no frontend. The agent closes its stdin locally,
+keeps its guest channel alive across a control-plane WebSocket reconnect, and
+retains a complete stdout/stderr snapshot under a shared 1 MiB combined cap.
+After registration it re-advertises the running session and re-offers a
+terminal `exited` or `closed` snapshot until the control plane acknowledges a
+durable database disposition. This reconnect guarantee is intentionally scoped
+to the same agent process; an agent or host restart still leaves the database
+deadline to classify an abandoned command.
 
 Per running sandbox the agent also keeps a long-lived log-follow task
 (reconnecting with backoff, resuming from the last seen sequence number),
 assembles chunks into lines, and ships each as `sandbox_log {sandboxId,
-stream, message}`. Both stream kinds react to control-plane connectivity:
-when the agent's WebSocket drops, exec sessions are closed guest-side (the
-control plane cannot close them over a dead socket, and a quiet process
-would otherwise outlive its frontend) and log follows are suspended — output
-waits in the guest ring buffer and ships after re-registration, rather than
-being consumed toward a socket that cannot deliver it. The control plane verifies the reporting agent owns the
+stream, message}`. The frontend-bound streams react to control-plane
+connectivity: when the agent's WebSocket drops, interactive exec sessions are
+closed guest-side (a quiet process must not outlive its unreachable frontend)
+and log follows are suspended. Recorded VM commands instead keep running as
+described above. Log output waits in the guest ring buffer and ships after
+re-registration, rather than being consumed toward a socket that cannot
+deliver it. The control plane verifies the reporting agent owns the
 sandbox (the `vm_log` anti-spoofing rule) and pushes to Loki with labels
 `sandbox_id`, `stream`, `source: workload` — the same Loki path VM logs use.
 `GET /api/sandboxes/:id/logs` queries them back, mirroring the VM logs
@@ -489,11 +502,15 @@ endpoint.
   bridge is present and host vsock preflight passes, so the route returns 503
   instead of minting a session the assigned agent cannot execute.
 
-Like the VM console, guest exec is **single-replica**: the browser WebSocket must
+Like the VM console, interactive guest exec is **single-replica**: the browser WebSocket must
 land on the replica holding the agent socket (`GuestExecSessionManager`
 mirrors `ConsoleSessionManager` and does not forward over the coordination
 RPC channels). Cross-replica stream forwarding is future work for both
 tunnels; the POST fails fast with 503 when the agent is socketed elsewhere.
+The recorded `actions/run` path has no browser stream and is not subject to
+that attachment constraint: PostgreSQL owns its operation, and the agent can
+re-offer its authoritative result to whichever replica holds the successor
+socket.
 
 The frontend's sandbox detail page has Terminal and Logs tabs mirroring the
 VM page — the terminal drives exec sessions (default `/bin/sh`, PTY, resize

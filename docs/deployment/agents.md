@@ -23,7 +23,7 @@ configured for SPIRE (see [Enrolling a node](#enrolling-a-node)).
 | --- | --- |
 | OS | Linux with systemd and KVM. Ubuntu 26.04 or another distribution shipping libvirt 11.5+; **Ubuntu 24.04 is not supported** (libvirt 10.0.0) |
 | libvirt | **11.5.0 or newer**, with `qemu:///system` reachable |
-| Packages | `qemu-utils`, `qemu-system-<arch>`, `ovmf`/`qemu-efi-aarch64`, `libvirt-daemon-system`, `libvirt-clients`, `swtpm`, `swtpm-tools`, plus `ovn-host`/`openvswitch-switch` for SDN networking |
+| Packages | `qemu-utils`, `ceph-common`, `qemu-system-<arch>`, `ovmf`/`qemu-efi-aarch64`, `libvirt-daemon-system`, `libvirt-clients`, `swtpm`, `swtpm-tools`, plus `ovn-host`/`openvswitch-switch` for SDN networking |
 
 The [install script](#one-command-install) installs and configures all of it.
 
@@ -42,6 +42,13 @@ node that looks healthy but fails every checkpoint, so both the installer's
 preflight and the agent's own check the version and say so up front. The agent's
 check is **gating**: a node below the floor reports `.qemu` as unavailable
 rather than accepting VMs it cannot fully serve.
+
+**Ceph QEMU requires 11.6.** The 11.5 floor remains sufficient for QEMU VMs
+backed by local disks. A project-scoped RBD namespace is encoded as
+`pool/namespace/image`, which libvirt supports from 11.6, so an agent with a
+reachable 11.5 daemon does not advertise Ceph-volume placement. A
+Firecracker/krbd-only agent may advertise Ceph without libvirt; krbd maps the
+same namespaced image directly and does not pass through libvirt.
 
 **libvirt configuration.** The agent owns every path under `/var/lib/strato`,
 and libvirt's QEMU driver would otherwise run QEMU as `libvirt-qemu:kvm` and
@@ -158,7 +165,8 @@ one-time SPIRE join token. The host no longer supplies or derives those values.
 
 On a fresh Linux host with nothing installed, it downloads the `strato-agent`
 and `spire-agent` binaries, installs the host dependencies (QEMU and libvirtd,
-swtpm for guest TPMs, and OVN/OVS for SDN networking), configures
+the client-only `ceph-common` RBD tools, swtpm for guest TPMs, and OVN/OVS for
+SDN networking), configures
 `/etc/libvirt/qemu.conf` for the agent's account and enables the libvirt socket,
 attests the node to SPIRE with the join token, writes `/etc/strato/config.toml`,
 brings up host telemetry, and enables `strato-agent.service` so the node
@@ -546,10 +554,12 @@ VM's spec — being what libvirt starts when the VM boots:
   persistent libvirt definition has changed, so the following start uses the
   requested count.
 
-Two host packages change what a node can be asked to run rather than how it
-runs: `ovmf` (the signed EDK2 firmware Secure Boot needs) and `swtpm` (which
+Three host packages change what a node can be asked to run rather than how it
+runs: `ovmf` (the signed EDK2 firmware Secure Boot needs), `swtpm` (which
 backs guest TPM 2.0 devices — libvirt starts and supervises it per domain, so
-the agent never launches it itself). Without them the node stays registered and
+the agent never launches it itself), and `ceph-common` (the `rbd` client and
+krbd map/unmap frontend for external Ceph pools). `ceph-common` runs no Ceph
+daemon on the agent. Without them the node stays registered and
 useful, it simply never receives a placement that requires those features —
 see [Windows Guests](/guide/windows-guests).
 

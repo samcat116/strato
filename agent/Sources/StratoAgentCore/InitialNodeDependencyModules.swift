@@ -372,3 +372,78 @@ public struct SimulatedNodeDependencyModule: NodeDependencyModule {
             compatibility: .compatible, functionalState: .healthy)
     }
 }
+
+/// Observation-only proof that this host can act as a Ceph client.
+///
+/// There is deliberately no Ceph unit to supervise: bring-your-own mode runs
+/// no monitor, manager, or OSD here. Cluster and credential reachability are
+/// proved again by each scoped backend operation; this module gates placement
+/// on the host-side client toolchain being present and executable.
+public struct CephClientNodeDependencyModule: NodeDependencyModule {
+    /// Namespaced RBD source names (`pool/namespace/image`) were added in
+    /// libvirt 11.6. Keep the host-wide QEMU floor at 11.5, but fail Ceph
+    /// placement closed on a QEMU-configured attach host with a reachable older
+    /// daemon. A Firecracker-only host uses krbd and must not lose Ceph merely
+    /// because an installed but unused libvirt daemon is older.
+    public static let minimumNamespacedRBDLibvirtVersion = LibvirtProbe.Version(
+        major: 11, minor: 6, patch: 0)
+
+    public let id = NodeDependencyID.cephClient
+    public let role = NodeDependencyRole.storage
+    public let dependencies: [NodeDependencyID] = []
+    public let desiredState = NodeDependencyDesiredState.required
+    public let ownership = NodeDependencyOwnership.observeOnly
+    public let affectedCapabilities = [NodeCapability.cephVolumes]
+
+    private let version: @Sendable () async -> String?
+    private let libvirt: @Sendable () async -> LibvirtProbe.Status?
+    private let qemuAttachmentsEnabled: Bool
+    private let functional: @Sendable () async -> NodeDependencyFunctionalHealth
+
+    public init(
+        version: @escaping @Sendable () async -> String?,
+        libvirt: @escaping @Sendable () async -> LibvirtProbe.Status? = { nil },
+        qemuAttachmentsEnabled: Bool = true,
+        functional: @escaping @Sendable () async -> NodeDependencyFunctionalHealth = { .healthy }
+    ) {
+        self.version = version
+        self.libvirt = libvirt
+        self.qemuAttachmentsEnabled = qemuAttachmentsEnabled
+        self.functional = functional
+    }
+
+    public func inspect() async -> NodeDependencyInspection {
+        guard let installedVersion = await version() else {
+            return NodeDependencyInspection(
+                supervisorState: .missing,
+                compatibility: .incompatible,
+                functionalState: .unhealthy,
+                reason: NodeDependencyFailureReason(
+                    code: .missingBinary,
+                    message: "Ceph RBD client tooling is not installed"))
+        }
+        let health = await functional()
+        if qemuAttachmentsEnabled,
+            case .reachable(let daemonVersion) = await libvirt(),
+            daemonVersion < Self.minimumNamespacedRBDLibvirtVersion
+        {
+            return NodeDependencyInspection(
+                supervisorState: .notApplicable,
+                installedVersion: installedVersion,
+                daemonVersion: daemonVersion.description,
+                compatibility: .incompatible,
+                functionalState: .unhealthy,
+                reason: NodeDependencyFailureReason(
+                    code: .incompatibleVersion,
+                    message:
+                        "libvirt \(daemonVersion) cannot attach namespaced Ceph RBD images; version \(Self.minimumNamespacedRBDLibvirtVersion) or newer is required"
+                ))
+        }
+        return NodeDependencyInspection(
+            supervisorState: .notApplicable,
+            installedVersion: installedVersion,
+            compatibility: .compatible,
+            functionalState: health.state,
+            reason: health.reason)
+    }
+}

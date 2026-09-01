@@ -454,6 +454,6 @@ struct OperationResponse: Content {
 struct VMCommandResultResponse: Content {
     let stdout: String
     let stderr: String
-    let exitCode: Int
+    let exitCode: Int?
     let truncated: Bool
 }

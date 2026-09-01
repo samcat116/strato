@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { volumesApi } from "@/lib/api/volumes";
 import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { useImages } from "@/lib/hooks/use-images";
+import { useProjectStoragePools } from "@/lib/hooks";
 import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
 import { toast } from "sonner";
 
@@ -43,12 +44,30 @@ export function CreateVolumeDialog({
     format: "qcow2" as VolumeFormat,
     volumeType: "data" as VolumeType,
     sourceImageId: "",
+    poolId: "",
+    poolProjectId: "",
   });
 
   // The volume is created in the project selected in the header switcher.
   const { currentProject } = useProjectContext();
   const projectId = currentProject?.id;
   const { data: images, isLoading: imagesLoading } = useImages(projectId);
+  const poolsQuery = useProjectStoragePools(projectId);
+  const selectablePools = useMemo(
+    () =>
+      (poolsQuery.data ?? []).filter(
+        (pool) =>
+          pool.id &&
+          pool.mode !== "replicated" &&
+          !(pool.mode === "local" && pool.name === "default")
+      ),
+    [poolsQuery.data]
+  );
+  const selectedPoolId =
+    formData.poolProjectId === projectId ? formData.poolId : "";
+  const selectedPool = selectablePools.find(
+    (pool) => pool.id === selectedPoolId
+  );
 
   const readyImages = useMemo(
     () =>
@@ -72,11 +91,22 @@ export function CreateVolumeDialog({
       format: "qcow2",
       volumeType: "data",
       sourceImageId: "",
+      poolId: "",
+      poolProjectId: "",
     });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (poolsQuery.isLoading) {
+      toast.error("Wait for storage pools to finish loading");
+      return;
+    }
+    if (poolsQuery.error) {
+      toast.error("Storage pools could not be loaded");
+      return;
+    }
 
     // Required: there is no default project to fall back to (issue #1059).
     // Without this the body would go out with the key dropped by
@@ -108,6 +138,7 @@ export function CreateVolumeDialog({
       format: formData.format,
       volumeType: formData.volumeType,
       sourceImageId: formData.sourceImageId || undefined,
+      poolId: selectedPoolId || undefined,
     };
     await run({
       intentKey: JSON.stringify(["POST", "/api/volumes", payload]),
@@ -196,7 +227,7 @@ export function CreateVolumeDialog({
                       format: e.target.value as VolumeFormat,
                     })
                   }
-                  disabled={isLoading}
+                  disabled={isLoading || selectedPool?.mode === "ceph"}
                   className={selectClassName}
                 >
                   <option value="qcow2">qcow2</option>
@@ -223,6 +254,52 @@ export function CreateVolumeDialog({
                   <option value="boot">Boot</option>
                 </select>
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="volumeStoragePool" className="text-foreground">
+                Storage pool
+              </Label>
+              {poolsQuery.isLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading storage pools...
+                </div>
+              ) : (
+                <select
+                  id="volumeStoragePool"
+                  value={selectedPoolId}
+                  onChange={(event) => {
+                    const pool = selectablePools.find(
+                      (item) => item.id === event.target.value
+                    );
+                    setFormData((current) => ({
+                      ...current,
+                      poolId: event.target.value,
+                      poolProjectId: projectId ?? "",
+                      format: pool?.mode === "ceph" ? "raw" : current.format,
+                    }));
+                  }}
+                  disabled={isLoading || !!poolsQuery.error}
+                  className={selectClassName}
+                >
+                  <option value="">Default local pool</option>
+                  {selectablePools.map((pool) => (
+                    <option key={pool.id} value={pool.id}>
+                      {pool.name}
+                      {pool.mode === "ceph"
+                        ? ` · Ceph ${pool.cephPoolName}/${pool.cephNamespace}`
+                        : ""}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <p className="text-xs text-muted-foreground">
+                {poolsQuery.error
+                  ? "Storage pools could not be loaded; volume creation is disabled."
+                  : selectedPool?.mode === "ceph"
+                    ? "RBD volumes use raw format and can attach from any configured agent in the site."
+                    : "Local volumes remain pinned to the agent that creates them."}
+              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="volumeSourceImage" className="text-foreground">
@@ -271,7 +348,12 @@ export function CreateVolumeDialog({
             <Button
               type="submit"
               className="bg-primary hover:bg-primary/90"
-              disabled={isLoading || !projectId}
+              disabled={
+                isLoading ||
+                !projectId ||
+                poolsQuery.isLoading ||
+                !!poolsQuery.error
+              }
             >
               {isLoading ? (
                 <>

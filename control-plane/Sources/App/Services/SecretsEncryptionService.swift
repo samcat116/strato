@@ -516,6 +516,7 @@ private enum StoredSecretTable: CaseIterable, Hashable {
     case ssfStreams
     case registryPullSecrets
     case webhookSubscriptions
+    case storedSecrets
 
     var metricLabel: String {
         switch self {
@@ -523,6 +524,7 @@ private enum StoredSecretTable: CaseIterable, Hashable {
         case .ssfStreams: "ssf_streams.auth_token"
         case .registryPullSecrets: "registry_pull_secrets.secret"
         case .webhookSubscriptions: "webhook_subscriptions.signing_secret"
+        case .storedSecrets: "stored_secrets.encrypted_value"
         }
     }
 
@@ -553,6 +555,10 @@ private enum StoredSecretTable: CaseIterable, Hashable {
         case .webhookSubscriptions:
             try await sql.raw(
                 "SELECT id, signing_secret AS value FROM webhook_subscriptions"
+            ).all(decoding: StoredSecretRow.self)
+        case .storedSecrets:
+            try await sql.raw(
+                "SELECT id, encrypted_value AS value FROM stored_secrets"
             ).all(decoding: StoredSecretRow.self)
         }
     }
@@ -595,6 +601,14 @@ private enum StoredSecretTable: CaseIterable, Hashable {
                 """
                 UPDATE webhook_subscriptions SET signing_secret = \(bind: new)
                 WHERE id = \(bind: id) AND signing_secret = \(bind: old)
+                RETURNING id
+                """
+            ).first(decoding: Updated.self)
+        case .storedSecrets:
+            updated = try await sql.raw(
+                """
+                UPDATE stored_secrets SET encrypted_value = \(bind: new)
+                WHERE id = \(bind: id) AND encrypted_value = \(bind: old)
                 RETURNING id
                 """
             ).first(decoding: Updated.self)

@@ -708,7 +708,10 @@ paths:
         Requires `vm:runCommand`. Accepts a non-interactive guest command and
         returns an operation immediately. Poll the operation until terminal;
         a succeeded operation includes stdout, stderr, and the process exit
-        code. Captured output is limited to 1 MiB across both streams.
+        code. A failed operation can include bounded partial stdout and stderr
+        with `truncated: true`; `exitCode` is omitted when no authoritative
+        guest exit was received. Captured output is limited to 1 MiB across
+        both streams.
       tags: [Virtual Machines]
       requestBody:
         required: true
@@ -1512,6 +1515,32 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/projects/{projectID}/storage-pools:
+    parameters:
+      - $ref: "#/components/parameters/ProjectID"
+    get:
+      operationId: listProjectStoragePools
+      summary: List storage pools available to a project
+      description: >-
+        Returns the deployment's local default pool followed by the Ceph pools
+        configured with a project-scoped namespace and cephx identity for this
+        project. Credentials are never included. Requires project membership.
+      tags: [Volumes]
+      responses:
+        "200":
+          description: The storage pools available to the project.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StoragePoolResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/volumes/{volumeId}:
     parameters:
       - $ref: "#/components/parameters/VolumeID"
@@ -6004,6 +6033,192 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/sites/{siteId}/ceph-cluster:
+    parameters:
+      - $ref: "#/components/parameters/SiteID"
+    get:
+      operationId: getSiteCephCluster
+      summary: Get a site's external Ceph cluster
+      description: >-
+        Returns the bring-your-own Ceph cluster registered for this site.
+        Credential material and its internal secret reference are never
+        returned. STR-155 does not yet schedule observer probes, so health is
+        `unknown` and capacity/usage timestamps are absent until a later
+        observation path is added. Requires `read` on the site.
+      tags: [Sites]
+      responses:
+        "200":
+          description: The site's registered Ceph cluster.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CephClusterResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createSiteCephCluster
+      summary: Register an external Ceph cluster for a site
+      description: >-
+        Registers an existing Ceph cluster. Strato agents act only as clients;
+        this does not bootstrap or manage any Ceph daemon. The submitted
+        monitor endpoints must use msgr2 (`v2:host:port` or
+        `v2:[IPv6]:port`, port 1 through 65535). The observer keyring must have
+        exactly one section matching `clientName` and exactly one nonempty
+        `key =` entry; it is encrypted at rest and never returned. Requires
+        `manage` on the site.
+      tags: [Sites]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExternalCephClusterRequest"
+      responses:
+        "201":
+          description: The registered Ceph cluster.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CephClusterResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    put:
+      operationId: updateSiteCephCluster
+      summary: Update a site's external Ceph client configuration
+      description: >-
+        Replaces monitor endpoints and observer client name. The cluster FSID
+        is immutable. Monitor endpoints must use msgr2 (`v2:host:port` or
+        `v2:[IPv6]:port`, port 1 through 65535). `keyring` may be omitted to
+        retain the current secret, but changing `clientName` requires a
+        replacement containing exactly one matching client section and one
+        nonempty `key =` entry. Requires `manage` on the site.
+      tags: [Sites]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateExternalCephClusterRequest"
+      responses:
+        "200":
+          description: The updated Ceph cluster.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CephClusterResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteSiteCephCluster
+      summary: Remove a site's external Ceph cluster registration
+      description: >-
+        Deletes the cluster registration and its observer credential. Refused
+        while any project access configuration still refers to the cluster.
+        This never modifies the external Ceph cluster. Requires `manage` on
+        the site.
+      tags: [Sites]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/sites/{siteId}/ceph-cluster/projects/{projectID}:
+    parameters:
+      - $ref: "#/components/parameters/SiteID"
+      - $ref: "#/components/parameters/ProjectID"
+    get:
+      operationId: getSiteCephProjectAccess
+      summary: Get a project's scoped Ceph access for a site
+      description: >-
+        Returns the project's Ceph client identity and storage pool, without
+        credential material or internal secret references. Requires `read` on
+        the site and membership in the project.
+      tags: [Sites]
+      responses:
+        "200":
+          description: The project's scoped Ceph access and storage pool.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CephProjectAccessResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    put:
+      operationId: upsertSiteCephProjectAccess
+      summary: Configure a project's scoped Ceph access for a site
+      description: >-
+        Creates or replaces the project's Ceph client identity, RBD pool, and
+        namespace. `keyring` is required when creating the configuration and
+        whenever the cephx identity, pool, namespace, or credential changes.
+        It must contain exactly one matching section, one key, and only the
+        exact namespace-scoped mon/mgr/osd RBD caps. Replacing an existing
+        credential also requires `cephxRevoked: true`, confirming that the
+        operator revoked it in the external cluster. Credentials, identity,
+        pool, and namespace are immutable while volumes exist. Requires
+        `manage` on the site and project policy administration.
+      tags: [Sites]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertCephProjectAccessRequest"
+      responses:
+        "200":
+          description: The configured project access and storage pool.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CephProjectAccessResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteSiteCephProjectAccess
+      summary: Remove a project's scoped Ceph access for a site
+      description: >-
+        Deletes the project storage pool, cephx credential, and access record,
+        and permanently records an agent-cleanup tombstone for the retired
+        credential. Refused while any volume still belongs to the pool. Strato
+        cannot revoke cephx in the external cluster, so callers must first do
+        that out of band and confirm it with `cephxRevoked=true`. Requires
+        `manage` on the site and project policy administration.
+      tags: [Sites]
+      parameters:
+        - name: cephxRevoked
+          in: query
+          required: true
+          description: >-
+            Must be true to confirm the retired cephx credential was revoked
+            in the external Ceph cluster before Strato deletes its copy.
+          schema:
+            type: boolean
+            enum: [true]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /api/sites/{siteId}/agents/{agentId}:
     parameters:
       - $ref: "#/components/parameters/SiteID"
@@ -9694,7 +9909,7 @@ components:
 
     VMCommandResult:
       type: object
-      required: [stdout, stderr, exitCode, truncated]
+      required: [stdout, stderr, truncated]
       properties:
         stdout:
           type: string
@@ -9702,8 +9917,15 @@ components:
           type: string
         exitCode:
           type: integer
+          description: >-
+            The guest-reported process exit code. Omitted when execution failed
+            or closed before an authoritative exec-exit event was recorded.
         truncated:
           type: boolean
+          description: >-
+            True when the result may be incomplete because output exceeded the
+            combined 1 MiB capture limit or the session closed without an
+            authoritative exec-exit event.
 
     OperationResourceKind:
       type: string
@@ -9769,6 +9991,14 @@ components:
         projectId:
           type: string
           format: uuid
+        poolId:
+          type: string
+          format: uuid
+          description: >-
+            Storage pool for the managed boot volume. Omit to preserve the
+            deployment's local default. A Ceph pool must belong to this project
+            and constrains VM placement to fresh Ceph-client agents in its site;
+            its bytes consume no agent-local disk reservation.
         environment:
           type: string
         cpu:
@@ -10981,6 +11211,13 @@ components:
         projectId:
           type: string
           format: uuid
+        poolId:
+          type: string
+          format: uuid
+          description: >-
+            Storage pool for the new volume. Omit to use the deployment's
+            local default pool. The selected pool must be available to the
+            project; Ceph pools accept only `raw` volumes.
         environment:
           type: string
           description: >-
@@ -11289,19 +11526,47 @@ components:
       properties:
         rbd:
           type: object
-          required: [pool, image, user, monHosts]
+          required:
+            - pool
+            - image
+            - namespace
+            - user
+            - monEndpoints
+            - clusterId
+            - credentialId
+            - configPath
           additionalProperties: false
           properties:
             pool:
               type: string
             image:
               type: string
+            namespace:
+              type: string
+              description: Project-scoped RBD namespace containing the image.
             user:
               type: string
-            monHosts:
+              description: Ceph client username without the `client.` prefix.
+            monEndpoints:
               type: array
               items:
-                type: string
+                $ref: "#/components/schemas/CephMonitorEndpoint"
+            clusterId:
+              type: string
+              format: uuid
+              description: Strato identity of the external Ceph cluster.
+            credentialId:
+              type: string
+              format: uuid
+              description: >-
+                Stable identity of the project-scoped credential and the
+                deterministic libvirt secret UUID. This is not secret material.
+            configPath:
+              type: string
+              description: >-
+                Deterministic agent-local path to the generated secure Ceph
+                client configuration. The keyring itself is never carried in
+                this attachment.
     VolumeSnapshot:
       type: object
       required: [name, description, environment, size, sizeFormatted, status]
@@ -15593,6 +15858,281 @@ components:
           type: string
           format: date-time
           nullable: true
+
+    CreateExternalCephClusterRequest:
+      type: object
+      description: >-
+        Client configuration for an existing Ceph cluster. `keyring` is an
+        observer credential used for cluster health and capacity probes; it is
+        encrypted at rest, never returned, and never used for project volume
+        I/O.
+      required: [fsid, monEndpoints, clientName, keyring]
+      properties:
+        fsid:
+          type: string
+          format: uuid
+          description: The external Ceph cluster's immutable FSID.
+        monEndpoints:
+          type: array
+          minItems: 1
+          maxItems: 32
+          description: >-
+            Messenger-v2 monitor endpoints. Each entry is `v2:host:port` or
+            `v2:[IPv6]:port`, with a port from 1 through 65535.
+          items:
+            $ref: "#/components/schemas/CephMonitorEndpoint"
+        clientName:
+          type: string
+          minLength: 8
+          maxLength: 128
+          pattern: "^client\\.[A-Za-z0-9][A-Za-z0-9._-]*$"
+          description: Observer cephx identity, including the `client.` prefix.
+        keyring:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          writeOnly: true
+          description: >-
+            Complete keyring whose only section is exactly `[<clientName>]`
+            (where `<clientName>` is this request's `clientName`) and which has
+            exactly one nonempty `key = ...` entry in that section. Accepted
+            only on this write and never represented in a response.
+
+    UpdateExternalCephClusterRequest:
+      type: object
+      description: >-
+        Full replacement of the mutable Ceph client configuration. Omit
+        `keyring` to retain the current secret. A replacement keyring is
+        required when changing `clientName`.
+      required: [monEndpoints, clientName]
+      properties:
+        monEndpoints:
+          type: array
+          minItems: 1
+          maxItems: 32
+          description: >-
+            Messenger-v2 monitor endpoints. Each entry is `v2:host:port` or
+            `v2:[IPv6]:port`, with a port from 1 through 65535.
+          items:
+            $ref: "#/components/schemas/CephMonitorEndpoint"
+        clientName:
+          type: string
+          minLength: 8
+          maxLength: 128
+          pattern: "^client\\.[A-Za-z0-9][A-Za-z0-9._-]*$"
+          description: Observer cephx identity, including the `client.` prefix.
+        keyring:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          writeOnly: true
+          description: >-
+            Replacement keyring whose only section is exactly
+            `[<clientName>]` (where `<clientName>` is this request's
+            `clientName`) and which has exactly one nonempty `key = ...` entry
+            in that section. Omit to retain the current secret; required when
+            changing `clientName`.
+
+    UpsertCephProjectAccessRequest:
+      type: object
+      description: >-
+        Project-isolated RBD access. `keyring` is required when creating this
+        configuration and whenever identity, pool, namespace, or credential
+        changes; omit it on metadata-only updates to retain the current secret.
+        The cephx identity must be scoped exactly to the supplied pool and
+        namespace. Replacing an existing credential requires external cephx
+        revocation and `cephxRevoked: true`.
+      required: [clientName, storagePoolName, cephPoolName, namespace]
+      properties:
+        clientName:
+          type: string
+          minLength: 8
+          maxLength: 128
+          pattern: "^client\\.[A-Za-z0-9][A-Za-z0-9._-]*$"
+          description: Project-scoped cephx identity, including `client.`.
+        keyring:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          writeOnly: true
+          description: >-
+            Complete keyring whose only section is exactly `[<clientName>]`
+            (where `<clientName>` is this request's `clientName`) and which has
+            exactly one nonempty `key = ...` entry in that section, exactly
+            `caps mon = "profile rbd"`, and exactly namespace-scoped `caps mgr`
+            and `caps osd` RBD profiles for the supplied pool and namespace.
+            No other capability services are accepted. Required on create and
+            whenever identity, pool, namespace, or credential changes; never
+            returned.
+        cephxRevoked:
+          type: boolean
+          description: >-
+            Required and true when replacing an existing credential. Confirms
+            that an operator already revoked the old cephx credential in the
+            external cluster. Ignored on create and metadata-only updates.
+        storagePoolName:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: User-facing name of the Strato storage pool.
+        cephPoolName:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          description: Existing Ceph RBD pool containing this project's images.
+        namespace:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          description: >-
+            RBD namespace dedicated to this project. It is fixed after the
+            first volume exists.
+
+    CephClusterResponse:
+      type: object
+      description: >-
+        Public external-cluster metadata. Secret material and internal secret
+        references are deliberately absent. This phase stores observer
+        credentials but does not yet run health/capacity probes, so observation
+        fields remain unknown/absent.
+      required:
+        - siteId
+        - fsid
+        - managed
+        - monEndpoints
+        - clientName
+        - hasCredential
+        - health
+      properties:
+        id:
+          type: string
+          format: uuid
+        siteId:
+          type: string
+          format: uuid
+        fsid:
+          type: string
+          format: uuid
+        managed:
+          type: boolean
+          description: False for a bring-your-own cluster registered here.
+        monEndpoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/CephMonitorEndpoint"
+        clientName:
+          type: string
+          description: Observer cephx identity; never a project volume identity.
+        hasCredential:
+          type: boolean
+          description: Whether encrypted observer credential material is stored.
+        health:
+          $ref: "#/components/schemas/CephClusterHealth"
+        capacityBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        usedBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        observedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CephClusterHealth:
+      type: string
+      description: >-
+        Last observed health of the external Ceph cluster. Always `unknown` in
+        STR-155 because observer probing is intentionally deferred.
+      enum: [unknown, ok, warning, error]
+
+    CephMonitorEndpoint:
+      type: string
+      minLength: 7
+      maxLength: 255
+      pattern: "^v2:(?:[^:\\s\\[\\]]+|\\[[^\\]\\s]+\\]):(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+      description: >-
+        A Ceph messenger-v2 monitor endpoint: `v2:host:port` for a hostname or
+        IPv4 address, or `v2:[IPv6]:port` for an IPv6 address. The port must be
+        from 1 through 65535.
+
+    CephProjectAccessResponse:
+      type: object
+      description: >-
+        Project-scoped Ceph identity and its storage pool. The keyring and its
+        internal secret reference are never returned.
+      required: [clusterId, projectId, clientName, hasCredential, storagePool]
+      properties:
+        id:
+          type: string
+          format: uuid
+        clusterId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        clientName:
+          type: string
+        hasCredential:
+          type: boolean
+          description: Whether encrypted project credential material is stored.
+        storagePool:
+          $ref: "#/components/schemas/StoragePoolResponse"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    StoragePoolResponse:
+      type: object
+      description: >-
+        Public storage-pool metadata. Local implementation details and all
+        credential material are omitted.
+      required: [name, mode]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        mode:
+          $ref: "#/components/schemas/StoragePoolMode"
+        siteId:
+          type: string
+          format: uuid
+        cephClusterId:
+          type: string
+          format: uuid
+        cephProjectAccessId:
+          type: string
+          format: uuid
+        cephPoolName:
+          type: string
+        cephNamespace:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    StoragePoolMode:
+      type: string
+      description: How a storage pool makes volume data available to agents.
+      enum: [local, replicated, ceph]
 
     SiteDetail:
       type: object

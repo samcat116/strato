@@ -119,6 +119,10 @@ extension Application {
         // STR-79: durable captured VM command state with cold output payloads.
         migrations.add(CreateVMCommandExecutions())
 
+        // STR-260: failed recorded commands may expose bounded partial output
+        // without inventing a guest exit code.
+        migrations.add(AllowPartialVMCommandResults())
+
         // STR-84: append-only guest command and interactive execution facts.
         migrations.add(AddVMGuestExecutionAudit())
 
@@ -153,5 +157,11 @@ extension Application {
         // identity/network value server-side when it is redeemed. Existing rows
         // stay on their issued bootstrap commands; no secret can be backfilled.
         migrations.add(AddAgentEnrollmentBootstrapTokens())
+
+        // STR-155: external Ceph clusters, per-project cephx identities, RBD
+        // pools, and a permanent credential-revocation ledger. Local pools and
+        // local-volume replica placement are unchanged.
+        migrations.add(AddExternalCephStorage())
+        migrations.add(AddCephCredentialRevocations())
     }
 }

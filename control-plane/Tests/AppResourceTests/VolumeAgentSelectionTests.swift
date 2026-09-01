@@ -20,6 +20,16 @@ struct VolumeAgentSelectionTests {
         hypervisors: [HypervisorSupport],
         status: AgentStatus = .online
     ) -> Agent {
+        let checkedAt = Date()
+        let dependencyObservations =
+            hypervisors.contains(where: { $0.type == .qemu })
+            ? [
+                NodeDependencyObservation(
+                    id: .libvirt, role: .compute, desiredState: .required,
+                    ownership: .observeOnly, supervisorState: .active,
+                    compatibility: .compatible, functionalState: .healthy,
+                    checkedAt: checkedAt, affectedCapabilities: [.qemuPlacement])
+            ] : []
         let agent = Agent(
             id: UUID(),
             name: id,
@@ -36,7 +46,9 @@ struct VolumeAgentSelectionTests {
                 availableDisk: 50
             ),
             hypervisors: hypervisors,
-            lastHeartbeat: Date()
+            dependencyObservations: dependencyObservations,
+            dependencyObservationsReceivedAt: dependencyObservations.isEmpty ? nil : checkedAt,
+            lastHeartbeat: checkedAt
         )
         return agent
     }
