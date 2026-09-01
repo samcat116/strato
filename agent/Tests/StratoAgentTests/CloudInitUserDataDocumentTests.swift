@@ -56,7 +56,8 @@ struct CloudInitUserDataDocumentTests {
         #expect(doc.contains("password: strato"))
         #expect(doc.contains("bootcmd:"))
         #expect(doc.contains("runcmd:"))
-        #expect(doc.contains("serial-getty@ttyS0.service"))
+        #expect(doc.contains("ttyS0 ttyAMA0 hvc0"))
+        #expect(doc.contains("serial-getty@$device.service"))
         #expect(!doc.contains("ssh_authorized_keys"))
     }
 
@@ -68,6 +69,24 @@ struct CloudInitUserDataDocumentTests {
         #expect(doc.contains("- qemu-guest-agent"))
         // And the service is brought up without a reboot.
         #expect(doc.contains("systemctl enable --now qemu-guest-agent"))
+    }
+
+    @Test("console setup starts gettys only for present character devices")
+    func consoleSetupSkipsMissingDevices() {
+        let guardedSetup =
+            #"for device in ttyS0 ttyAMA0 hvc0; do [ -c "/dev/$device" ] || continue; systemctl enable --now "serial-getty@$device.service" || true; done"#
+        let documents = [
+            CloudInitProvisioner.userDataDocument(sshAuthorizedKeys: [], userData: nil),
+            CloudInitProvisioner.userDataDocument(
+                sshAuthorizedKeys: [], userData: "#!/bin/sh\ntrue\n"),
+        ]
+
+        for document in documents {
+            #expect(document.contains(guardedSetup))
+            #expect(!document.contains("systemctl enable --now serial-getty@ttyS0.service"))
+            #expect(!document.contains("systemctl enable --now serial-getty@ttyAMA0.service"))
+            #expect(!document.contains("systemctl enable --now serial-getty@hvc0.service"))
+        }
     }
 
     @Test("legacy document installs the hot-plug onlining udev rules")
@@ -172,7 +191,8 @@ struct CloudInitUserDataDocumentTests {
 
         // The console setup still ships — as a shell script part.
         #expect(doc.contains("Content-Type: text/x-shellscript"))
-        #expect(doc.contains("serial-getty@ttyS0.service"))
+        #expect(doc.contains("ttyS0 ttyAMA0 hvc0"))
+        #expect(doc.contains("serial-getty@$device.service"))
     }
 
     @Test("multipart carries SSH keys in Strato's cloud-config part")
