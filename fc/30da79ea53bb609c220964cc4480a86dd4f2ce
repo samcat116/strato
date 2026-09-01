@@ -1,0 +1,23 @@
+control-plane/web/src/components/images/image-status-badge.tsx
+  s_4228c85492094f::t_d9cd63e9255599 3-6,14-41,46-59,61
+control-plane/web/src/components/ui/status-badge.tsx
+  s_4228c85492094f::t_d9cd63e9255599 21-24
+control-plane/web/src/components/agents/agent-status-badge.tsx
+  s_4228c85492094f::t_d9cd63e9255599 1-4,7,27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "fc30da79ea53bb609c220964cc4480a86dd4f2ce",
+  "prompts": {},
+  "sessions": {
+    "s_4228c85492094f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05a8d-3d96-79c0-a582-db371605ea85",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
