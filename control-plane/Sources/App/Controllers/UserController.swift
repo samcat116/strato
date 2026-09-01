@@ -380,9 +380,18 @@ struct UserController: RouteCollection {
             throw Abort(.notFound)
         }
 
-        try await requireDeletableCreatorReferences(userID, on: req.db)
-
         try await req.db.transaction { db in
+            // The refusal check runs inside the deletion transaction and locks
+            // every volume the user created, because an attach commits through
+            // `ResourceMutation.accept`'s `SELECT ... FOR UPDATE` on the same
+            // row: an attach in flight either committed first and is counted
+            // here, or waits out this transaction and lands after the user row
+            // is gone — equivalent to attaching after the delete, which the
+            // contract allows. Checked outside the transaction, an attach
+            // could slip between the count and the delete and silently bypass
+            // the documented attached-volume refusal.
+            try await requireDeletableCreatorReferences(userID, on: db)
+
             // Mirror rows (memberships, group memberships, project members)
             // cascade with the user row; role bindings have no FK by design
             // and must be swept by principal — across every org, because a
@@ -418,11 +427,25 @@ struct UserController: RouteCollection {
     /// * a SCIM token, whose FK is deliberately RESTRICT — a provisioning
     ///   credential is something its creator is accountable for, and the raw
     ///   constraint violation used to surface as a 500.
+    ///
+    /// Must run inside the deletion transaction. Every volume the user
+    /// created is locked `FOR UPDATE` — the detached ones included, since
+    /// those are exactly the rows whose attachment state could otherwise flip
+    /// between this count and the delete. The SCIM count needs no lock: a
+    /// token minted concurrently is caught by the RESTRICT constraint and the
+    /// caller's `isConstraintFailure` translation.
     private func requireDeletableCreatorReferences(_ userID: UUID, on db: Database) async throws {
-        let attachedVolumes = try await Volume.query(on: db)
-            .filter(\.$createdBy.$id == userID)
-            .filter(\.$vm.$id != nil)
-            .count()
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "User deletion requires a SQL database")
+        }
+        let volumeAttachments = try await sql.raw(
+            """
+            SELECT vm_id IS NOT NULL AS attached FROM volumes
+            WHERE created_by_id = \(bind: userID)
+            FOR UPDATE
+            """
+        ).all(decodingColumn: "attached", as: Bool.self)
+        let attachedVolumes = volumeAttachments.count(where: { $0 })
         if attachedVolumes > 0 {
             let noun = attachedVolumes == 1 ? "volume" : "volumes"
             throw Abort(
