@@ -139,7 +139,7 @@ actor MockHypervisorService: HypervisorService {
 
     func attachDisk(
         vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String,
-        readonly: Bool
+        readonly: Bool, orderedBootVolumeIds: [String]
     ) async throws {
         logger.info(
             "Mock: attaching disk to VM (mock mode)",
@@ -148,6 +148,7 @@ actor MockHypervisorService: HypervisorService {
                 "volumeId": .string(volumeId),
                 "attachment": .string(String(describing: attachment)),
                 "deviceName": .string(deviceName),
+                "orderedBootVolumeIds": .string(orderedBootVolumeIds.joined(separator: ",")),
             ])
     }
 

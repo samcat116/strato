@@ -33,8 +33,11 @@ public enum DomainDeviceXML {
     /// detach can find exactly this disk.
     ///
     /// No `<boot order>`: a disk plugged into a running guest cannot change
-    /// what that guest booted from, and emitting one would collide with the
-    /// order the create-time document already gave the boot disk.
+    /// what that guest already booted from, and emitting one here would collide
+    /// with the create-time order before the other disks could be renumbered.
+    /// `LibvirtService.attachDisk` separately rewrites the complete inactive
+    /// definition through `DomainRedefinition.applyingBootOrder`, atomically
+    /// setting the order the next boot reads.
     ///
     /// No `<address>` either — libvirt picks a free PCIe root port, of which
     /// the create-time document reserves `DomainXMLBuilder.spareHotplugPorts`

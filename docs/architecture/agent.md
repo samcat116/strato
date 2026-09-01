@@ -327,17 +327,22 @@ Three consequences follow:
   `hasLiveSession` returns true for *any* domain here for a related reason: its
   false branch means "recording the attachment realizes it", which is true of a
   respawn-from-configuration path and false of this one.
-- **A redefine is the only second write, and it is deliberately narrow.** See
-  below.
+- **Whole-document edits are narrow.** Capacity widening and disk boot-order
+  reconciliation both edit libvirt's inactive XML rather than rebuilding a VM
+  from a spec that does not describe all of its realized hardware. See below.
 
 #### Redefining a stopped domain
 
 `LibvirtService.redefineVM` runs before every boot the reconciler plans for a VM
-it did not just create, and it is the only thing besides `createVM` that ever
-writes a domain document (STR-187). It reads the domain's **persistent**
-definition (`VIR_DOMAIN_XML_INACTIVE`), hands it to `DomainRedefinition`, and
-defines the result only if it differs — so an ordinary boot costs one `dumpxml`
-and nothing else.
+it did not just create (STR-187). It reads the domain's **persistent** definition
+(`VIR_DOMAIN_XML_INACTIVE`), hands it to `DomainRedefinition`, and defines the
+result only if it differs — so an ordinary boot costs one `dumpxml` and nothing
+else. Disk attachment has one additional whole-document edit: after
+`AFFECT_LIVE|AFFECT_CONFIG` (or CONFIG alone for a stopped domain) makes the disk
+durable, it rewrites only the disks' `<boot>` elements from the complete sorted
+volume list. This produces dense, unique positive libvirt orders without copying
+API values such as zero, and lets a running guest keep its completed boot while
+making its next boot correct.
 
 What it changes is only the three ceilings above: it tops the spare
 `pcie-root-port`s back up to `spareHotplugPorts` *free* ones, raises

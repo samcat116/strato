@@ -812,7 +812,7 @@ actor FirecrackerService: HypervisorService {
     /// Firecracker does not support hot-plugging drives into a running microVM.
     func attachDisk(
         vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String,
-        readonly: Bool
+        readonly: Bool, orderedBootVolumeIds: [String]
     ) async throws {
         guard vmManagers[vmId] != nil else {
             throw HypervisorServiceError.vmNotFound(vmId)

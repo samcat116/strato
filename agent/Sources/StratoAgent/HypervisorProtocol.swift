@@ -229,12 +229,15 @@ public protocol HypervisorService: Actor, Sendable {
     ///   console mechanism at all
     func consoleEndpoint(vmId: String) async throws -> ConsoleEndpoint?
 
-    /// Attaches a disk to a running VM (hot-plug)
+    /// Attaches a disk to a VM and persists the complete next-boot disk order.
+    /// `orderedBootVolumeIds` contains every explicitly ordered volume in the
+    /// same total order as `VMSpec.volumes`; drivers derive their native dense
+    /// positive orders from its positions rather than copying API integers.
     /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot
     ///   hot-plug disks
     func attachDisk(
         vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String,
-        readonly: Bool
+        readonly: Bool, orderedBootVolumeIds: [String]
     ) async throws
 
     /// Detaches a disk from a running VM (hot-unplug)
