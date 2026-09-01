@@ -6136,26 +6136,29 @@ extension Agent: ReconcileActuator {
             // from quarantined future-schema entries untouched.
             return
         }
-        guard let jailUID = entry.jailUID else {
+        let jailUID = entry.jailUID
+        if runtime.requiresJailUID, jailUID == nil {
             throw SandboxRuntimeError.jailIdentityUnavailable(
                 "sandbox \(item.id) has no persisted jail uid/gid")
         }
-        switch await runtime.reserveJailUID(jailUID, for: item.id) {
-        case .reserved, .unchanged:
-            break
-        case .conflict(let holder):
-            // Existing legacy collisions must remain poison for allocation,
-            // but either claimant still needs an explicit teardown path.
-            logger.warning(
-                "Deleting a legacy sandbox whose jail uid/gid is duplicated",
-                metadata: [
-                    "strato.sandbox.id": .string(item.id),
-                    "uid": .stringConvertible(jailUID),
-                    "otherSandboxId": .string(holder),
-                ])
-        case .notAssignable:
-            throw SandboxRuntimeError.jailIdentityUnavailable(
-                "manifest uid/gid \(jailUID) is not a usable jail identity")
+        if let jailUID {
+            switch await runtime.reserveJailUID(jailUID, for: item.id) {
+            case .reserved, .unchanged:
+                break
+            case .conflict(let holder):
+                // Existing legacy collisions must remain poison for allocation,
+                // but either claimant still needs an explicit teardown path.
+                logger.warning(
+                    "Deleting a legacy sandbox whose jail uid/gid is duplicated",
+                    metadata: [
+                        "strato.sandbox.id": .string(item.id),
+                        "uid": .stringConvertible(jailUID),
+                        "otherSandboxId": .string(holder),
+                    ])
+            case .notAssignable:
+                throw SandboxRuntimeError.jailIdentityUnavailable(
+                    "manifest uid/gid \(jailUID) is not a usable jail identity")
+            }
         }
 
         // This call returns only after the process inventory is empty and all
@@ -6179,7 +6182,9 @@ extension Agent: ReconcileActuator {
             // Agent operation can allocate between the awaited release and
             // this synchronous write/re-reservation sequence.
             orphanedSandboxes[item.id] = entry
-            _ = await runtime.reserveJailUID(jailUID, for: item.id)
+            if let jailUID {
+                _ = await runtime.reserveJailUID(jailUID, for: item.id)
+            }
             throw SandboxRuntimeError.jailSetupFailed(
                 "sandbox was torn down, but its jail UID claim could not be removed from the manifest")
         }

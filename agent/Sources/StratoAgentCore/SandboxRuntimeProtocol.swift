@@ -15,6 +15,11 @@ import StratoShared
 /// (issue #423) is stream-shaped instead: sessions are keyed by the control
 /// plane's sessionId and end with exactly one terminal event.
 public protocol SandboxRuntimeService: Sendable {
+    /// Whether every sandbox owned by this runtime must have a durable host
+    /// UID/GID assignment. Simulation runtimes occupy no host identity
+    /// namespace and therefore keep this false.
+    var requiresJailUID: Bool { get }
+
     /// Reserve this sandbox's host identity before any host artifact is
     /// chowned or any VMM is spawned. Real jailer runtimes return a lease;
     /// runtimes with no host uid namespace (the simulation mock) return nil.
@@ -182,6 +187,7 @@ public protocol SandboxRuntimeService: Sendable {
 /// fact out of every mock while the real Firecracker runtime overrides all
 /// four operations with its manifest-backed allocator.
 extension SandboxRuntimeService {
+    public var requiresJailUID: Bool { false }
     public func leaseJailUID(for sandboxId: String) async throws -> SandboxJailUIDLease? { nil }
     public func commitJailUID(_ lease: SandboxJailUIDLease) async {}
     public func rollBackJailUID(_ lease: SandboxJailUIDLease) async {}

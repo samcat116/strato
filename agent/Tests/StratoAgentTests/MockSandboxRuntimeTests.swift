@@ -87,6 +87,21 @@ struct MockSandboxRuntimeTests {
         }
     }
 
+    @Test("A non-jailing runtime deletes a sandbox without a jail uid")
+    func uidlessDeletion() async throws {
+        let runtime: any SandboxRuntimeService = makeRuntime()
+        #expect(!runtime.requiresJailUID)
+
+        try await runtime.createSandbox(
+            sandboxId: "sb-uidless", spec: makeSpec(), registryCredential: nil,
+            networkAttachments: [])
+        try await runtime.deleteSandbox(sandboxId: "sb-uidless", jailUID: nil)
+
+        await #expect(throws: SandboxRuntimeError.self) {
+            try await runtime.getSandboxStatus(sandboxId: "sb-uidless")
+        }
+    }
+
     @Test("Operations are idempotent at the already-satisfied level")
     func idempotency() async throws {
         let runtime = makeRuntime()

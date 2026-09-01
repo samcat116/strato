@@ -33,6 +33,8 @@ import SwiftFirecracker
 /// consistent with the manifest-based, state-independent reservation model.
 /// Cold-boot stop (releasing memory) is future work.
 actor FirecrackerSandboxRuntime: SandboxRuntimeService {
+    nonisolated var requiresJailUID: Bool { true }
+
     private let logger: Logger
     private let client: FirecrackerClient
     private let imageService: SandboxImageService
