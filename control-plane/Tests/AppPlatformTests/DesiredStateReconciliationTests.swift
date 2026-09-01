@@ -126,23 +126,6 @@ final class DesiredStateReconciliationTests {
         return registeredID
     }
 
-    private func attachBootVolume(app: Application, vm: VM, agentID: String) async throws {
-        let owner = try #require(try await User.query(on: app.db).sort(\.$createdAt).first())
-        let boot = Volume(
-            name: "\(vm.name)-boot", description: "", projectID: vm.$project.id,
-            environment: vm.environment, size: vm.disk, format: .qcow2,
-            volumeType: .boot, status: .attached, createdByID: try owner.requireID())
-        boot.$vm.id = try vm.requireID()
-        boot.deviceName = VolumeDeviceName.disk(0).rawValue
-        boot.bootOrder = 0
-        boot.generation = 1
-        boot.observedGeneration = 1
-        try await boot.save(on: app.db)
-        try await placeVolume(
-            boot, on: agentID, at: "/var/lib/strato/volumes/\(try boot.requireID())/volume.qcow2",
-            state: .healthy, using: app.db)
-    }
-
     private func report(
         agentId: String,
         vms: [ObservedVMState]
@@ -294,7 +277,7 @@ final class DesiredStateReconciliationTests {
     func syncAssemblyFromDatabase() async throws {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
-            try await self.attachBootVolume(app: app, vm: vm, agentID: agentId)
+            try await attachBootVolume(to: vm, on: agentId, using: app.db)
 
             vm.setFixtureDesiredStatus(.running)
             try await vm.save(on: app.db)
@@ -321,7 +304,7 @@ final class DesiredStateReconciliationTests {
     func syncAssemblyIncludesNetworks() async throws {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
-            try await self.attachBootVolume(app: app, vm: vm, agentID: agentId)
+            try await attachBootVolume(to: vm, on: agentId, using: app.db)
             let project = try #require(try await Project.find(vm.$project.id, on: app.db))
             let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
 
@@ -365,7 +348,7 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, user, vm, _ in
             let agentId = try await self.registerAgent(
                 app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
-            try await self.attachBootVolume(app: app, vm: vm, agentID: agentId)
+            try await attachBootVolume(to: vm, on: agentId, using: app.db)
             let project = try #require(try await Project.find(vm.$project.id, on: app.db))
             let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
 

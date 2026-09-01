@@ -101,6 +101,7 @@ final class SiteTests {
         let vm = try await builder.createVM(name: name, project: project)
         vm.hypervisorId = agentId
         try await vm.save(on: app.db)
+        try await attachBootVolume(to: vm, on: agentId, using: app.db)
         let nic = VMNetworkInterface(
             vmID: vm.id!, logicalNetworkID: try network.requireID(),
             macAddress: MACAllocator.generateCandidate().description)
@@ -938,6 +939,7 @@ final class SiteTests {
                 name: "place-guard-net", project: project, subnet: "10.62.0.0/24",
                 gateway: "10.62.0.1", site: site)
             let vm = try await builder.createVM(name: "unplaceable-vm", project: project)
+            try await attachBootVolume(to: vm, on: nil, using: app.db)
             let nic = VMNetworkInterface(
                 vmID: try vm.requireID(), logicalNetworkID: try pinned.requireID(),
                 macAddress: MACAllocator.generateCandidate().description)
@@ -1121,6 +1123,7 @@ final class SiteTests {
                 name: "guard-pinned-net", project: project, subnet: "10.64.0.0/24",
                 gateway: "10.64.0.1", site: site)
             let pending = try await builder.createVM(name: "guard-unplaceable", project: project)
+            try await attachBootVolume(to: pending, on: nil, using: app.db)
             try await VMNetworkInterface(
                 vmID: try pending.requireID(), logicalNetworkID: try pinned.requireID(),
                 macAddress: MACAllocator.generateCandidate().description

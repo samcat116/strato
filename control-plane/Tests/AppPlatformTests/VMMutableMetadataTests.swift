@@ -73,24 +73,6 @@ final class VMMutableMetadataTests {
             organizationScope: .organization(organizationID))
     }
 
-    private func attachBootVolume(app: Application, vm: VM, agentID: String) async throws {
-        let owner = try #require(try await User.query(on: app.db).sort(\.$createdAt).first())
-        let boot = Volume(
-            name: "\(vm.name)-boot", description: "", projectID: vm.$project.id,
-            environment: vm.environment, size: vm.disk, format: .qcow2,
-            volumeType: .boot, status: .attached, createdByID: try owner.requireID())
-        boot.$vm.id = try vm.requireID()
-        boot.deviceName = VolumeDeviceName.disk(0).rawValue
-        boot.bootOrder = 0
-        boot.generation = 1
-        boot.observedGeneration = 1
-        try await boot.save(on: app.db)
-        try await placeVolume(
-            boot, on: agentID,
-            at: "/var/lib/strato/volumes/\(try boot.requireID())/volume.qcow2",
-            state: .healthy, using: app.db)
-    }
-
     @Test("PATCH persists tags and keys with one generation bump and rings the placed agent")
     func patchConvergesMutableMetadata() async throws {
         try await withApp { app, project, token, store in
@@ -104,7 +86,7 @@ final class VMMutableMetadataTests {
             vm.hypervisorId = agentID
             vm.setSSHAuthorizedKeys([Self.firstKey])
             try await vm.save(on: app.db)
-            try await self.attachBootVolume(app: app, vm: vm, agentID: agentID)
+            try await attachBootVolume(to: vm, on: agentID, using: app.db)
             let vmID = try vm.requireID()
             let startingGeneration = vm.generation
 

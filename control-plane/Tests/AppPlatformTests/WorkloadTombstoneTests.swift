@@ -256,6 +256,7 @@ final class WorkloadTombstoneTests {
             )
             restored.hypervisorId = agentId
             try await restored.create(on: app.db)
+            try await attachBootVolume(to: restored, on: agentId, using: app.db)
 
             _ = try await app.observedStateApplier.apply(
                 self.report(
@@ -432,6 +433,7 @@ final class WorkloadTombstoneTests {
             let held = try await builder.createVM(name: "held-vm", project: project)
             held.hypervisorId = oldId
             try await held.save(on: app.db)
+            try await attachBootVolume(to: held, on: oldId, using: app.db)
             // A second VM on the old record that the node does *not* report
             // holding — it must stay put, whatever the operator clicks.
             let unheld = try await builder.createVM(name: "unheld-vm", project: project)

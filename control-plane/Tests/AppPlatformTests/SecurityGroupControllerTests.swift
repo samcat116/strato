@@ -162,23 +162,6 @@ final class SecurityGroupControllerTests {
         return (sandbox, nic)
     }
 
-    private func attachBootVolume(app: Application, vm: VM, agentID: String) async throws {
-        let owner = try #require(try await User.query(on: app.db).sort(\.$createdAt).first())
-        let boot = Volume(
-            name: "\(vm.name)-boot", description: "", projectID: vm.$project.id,
-            environment: vm.environment, size: vm.disk, format: .qcow2,
-            volumeType: .boot, status: .attached, createdByID: try owner.requireID())
-        boot.$vm.id = try vm.requireID()
-        boot.deviceName = VolumeDeviceName.disk(0).rawValue
-        boot.bootOrder = 0
-        boot.generation = 1
-        boot.observedGeneration = 1
-        try await boot.save(on: app.db)
-        try await placeVolume(
-            boot, on: agentID, at: "/var/lib/strato/volumes/\(try boot.requireID())/volume.qcow2",
-            state: .healthy, using: app.db)
-    }
-
     // MARK: - Default group
 
     @Test("ensureDefaultGroup creates AWS-semantics rules once and is idempotent")
@@ -831,7 +814,7 @@ final class SecurityGroupControllerTests {
             let (vm, nic) = try await self.createVMWithNIC(
                 app: app, org: org, project: project,
                 protocolVersion: WireProtocol.currentVersion)
-            try await self.attachBootVolume(app: app, vm: vm, agentID: vm.hypervisorId!)
+            try await attachBootVolume(to: vm, on: vm.hypervisorId!, using: app.db)
             try await VMInterfaceSecurityGroup(
                 interfaceID: nic.id!, securityGroupID: web.id
             ).save(on: app.db)
@@ -939,7 +922,7 @@ final class SecurityGroupControllerTests {
             let (vm, nic) = try await self.createVMWithNIC(
                 app: app, org: org, project: project,
                 protocolVersion: WireProtocol.currentVersion)
-            try await self.attachBootVolume(app: app, vm: vm, agentID: vm.hypervisorId!)
+            try await attachBootVolume(to: vm, on: vm.hypervisorId!, using: app.db)
             try await VMInterfaceSecurityGroup(
                 interfaceID: nic.id!, securityGroupID: web.id
             ).save(on: app.db)

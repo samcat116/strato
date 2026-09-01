@@ -71,10 +71,12 @@ final class DesiredStateDNSZoneTests {
         vm.hypervisorId = agentId
         vm.hostname = hostname
         try await vm.save(on: app.db)
+        try await attachBootVolume(to: vm, on: agentId, using: app.db)
 
         let nic = VMNetworkInterface(
             vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),
-            macAddress: "00:0c:29:00:00:01", deviceName: "net0", orderIndex: 0)
+            macAddress: MACAllocator.generateCandidate().description, deviceName: "net0",
+            orderIndex: 0)
         try await nic.save(on: app.db)
         try await VMInterfaceAddress(
             interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(),

@@ -64,6 +64,7 @@ final class ImageDownloadScopingTests {
             vm.hypervisorId = placedAgent
             vm.$sourceImage.id = image.id
             try await vm.save(on: app.db)
+            try await attachBootVolume(to: vm, on: placedAgent, using: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: placedAgent)
             #expect(message.vms.first?.imageInfo?.imageId == image.id)
@@ -91,6 +92,7 @@ final class ImageDownloadScopingTests {
             vm.hypervisorId = agentId
             vm.$sourceImage.id = image.id
             try await vm.save(on: app.db)
+            try await attachBootVolume(to: vm, on: agentId, using: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(message.vms.first?.imageInfo == nil)
@@ -110,13 +112,15 @@ final class ImageDownloadScopingTests {
                 project: project, uploadedBy: user, storagePath: "scoping/volume-source.qcow2")
             let agentId = try await self.registerAgent(app: app, named: "volume-agent")
 
+            // A detached volume: `volumes_canonical_boot` reserves the boot
+            // type for a volume attached as the canonical disk0, and the
+            // grant under test rides the image source, not the volume type.
             let volume = Volume(
                 name: "scoped-volume",
                 description: "volume from image",
                 projectID: project.id!, environment: "development",
                 size: 10 * 1024 * 1024 * 1024,
                 format: .qcow2,
-                volumeType: .boot,
                 createdByID: user.id!,
                 sourceImageID: image.id
             )
@@ -145,7 +149,6 @@ final class ImageDownloadScopingTests {
                 projectID: project.id!, environment: "development",
                 size: 10 * 1024 * 1024 * 1024,
                 format: .qcow2,
-                volumeType: .boot,
                 createdByID: user.id!,
                 sourceImageID: image.id
             )
@@ -185,6 +188,7 @@ final class ImageDownloadScopingTests {
             vm.hypervisorId = agentId
             vm.$sourceImage.id = image.id
             try await vm.save(on: app.db)
+            try await attachBootVolume(to: vm, on: agentId, using: app.db)
 
             for _ in 0..<3 {
                 _ = try await app.desiredStateAssembler.assemble(agentId: agentId)
@@ -212,6 +216,7 @@ final class ImageDownloadScopingTests {
             vm.hypervisorId = agentId
             vm.$sourceImage.id = image.id
             try await vm.save(on: app.db)
+            try await attachBootVolume(to: vm, on: agentId, using: app.db)
 
             // Assemble and throw the payload away, exactly as the poll handler
             // does when the digest matches the client's validator.
