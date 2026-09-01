@@ -2847,7 +2847,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     /// Prefer API-socket adoption for a graceful tracked teardown, then always
     /// scan by id and destroy any process the socket path could not account
-    /// for. The scan is the proof step for a process-only crash leftover.
+    /// for. If tracked destruction failed after adoption, the fallback retries
+    /// that retained claim before scanning. The scan is the proof step for a
+    /// process-only crash leftover.
     private func destroyLeakedWarmTemplateProcess(
         _ templateId: String, plan: SandboxJailPlan
     ) async throws {

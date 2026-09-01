@@ -717,14 +717,17 @@ public actor FirecrackerClient {
         logger.info("VM destroyed", metadata: ["strato.vm.id": "\(vmId)"])
     }
 
-    /// Terminates a Firecracker/jailer process that is not present in this
+    /// Terminates a Firecracker/jailer process that may not be present in this
     /// client's in-memory tracking (for example, a failed spawn or an orphan
-    /// left by an agent restart). The exact `--id` value, managed-process argv
+    /// left by an agent restart). A retained entry means a prior tracked
+    /// teardown failed, so retry that authoritative path before falling back
+    /// to process discovery. The exact `--id` value, managed-process argv
     /// shape, and Linux process start time are all revalidated before a signal
     /// is sent. Success means a final `/proc` scan found no matching process.
     public func destroyUntrackedVM(vmId: String) async throws {
-        guard runningVMs[vmId] == nil else {
-            throw FirecrackerError.vmAlreadyRunning(vmId)
+        if runningVMs[vmId] != nil {
+            try await destroyVM(vmId: vmId)
+            return
         }
         guard destroyingVMIds.insert(vmId).inserted else {
             throw FirecrackerError.vmTeardownInProgress(vmId)
