@@ -178,6 +178,7 @@ let package = Package(
                 .target(name: "AppTestSupport"),
                 .product(name: "VaporTesting", package: "vapor"),
                 .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
+                .product(name: "InMemoryLogging", package: "swift-log"),
                 .product(name: "MetricsTestKit", package: "swift-metrics"),
                 .product(name: "Logging", package: "swift-log"),
                 // Mints the throwaway server certificate GuardedHTTPClientTests

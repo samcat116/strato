@@ -5,21 +5,18 @@ extension Application {
     /// method is significant: authentication, tracing, auditing, and default-
     /// deny authorization depend on the effective middleware order.
     func bootstrapHTTPPipeline() throws {
+        // Request logging: replace Vapor's concrete-path access and error loggers
+        // before installing the rest of the pipeline. Matched requests use route
+        // templates; unmatched requests use one bounded fallback. Default on
+        // outside production; override with REQUEST_LOGGING.
+        let requestLoggingEnabled =
+            controlPlaneConfiguration.bool(.requestLogging)
+        configureRequestLogging(enabled: requestLoggingEnabled)
+
         // Vapor supplies `request-id` on every request logger. Mirror it into
         // the canonical taxonomy before request-aware middleware or controllers
         // log, retaining the legacy key for the bounded STR-284 transition.
         middleware.use(RequestLogMetadataMiddleware())
-
-        // Request logging: one structured line per HTTP request (method/path/status/
-        // duration). Registered immediately after metadata normalization so it
-        // times the full request. Default on outside production; override with
-        // REQUEST_LOGGING.
-        let requestLoggingEnabled =
-            controlPlaneConfiguration.bool(.requestLogging)
-        if requestLoggingEnabled {
-            middleware.use(RequestLoggingMiddleware())
-            logger.info("Request logging enabled")
-        }
 
         // Observability middleware, registered high in the stack so they time the
         // full request and so downstream child spans (authz, scheduler, etc.) nest
