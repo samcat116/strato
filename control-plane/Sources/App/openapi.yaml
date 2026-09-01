@@ -8647,8 +8647,9 @@ paths:
       summary: List a webhook's recent deliveries
       description: >-
         Requires organization admin — delivery payloads carry operational
-        detail from any project in the organization. Newest first. Terminal
-        deliveries are pruned after the history retention window.
+        detail from any project in the organization. Most recently updated
+        first. Terminal deliveries are pruned after the history retention
+        window.
       tags: [Webhooks]
       responses:
         "200":
@@ -8676,9 +8677,9 @@ paths:
       operationId: redeliverWebhookDelivery
       summary: Re-enqueue a delivery
       description: >-
-        Requires organization admin. Resets a terminal (succeeded or dead)
-        delivery to pending with a fresh attempt budget; the delivery sweep
-        posts it again.
+        Requires organization admin. Resets a terminal (succeeded, dead, or
+        dropped) delivery to pending with a fresh attempt budget; the delivery
+        sweep posts it again.
       tags: [Webhooks]
       responses:
         "200":
@@ -18834,13 +18835,18 @@ components:
           type: string
           format: uuid
           description: >-
-            Shared across the fan-out of one event to many subscriptions;
-            consumers dedupe on it (delivery is at-least-once).
+            Shared across the fan-out of one event to many subscriptions. A
+            claimed POST can repeat after a crash, so consumers dedupe on this
+            id. Rows shed at the pending ceiling receive no further attempt.
         eventType:
           type: string
         status:
           type: string
-          enum: [pending, succeeded, dead]
+          enum: [pending, succeeded, dead, dropped]
+          description: >-
+            `dropped` means the row was intentionally removed from pending work
+            to enforce the subscription's ceiling. It receives no further POST,
+            but its attempt history can include earlier failed POSTs.
         attempts:
           type: integer
         nextAttemptAt:
@@ -18863,7 +18869,7 @@ components:
           format: date-time
         payload:
           type: string
-          description: The exact JSON body posted, frozen at enqueue time.
+          description: The exact JSON body prepared for delivery, frozen at enqueue time.
 
     SETErrorResponse:
       type: object

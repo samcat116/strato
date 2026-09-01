@@ -42,6 +42,29 @@ struct ControlPlaneConfigurationTests {
         }
     }
 
+    @Test("Webhook drain pass budget has a bounded default and accepts an override")
+    func webhookDrainPassBudget() async throws {
+        let defaulted = try await ControlPlaneConfiguration.load(
+            environmentVariables: [:], for: .testing)
+        #expect(defaulted.int(.webhookDeliveryPassBudgetSeconds) == 30)
+
+        let configured = try await ControlPlaneConfiguration.load(
+            environmentVariables: ["WEBHOOK_DELIVERY_PASS_BUDGET_SECONDS": "60"],
+            for: .testing)
+        #expect(configured.int(.webhookDeliveryPassBudgetSeconds) == 60)
+    }
+
+    @Test("Webhook drain pass budget rejects values outside its supported range")
+    func invalidWebhookDrainPassBudgetIsRejected() async {
+        for value in ["0", "3601"] {
+            await #expect(throws: ControlPlaneConfigurationError.self) {
+                _ = try await ControlPlaneConfiguration.load(
+                    environmentVariables: ["WEBHOOK_DELIVERY_PASS_BUDGET_SECONDS": value],
+                    for: .testing)
+            }
+        }
+    }
+
     @Test("Explicit strings remain distinguishable from loader defaults")
     func explicitStringsRemainDistinguishable() async throws {
         let defaulted = try await ControlPlaneConfiguration.load(

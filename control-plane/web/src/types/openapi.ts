@@ -5568,7 +5568,7 @@ export interface paths {
         };
         /**
          * List a webhook's recent deliveries
-         * @description Requires organization admin — delivery payloads carry operational detail from any project in the organization. Newest first. Terminal deliveries are pruned after the history retention window.
+         * @description Requires organization admin — delivery payloads carry operational detail from any project in the organization. Most recently updated first. Terminal deliveries are pruned after the history retention window.
          */
         get: operations["listWebhookDeliveries"];
         put?: never;
@@ -5597,7 +5597,7 @@ export interface paths {
         put?: never;
         /**
          * Re-enqueue a delivery
-         * @description Requires organization admin. Resets a terminal (succeeded or dead) delivery to pending with a fresh attempt budget; the delivery sweep posts it again.
+         * @description Requires organization admin. Resets a terminal (succeeded, dead, or dropped) delivery to pending with a fresh attempt budget; the delivery sweep posts it again.
          */
         post: operations["redeliverWebhookDelivery"];
         delete?: never;
@@ -10210,12 +10210,15 @@ export interface components {
             subscriptionId: string;
             /**
              * Format: uuid
-             * @description Shared across the fan-out of one event to many subscriptions; consumers dedupe on it (delivery is at-least-once).
+             * @description Shared across the fan-out of one event to many subscriptions. A claimed POST can repeat after a crash, so consumers dedupe on this id. Rows shed at the pending ceiling receive no further attempt.
              */
             eventId: string;
             eventType: string;
-            /** @enum {string} */
-            status: "pending" | "succeeded" | "dead";
+            /**
+             * @description `dropped` means the row was intentionally removed from pending work to enforce the subscription's ceiling. It receives no further POST, but its attempt history can include earlier failed POSTs.
+             * @enum {string}
+             */
+            status: "pending" | "succeeded" | "dead" | "dropped";
             attempts: number;
             /**
              * Format: date-time
@@ -10231,7 +10234,7 @@ export interface components {
             deliveredAt?: string;
             /** Format: date-time */
             createdAt?: string;
-            /** @description The exact JSON body posted, frozen at enqueue time. */
+            /** @description The exact JSON body prepared for delivery, frozen at enqueue time. */
             payload: string;
         };
         /** @description The RFC 8935 error envelope returned by the push-delivery endpoint. Unlike the rest of the API this is not the standard Strato `Error` body. */

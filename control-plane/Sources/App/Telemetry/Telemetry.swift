@@ -14,6 +14,15 @@ import StratoShared
 /// See `docs/deployment/observability.md` for the alert runbook built on these.
 enum Telemetry {
 
+    /// Bounded durable outcomes from processing a claimed delivery. A retryable
+    /// endpoint or transport failure is `failed`; `dead` means either the final
+    /// attempt failed or the subscription was disabled before a POST began.
+    enum WebhookDeliveryResult: String, CaseIterable, Sendable {
+        case succeeded
+        case failed
+        case dead
+    }
+
     // MARK: - PostgreSQL advisory locks (STR-275)
 
     /// One successful lock acquisition and the time spent waiting for it.
@@ -82,6 +91,30 @@ enum Telemetry {
         }
     }
 
+    /// Retire the UUID-labelled gauge when its subscription is deleted. The
+    /// OpenTelemetry backend retains attribute sets until `destroy()` is called;
+    /// explicitly unregistering prevents unbounded cardinality and a phantom
+    /// last non-zero value after the row is cascade-deleted.
+    static func removeWebhookDeliverySubscriptionQueueMetric(
+        subscriptionID: UUID,
+        factory: (any MetricsFactory)? = nil
+    ) {
+        let dimensions = [("subscription_id", subscriptionID.uuidString)]
+        let gauge =
+            if let factory {
+                Gauge(
+                    label: "strato_webhook_delivery_subscription_pending",
+                    dimensions: dimensions,
+                    factory: factory)
+            } else {
+                Gauge(
+                    label: "strato_webhook_delivery_subscription_pending",
+                    dimensions: dimensions)
+            }
+        gauge.record(0)
+        gauge.destroy()
+    }
+
     /// Bounded outcomes emitted by the desired-state endpoint.
     enum DesiredStatePollOutcome: String, CaseIterable, Sendable {
         case served
@@ -100,6 +133,84 @@ enum Telemetry {
             label: "strato_desired_state_write_conflicts_total",
             dimensions: [("resource_kind", resourceKind), ("writer", writer)]
         ).increment()
+    }
+
+    // MARK: - Webhook delivery (STR-264)
+
+    /// Record one cluster-wide snapshot of the durable webhook outbox.
+    ///
+    /// `subscriptionIDs` must contain every live subscription, including those
+    /// with no pending rows. Missing entries in `pendingBySubscription` are
+    /// recorded as zero so a recovered subscription's gauge does not retain its
+    /// previous backlog forever. Counts supplied for a subscription absent from
+    /// `subscriptionIDs` are still recorded, which keeps the snapshot useful if
+    /// a subscription is deleted concurrently with the database query.
+    ///
+    /// Every replica observes the same PostgreSQL queue. Dashboards therefore
+    /// aggregate these gauges with `max`, not `sum`, across replica instances.
+    static func recordWebhookDeliveryQueue(
+        pendingCount: Int,
+        oldestPendingAgeSeconds: Double?,
+        droppedCount: Int,
+        subscriptionIDs: [UUID],
+        pendingBySubscription: [UUID: Int],
+        factory: (any MetricsFactory)? = nil
+    ) {
+        recordGauge(
+            label: "strato_webhook_delivery_pending",
+            value: Double(max(pendingCount, 0)),
+            factory: factory)
+        recordGauge(
+            label: "strato_webhook_delivery_oldest_pending_age_seconds",
+            value: max(oldestPendingAgeSeconds ?? 0, 0),
+            factory: factory)
+        // This is derived from committed, retained `dropped` rows rather than
+        // incremented in the admission transaction. It therefore cannot claim
+        // a drop that later rolls back.
+        recordGauge(
+            label: "strato_webhook_delivery_dropped",
+            value: Double(max(droppedCount, 0)),
+            factory: factory)
+
+        let observedSubscriptionIDs = Set(subscriptionIDs).union(pendingBySubscription.keys)
+        for subscriptionID in observedSubscriptionIDs.sorted(by: {
+            $0.uuidString < $1.uuidString
+        }) {
+            recordGauge(
+                label: "strato_webhook_delivery_subscription_pending",
+                dimensions: [("subscription_id", subscriptionID.uuidString)],
+                value: Double(max(pendingBySubscription[subscriptionID] ?? 0, 0)),
+                factory: factory)
+        }
+    }
+
+    /// Count HTTP delivery attempts. Callers may aggregate a pass and increment
+    /// once; retryable failures remain queued, so this is endpoint work rate
+    /// rather than terminal queue drain.
+    static func webhookDeliveryAttempted(
+        count: Int = 1,
+        factory: (any MetricsFactory)? = nil
+    ) {
+        incrementCounter(
+            label: "strato_webhook_delivery_attempts_total",
+            count: count,
+            factory: factory)
+    }
+
+    /// Count the mutually-exclusive durable result of processing a claimed row.
+    /// `dead` includes both an exhausted HTTP attempt and a row parked because
+    /// its subscription was disabled; use the separate attempt counter for the
+    /// actual HTTP request rate.
+    static func webhookDeliveryFinished(
+        result: WebhookDeliveryResult,
+        count: Int = 1,
+        factory: (any MetricsFactory)? = nil
+    ) {
+        incrementCounter(
+            label: "strato_webhook_delivery_results_total",
+            dimensions: [("result", result.rawValue)],
+            count: count,
+            factory: factory)
     }
 
     // MARK: - Agent lifecycle
@@ -486,5 +597,38 @@ enum Telemetry {
             label: "strato_guest_identity_mints_total",
             dimensions: [("outcome", outcome)]
         ).increment()
+    }
+
+    // MARK: - Metric construction
+
+    private static func recordGauge(
+        label: String,
+        dimensions: [(String, String)] = [],
+        value: Double,
+        factory: (any MetricsFactory)?
+    ) {
+        let gauge =
+            if let factory {
+                Gauge(label: label, dimensions: dimensions, factory: factory)
+            } else {
+                Gauge(label: label, dimensions: dimensions)
+            }
+        gauge.record(value)
+    }
+
+    private static func incrementCounter(
+        label: String,
+        dimensions: [(String, String)] = [],
+        count: Int,
+        factory: (any MetricsFactory)?
+    ) {
+        guard count > 0 else { return }
+        let counter =
+            if let factory {
+                Counter(label: label, dimensions: dimensions, factory: factory)
+            } else {
+                Counter(label: label, dimensions: dimensions)
+            }
+        counter.increment(by: Int64(count))
     }
 }

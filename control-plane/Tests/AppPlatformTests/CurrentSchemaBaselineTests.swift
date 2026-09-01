@@ -9,7 +9,7 @@ import Vapor
 
 @Suite("Current schema baseline", .serialized)
 struct CurrentSchemaBaselineTests {
-    private static let expectedCatalogMD5 = "836f85a4a909c640e9cf46f62f39845a"
+    private static let expectedCatalogMD5 = "6d05e0afd3bcc68a68bb3a17f09b2333"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -29,10 +29,10 @@ struct CurrentSchemaBaselineTests {
             #expect(fluentEnumRows.count == 12)
 
             let counts = try await catalogCounts(on: app.db)
-            #expect(counts.tables == 65)
-            #expect(counts.columns == 849)
-            #expect(counts.constraints == 297)
-            #expect(counts.indexes == 194)
+            #expect(counts.tables == 69)
+            #expect(counts.columns == 888)
+            #expect(counts.constraints == 316)
+            #expect(counts.indexes == 213)
             #expect(counts.enums == 3)
             #expect(counts.triggers == 3)
             #expect(counts.functions == 2)
@@ -65,6 +65,73 @@ struct CurrentSchemaBaselineTests {
         try await app.shutdownForTesting()
     }
 
+    @Test("The webhook claim-lease upgrade is idempotent and restores its queue index")
+    func webhookClaimLeaseUpgradeIsIdempotentOnFreshSchema() async throws {
+        let app = try await Application.makeForBareDatabaseTesting()
+        do {
+            try await CurrentSchemaBaseline().prepare(on: app.db)
+            let sql = try #require(app.db as? any SQLDatabase)
+            let catalogBeforeUpgrade = try await catalogMD5(on: app.db)
+
+            let migration = AddWebhookDeliveryClaimLease()
+            try await migration.prepare(on: app.db)
+            try await migration.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == catalogBeforeUpgrade)
+
+            try await sql.raw(
+                """
+                UPDATE pg_index
+                SET indisvalid = false
+                WHERE indexrelid =
+                    'idx_webhook_deliveries_pending_subscription_due'::regclass
+                """
+            ).run()
+            let invalid = try await sql.raw(
+                """
+                SELECT indisvalid
+                FROM pg_index
+                WHERE indexrelid =
+                    'idx_webhook_deliveries_pending_subscription_due'::regclass
+                """
+            ).first(decodingColumn: "indisvalid", as: Bool.self)
+            #expect(invalid == false)
+
+            try await migration.prepare(on: app.db)
+            let repaired = try await sql.raw(
+                """
+                SELECT indisvalid
+                FROM pg_index
+                WHERE indexrelid =
+                    'idx_webhook_deliveries_pending_subscription_due'::regclass
+                """
+            ).first(decodingColumn: "indisvalid", as: Bool.self)
+            #expect(repaired == true)
+            #expect(try await catalogMD5(on: app.db) == catalogBeforeUpgrade)
+
+            try await sql.raw(
+                "DROP INDEX idx_webhook_deliveries_pending_subscription_due"
+            ).run()
+            #expect(try await catalogMD5(on: app.db) != catalogBeforeUpgrade)
+
+            try await migration.prepare(on: app.db)
+            try await migration.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == catalogBeforeUpgrade)
+
+            try await sql.raw(
+                "ALTER TABLE webhook_deliveries DROP COLUMN enqueued_at"
+            ).run()
+            #expect(try await catalogMD5(on: app.db) != catalogBeforeUpgrade)
+
+            try await migration.prepare(on: app.db)
+            try await migration.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == catalogBeforeUpgrade)
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
     @Test("The MAC ledger upgrade leaves a fresh schema unchanged")
     func macLedgerUpgradeIsIdempotentOnFreshSchema() async throws {
         let app = try await Application.makeForBareDatabaseTesting()
@@ -75,7 +142,6 @@ struct CurrentSchemaBaselineTests {
             let migration = CreateMACAddressLedger()
             try await migration.prepare(on: app.db)
             try await migration.prepare(on: app.db)
-
             #expect(try await catalogMD5(on: app.db) == catalogBeforeUpgrade)
         } catch {
             try? await app.shutdownForTesting()
