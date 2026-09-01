@@ -1,0 +1,24 @@
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_025e4482868a60::t_37145a9863bdba 8-12,18-19,21-23,1424-1433,1444,1452-1455
+  s_025e4482868a60::t_770341013056c4 13,16-17,20
+  s_025e4482868a60::t_7d1395af7ddaf6 14-15
+  s_025e4482868a60::t_f6b8b4218ee288 1456
+agent/Tests/StratoAgentTests/DomainNetworkDetachConvergenceTests.swift
+  s_025e4482868a60::t_fe5a8781658c6e 1-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "cf7d89dc53807f4db30a0cc0c81385ac5b2897ff",
+  "prompts": {},
+  "sessions": {
+    "s_025e4482868a60": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05a8a-5af7-7792-a757-98cf09fb6ecd",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
