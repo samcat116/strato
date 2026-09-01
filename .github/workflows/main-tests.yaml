@@ -277,12 +277,13 @@ jobs:
           DATABASE_NAME: strato_test
           DATABASE_USERNAME: strato
           DATABASE_PASSWORD: strato_password
-        # Fully parallel: each test app runs on a 2-loop event-loop group
-        # (1 pooled connection per loop), and per-test database clones are
+        # Bounded parallelism: each test app runs on a 2-loop event-loop group
+        # (up to 2 pooled connections per loop), and per-test database clones are
         # minted through one serialized admin connection — see
-        # control-plane/Tests/AppTestSupport/TestUtilities.swift — so the suite
-        # stays far under Postgres's default max_connections=100. This
-        # used to be forced to --no-parallel and took ~8 minutes.
+        # control-plane/Tests/AppTestSupport/TestUtilities.swift. Leaving the
+        # worker count at SwiftPM's host-core default can exceed Postgres's
+        # max_connections on large runners; four workers keep the suite fast
+        # while bounding it to roughly 16 serving connections plus overhead.
         #
         # One invocation covering all four test targets, NOT one per target.
         # `--filter <target>\.` looks like it would scope a run to one target,
@@ -300,7 +301,7 @@ jobs:
         # (macOS builds a separate bundle per target, so a local run costs one
         # template build each; the parallel `-emit-module` win the split is
         # for holds on both.)
-        run: swift test --skip-build --parallel --xunit-output test-results.xml --scratch-path "$BUILD_SCRATCH_ROOT/control-plane" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
+        run: swift test --skip-build --parallel --num-workers 4 --xunit-output test-results.xml --scratch-path "$BUILD_SCRATCH_ROOT/control-plane" --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
       # Surface the exact failing test (and its message) as a JUnit report,
       # since the raw job log is dominated by per-request debug output.

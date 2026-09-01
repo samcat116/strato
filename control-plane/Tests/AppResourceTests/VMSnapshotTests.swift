@@ -89,6 +89,7 @@ final class VMSnapshotTests {
         // movement in a test is something the checkpoint path did.
         if status == .running { vm.desiredStatus = .running }
         try await vm.save(on: app.db)
+        try await attachBootVolume(to: vm, on: agentID, using: app.db)
         return agentID
     }
 

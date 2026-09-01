@@ -177,12 +177,15 @@ final class CrossProjectContainmentTests {
     private func createFloatingIP(
         app: Application, org: Organization, token: String, project: Project
     ) async throws -> UUID {
+        let site = try await Site.createDefault(
+            forOrganization: try org.requireID(), named: org.name, on: app.db)
         var poolId: UUID?
         try await app.test(.POST, "/api/floating-ip-pools") { req in
             req.headers.bearerAuthorization = BearerAuthorization(token: token)
             try req.content.encode([
                 "name": "containment-edge", "cidr": "203.0.113.0/29", "gateway": "203.0.113.1",
                 "organizationId": try org.requireID().uuidString,
+                "siteId": try site.requireID().uuidString,
             ])
         } afterResponse: { res in
             #expect(res.status == .ok)

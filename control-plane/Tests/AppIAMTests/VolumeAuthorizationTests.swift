@@ -66,7 +66,7 @@ final class VolumeAuthorizationTests {
             projectId: project.id!, environment: nil,
             sizeGB: 10,
             format: "qcow2",
-            volumeType: "boot",
+            volumeType: "data",
             sourceImageId: image.id!,
             iopsTotal: nil,
             bpsTotal: nil

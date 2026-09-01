@@ -412,7 +412,7 @@ final class InputSizeBoundTests {
                 """
                 forbid (
                     principal,
-                    action,
+                    action == Action::"vm:delete",
                     resource in Organization::"\(orgID.uuidString.lowercased())"
                 );
                 """

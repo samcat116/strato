@@ -156,7 +156,11 @@ package actor PostgresTestDatabases {
         env.arguments = ["vapor"]
         let app = try await Application.make(env, .shared(Self.appEventLoopGroup))
         app.logger.logLevel = .error
-        app.databases.use(.postgres(configuration: Self.configuration(database: templateName)), as: .psql)
+        app.databases.use(
+            .postgres(
+                configuration: Self.configuration(database: templateName),
+                maxConnectionsPerEventLoop: 2),
+            as: .psql)
         do {
             try await configure(app)
             try await app.asyncShutdown()
@@ -276,7 +280,9 @@ extension Application {
         let app = try await Application.make(env, .shared(PostgresTestDatabases.appEventLoopGroup))
         app.logger.logLevel = .debug
         app.databases.use(
-            .postgres(configuration: PostgresTestDatabases.configuration(database: databaseName)),
+            .postgres(
+                configuration: PostgresTestDatabases.configuration(database: databaseName),
+                maxConnectionsPerEventLoop: 2),
             as: .psql
         )
         if owningDatabase {
@@ -406,7 +412,7 @@ package struct TestDataBuilder {
         hostInfo: HostInfo? = nil,
         resolverCapable: Bool? = nil,
         metadataServiceCapable: Bool? = nil,
-        dependencyObservations: [NodeDependencyObservation] = [],
+        dependencyObservations: [NodeDependencyObservation]? = nil,
         trustDomain: String = "strato.local",
         siteID requestedSiteID: UUID? = nil,
         organizationScope requestedScope: OrganizationScope? = nil
@@ -414,6 +420,13 @@ package struct TestDataBuilder {
         let (scope, siteID) = try await agentPlacement(
             siteID: requestedSiteID, organizationScope: requestedScope)
 
+        let effectiveDependencyObservations =
+            dependencyObservations
+            ?? Self.healthyDependencyObservations(
+                hypervisors: hypervisors,
+                networkCapability: networkCapability,
+                sandboxNetworkingCapable: sandboxNetworkingCapable,
+                resolverCapable: resolverCapable)
         let message = AgentRegisterMessage(
             agentId: name,
             hostname: hostname ?? "host-\(name)",
@@ -430,13 +443,64 @@ package struct TestDataBuilder {
             hostInfo: hostInfo,
             resolverCapable: resolverCapable,
             metadataServiceCapable: metadataServiceCapable,
-            dependencyObservations: dependencyObservations)
+            dependencyObservations: effectiveDependencyObservations)
         let id = try await app.agentService.registerAgent(
             message,
             identity: AgentIdentity(trustDomain: trustDomain, name: name),
             siteID: siteID,
             organizationScope: scope)
         return id.uuidString
+    }
+
+    /// The registration fixture defaults to a usable QEMU/OVN node, so its
+    /// dependency snapshot must substantiate the capabilities it advertises.
+    /// Passing an explicit empty array still models a legacy or unhealthy
+    /// registration whose dependency health is unknown.
+    private static func healthyDependencyObservations(
+        hypervisors: [HypervisorSupport]?,
+        networkCapability: NetworkCapability?,
+        sandboxNetworkingCapable: Bool?,
+        resolverCapable: Bool?
+    ) -> [NodeDependencyObservation] {
+        let checkedAt = Date()
+        var observations: [NodeDependencyObservation] = []
+
+        if hypervisors?.contains(where: { $0.type == .qemu && $0.available }) == true {
+            observations.append(
+                NodeDependencyObservation(
+                    id: .libvirt,
+                    role: .compute,
+                    desiredState: .required,
+                    ownership: .observeOnly,
+                    supervisorState: .active,
+                    compatibility: .compatible,
+                    functionalState: .healthy,
+                    checkedAt: checkedAt,
+                    lastHealthyAt: checkedAt,
+                    affectedCapabilities: [.qemuPlacement]))
+        }
+
+        if networkCapability == .overlay
+            || sandboxNetworkingCapable == true
+            || resolverCapable == true
+        {
+            observations.append(
+                NodeDependencyObservation(
+                    id: .ovnOvs,
+                    role: .networking,
+                    desiredState: .required,
+                    ownership: .observeOnly,
+                    supervisorState: .active,
+                    compatibility: .compatible,
+                    functionalState: .healthy,
+                    checkedAt: checkedAt,
+                    lastHealthyAt: checkedAt,
+                    affectedCapabilities: [
+                        .overlayNetworking, .sandboxNetworking, .networkResolver,
+                    ]))
+        }
+
+        return observations
     }
 
     package func createAgent(

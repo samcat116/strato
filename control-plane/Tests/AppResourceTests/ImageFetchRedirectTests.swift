@@ -155,6 +155,7 @@ struct ImageFetchRedirectTests {
             if let image = try await Image.find(imageID, on: app.db),
                 let artifact = try await ImageArtifact.query(on: app.db)
                     .filter(\.$image.$id == imageID).filter(\.$kind == .diskImage).first(),
+                image.status == .ready || image.status == .error,
                 artifact.status == .ready || artifact.status == .error
             {
                 return (image, artifact)

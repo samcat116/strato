@@ -47,10 +47,11 @@ extension Application {
         // performs the boot-time build.
         //
         // Since cutover (#482) the compiled set is the authoritative decision
-        // path, so `.testing` needs it too — but built once at boot rather than
-        // via the watch, whose periodic re-read would outlive the test's
-        // application. Tests that change policy (guardrail writes) drive
-        // `cedarPolicySet.reconcile` directly.
+        // path, so `.testing` needs it too. Register the refresh listener and
+        // drive its initial refresh without starting the background watch:
+        // endpoint tests then exercise the same synchronous local rebuild that
+        // policy writes announce in production, while no periodic task outlives
+        // the test application.
         //
         // IAM #610: densify `iam_guardrails.cedar_text` before the set is built, so
         // the compiled set uses the stored text rather than the cache's
@@ -63,8 +64,8 @@ extension Application {
             await startCedarPolicySetCache()
             await startPolicySetVersionWatch()
         } else {
-            let version = try await PolicySetVersionService.current(on: db)
-            await cedarPolicySet.rebuild(version: version, on: db)
+            await startCedarPolicySetCache()
+            await policySetVersion.refresh(on: db)
         }
     }
 }

@@ -379,6 +379,7 @@ final class VMOperationTests {
     func deleteRevokesRoleBindings() async throws {
         try await withVMTestApp { app, user, vm, token in
             let vmID = try vm.requireID()
+            try await attachBootVolume(to: vm, on: nil, using: app.db)
 
             // The creator binding VM creation writes, plus a checkpoint whose
             // row cascades away with the VM and so orphans its binding too.
