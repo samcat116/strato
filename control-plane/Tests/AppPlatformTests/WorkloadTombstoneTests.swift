@@ -26,7 +26,6 @@ final class WorkloadTombstoneTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let admin = try await builder.createUser(
@@ -53,23 +52,16 @@ final class WorkloadTombstoneTests {
     }
 
     private func makeAgent(app: Application, org: Organization, name: String) async throws -> Agent {
-        let agent = Agent(
-            name: name,
+        try await TestDataBuilder(db: app.db).createAgent(
+            named: name,
             hostname: "\(name).example",
-            version: "1.0.0",
-            status: .online,
             resources: AgentResources(
                 totalCPU: 8, availableCPU: 8,
                 totalMemory: 16_000_000_000, availableMemory: 16_000_000_000,
-                totalDisk: 100_000_000_000, availableDisk: 100_000_000_000
-            ),
+                totalDisk: 100_000_000_000, availableDisk: 100_000_000_000),
             architecture: .x86_64,
-            lastHeartbeat: Date()
-        )
-        agent.wireProtocolVersion = WireProtocol.currentVersion
-        agent.organizationScope = .organization(try org.requireID())
-        try await agent.save(on: app.db)
-        return agent
+            lastHeartbeat: Date(),
+            organizationScope: .organization(try org.requireID()))
     }
 
     private func report(

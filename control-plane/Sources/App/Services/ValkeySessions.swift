@@ -106,7 +106,7 @@ extension ValkeySessionDriver {
     static let minimumTTL = 60
 
     static func ttlFromConfiguration(_ configuration: ControlPlaneConfiguration) -> Int {
-        configuration.int(.sessionTTLSeconds)!
+        configuration.int(.sessionTTLSeconds)
     }
 }
 

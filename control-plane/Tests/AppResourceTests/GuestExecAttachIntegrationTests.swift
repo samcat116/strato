@@ -19,6 +19,223 @@ import AppTestSupport
 @Suite("Guest Exec Attach Integration", .serialized)
 struct GuestExecAttachIntegrationTests {
 
+    enum VMAttachRejection: CaseIterable, Sendable {
+        case invalidResourceID
+        case sessionNotFound
+        case sessionExpired
+        case sessionMismatch
+        case alreadyAttached
+
+        var status: Int {
+            switch self {
+            case .invalidResourceID: 400
+            case .sessionNotFound: 404
+            case .sessionExpired: 410
+            case .sessionMismatch: 403
+            case .alreadyAttached: 409
+            }
+        }
+    }
+
+    @Test("VM attach authentication and authorization refusals stay in api.request")
+    func vmAttachRefusalsAreGenericallyAudited() async throws {
+        try await withRunningExecApp { app, port in
+            let builder = TestDataBuilder(db: app.db)
+            let organization = try await builder.createOrganization(name: "Exec Refusal Org")
+            let project = try await builder.createProject(
+                name: "Exec Refusal Project", description: "p", organization: organization)
+            let vm = try await builder.createVM(name: "exec-refusal-vm", project: project)
+
+            let viewer = try await builder.createUser(
+                username: "exec-refusal-viewer",
+                email: "exec-refusal-viewer@example.com")
+            try await builder.addUserToOrganization(
+                user: viewer, organization: organization, role: "viewer")
+            viewer.currentOrganizationId = try organization.requireID()
+            try await viewer.save(on: app.db)
+            let viewerAPIKey = try await viewer.generateAPIKey(on: app.db)
+
+            let vmID = try vm.requireID()
+            let path =
+                "/api/vms/\(vmID.uuidString.lowercased())/exec/\(UUID().uuidString)/attach"
+            let url = "ws://127.0.0.1:\(port)\(path)"
+
+            do {
+                _ = try await ExecWSClient.connect(
+                    url: url,
+                    headers: HTTPHeaders(),
+                    on: app.eventLoopGroup)
+                Issue.record("Expected the unauthenticated WebSocket handshake to fail")
+            } catch {
+                // Global authorization rejects the missing principal before
+                // the upgrade. The persisted generic fact below proves the
+                // externally visible status without coupling to WebSocketKit's
+                // private handshake-error type.
+            }
+
+            var viewerHeaders = HTTPHeaders()
+            viewerHeaders.bearerAuthorization = .init(token: viewerAPIKey)
+            do {
+                _ = try await ExecWSClient.connect(
+                    url: url,
+                    headers: viewerHeaders,
+                    on: app.eventLoopGroup)
+                Issue.record("Expected the unauthorized WebSocket handshake to fail")
+            } catch {
+                // The global IAM gate rejects this viewer with HTTP 403. If a
+                // future route shape defers the same decision until after the
+                // upgrade, validateExecAccess uses the same forced recorder.
+            }
+
+            await app.audit.flush()
+            let refusals = try await AuditEvent.query(on: app.db)
+                .filter(\.$eventType == "api.request")
+                .filter(\.$path == path)
+                .sort(\.$createdAt)
+                .all()
+            #expect(refusals.count == 2)
+            let authenticationRefusal = try #require(refusals.first { $0.status == 401 })
+            #expect(authenticationRefusal.userID == nil)
+            let authorizationRefusal = try #require(refusals.first { $0.status == 403 })
+            #expect(authorizationRefusal.userID == viewer.id)
+            for refusal in refusals {
+                #expect(refusal.method == "GET")
+                #expect(refusal.resourceType == "vms")
+                #expect(refusal.resourceID == vmID.uuidString)
+                #expect(refusal.action == "read")
+            }
+            #expect(
+                try await AuditEvent.query(on: app.db)
+                    .filter(\.$eventType == "vm.exec.requested")
+                    .count() == 0)
+        }
+    }
+
+    @Test(
+        "VM attach session rejections append one precise generic refusal",
+        arguments: VMAttachRejection.allCases)
+    func vmAttachSessionRejectionsArePreciselyAudited(
+        rejection: VMAttachRejection
+    ) async throws {
+        try await withRunningExecApp(includeAuditReads: true) { app, port in
+            let builder = TestDataBuilder(db: app.db)
+            let organization = try await builder.createOrganization(name: "Attach Status Org")
+            let project = try await builder.createProject(
+                name: "Attach Status Project", description: "p", organization: organization)
+            let vm = try await builder.createVM(name: "attach-status-vm", project: project)
+            let user = try await builder.createUser(
+                username: "attach-status-admin",
+                email: "attach-status-admin@example.com",
+                isSystemAdmin: true)
+            let apiKey = try await user.generateAPIKey(on: app.db)
+
+            let vmID = try vm.requireID()
+            let sessionID = UUID().uuidString
+            let userID = try user.requireID().uuidString
+            let manager = app.guestExecSessionManager
+
+            switch rejection {
+            case .invalidResourceID, .sessionNotFound:
+                break
+            case .sessionExpired:
+                _ = manager.createPendingSession(
+                    sessionId: sessionID,
+                    resourceKind: .virtualMachine,
+                    resourceId: vmID.uuidString,
+                    agentKey: "spiffe://strato.local/agent/attach-status",
+                    userId: userID,
+                    command: ["/usr/bin/id"],
+                    env: nil,
+                    workingDir: nil,
+                    tty: false,
+                    rows: nil,
+                    cols: nil,
+                    now: Date().addingTimeInterval(
+                        -(GuestExecSessionManager.pendingSessionTTL + 1)))
+            case .sessionMismatch:
+                _ = manager.createPendingSession(
+                    sessionId: sessionID,
+                    resourceKind: .virtualMachine,
+                    resourceId: vmID.uuidString,
+                    agentKey: "spiffe://strato.local/agent/attach-status",
+                    userId: UUID().uuidString,
+                    command: ["/usr/bin/id"],
+                    env: nil,
+                    workingDir: nil,
+                    tty: false,
+                    rows: nil,
+                    cols: nil)
+            case .alreadyAttached:
+                let pending = manager.createPendingSession(
+                    sessionId: sessionID,
+                    resourceKind: .virtualMachine,
+                    resourceId: vmID.uuidString,
+                    agentKey: "spiffe://strato.local/agent/attach-status",
+                    userId: userID,
+                    command: ["/usr/bin/id"],
+                    env: nil,
+                    workingDir: nil,
+                    tty: false,
+                    rows: nil,
+                    cols: nil)
+                _ = try manager.attachSession(
+                    sessionId: sessionID,
+                    resourceKind: .virtualMachine,
+                    resourceId: vmID.uuidString,
+                    userId: pending.userId,
+                    websocket: nil)
+            }
+
+            let resourceID =
+                rejection == .invalidResourceID ? "not-a-uuid" : vmID.uuidString.lowercased()
+            let path = "/api/vms/\(resourceID)/exec/\(sessionID)/attach"
+            var headers = HTTPHeaders()
+            headers.bearerAuthorization = .init(token: apiKey)
+
+            if rejection == .invalidResourceID {
+                do {
+                    _ = try await ExecWSClient.connect(
+                        url: "ws://127.0.0.1:\(port)\(path)",
+                        headers: headers,
+                        on: app.eventLoopGroup)
+                    Issue.record("Expected the invalid VM ID handshake to fail")
+                } catch {
+                    // Authorization rejects the malformed resource before the
+                    // upgrade; the generic fact below carries the HTTP 400.
+                }
+            } else {
+                let browser = try await ExecWSClient.connect(
+                    url: "ws://127.0.0.1:\(port)\(path)",
+                    headers: headers,
+                    on: app.eventLoopGroup)
+                let frame = try await browser.nextControlFrame()
+                #expect(frame.type == "error")
+                try await browser.waitForClose()
+            }
+
+            await app.audit.flush()
+            let facts = try await AuditEvent.query(on: app.db)
+                .filter(\.$eventType == "api.request")
+                .filter(\.$path == path)
+                .all()
+            #expect(facts.count == 1)
+            let refusals = facts.filter { $0.status == rejection.status }
+            #expect(refusals.count == 1)
+            let refusal = try #require(refusals.first)
+            #expect(refusal.method == "GET")
+            #expect(refusal.resourceType == "vms")
+            #expect(
+                refusal.resourceID
+                    == (rejection == .invalidResourceID ? resourceID : vmID.uuidString))
+            #expect(refusal.action == "read")
+            #expect(refusal.metadata == nil)
+            #expect(
+                try await AuditEvent.query(on: app.db)
+                    .filter(\.$eventType == "vm.exec.requested")
+                    .count() == 0)
+        }
+    }
+
     @Test(
         "VM and sandbox routes preserve raw framing and support multiplexed framing",
         arguments: [GuestResourceKind.sandbox, GuestResourceKind.virtualMachine],
@@ -41,10 +258,15 @@ struct GuestExecAttachIntegrationTests {
 
             let org = Organization(name: "Exec WS Org", description: "org for exec attach test")
             try await org.save(on: app.db)
+            let site = Site(
+                name: "exec-ws-site",
+                organizationScope: .organization(try org.requireID()))
+            try await site.save(on: app.db)
             let enrollment = AgentEnrollment(
                 agentName: agentName,
                 spiffeID: "spiffe://strato.local/agent/\(agentName)",
                 expirationHours: 1,
+                siteID: try site.requireID(),
                 organizationScope: .organization(try org.requireID()))
             try await enrollment.save(on: app.db)
 
@@ -101,13 +323,17 @@ struct GuestExecAttachIntegrationTests {
 
             // Exercise the public POST route rather than seeding the manager:
             // both resource kinds must mint the same single-use session shape.
+            let environmentSentinel = "STR84_ENVIRONMENT_MUST_NOT_REACH_AUDIT"
+            let workingDirectorySentinel = "/STR84/WORKING-DIRECTORY-MUST-NOT-REACH-AUDIT"
             let mintResponse = try await app.client.post(
                 URI(string: "http://127.0.0.1:\(port)/api/\(collection)/\(resourceId)/exec")
             ) { req in
                 req.headers.bearerAuthorization = .init(token: apiKey)
                 try req.content.encode(
                     ExecMintRequest(
-                        command: ["/bin/echo", "hello"], env: nil, workingDir: nil,
+                        command: ["/bin/echo", "hello"],
+                        env: ["STR84_SECRET": environmentSentinel],
+                        workingDir: workingDirectorySentinel,
                         tty: true, rows: 24, cols: 80,
                         // Omission is deliberate: it proves the existing
                         // browser request remains raw without opting in.
@@ -120,17 +346,48 @@ struct GuestExecAttachIntegrationTests {
                     == "/api/\(collection)/\(resourceId)/exec/\(session.sessionId)/attach")
             #expect(session.outputMode == outputMode.rawValue)
 
+            await app.audit.flush()
+            let requested = try await AuditEvent.query(on: app.db)
+                .filter(\.$eventType == "vm.exec.requested")
+                .all()
+            switch resourceKind {
+            case .sandbox:
+                #expect(requested.isEmpty)
+            case .virtualMachine:
+                #expect(requested.count == 1)
+                let event = try #require(requested.first)
+                let metadata = try #require(event.metadata)
+                #expect(event.resourceType == "vms")
+                #expect(event.resourceID == resourceId)
+                #expect(metadata["correlationID"] == session.sessionId)
+                #expect(metadata["argv"] == #"["/bin/echo","hello"]"#)
+                #expect(metadata["outcome"] == "accepted")
+                #expect(metadata["phase"] == "requested")
+                for prohibitedKey in [
+                    "env", "environment", "workingDir", "stdin", "stdout", "stderr", "output",
+                    "terminalFrames",
+                ] {
+                    #expect(metadata[prohibitedKey] == nil)
+                }
+                let persistedMetadata = try JSONEncoder().encode(metadata)
+                let persistedText = String(decoding: persistedMetadata, as: UTF8.self)
+                #expect(!persistedText.contains(environmentSentinel))
+                #expect(!persistedText.contains(workingDirectorySentinel))
+            }
+
             // WebSocket authentication is checked before the single-use
             // token is consumed, so a rejected attach cannot burn a valid
             // session minted by the user.
-            let unauthenticated = try await ExecWSClient.connect(
-                url: "ws://127.0.0.1:\(port)\(session.websocketPath)",
-                headers: HTTPHeaders(),
-                on: app.eventLoopGroup)
-            let authenticationError = try await unauthenticated.nextControlFrame()
-            #expect(authenticationError.type == "error")
-            #expect(authenticationError.message == "Authentication required")
-            try await unauthenticated.waitForClose()
+            do {
+                _ = try await ExecWSClient.connect(
+                    url: "ws://127.0.0.1:\(port)\(session.websocketPath)",
+                    headers: HTTPHeaders(),
+                    on: app.eventLoopGroup)
+                Issue.record("Expected the unauthenticated WebSocket handshake to fail")
+            } catch {
+                // Missing credentials are rejected with HTTP 401 before the
+                // WebSocket upgrade; the pending session must remain usable.
+            }
             #expect(app.guestExecSessionManager.hasPendingSession(sessionId: session.sessionId))
 
             // The browser attaches over a real WebSocket upgrade.
@@ -155,7 +412,24 @@ struct GuestExecAttachIntegrationTests {
             #expect(start.resourceKind == resourceKind)
             #expect(start.resourceId == resourceId)
             #expect(start.command == ["/bin/echo", "hello"])
+            #expect(start.env == ["STR84_SECRET": environmentSentinel])
+            #expect(start.workingDir == workingDirectorySentinel)
             #expect(start.tty == true)
+
+            if resourceKind == .virtualMachine {
+                await app.audit.flush()
+                let attachSuccesses = try await AuditEvent.query(on: app.db)
+                    .filter(\.$eventType == "api.request")
+                    .filter(\.$path == session.websocketPath)
+                    .filter(\.$status == Int(HTTPResponseStatus.switchingProtocols.code))
+                    .all()
+                #expect(attachSuccesses.count == 1)
+                let attachSuccess = try #require(attachSuccesses.first)
+                #expect(attachSuccess.resourceType == "vms")
+                #expect(attachSuccess.resourceID == resourceId)
+                #expect(attachSuccess.adminBypass == true)
+                #expect(attachSuccess.metadata == nil)
+            }
 
             // Agent reports the spawn; the browser sees the ready frame.
             agent.send(
@@ -163,6 +437,19 @@ struct GuestExecAttachIntegrationTests {
                     GuestExecStartedMessage(sessionId: session.sessionId)))
             let ready = try await browser.nextControlFrame()
             #expect(ready.type == "ready")
+            await app.audit.flush()
+            let startedEvents = try await AuditEvent.query(on: app.db)
+                .filter(\.$eventType == "vm.exec.started")
+                .all()
+            switch resourceKind {
+            case .sandbox:
+                #expect(startedEvents.isEmpty)
+            case .virtualMachine:
+                #expect(startedEvents.count == 1)
+                #expect(startedEvents.first?.resourceID == resourceId)
+                #expect(startedEvents.first?.metadata?["correlationID"] == session.sessionId)
+                #expect(startedEvents.first?.metadata?["outcome"] == "started")
+            }
 
             // A session token is single-use even while the first attachment
             // remains active.
@@ -235,6 +522,20 @@ struct GuestExecAttachIntegrationTests {
             #expect(exit.exitCode == 0)
             try await browser.waitForClose()
             #expect(app.guestExecSessionManager.getSession(sessionId: session.sessionId) == nil)
+            await app.audit.flush()
+            let endedEvents = try await AuditEvent.query(on: app.db)
+                .filter(\.$eventType == "vm.exec.ended")
+                .all()
+            switch resourceKind {
+            case .sandbox:
+                #expect(endedEvents.isEmpty)
+            case .virtualMachine:
+                #expect(endedEvents.count == 1)
+                #expect(endedEvents.first?.resourceID == resourceId)
+                #expect(endedEvents.first?.metadata?["correlationID"] == session.sessionId)
+                #expect(endedEvents.first?.metadata?["outcome"] == "exited")
+                #expect(endedEvents.first?.metadata?["exitCode"] == "0")
+            }
 
             try await agent.close()
         }
@@ -274,8 +575,16 @@ enum ExecTestOutputMode: String, CaseIterable, Sendable {
 
 // MARK: - Running-server harness (mirrors AgentWebSocketIntegrationTests)
 
-private func withRunningExecApp(_ test: (Application, Int) async throws -> Void) async throws {
-    try await withApp { app in
+private func withRunningExecApp(
+    includeAuditReads: Bool = false,
+    _ test: (Application, Int) async throws -> Void
+) async throws {
+    try await withTestApp { app in
+        if includeAuditReads {
+            var config = AuditConfig.fromConfiguration(app.controlPlaneConfiguration)
+            config.includeReads = true
+            app.audit = AuditService(app: app, config: config)
+        }
         try await app.server.start(address: .hostname("127.0.0.1", port: 0))
         do {
             guard let port = app.http.server.shared.localAddress?.port else {

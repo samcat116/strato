@@ -26,7 +26,13 @@ const OrganizationContext = createContext<OrganizationContextType | undefined>(
   undefined
 );
 
-export function OrganizationProvider({ children }: { children: ReactNode }) {
+export function OrganizationProvider({
+  children,
+  initialOrganizations,
+}: {
+  children: ReactNode;
+  initialOrganizations?: Organization[];
+}) {
   const { user, isAuthenticated } = useAuth();
   const userId = user?.id;
   // Only track user-selected org; null means use default
@@ -44,6 +50,7 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
     queryKey: ["organizations", { userId }],
     queryFn: ({ signal }) => organizationsApi.list(signal),
     enabled: isAuthenticated,
+    initialData: isAuthenticated ? initialOrganizations : undefined,
   });
 
   // Derive current org: user selection > user's default > first available

@@ -259,7 +259,8 @@ struct SchedulerReservationTests {
             totalDisk: 100_000,
             availableDisk: availableDisk,
             status: .online,
-            runningVMCount: 0
+            runningVMCount: 0,
+            siteID: UUID()
         )
     }
 

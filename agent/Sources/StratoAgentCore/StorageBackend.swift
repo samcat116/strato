@@ -78,21 +78,42 @@ public protocol StorageBackend: Actor {
     func deleteVolume(volumeId: String) async throws
 
     /// Grows a volume to `newSizeBytes` (must be detached).
-    func resizeVolume(volumePath: String, newSizeBytes: Int64) async throws
+    ///
+    /// The attachment is the backend-owned identity. Network backends do not
+    /// have a host path, and callers must not manufacture one merely to fit a
+    /// filesystem-shaped interface.
+    func resizeVolume(attachment: DiskAttachment, newSizeBytes: Int64) async throws
 
     /// Creates a point-in-time snapshot of a volume; returns the snapshot's path.
-    func createSnapshot(volumeId: String, snapshotId: String, volumePath: String) async throws -> String
+    func createSnapshot(
+        volumeId: String, snapshotId: String, attachment: DiskAttachment
+    ) async throws -> String
 
     /// Deletes a snapshot, deriving its location from the IDs (idempotent).
     func deleteSnapshot(volumeId: String, snapshotId: String) async throws
 
     /// Clones a volume into a new, independent volume (no shared backing chain)
     /// and returns the clone's attachment.
-    func cloneVolume(sourceVolumeId: String, sourcePath: String, targetVolumeId: String) async throws
-        -> DiskAttachment
+    func cloneVolume(
+        sourceVolumeId: String, sourceAttachment: DiskAttachment, targetVolumeId: String
+    ) async throws -> DiskAttachment
 
     /// Queries a volume's on-disk state.
-    func volumeInfo(volumePath: String) async throws -> VolumeInfoResult
+    func volumeInfo(attachment: DiskAttachment) async throws -> VolumeInfoResult
+
+    /// Looks up one backend-owned volume without asserting that every image
+    /// visible to the backend belongs to this host.
+    ///
+    /// This distinction is load-bearing for shared RBD namespaces: `list`
+    /// describes cluster state, not per-agent ownership. Reconciliation uses a
+    /// targeted lookup for Ceph desired entries and retains full inventory only
+    /// for local storage.
+    func inspectVolume(volumeId: String) async throws -> DiskAttachment?
+
+    /// Installs any host-side credential reference required by libvirt before
+    /// a QEMU domain document containing `attachment` is defined or attached.
+    /// Local and krbd paths need no preparation.
+    func prepareAttachmentForQEMU(_ attachment: DiskAttachment) async throws
 
     /// Every volume whose data this backend currently holds, by id (STR-148).
     ///
@@ -104,11 +125,55 @@ public protocol StorageBackend: Actor {
     func listVolumes() async throws -> [String: DiskAttachment]
 }
 
+/// A Ceph backend whose credential can be permanently invalidated while old
+/// reconciliation work still holds an actor reference. Invalidation is a
+/// barrier: it rejects new operations immediately and returns only after work
+/// already inside the backend has stopped using the credential.
+public protocol CephStorageBackend: StorageBackend {
+    func invalidateForCredentialRevocation() async
+}
+
 extension StorageBackend {
     public func adoptVolume(
         volumeId _: String, existingPath _: String, format _: DiskFormat
     ) async throws -> DiskAttachment {
         throw StorageBackendError.createFailed("this storage backend cannot adopt an existing volume path")
+    }
+
+    public func inspectVolume(volumeId: String) async throws -> DiskAttachment? {
+        try await listVolumes()[volumeId]
+    }
+
+    public func prepareAttachmentForQEMU(_: DiskAttachment) async throws {}
+
+    /// Source-compatible conveniences for filesystem-only callers and tests.
+    /// New reconciliation code carries the typed attachment end to end.
+    public func resizeVolume(volumePath: String, newSizeBytes: Int64) async throws {
+        try await resizeVolume(
+            attachment: .file(path: volumePath, format: DiskFormat(volumePath: volumePath)),
+            newSizeBytes: newSizeBytes)
+    }
+
+    public func createSnapshot(
+        volumeId: String, snapshotId: String, volumePath: String
+    ) async throws -> String {
+        try await createSnapshot(
+            volumeId: volumeId, snapshotId: snapshotId,
+            attachment: .file(path: volumePath, format: DiskFormat(volumePath: volumePath)))
+    }
+
+    public func cloneVolume(
+        sourceVolumeId: String, sourcePath: String, targetVolumeId: String
+    ) async throws -> DiskAttachment {
+        try await cloneVolume(
+            sourceVolumeId: sourceVolumeId,
+            sourceAttachment: .file(path: sourcePath, format: DiskFormat(volumePath: sourcePath)),
+            targetVolumeId: targetVolumeId)
+    }
+
+    public func volumeInfo(volumePath: String) async throws -> VolumeInfoResult {
+        try await volumeInfo(
+            attachment: .file(path: volumePath, format: DiskFormat(volumePath: volumePath)))
     }
 }
 
@@ -124,9 +189,12 @@ public enum StorageBackendError: Error, LocalizedError, Sendable {
     case volumeNotFound(String)
     case imageSourceUnavailable
     case unsupportedFormat(String)
-    /// The host itself is the problem (qemu-img missing, permission denied,
-    /// disk full): retrying cannot succeed until an operator fixes it, so the
-    /// message must carry the remediation.
+    /// The storage filesystem cannot currently satisfy the write. Kept
+    /// separate from host misconfiguration so freeing space always re-drives
+    /// the blocked convergence at the same generation.
+    case insufficientDiskSpace(String)
+    /// A stable host prerequisite is missing or unusable (for example,
+    /// qemu-img is missing or the storage path is not writable).
     case hostMisconfiguration(String)
 
     public var errorDescription: String? {
@@ -149,6 +217,8 @@ public enum StorageBackendError: Error, LocalizedError, Sendable {
             return "Image source not available: cannot materialize a disk from an image"
         case .unsupportedFormat(let format):
             return "Unsupported disk format: \(format)"
+        case .insufficientDiskSpace(let reason):
+            return "Insufficient disk space: \(reason)"
         case .hostMisconfiguration(let reason):
             return "Host misconfiguration: \(reason)"
         }

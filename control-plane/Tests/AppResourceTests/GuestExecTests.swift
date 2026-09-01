@@ -24,7 +24,6 @@ final class GuestExecTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -66,15 +65,10 @@ final class GuestExecTests {
         named agentName: String = "exec-agent",
         supportsVMGuestExec: Bool? = nil
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: agentName,
+        let agentID = try await TestDataBuilder(db: app.db).registerAgent(
+            on: app,
+            named: agentName,
             hostname: "test-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
             hypervisors: [
                 HypervisorSupport(
                     type: .qemu,
@@ -84,22 +78,16 @@ final class GuestExecTests {
                     supportsVsock: true,
                     supportsGuestExec: supportsVMGuestExec)
             ],
-            protocolVersion: WireProtocol.currentVersion,
-            sandboxCapable: true
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: agentName,
-            organizationScope: orgID.map { .organization($0) })
+            sandboxCapable: true)
         if let sandbox {
-            sandbox.hypervisorId = agentUUID.uuidString
+            sandbox.hypervisorId = agentID
             try await sandbox.save(on: app.db)
         }
         if let vm {
-            vm.hypervisorId = agentUUID.uuidString
+            vm.hypervisorId = agentID
             try await vm.save(on: app.db)
         }
-        return agentUUID.uuidString
+        return agentID
     }
 
     private struct ExecBody: Content {
@@ -109,6 +97,25 @@ final class GuestExecTests {
         var tty: Bool?
         var rows: Int?
         var cols: Int?
+    }
+
+    enum AuditedVMGuestExecutionRoute: CaseIterable, Sendable {
+        case exec
+        case run
+
+        var suffix: String {
+            switch self {
+            case .exec: "exec"
+            case .run: "actions/run"
+            }
+        }
+
+        var domainRequestEvent: String {
+            switch self {
+            case .exec: "vm.exec.requested"
+            case .run: "vm.command.requested"
+            }
+        }
     }
 
     // MARK: - POST /api/sandboxes/:id/exec validation
@@ -208,13 +215,24 @@ final class GuestExecTests {
     func vmExecDeniedWithoutPermission() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "exec-vm", project: project)
+            let path = "/api/vms/\(vm.id!.uuidString.lowercased())/exec"
 
-            try await app.test(.POST, "/api/vms/\(vm.id!)/exec") { req in
+            try await app.test(.POST, path) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(ExecBody(command: ["/bin/sh"]))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
+
+            let apiRequests = try await self.auditEvents(ofType: "api.request", on: app)
+            #expect(apiRequests.count == 1)
+            let apiRequest = try #require(apiRequests.first)
+            #expect(apiRequest.path == path)
+            #expect(apiRequest.status == 403)
+            #expect(apiRequest.resourceType == "vms")
+            #expect(apiRequest.resourceID == vm.id?.uuidString)
+            #expect(apiRequest.action == "exec")
+            #expect(try await self.auditEvents(ofType: "vm.exec.requested", on: app).isEmpty)
         }
     }
 
@@ -231,6 +249,81 @@ final class GuestExecTests {
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
+        }
+    }
+
+    @Test("VM exec rejects an oversized command argument before acceptance")
+    func vmExecRejectsOversizedCommandArgument() async throws {
+        try await withSandboxTestApp { app, user, project, _, token in
+            user.isSystemAdmin = true
+            try await user.save(on: app.db)
+            let vm = try await TestDataBuilder(db: app.db).createVM(
+                name: "oversized-exec-vm", project: project)
+            let path = "/api/vms/\(vm.id!.uuidString.lowercased())/exec"
+            let oversizedArgument = String(repeating: "x", count: Validate.textLength + 1)
+
+            try await app.test(.POST, path) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(ExecBody(command: [oversizedArgument]))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            let requests = try await self.auditEvents(ofType: "api.request", on: app)
+            #expect(requests.count == 1)
+            #expect(requests.first?.status == 400)
+            #expect(requests.first?.metadata == nil)
+            #expect(try await self.auditEvents(ofType: "vm.exec.requested", on: app).isEmpty)
+        }
+    }
+
+    @Test(
+        "Invalid VM guest-execution environment is status-only in generic audit",
+        arguments: AuditedVMGuestExecutionRoute.allCases)
+    func invalidGuestExecutionEnvironmentIsRedacted(
+        route: AuditedVMGuestExecutionRoute
+    ) async throws {
+        try await withSandboxTestApp { app, user, project, _, token in
+            user.isSystemAdmin = true
+            try await user.save(on: app.db)
+            let vm = try await TestDataBuilder(db: app.db).createVM(
+                name: "redacted-exec-vm", project: project)
+            vm.guestAgentEnabled = true
+            _ = try await self.registerAgent(
+                app: app, vm: vm, supportsVMGuestExec: true)
+            vm.setStatus(.running)
+            try await vm.save(on: app.db)
+
+            let keySentinel = "STR84_ENV_KEY_MUST_NOT_REACH_AUDIT"
+            let valueSentinel = "STR84_ENV_VALUE_MUST_NOT_REACH_AUDIT"
+            let overlongValue =
+                valueSentinel + String(repeating: "x", count: Validate.textLength + 1)
+            let path = "/api/vms/\(vm.id!.uuidString.lowercased())/\(route.suffix)"
+
+            try await app.test(.POST, path) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    ExecBody(
+                        command: ["/usr/bin/id"],
+                        env: [keySentinel: overlongValue]))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            let requests = try await self.auditEvents(ofType: "api.request", on: app)
+            #expect(requests.count == 1)
+            let request = try #require(requests.first)
+            #expect(request.path == path)
+            #expect(request.status == 400)
+            #expect(request.resourceType == "vms")
+            #expect(request.resourceID == vm.id?.uuidString)
+            #expect(request.action == route.suffix)
+            #expect(request.metadata == nil)
+            let persistedMetadata = request.metadataJSON ?? ""
+            #expect(!persistedMetadata.contains(keySentinel))
+            #expect(!persistedMetadata.contains(valueSentinel))
+            #expect(
+                try await self.auditEvents(ofType: route.domainRequestEvent, on: app).isEmpty)
         }
     }
 
@@ -336,13 +429,25 @@ final class GuestExecTests {
     func vmRunDeniedWithoutPermission() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "run-vm", project: project)
-            try await app.test(.POST, "/api/vms/\(vm.id!)/actions/run") { req in
+            let path = "/api/vms/\(vm.id!.uuidString.lowercased())/actions/run"
+            try await app.test(.POST, path) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(ExecBody(command: ["/usr/bin/id"]))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
             #expect(try await VMCommandExecution.query(on: app.db).count() == 0)
+
+            let apiRequests = try await self.auditEvents(ofType: "api.request", on: app)
+            #expect(apiRequests.count == 1)
+            let apiRequest = try #require(apiRequests.first)
+            #expect(apiRequest.path == path)
+            #expect(apiRequest.status == 403)
+            #expect(apiRequest.resourceType == "vms")
+            #expect(apiRequest.resourceID == vm.id?.uuidString)
+            #expect(apiRequest.action == "actions/run")
+            #expect(
+                try await self.auditEvents(ofType: "vm.command.requested", on: app).isEmpty)
         }
     }
 
@@ -357,10 +462,16 @@ final class GuestExecTests {
             vm.setStatus(.running)
             try await vm.save(on: app.db)
 
+            let environmentSentinel = "STR84_ENVIRONMENT_MUST_NOT_BE_AUDITED"
+            let workingDirectorySentinel = "/STR84/WORKING_DIRECTORY_MUST_NOT_BE_AUDITED"
             var accepted: OperationResponse?
             try await app.test(.POST, "/api/vms/\(vm.id!)/actions/run") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(ExecBody(command: ["/usr/bin/id"]))
+                try req.content.encode(
+                    ExecBody(
+                        command: ["/usr/bin/id"],
+                        env: ["STR84_SECRET": environmentSentinel],
+                        workingDir: workingDirectorySentinel))
             } afterResponse: { res in
                 #expect(res.status == .accepted)
                 accepted = try res.content.decode(OperationResponse.self)
@@ -372,6 +483,26 @@ final class GuestExecTests {
             let operationID = try #require(accepted?.id)
             let payload = try #require(try await VMCommandPayload.find(operationID, on: app.db))
             #expect(payload.command == ["/usr/bin/id"])
+
+            let requested = try #require(
+                try await self.auditEvents(ofType: "vm.command.requested", on: app).first)
+            #expect(requested.resourceType == "vms")
+            #expect(requested.resourceID == vm.id?.uuidString)
+            #expect(requested.userID == user.id)
+            #expect(requested.metadata?["correlationID"] == operationID.uuidString)
+            #expect(requested.metadata?["argv"] == "[\"/usr/bin/id\"]")
+            #expect(requested.metadata?["outcome"] == "accepted")
+            #expect(!requested.metadata!.values.contains(environmentSentinel))
+            #expect(!requested.metadata!.values.contains(workingDirectorySentinel))
+
+            let completed = try #require(
+                try await self.auditEvents(ofType: "vm.command.completed", on: app).first)
+            #expect(completed.metadata?["correlationID"] == operationID.uuidString)
+            #expect(completed.metadata?["outcome"] == "failed")
+            #expect(completed.metadata?["reason"]?.contains("Could not dispatch command") == true)
+            #expect(!completed.metadata!.values.contains(environmentSentinel))
+            #expect(!completed.metadata!.values.contains(workingDirectorySentinel))
+
             try await app.test(.GET, "/api/operations/\(operationID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
@@ -388,12 +519,15 @@ final class GuestExecTests {
 
     private func mintPendingSession(
         _ manager: GuestExecSessionManager,
+        sessionId: String = UUID().uuidString,
         resourceKind: GuestResourceKind = .sandbox,
         resourceId: String = UUID().uuidString,
         userId: String = UUID().uuidString,
+        auditContext: VMGuestExecutionAuditContext? = nil,
         now: Date = Date()
     ) -> GuestExecSessionManager.PendingExecSession {
         manager.createPendingSession(
+            sessionId: sessionId,
             resourceKind: resourceKind,
             resourceId: resourceId,
             agentKey: agentKey("exec-agent"),
@@ -404,8 +538,37 @@ final class GuestExecTests {
             tty: true,
             rows: 24,
             cols: 80,
+            auditContext: auditContext,
             now: now
         )
+    }
+
+    private func vmAuditContext(
+        vmID: UUID,
+        sessionId: String,
+        userID: UUID = UUID()
+    ) -> VMGuestExecutionAuditContext {
+        VMGuestExecutionAuditContext(
+            vmID: vmID,
+            organizationID: UUID(),
+            userID: userID,
+            username: "exec-auditor",
+            apiKeyID: UUID(),
+            sourceIP: "192.0.2.84",
+            adminBypass: false,
+            correlationID: sessionId,
+            argv: ["/bin/sh", "-c", "echo hi"])
+    }
+
+    private func auditEvents(
+        ofType type: String,
+        on app: Application
+    ) async throws -> [AuditEvent] {
+        await app.audit.flush()
+        return try await AuditEvent.query(on: app.db)
+            .filter(\.$eventType == type)
+            .sort(\.$createdAt)
+            .all()
     }
 
     @Test("A pending session carries the exec request and a 60s expiry")
@@ -431,7 +594,15 @@ final class GuestExecTests {
         try await withSandboxTestApp { app, _, _, _, _ in
             let manager = app.guestExecSessionManager
             let now = Date()
-            let session = self.mintPendingSession(manager, now: now)
+            let vmID = UUID()
+            let sessionId = UUID().uuidString
+            let session = self.mintPendingSession(
+                manager,
+                sessionId: sessionId,
+                resourceKind: .virtualMachine,
+                resourceId: vmID.uuidString,
+                auditContext: self.vmAuditContext(vmID: vmID, sessionId: sessionId),
+                now: now)
             let later = now.addingTimeInterval(GuestExecSessionManager.pendingSessionTTL + 1)
 
             // Attaching after the TTL reports expiry...
@@ -452,6 +623,8 @@ final class GuestExecTests {
             // ...and the entry is gone afterwards.
             let stillThere = manager.hasPendingSession(sessionId: session.sessionId, now: later)
             #expect(stillThere == false)
+            #expect(try await self.auditEvents(ofType: "vm.exec.started", on: app).isEmpty)
+            #expect(try await self.auditEvents(ofType: "vm.exec.ended", on: app).isEmpty)
         }
     }
 
@@ -566,7 +739,10 @@ final class GuestExecTests {
             let forResource = manager.getSessions(
                 resourceKind: session.resourceKind, resourceId: session.resourceId)
             #expect(forResource.count == 1)
-            manager.removeSession(sessionId: session.sessionId)
+            await manager.endSession(
+                sessionId: session.sessionId,
+                outcome: .terminated,
+                reason: "test cleanup")
             let afterRemoval = manager.getSessions(
                 resourceKind: session.resourceKind, resourceId: session.resourceId)
             #expect(afterRemoval.isEmpty)
@@ -574,11 +750,113 @@ final class GuestExecTests {
         }
     }
 
+    @Test("Only the first owning-agent start is audited")
+    func firstOwningAgentStartIsAuditedOnce() async throws {
+        try await withSandboxTestApp { app, _, _, _, _ in
+            let manager = app.guestExecSessionManager
+            let vmID = UUID()
+            let sessionId = UUID().uuidString
+            let session = self.mintPendingSession(
+                manager,
+                sessionId: sessionId,
+                resourceKind: .virtualMachine,
+                resourceId: vmID.uuidString,
+                auditContext: self.vmAuditContext(vmID: vmID, sessionId: sessionId))
+            _ = try manager.attachSession(
+                sessionId: session.sessionId,
+                resourceKind: session.resourceKind,
+                resourceId: session.resourceId,
+                userId: session.userId,
+                websocket: nil)
+
+            await manager.handleStarted(
+                sessionId: session.sessionId, fromAgentKey: agentKey("impostor"))
+            #expect(try await self.auditEvents(ofType: "vm.exec.started", on: app).isEmpty)
+
+            await manager.handleStarted(
+                sessionId: session.sessionId, fromAgentKey: agentKey("exec-agent"))
+            await manager.handleStarted(
+                sessionId: session.sessionId, fromAgentKey: agentKey("exec-agent"))
+
+            let events = try await self.auditEvents(ofType: "vm.exec.started", on: app)
+            #expect(events.count == 1)
+            #expect(events.first?.resourceType == "vms")
+            #expect(events.first?.resourceID == vmID.uuidString)
+            #expect(events.first?.metadata?["correlationID"] == sessionId)
+            #expect(events.first?.metadata?["outcome"] == "started")
+        }
+    }
+
+    @Test("Concurrent start and end transitions retain lifecycle timestamp order")
+    func concurrentStartAndEndTimestampsAreOrdered() async throws {
+        try await withSandboxTestApp { app, _, _, _, _ in
+            let manager = app.guestExecSessionManager
+            let vmID = UUID()
+            let sessionId = UUID().uuidString
+            let session = self.mintPendingSession(
+                manager,
+                sessionId: sessionId,
+                resourceKind: .virtualMachine,
+                resourceId: vmID.uuidString,
+                auditContext: self.vmAuditContext(vmID: vmID, sessionId: sessionId))
+            _ = try manager.attachSession(
+                sessionId: session.sessionId,
+                resourceKind: session.resourceKind,
+                resourceId: session.resourceId,
+                userId: session.userId,
+                websocket: nil)
+
+            // Give both concurrent transitions the same observed wall-clock
+            // value. The terminal claim waits only for the locked start state,
+            // not its asynchronous audit enqueue, reproducing the ordering
+            // race while making the expected one-microsecond floor exact.
+            let observedAt = Date(timeIntervalSince1970: 1_800_000_000)
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    await manager.handleStarted(
+                        sessionId: session.sessionId,
+                        fromAgentKey: agentKey("exec-agent"),
+                        timestamp: observedAt)
+                }
+                group.addTask {
+                    while manager.getSession(sessionId: session.sessionId)?
+                        .agentConfirmedStartedAt == nil
+                    {
+                        await Task.yield()
+                    }
+                    await manager.handleExit(
+                        sessionId: session.sessionId,
+                        fromAgentKey: agentKey("exec-agent"),
+                        exitCode: 0,
+                        timestamp: observedAt)
+                }
+            }
+
+            let started = try #require(
+                try await self.auditEvents(ofType: "vm.exec.started", on: app).first)
+            let ended = try #require(
+                try await self.auditEvents(ofType: "vm.exec.ended", on: app).first)
+            let startedAt = try #require(started.createdAt)
+            let endedAt = try #require(ended.createdAt)
+            #expect(started.metadata?["correlationID"] == sessionId)
+            #expect(ended.metadata?["correlationID"] == sessionId)
+            #expect(startedAt == observedAt)
+            #expect(endedAt > startedAt)
+        }
+    }
+
     @Test("Terminal agent events only tear down sessions owned by the reporting agent")
     func terminalEventsRequireOwningAgent() async throws {
         try await withSandboxTestApp { app, _, _, _, _ in
             let manager = app.guestExecSessionManager
-            let session = self.mintPendingSession(manager)
+            let vmID = UUID()
+            let sessionId = UUID().uuidString
+            let session = self.mintPendingSession(
+                manager,
+                sessionId: sessionId,
+                resourceKind: .virtualMachine,
+                resourceId: vmID.uuidString,
+                auditContext: self.vmAuditContext(vmID: vmID, sessionId: sessionId))
             _ = try manager.attachSession(
                 sessionId: session.sessionId,
                 resourceKind: session.resourceKind,
@@ -588,11 +866,286 @@ final class GuestExecTests {
             )
 
             // A spoofed exit from a different agent must not remove the session.
-            manager.handleExit(sessionId: session.sessionId, fromAgentKey: agentKey("impostor"), exitCode: 0)
+            await manager.handleExit(
+                sessionId: session.sessionId,
+                fromAgentKey: agentKey("impostor"),
+                exitCode: 0)
             #expect(manager.getSession(sessionId: session.sessionId) != nil)
 
             // The owning agent's exit does.
-            manager.handleExit(sessionId: session.sessionId, fromAgentKey: agentKey("exec-agent"), exitCode: 0)
+            await manager.handleExit(
+                sessionId: session.sessionId,
+                fromAgentKey: agentKey("exec-agent"),
+                exitCode: 17)
+            #expect(manager.getSession(sessionId: session.sessionId) == nil)
+
+            // A duplicate terminal frame arrives after the atomic removal and
+            // cannot append a second end fact.
+            await manager.handleExit(
+                sessionId: session.sessionId,
+                fromAgentKey: agentKey("exec-agent"),
+                exitCode: 17)
+
+            let events = try await self.auditEvents(ofType: "vm.exec.ended", on: app)
+            #expect(events.count == 1)
+            #expect(events.first?.resourceID == vmID.uuidString)
+            #expect(events.first?.metadata?["correlationID"] == sessionId)
+            #expect(events.first?.metadata?["outcome"] == "exited")
+            #expect(events.first?.metadata?["exitCode"] == "17")
+        }
+    }
+
+    @Test("Agent closure is refused before start and disconnected after start")
+    func agentClosureUsesConfirmedStartPhase() async throws {
+        try await withSandboxTestApp { app, _, _, _, _ in
+            let manager = app.guestExecSessionManager
+            let vmID = UUID()
+
+            let refusedSessionId = UUID().uuidString
+            let refused = self.mintPendingSession(
+                manager,
+                sessionId: refusedSessionId,
+                resourceKind: .virtualMachine,
+                resourceId: vmID.uuidString,
+                auditContext: self.vmAuditContext(vmID: vmID, sessionId: refusedSessionId))
+            _ = try manager.attachSession(
+                sessionId: refused.sessionId,
+                resourceKind: refused.resourceKind,
+                resourceId: refused.resourceId,
+                userId: refused.userId,
+                websocket: nil)
+
+            let disconnectedSessionId = UUID().uuidString
+            let disconnected = self.mintPendingSession(
+                manager,
+                sessionId: disconnectedSessionId,
+                resourceKind: .virtualMachine,
+                resourceId: vmID.uuidString,
+                auditContext: self.vmAuditContext(vmID: vmID, sessionId: disconnectedSessionId))
+            _ = try manager.attachSession(
+                sessionId: disconnected.sessionId,
+                resourceKind: disconnected.resourceKind,
+                resourceId: disconnected.resourceId,
+                userId: disconnected.userId,
+                websocket: nil)
+            await manager.handleStarted(
+                sessionId: disconnected.sessionId,
+                fromAgentKey: agentKey("exec-agent"))
+
+            await manager.handleClosed(
+                sessionId: refused.sessionId,
+                fromAgentKey: agentKey("exec-agent"),
+                reason: "guest refused the process")
+            await manager.handleClosed(
+                sessionId: disconnected.sessionId,
+                fromAgentKey: agentKey("exec-agent"),
+                reason: "guest channel closed")
+
+            let events = try await self.auditEvents(ofType: "vm.exec.ended", on: app)
+            let outcomes: [String: String] = Dictionary(
+                uniqueKeysWithValues: events.compactMap { event in
+                    guard let correlationID = event.metadata?["correlationID"],
+                        let outcome = event.metadata?["outcome"]
+                    else { return nil }
+                    return (correlationID, outcome)
+                })
+            #expect(outcomes[refusedSessionId] == "refused")
+            #expect(outcomes[disconnectedSessionId] == "disconnected")
+        }
+    }
+
+    @Test("Browser termination and agent disconnect append one typed end fact each")
+    func controlPlaneTerminalPathsAreAudited() async throws {
+        try await withSandboxTestApp { app, _, _, _, _ in
+            let manager = app.guestExecSessionManager
+            let vmID = UUID()
+
+            let terminatedSessionId = UUID().uuidString
+            let terminated = self.mintPendingSession(
+                manager,
+                sessionId: terminatedSessionId,
+                resourceKind: .virtualMachine,
+                resourceId: vmID.uuidString,
+                auditContext: self.vmAuditContext(vmID: vmID, sessionId: terminatedSessionId))
+            _ = try manager.attachSession(
+                sessionId: terminated.sessionId,
+                resourceKind: terminated.resourceKind,
+                resourceId: terminated.resourceId,
+                userId: terminated.userId,
+                websocket: nil)
+
+            let disconnectedSessionId = UUID().uuidString
+            let disconnected = self.mintPendingSession(
+                manager,
+                sessionId: disconnectedSessionId,
+                resourceKind: .virtualMachine,
+                resourceId: vmID.uuidString,
+                auditContext: self.vmAuditContext(vmID: vmID, sessionId: disconnectedSessionId))
+            _ = try manager.attachSession(
+                sessionId: disconnected.sessionId,
+                resourceKind: disconnected.resourceKind,
+                resourceId: disconnected.resourceId,
+                userId: disconnected.userId,
+                websocket: nil)
+
+            await manager.endSession(
+                sessionId: terminated.sessionId,
+                outcome: .terminated,
+                reason: "browser disconnected")
+            await manager.closeAllSessions(
+                forAgent: agentKey("exec-agent"), reason: "agent disconnected")
+
+            let events = try await self.auditEvents(ofType: "vm.exec.ended", on: app)
+            let outcomes: [String: String] = Dictionary(
+                uniqueKeysWithValues: events.compactMap { event in
+                    guard let correlationID = event.metadata?["correlationID"],
+                        let outcome = event.metadata?["outcome"]
+                    else { return nil }
+                    return (correlationID, outcome)
+                })
+            #expect(outcomes[terminatedSessionId] == "terminated")
+            #expect(outcomes[disconnectedSessionId] == "disconnected")
+        }
+    }
+
+    @Test("Racing terminal paths append exactly one end fact")
+    func racingTerminalPathsAreAuditedOnce() async throws {
+        try await withSandboxTestApp { app, _, _, _, _ in
+            let manager = app.guestExecSessionManager
+            let vmID = UUID()
+            let sessionId = UUID().uuidString
+            let session = self.mintPendingSession(
+                manager,
+                sessionId: sessionId,
+                resourceKind: .virtualMachine,
+                resourceId: vmID.uuidString,
+                auditContext: self.vmAuditContext(vmID: vmID, sessionId: sessionId))
+            _ = try manager.attachSession(
+                sessionId: session.sessionId,
+                resourceKind: session.resourceKind,
+                resourceId: session.resourceId,
+                userId: session.userId,
+                websocket: nil)
+
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    await manager.handleExit(
+                        sessionId: session.sessionId,
+                        fromAgentKey: agentKey("exec-agent"),
+                        exitCode: 0)
+                }
+                group.addTask {
+                    await manager.endSession(
+                        sessionId: session.sessionId,
+                        outcome: .terminated,
+                        reason: "browser disconnected")
+                }
+            }
+
+            let events = try await self.auditEvents(ofType: "vm.exec.ended", on: app)
+            #expect(events.count == 1)
+            #expect(events.first?.metadata?["correlationID"] == sessionId)
+            #expect(["exited", "terminated"].contains(events.first?.metadata?["outcome"] ?? ""))
+        }
+    }
+
+    @Test("A typed control-plane timeout appends one timed-out end fact")
+    func typedTimeoutIsAuditedOnce() async throws {
+        try await withSandboxTestApp { app, _, _, _, _ in
+            let manager = app.guestExecSessionManager
+            let vmID = UUID()
+            let sessionId = UUID().uuidString
+            let session = self.mintPendingSession(
+                manager,
+                sessionId: sessionId,
+                resourceKind: .virtualMachine,
+                resourceId: vmID.uuidString,
+                auditContext: self.vmAuditContext(vmID: vmID, sessionId: sessionId))
+            _ = try manager.attachSession(
+                sessionId: session.sessionId,
+                resourceKind: session.resourceKind,
+                resourceId: session.resourceId,
+                userId: session.userId,
+                websocket: nil)
+
+            await manager.endSession(
+                sessionId: session.sessionId,
+                outcome: .timedOut,
+                reason: "typed exec timeout")
+            await manager.endSession(
+                sessionId: session.sessionId,
+                outcome: .timedOut,
+                reason: "duplicate timeout")
+
+            let events = try await self.auditEvents(ofType: "vm.exec.ended", on: app)
+            #expect(events.count == 1)
+            #expect(events.first?.resourceType == "vms")
+            #expect(events.first?.resourceID == vmID.uuidString)
+            #expect(events.first?.metadata?["correlationID"] == sessionId)
+            #expect(events.first?.metadata?["outcome"] == "timed_out")
+            #expect(events.first?.metadata?["phase"] == "ended")
+        }
+    }
+
+    @Test("Sandbox exec lifecycle does not emit VM audit events")
+    func sandboxExecDoesNotEmitVMAuditEvents() async throws {
+        try await withSandboxTestApp { app, _, _, _, _ in
+            let manager = app.guestExecSessionManager
+            let session = self.mintPendingSession(manager)
+            _ = try manager.attachSession(
+                sessionId: session.sessionId,
+                resourceKind: session.resourceKind,
+                resourceId: session.resourceId,
+                userId: session.userId,
+                websocket: nil)
+
+            await manager.handleStarted(
+                sessionId: session.sessionId, fromAgentKey: agentKey("exec-agent"))
+            await manager.handleExit(
+                sessionId: session.sessionId,
+                fromAgentKey: agentKey("exec-agent"),
+                exitCode: 0)
+
+            #expect(try await self.auditEvents(ofType: "vm.exec.started", on: app).isEmpty)
+            #expect(try await self.auditEvents(ofType: "vm.exec.ended", on: app).isEmpty)
+        }
+    }
+
+    @Test("Audit persistence failure cannot interrupt an interactive exec lifecycle")
+    func execAuditPersistenceFailureIsFailOpen() async throws {
+        try await withSandboxTestApp { app, _, _, _, _ in
+            let manager = app.guestExecSessionManager
+            let vmID = UUID()
+            let sessionId = UUID().uuidString
+            let session = self.mintPendingSession(
+                manager,
+                sessionId: sessionId,
+                resourceKind: .virtualMachine,
+                resourceId: vmID.uuidString,
+                auditContext: self.vmAuditContext(vmID: vmID, sessionId: sessionId))
+            _ = try manager.attachSession(
+                sessionId: session.sessionId,
+                resourceKind: session.resourceKind,
+                resourceId: session.resourceId,
+                userId: session.userId,
+                websocket: nil)
+
+            // Remove the backing table before the lifecycle facts are queued.
+            // `flush` below forces the fail-open backend through the actual
+            // persistence error rather than merely proving that queueing is
+            // asynchronous.
+            try await app.db.schema(AuditEvent.schema).delete()
+            await manager.handleStarted(
+                sessionId: session.sessionId, fromAgentKey: agentKey("exec-agent"))
+            #expect(manager.getSession(sessionId: session.sessionId)?.agentConfirmedStarted == true)
+
+            await manager.handleExit(
+                sessionId: session.sessionId,
+                fromAgentKey: agentKey("exec-agent"),
+                exitCode: 0)
+            #expect(manager.getSession(sessionId: session.sessionId) == nil)
+
+            await app.audit.flush()
             #expect(manager.getSession(sessionId: session.sessionId) == nil)
         }
     }
@@ -638,7 +1191,8 @@ final class GuestExecTests {
                 websocket: nil
             )
 
-            manager.closeAllSessions(forAgent: agentKey("exec-agent"), reason: "agent disconnected")
+            await manager.closeAllSessions(
+                forAgent: agentKey("exec-agent"), reason: "agent disconnected")
 
             #expect(manager.getSession(sessionId: attached.sessionId) == nil)
             let attachedIndex = manager.getSessions(

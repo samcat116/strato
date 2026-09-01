@@ -128,6 +128,10 @@ Exactly one of the two ever holds: a failure recorded at the target generation
 makes `converged` false (STR-191). A `degraded` naming an *older* generation is
 a failure a newer mutation is already retrying, and it can stand alongside a
 converged resource — which is why the comparison is by generation, not presence.
+"Failed" here means an attempt was refused or failed, not necessarily that the
+agent stopped trying: a reported capacity or host-state block remains degraded
+while level-triggered syncs retry it, then clears to converged when the block
+lifts without requiring a new generation.
 
 Prefer that over `status` alone. VMs are still created in `Created` rather than
 running, so start them explicitly with `POST /api/vms/{id}/start`.

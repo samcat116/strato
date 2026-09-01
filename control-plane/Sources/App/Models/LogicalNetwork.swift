@@ -133,9 +133,10 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     var resolverIndex: Int?
 
     /// Monotonic counter bumped whenever a change alters how agents realize the
-    /// network's L3 (subnet, gateway, or external access). Sent to agents as the
+    /// network's L3 (subnet, gateway, or external access), or creates, changes,
+    /// or deletes its switch-level network ACL. Sent to agents as the
     /// `DesiredNetworkState.generation` so replayed/reordered syncs can't roll
-    /// the network's realization backward.
+    /// the network's realization backward or resurrect removed ACL rules.
     @Field(key: "generation")
     var generation: Int
 
@@ -290,9 +291,8 @@ struct CreateNetworkRequest: Content, ValidatedRequestBody {
     let gateway6: String?
     /// Pass false for a v4-only network (subnet6 must then be omitted).
     let ipv6Enabled: Bool?
-    /// Required: there is no default project (issue #1059). Optional here so
-    /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
-    /// rather than a `Codable` decode failure that names neither.
+    /// Required by project resolution; optional at decode time so the API can
+    /// return a useful error.
     let projectId: UUID?
     /// Whether agents program OVN DHCP for this network. Defaults true.
     let dhcpEnabled: Bool?

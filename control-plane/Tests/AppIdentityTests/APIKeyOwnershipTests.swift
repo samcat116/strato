@@ -22,7 +22,6 @@ final class APIKeyOwnershipTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let alice = try await builder.createUser(

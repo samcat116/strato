@@ -534,7 +534,7 @@ struct DomainRedefinitionTests {
     }
 
     /// Sub-block headroom cannot be realized — the same rule
-    /// `MemoryHotplugPlan` applies at create time — so it is not a widening at
+    /// `QEMUMemoryReservation` applies at create time — so it is not a widening at
     /// all rather than a device the VM could never grow into.
     @Test("headroom smaller than one virtio-mem block is not a widening")
     func subBlockHeadroomIsIgnored() throws {

@@ -22,6 +22,7 @@ const pendingMutationLabels: Record<OperationKind, string> = {
   attach: "Attaching",
   detach: "Detaching",
   throttle: "Setting I/O limits",
+  run: "Running command",
 };
 
 /**

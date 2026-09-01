@@ -29,48 +29,17 @@ import {
 } from "@/lib/cloud-images";
 import { formatMemory } from "@/lib/format-bytes";
 import { cn } from "@/lib/utils";
-import type { CPUArchitecture, ImageFormat } from "@/types/api";
-
-const ARCHITECTURES: CPUArchitecture[] = ["x86_64", "arm64"];
-const DISK_FORMATS: ImageFormat[] = ["qcow2", "raw", "vmdk", "vhd", "vhdx"];
-
-/**
- * What the Disk format control can hold. "auto" means "say nothing and let the
- * server read the file", which is the only honest default: the extension often
- * doesn't name a format (`.img`, `.iso`, none at all), and defaulting to a
- * concrete value would post a claim the user never made — the server trusts an
- * explicit format whenever its own header probe finds no signature, so a raw
- * `disk.img` would be stored and displayed as qcow2.
- */
-type FormatChoice = ImageFormat | "auto";
-
-/** The blue accent from the design system. A literal, matching how the rest of
- *  the ported design references it (see organization-switcher, overview chart). */
-const ACCENT = "#3c87dd";
-
-/** Shared field styling: mono values on a bordered box, blue focus ring. */
-const FIELD_CLASS =
-  "h-[38px] w-full rounded-[9px] border border-input bg-card px-3 font-mono text-[13px] font-medium text-foreground outline-none transition focus:border-[#3c87dd] focus:shadow-[0_0_0_3px_rgba(60,135,221,0.14)]";
-
-const LABEL_CLASS =
-  "mb-1.5 block text-xs font-semibold text-muted-foreground";
-
-/**
- * Best guess at a URL's disk format from its extension, for the format pill.
- *
- * Only extensions that name a format are reported. `.img`/`.iso` deliberately
- * return "auto": they say nothing about the contents — Ubuntu's cloud images
- * are `.img` but qcow2 inside — and the server settles it from the file's magic
- * bytes on download anyway. Guessing "raw" here would mislabel the most common
- * import in the catalog.
- */
-function guessFormatFromURL(url: string): ImageFormat | "auto" {
-  const match = url.match(/\.(qcow2|raw|vmdk|vhdx?)(\?|$)/i);
-  if (!match) return "auto";
-  return match[1].toLowerCase() as ImageFormat;
-}
-
-const isValidChecksum = (value: string) => /^[a-f0-9]{64}$/i.test(value.trim());
+import type { CPUArchitecture } from "@/types/api";
+import {
+  IMAGE_ARCHITECTURES as ARCHITECTURES,
+  IMAGE_DISK_FORMATS as DISK_FORMATS,
+  IMAGE_UPLOAD_ACCENT as ACCENT,
+  IMAGE_UPLOAD_FIELD_CLASS as FIELD_CLASS,
+  IMAGE_UPLOAD_LABEL_CLASS as LABEL_CLASS,
+  imageFormatFromURL as guessFormatFromURL,
+  isValidImageChecksum as isValidChecksum,
+  type ImageFormatChoice as FormatChoice,
+} from "@/lib/image-upload-model";
 
 interface UploadImageDialogProps {
   projectId: string;

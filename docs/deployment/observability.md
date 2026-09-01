@@ -21,18 +21,22 @@ OpenTelemetry is bootstrapped. Controlled by environment variables (see
 |----------|---------|-------|
 | `OTEL_METRICS_ENABLED` | `true` | Master switch for metric export |
 | `OTEL_TRACES_ENABLED` | `true` | Master switch for trace/span export |
-| `OTEL_LOGS_ENABLED` | `true` | Master switch for log export |
+| `OTEL_LOGS_ENABLED` | `true` | Adds OTLP log export; console/stdout logging always remains enabled |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` (gRPC) | Where to ship OTLP |
 | `OTEL_SERVICE_NAME` | `strato-control-plane` | `service.name` resource attribute |
 | `OTEL_RESOURCE_ATTRIBUTES` | — | Extra resource attributes; merged over the built-in `service.version` / `service.instance.id` / `deployment.environment.name` |
 
-The compose deployment sets all **three** `OTEL_*_ENABLED` variables to
+The compose deployment defaults all **three** `OTEL_*_ENABLED` variables to
 `false` — its Prometheus and Loki serve agent host telemetry and VM console
-logs, not control-plane OTLP export.
+logs, not control-plane OTLP export. Metrics can be opted in from `.env` with
+`OTEL_METRICS_ENABLED=true` and an `OTEL_EXPORTER_OTLP_ENDPOINT` reachable from
+the control-plane container; logs and traces remain disabled by the Compose
+manifest.
 
-When a pillar is disabled, its facade uses a no-op backend — emission call sites
-(`Counter`/`Gauge`/`Timer`, `withSpan`) stay in the code but cost nothing. The
-bootstrap is also skipped entirely under the `.testing` environment.
+When metrics or traces are disabled, their facade uses a no-op backend —
+emission call sites (`Counter`/`Gauge`/`Timer`, `withSpan`) stay in the code but
+cost nothing. Disabling OTLP logs leaves the console backend in place. The OTel
+backends are skipped entirely under the `.testing` environment.
 
 Production should run with `OTEL_METRICS_ENABLED=true` pointed at a collector.
 The Helm chart wires this via the `opentelemetry.*` values.
@@ -148,6 +152,68 @@ bounded; unmatched requests fall back to `unmatched`.
 | `strato_http_server_requests_total` | counter | `method`, `route`, `status` = `2xx`…`5xx` | Request count by route and status class |
 | `strato_http_server_request_duration_seconds` | timer | `method`, `route` | Request latency distribution |
 
+### PostgreSQL advisory locks
+
+| Metric | Type | Labels | Meaning |
+|--------|------|--------|---------|
+| `strato_advisory_lock_acquisitions_total` | counter | `namespace` | Successful transaction- and session-lock acquisitions |
+| `strato_advisory_lock_wait_duration_seconds` | timer | `namespace` | Time from the first attempt until successful acquisition; graph its upper percentiles to find cross-replica contention |
+| `strato_advisory_lock_release_failures_total` | counter | `namespace` | A session lock could not be confirmed released. **Alert on any increase** and inspect the paired critical log for the resource UUID and digest |
+
+`namespace` is deliberately the only metric label. Resource UUIDs and digests
+belong in logs and diagnostic queries, not an unbounded metric dimension. The
+stable `classid` mapping in PostgreSQL's two-`int4` advisory-lock space is:
+
+| `classid` | Namespace | `classid` | Namespace |
+|-----------|-----------|-----------|-----------|
+| 1 | `schema_migration` | 7 | `floating_ip_pool` |
+| 2 | `user_registration` | 8 | `resolver_index` |
+| 3 | `project_network` | 9 | `dns_zone` |
+| 4 | `sandbox_snapshot_lineage` | 10 | `volume_attachment` |
+| 5 | `quota` | 11 | `security_group_membership` |
+| 6 | `ipam` | 12 | `agent_enrollment` |
+
+List held and waiting Strato locks with signed digests that match the
+application's logs:
+
+```sql
+SELECT pid,
+       classid::bigint AS namespace,
+       CASE WHEN objid::bigint > 2147483647
+            THEN objid::bigint - 4294967296
+            ELSE objid::bigint
+       END AS object_digest,
+       mode,
+       granted
+FROM pg_locks
+WHERE locktype = 'advisory'
+  AND objsubid = 2
+  AND classid::bigint BETWEEN 1 AND 12
+ORDER BY granted, namespace, object_digest;
+```
+
+Object keys hash the UUID's 16 binary bytes with SHA-256, take the first four
+bytes in network order, and reinterpret that value as a signed `int4`.
+Singleton locks use digest `0`. To compare a candidate UUID with `objid`:
+
+```sql
+WITH candidate(id) AS (VALUES ('00112233-4455-6677-8899-aabbccddeeff'::uuid)),
+hashed AS (
+  SELECT id,
+         (get_byte(sha256(uuid_send(id)), 0)::bigint << 24)
+       | (get_byte(sha256(uuid_send(id)), 1)::bigint << 16)
+       | (get_byte(sha256(uuid_send(id)), 2)::bigint << 8)
+       |  get_byte(sha256(uuid_send(id)), 3)::bigint AS unsigned_digest
+  FROM candidate
+)
+SELECT id,
+       CASE WHEN unsigned_digest > 2147483647
+            THEN unsigned_digest - 4294967296
+            ELSE unsigned_digest
+       END AS object_digest
+FROM hashed;
+```
+
 ### Agent lifecycle & VM health
 
 | Metric | Type | Labels | Meaning |
@@ -160,7 +226,9 @@ bounded; unmatched requests fall back to `unmatched`.
 | `strato_agent_heartbeat_staleness_seconds` | gauge | `agent` = agent name | Seconds since the agent's last heartbeat, recorded each ~30s cycle **while connected**. Secondary "heartbeats slowing" signal; stops updating once the agent is swept |
 | `strato_vm_errors_total` | counter | `reason` = `reconciliation` \| `convergence_failed` \| `stuck_convergence` \| `mutation_failed` | A VM transitioned into `.error` |
 | `strato_vm_drift_total` | counter | — | A VM's observed state changed out-of-band with no mutation in flight (issue #260) |
+| `strato_desired_state_assembly_failures_total` | counter | `kind` = `vm`, `reason` = `boot_volume_count` \| `non_canonical_boot_volume` \| `terminating_boot_volume` \| `missing_volume_identity` \| `invalid_volume_device_name` \| `unexpected` | One workload entry could not be assembled and was omitted while the rest of the host payload continued. Alert on any increase; inspect the named VM in the paired error log and its degraded condition |
 | `strato_diverged_workloads` | gauge | `kind` = `vm` \| `sandbox` | Current workloads whose acknowledged observed status has remained different from desired state for at least 15 minutes with no mutation outstanding. Recorded every sweep, including zero. **Alert on `> 0`** |
+| `strato_secrets_encryption_unopenable` | gauge | `table` = one of the four recoverable-secret columns | Stored secrets the boot keyring could not open. Recorded for every table at startup, including zero. **Alert on `> 0`**; `/health/ready` also reports `secrets-encryption` degraded. |
 
 ### Teardown safety & site networking
 
@@ -190,6 +258,38 @@ bounded; unmatched requests fall back to `unmatched`.
 | `strato_agent_poll_total` | counter | `mode` = `conditional` \| `unconditional`, `outcome` = `served` \| `not_modified` \| `assembly_budget_exhausted` \| `park_refused` | A desired-state poll resolved. `served` is a full `200` payload; the other outcomes are conditional polls that finish with `304` |
 | `strato_agent_desired_state_last_full_refetch_timestamp_seconds` | gauge | `agent` = agent name | Unix timestamp of the last full `200` payload served for a request without `If-None-Match`. Conditional requests and failed response assembly do not update it |
 
+### Webhook delivery
+
+The queue gauges are database snapshots. Every control-plane replica observes
+the same durable outbox, so aggregate them with `max` across replicas, **never
+`sum`**. The per-subscription gauge is emitted for every live subscription,
+including zero, so a recovered queue does not leave a stale nonzero series.
+Deleting a subscription unregisters its UUID-labelled gauge.
+
+The counters are different: only the replica that performed the work
+increments them. Sum their rates or increases across replicas. For example:
+
+```promql
+max(strato_webhook_delivery_pending)
+max(strato_webhook_delivery_oldest_pending_age_seconds)
+max(strato_webhook_delivery_dropped)
+max by (subscription_id) (strato_webhook_delivery_subscription_pending)
+sum(rate(strato_webhook_delivery_attempts_total[5m]))
+sum by (result) (rate(strato_webhook_delivery_results_total[5m]))
+```
+
+Scope these queries to one deployment when a metrics backend contains several
+clusters.
+
+| Metric | Type | Labels | Meaning |
+|--------|------|--------|---------|
+| `strato_webhook_delivery_pending` | gauge | — | Total pending delivery rows in PostgreSQL, including scheduled retries and active claims |
+| `strato_webhook_delivery_oldest_pending_age_seconds` | gauge | — | Age of the oldest pending row; records zero when the queue is empty. This is the primary delivery-latency alert signal |
+| `strato_webhook_delivery_subscription_pending` | gauge | `subscription_id` | Pending rows for each subscription, including an explicit zero |
+| `strato_webhook_delivery_attempts_total` | counter | — | HTTP delivery attempts started. Its summed rate measures endpoint work, not terminal queue drain: retryable failures remain pending |
+| `strato_webhook_delivery_results_total` | counter | `result` = `succeeded` \| `failed` \| `dead` | Durable claimed-row verdicts. `failed` remains pending; `dead` includes exhausted attempts and rows parked because their subscription is disabled |
+| `strato_webhook_delivery_dropped` | gauge | — | Committed `dropped` rows still present in the seven-day delivery history. It can fall when history is pruned or a row is manually redelivered |
+
 ### Authorization (Cedar)
 
 Every `IAMAuthorizer.authorize` funnels through the same instrumented entry, so
@@ -206,6 +306,7 @@ this is the allow/deny rate and evaluation latency for the entire API.
 |--------|------|--------|---------|
 | `strato_ipam_allocations_total` | counter | `family` = `ipv4` \| `ipv6` | A NIC address was allocated from a network's subnet |
 | `strato_ipam_allocation_failures_total` | counter | `family`, `reason` = `pool_exhausted` \| `invalid_subnet` \| `invalid_gateway` | An allocation failed; `pool_exhausted` is the capacity signal |
+| `strato_network_interface_duplicate_mac_addresses` | gauge | — | Canonical MAC addresses assigned to more than one VM or sandbox NIC at startup; zero is healthy |
 
 ### Notes on the labels
 
@@ -332,9 +433,10 @@ SSF poll delivery are all timer-driven, with no enclosing span to attach to.
 
 ### Correlating traces with logs
 
-`entrypoint.swift` bootstraps SwiftLog with swift-otel's logging metadata
-provider, so any line logged inside a span carries `trace_id`, `span_id` and
-`trace_flags`. The default console handler renders metadata as a sorted,
+`entrypoint.swift` bootstraps SwiftLog once with the console handler, the
+optional OTLP handler, and swift-otel's logging metadata provider. Any line
+logged inside a span therefore carries `trace_id`, `span_id` and `trace_flags`
+in both sinks. The default console handler renders metadata as a sorted,
 bracketed suffix:
 
 ```
@@ -359,6 +461,34 @@ trace link back to the mutation that rang it.
 ## Alert runbook
 
 Thresholds are starting points; tune to your fleet size and SLOs.
+
+### Webhook outbox is falling behind
+
+- **Condition:** alert when
+  `max(strato_webhook_delivery_oldest_pending_age_seconds)` exceeds the webhook
+  delivery SLO for 5 minutes. Five minutes is a useful initial warning
+  threshold; unlike `WEBHOOK_DELIVERY_INTERVAL_SECONDS`, it measures actual
+  queued delay under load. Also alert when
+  `max(strato_webhook_delivery_dropped) > 0`: committed delivery history shows
+  that the queue reached its fixed safety ceiling and intentionally shed rows.
+- **Severity:** warning when age exceeds the SLO or a drop occurs. Page if age
+  and total depth keep rising for 15 minutes, or drops continue across several
+  windows.
+- **First checks:** compare
+  `max(strato_webhook_delivery_pending)` with
+  `max by (subscription_id) (strato_webhook_delivery_subscription_pending)` to
+  distinguish a broad backlog from one hot subscription. Then compare the
+  summed attempt rate with
+  `sum by (result) (rate(strato_webhook_delivery_results_total[5m]))`.
+  Rising `failed` results point to endpoint health, DNS/SSRF rejection, or
+  request timeouts; those rows may be waiting in backoff for as long as one
+  hour. A deep pending gauge also includes future retries and active leases, so
+  a low immediate attempt rate does not by itself prove a capacity problem.
+  Confirm delivery is enabled, inspect worker errors, the `next_attempt_at` and
+  `claimed_until` distribution, and result rates over the full backoff window.
+  Then scale control-plane replicas if due, unleased work for healthy endpoints
+  still cannot keep up. Lowering the 15-second interval does not increase
+  busy-drain throughput; it changes the no-work and sweep-error retry delay.
 
 ### Agent disconnected too long
 
@@ -453,9 +583,13 @@ Thresholds are starting points; tune to your fleet size and SLOs.
 ## Verifying locally
 
 The compose deployment ships with OTel export disabled. To exercise metrics,
-run the control plane with `OTEL_METRICS_ENABLED=true` and point
-`OTEL_EXPORTER_OTLP_ENDPOINT` at an OTLP collector of your own, then:
+set `OTEL_METRICS_ENABLED=true` and a reachable
+`OTEL_EXPORTER_OTLP_ENDPOINT` in `.env`, then:
 
+- Create a webhook subscription and enqueue an event while delivery is stopped
+  → expect `strato_webhook_delivery_pending` and the matching
+  `strato_webhook_delivery_subscription_pending` series to rise. Re-enable the
+  worker and expect both to return to zero while attempts/results increase.
 - Kill an agent → expect `strato_agent_up{agent="…"}` to drop to `0` (and stay
   there) and a `strato_agent_disconnections_total{reason="stale"}` (or
   `connection_closed`) increment. While it's still in the 60s grace window,

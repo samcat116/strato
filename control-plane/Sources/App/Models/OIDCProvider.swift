@@ -19,7 +19,7 @@ final class OIDCProvider: Model, @unchecked Sendable {
     @Field(key: "client_id")
     var clientID: String
 
-    // Encrypted at rest (`enc:v1:` prefix) via SecretsEncryptionService;
+    // Encrypted at rest (`enc:v2:<key-id>:`; legacy v1 remains readable) via SecretsEncryptionService;
     // read through decrypt().
     @Field(key: "client_secret")
     var clientSecret: String

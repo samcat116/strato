@@ -301,11 +301,9 @@ public struct VsockCIDAllocator: Sendable {
 }
 
 extension VsockCIDAllocator.AllocationError: ClassifiableError {
-    /// Permanent, in the same sense as a full disk: the namespace only frees up
-    /// when *another* VM is deleted, which cannot happen inside this item's
-    /// retry budget. Retrying would burn the whole budget re-running a create
-    /// that has no way to succeed, and hide the reason behind the last attempt.
-    public var failureClassification: FailureClassification { .permanent }
+    /// The namespace frees up when another VM is deleted. That can happen
+    /// without changing this VM's generation, so every sync must re-drive it.
+    public var failureClassification: FailureClassification { .blocked }
 }
 
 extension HypervisorType {

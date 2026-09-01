@@ -76,7 +76,7 @@ public struct CloudInitProvisioner {
                     logger.warning(
                         "Desired hostname is not a valid DNS label; booting under a derived name instead",
                         metadata: [
-                            "vmId": .string(vmId),
+                            "strato.vm.id": .string(vmId),
                             "hostname": .string(hostname.debugDescription),
                             "localHostname": .string(localHostname),
                         ])
@@ -419,11 +419,16 @@ public struct CloudInitProvisioner {
     }
 
     /// The single-document `#cloud-config` used when the caller supplied no
-    /// user data. Extends the pre-user-data agent output with the QEMU guest
-    /// agent (issue #563); with no caller part to merge against, cloud-init's
-    /// native `packages:` install and a `runcmd` service-enable are safe here
-    /// (the multipart path can't use them — see `qgaSetupScript`).
+    /// user data. QGA setup runs through the same best-effort script as the
+    /// multipart path: cloud-init's native `packages:` module makes an
+    /// unavailable package repository fatal to otherwise unrelated bootstrap
+    /// work (STR-305).
     static func legacyCloudConfig(authorizedKeys keys: [String]) -> String {
+        let qgaSetup =
+            qgaSetupScript
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { "      \($0)" }
+            .joined(separator: "\n")
         var document = """
             #cloud-config
             # Console login: set a password on the image's default user so
@@ -436,11 +441,6 @@ public struct CloudInitProvisioner {
             chpasswd:
               expire: false
             ssh_pwauth: true
-            # Install the QEMU guest agent so the host can do verified shutdown
-            # and guest IP reporting. Most cloud images already ship it; this
-            # covers those that don't.
-            packages:
-              - qemu-guest-agent
             # Bring hot-added vCPUs/memory online automatically (issue #568).
             # Modern distros ship equivalent udev rules; this covers older
             # images, and is harmless where they already exist.
@@ -457,11 +457,11 @@ public struct CloudInitProvisioner {
 
             # Enable getty on serial console
             runcmd:
-              - systemctl enable --now serial-getty@ttyS0.service || true
-              - systemctl enable --now serial-getty@ttyAMA0.service || true
-              - systemctl enable --now serial-getty@hvc0.service || true
-              # Start the guest agent (installed above) without a reboot.
-              - systemctl enable --now qemu-guest-agent 2>/dev/null || systemctl enable --now qemu-ga 2>/dev/null || true
+              # QGA is optional guest integration. A missing package repository
+              # must not fail the rest of cloud-init (STR-305).
+              - |
+            \(qgaSetup)
+              - '\(Self.serialGettySetupCommand)'
               # Apply the hot-plug rules now, and online anything already
               # offline (a resize that landed mid-boot) — issue #568.
               - udevadm control --reload-rules 2>/dev/null || true
@@ -531,36 +531,45 @@ public struct CloudInitProvisioner {
         # without modifying the disk image.
         sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\\"console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0\\"/" /etc/default/grub || true
         update-grub 2>/dev/null || grub2-mkconfig -o /boot/grub2/grub.cfg 2>/dev/null || true
-        systemctl enable --now serial-getty@ttyS0.service || true
-        systemctl enable --now serial-getty@ttyAMA0.service || true
-        systemctl enable --now serial-getty@hvc0.service || true
+        \(Self.serialGettySetupCommand)
         # Emit a marker so we can verify console output quickly
         echo '[cloud-init] console marker' > /dev/ttyS0 2>/dev/null || true
         echo '[cloud-init] console marker' > /dev/ttyAMA0 2>/dev/null || true
         echo '[cloud-init] console marker' > /dev/hvc0 2>/dev/null || true
         """
 
+    /// Starts a getty only for serial devices present in this guest. Calling
+    /// `systemctl --now` for an absent architecture-specific device waits for
+    /// systemd's device-job timeout before it fails.
+    static let serialGettySetupCommand =
+        #"for device in ttyS0 ttyAMA0 hvc0; do [ -c "/dev/$device" ] || continue; "#
+        + #"systemctl enable --now "serial-getty@$device.service" || true; done"#
+
     /// Installs and enables the QEMU guest agent as a shell script, run by
-    /// cloud-init's scripts-user stage. Used only in the multipart (caller)
-    /// path, where a `packages:` key would be clobbered by a caller's own list
-    /// (see `systemCloudConfig`); the no-caller path installs it natively via
-    /// `packages:` (see `legacyCloudConfig`). Best-effort across package
-    /// managers and service names, and quiet on images that already ship it.
+    /// cloud-init's scripts-user stage in the multipart path and embedded in
+    /// `runcmd` in the no-caller path. Best-effort across package managers and
+    /// service names, and avoids package repositories when the image already
+    /// contains QGA.
     static let qgaSetupScript = """
         #!/bin/sh
         # Strato guest-agent setup: install the QEMU guest agent so the host can
         # do verified shutdown and guest IP reporting
         # (issue #563). Most cloud images already ship it; this covers those
         # that don't, without requiring image changes.
-        if command -v apt-get >/dev/null 2>&1; then
-            apt-get update -y >/dev/null 2>&1 || true
-            apt-get install -y qemu-guest-agent >/dev/null 2>&1 || true
-        elif command -v dnf >/dev/null 2>&1; then
-            dnf install -y qemu-guest-agent >/dev/null 2>&1 || true
-        elif command -v yum >/dev/null 2>&1; then
-            yum install -y qemu-guest-agent >/dev/null 2>&1 || true
-        elif command -v apk >/dev/null 2>&1; then
-            apk add --no-cache qemu-guest-agent >/dev/null 2>&1 || true
+        if ! command -v qemu-ga >/dev/null 2>&1 \
+            && ! command -v qemu-guest-agent >/dev/null 2>&1; then
+            if command -v apt-get >/dev/null 2>&1; then
+                apt-get update -y >/dev/null 2>&1 || true
+                apt-get install -y qemu-guest-agent >/dev/null 2>&1 || true
+            elif command -v dnf >/dev/null 2>&1; then
+                dnf install -y qemu-guest-agent >/dev/null 2>&1 || true
+            elif command -v yum >/dev/null 2>&1; then
+                yum install -y qemu-guest-agent >/dev/null 2>&1 || true
+            elif command -v zypper >/dev/null 2>&1; then
+                zypper --non-interactive install --auto-agree-with-licenses qemu-guest-agent >/dev/null 2>&1 || true
+            elif command -v apk >/dev/null 2>&1; then
+                apk add --no-cache qemu-guest-agent >/dev/null 2>&1 || true
+            fi
         fi
         # Service name differs across distros (qemu-guest-agent vs qemu-ga).
         systemctl enable --now qemu-guest-agent 2>/dev/null \

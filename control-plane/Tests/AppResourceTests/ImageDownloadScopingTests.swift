@@ -26,7 +26,6 @@ final class ImageDownloadScopingTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(username: "scoping-user", email: "scoping@example.com")
@@ -42,28 +41,11 @@ final class ImageDownloadScopingTests {
         try await app.shutdownForTesting()
     }
 
-    /// Registers an online agent that supports QEMU and returns its UUID string.
-    /// `protocolVersion` defaults to the current wire version because the
-    /// volume cases below need an agent that speaks volume sync (STR-148); the
-    /// VM cases are indifferent to it.
     private func registerAgent(
         app: Application, named name: String, protocolVersion: Int = WireProtocol.currentVersion
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: name,
-            hostname: "\(name).test",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
-            protocolVersion: protocolVersion
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let uuid = try await app.agentService.registerAgent(
-            message, agentName: name, organizationScope: orgID.map { .organization($0) })
-        return uuid.uuidString
+        try await TestDataBuilder(db: app.db).registerAgent(
+            on: app, named: name, hostname: "\(name).test", protocolVersion: protocolVersion)
     }
 
     private func hasGrant(app: Application, agentId: String, image: Image) async -> Bool {

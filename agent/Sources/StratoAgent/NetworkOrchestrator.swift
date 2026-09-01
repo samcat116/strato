@@ -50,7 +50,7 @@ struct NetworkOrchestrator: Sendable {
                 logger.error(
                     "Failed to realize NIC; rolling back already-realized NICs",
                     metadata: [
-                        "vmId": .string(vmId),
+                        "strato.vm.id": .string(vmId),
                         "nicIndex": .stringConvertible(slot),
                         "network": .string(spec.network),
                         "error": .string(error.localizedDescription),
@@ -70,7 +70,7 @@ struct NetworkOrchestrator: Sendable {
         logger.info(
             "VM networking prepared",
             metadata: [
-                "vmId": .string(vmId),
+                "strato.vm.id": .string(vmId),
                 "nics": .stringConvertible(resolved.count),
             ])
         return resolved
@@ -88,7 +88,7 @@ struct NetworkOrchestrator: Sendable {
         guard let networkService else {
             logger.warning(
                 "Network service not available; falling back to user-mode networking",
-                metadata: ["vmId": .string(vmId)])
+                metadata: ["strato.vm.id": .string(vmId)])
             return userModeAttachment(for: spec)
         }
 
@@ -122,7 +122,7 @@ struct NetworkOrchestrator: Sendable {
             logger.debug(
                 "NIC degraded to user-mode; withholding the guest's route to the metadata service",
                 metadata: [
-                    "vmId": .string(vmId),
+                    "strato.vm.id": .string(vmId),
                     "nicIndex": .stringConvertible(slot),
                     "network": .string(spec.network),
                 ])
@@ -133,7 +133,7 @@ struct NetworkOrchestrator: Sendable {
             logger.debug(
                 "NIC degraded to user-mode; the guest resolves through the network's upstream servers",
                 metadata: [
-                    "vmId": .string(vmId),
+                    "strato.vm.id": .string(vmId),
                     "nicIndex": .stringConvertible(slot),
                     "network": .string(spec.network),
                 ])
@@ -176,7 +176,7 @@ struct NetworkOrchestrator: Sendable {
                 logger.error(
                     "Failed to tear down VM NIC",
                     metadata: [
-                        "vmId": .string(vmId),
+                        "strato.vm.id": .string(vmId),
                         "nicIndex": .stringConvertible(slot),
                         "error": .string(error.localizedDescription),
                     ])

@@ -17,6 +17,51 @@ struct NodeDependencyManagerTests {
         functionalState: .unhealthy,
         reason: .init(code: .functionalProbeFailed, message: "probe failed"))
 
+    @Test("Ceph client health advertises only the Ceph volume capability")
+    func cephClientCapability() async {
+        let healthy = CephClientNodeDependencyModule(version: { "ceph version 19.2.1" })
+        let inspection = await healthy.inspect()
+        #expect(inspection.supervisorState == .notApplicable)
+        #expect(inspection.compatibility == .compatible)
+        #expect(inspection.functionalState == .healthy)
+        #expect(healthy.affectedCapabilities == [.cephVolumes])
+
+        let missing = CephClientNodeDependencyModule(version: { nil })
+        let absent = await missing.inspect()
+        #expect(absent.supervisorState == .missing)
+        #expect(absent.reason?.code == .missingBinary)
+        #expect(absent.functionalState == .unhealthy)
+
+        let libvirt115 = CephClientNodeDependencyModule(
+            version: { "ceph version 19.2.1" },
+            libvirt: { .reachable(.init(major: 11, minor: 5, patch: 0)) })
+        let incompatible = await libvirt115.inspect()
+        #expect(incompatible.compatibility == .incompatible)
+        #expect(incompatible.functionalState == .unhealthy)
+        #expect(incompatible.reason?.code == .incompatibleVersion)
+        #expect(incompatible.reason?.message.contains("11.6.0") == true)
+
+        let libvirt116 = CephClientNodeDependencyModule(
+            version: { "ceph version 19.2.1" },
+            libvirt: { .reachable(.init(major: 11, minor: 6, patch: 0)) })
+        #expect(await libvirt116.inspect().isHealthy)
+
+        // A Firecracker-only host uses krbd. Even if an old libvirt daemon is
+        // installed and reachable for unrelated host tooling, it is not part
+        // of the configured attach path and cannot withdraw Ceph placement.
+        let firecrackerOnly = CephClientNodeDependencyModule(
+            version: { "ceph version 19.2.1" },
+            libvirt: { .reachable(.init(major: 11, minor: 5, patch: 0)) },
+            qemuAttachmentsEnabled: false)
+        #expect(await firecrackerOnly.inspect().isHealthy)
+
+        let firecrackerWithoutLibvirt = CephClientNodeDependencyModule(
+            version: { "ceph version 19.2.1" },
+            libvirt: { .unreachable("no libvirt socket") },
+            qemuAttachmentsEnabled: false)
+        #expect(await firecrackerWithoutLibvirt.inspect().isHealthy)
+    }
+
     @Test("The registry rejects missing dependencies and cycles")
     func validatesGraph() throws {
         let missing = module(.libvirt, dependencies: [.spire], inspection: healthy)

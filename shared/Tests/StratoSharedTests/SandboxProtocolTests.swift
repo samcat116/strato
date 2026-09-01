@@ -164,7 +164,8 @@ struct SandboxProtocolTests {
     func desiredSandboxesAreRequired() {
         let malformed = """
             {"requestId":"r","timestamp":0,"syncId":"s","vms":[],"networks":[],
-             "networksAuthoritative":true,"tombstones":[],"volumes":[],"snapshots":[]}
+             "networksAuthoritative":true,"tombstones":[],"volumes":[],"snapshots":[],
+             "cephCredentialRevocations":[]}
             """
         #expect(throws: DecodingError.self) {
             try decodeJSON(DesiredStateMessage.self, from: malformed)
@@ -189,7 +190,8 @@ struct SandboxProtocolTests {
                     observedGeneration: 0,
                     convergencePhase: "pulling image",
                     lastError: "previous attempt: registry unreachable",
-                    failedGeneration: 2
+                    failedGeneration: 2,
+                    failureClassification: .transient
                 ),
             ],
             resources: Fixtures.resources
@@ -205,6 +207,7 @@ struct SandboxProtocolTests {
         #expect(decoded.sandboxes[1].convergencePhase == "pulling image")
         #expect(decoded.sandboxes[1].lastError == "previous attempt: registry unreachable")
         #expect(decoded.sandboxes[1].failedGeneration == 2)
+        #expect(decoded.sandboxes[1].failureClassification == .transient)
         #expect(decoded.sandboxes[1].exitCode == nil)
     }
 

@@ -4,6 +4,7 @@ import NIOCore
 import NIOPosix
 import PostgresNIO
 import SQLKit
+import StratoShared
 import Vapor
 import VaporTesting
 
@@ -19,17 +20,8 @@ import VaporTesting
 // anchor database strato_test — matching `docker run -e POSTGRES_DB=strato_test
 // -e POSTGRES_USER=strato -e POSTGRES_PASSWORD=strato_password ...`.
 //
-// Booting a test app used to replay every migration up (via `configure()`'s
-// trailing `autoMigrate()`) against an empty database, and most teardowns
-// replayed them all back down with `autoRevert()` — two full migration passes
-// per test, which dominated suite runtime. Instead, migrations run ONCE per
-// test process into a template database, and every test gets a cheap
-// server-side clone of the migrated result via
-// `CREATE DATABASE ... TEMPLATE ...`.
-//
-// `configure(app)` still calls `autoMigrate()` in every test, but against a
-// pre-migrated clone that is a no-op scan of the migration log. Full up/down
-// migration coverage lives in MigrationRoundTripTests.
+// Migrations run once per test process into a template database. Every test
+// receives a cheap server-side clone via `CREATE DATABASE ... TEMPLATE ...`.
 
 private let testProcessID = ProcessInfo.processInfo.processIdentifier
 
@@ -158,10 +150,8 @@ package actor PostgresTestDatabases {
 
         try await run(#"CREATE DATABASE "\#(templateName)""#)
 
-        // Boot a throwaway app against the template: configure() registers
-        // every migration and its trailing autoMigrate() applies them. The app
-        // is shut down before the first clone, so the template has no live
-        // sessions when CREATE DATABASE reads it.
+        // Boot a throwaway app against the template so `configure()` applies the
+        // schema. Shut it down before cloning so the template has no live sessions.
         var env = Environment.testing
         env.arguments = ["vapor"]
         let app = try await Application.make(env, .shared(Self.appEventLoopGroup))
@@ -315,8 +305,6 @@ extension Application {
     }
 }
 
-// Helper function to run tests with proper database lifecycle. configure()
-// runs autoMigrate(), which is a no-op scan against the pre-migrated clone.
 /// A symbolic analyzer that proves nothing and objects to nothing.
 ///
 /// Installed by `withTestApp` so the suites that merely *write bindings* do
@@ -360,19 +348,7 @@ package func withTestApp(_ test: (Application) async throws -> Void) async throw
     try await app.shutdownForTesting()
 }
 
-// Historical alias: the two helpers only differed in a teardown-time
-// autoRevert(), which per-test database clones made obsolete.
-package func withApp(_ test: (Application) async throws -> Void) async throws {
-    try await withTestApp(test)
-}
-
 extension User {
-    package func generateToken() throws -> String {
-        // In a real implementation, this would create a proper session/token
-        // For testing, we'll use a simple token
-        return "test-token-\(self.id?.uuidString ?? UUID().uuidString)"
-    }
-
     package func generateAPIKey(
         on db: Database,
         name: String = "Test API Key",
@@ -403,6 +379,152 @@ package struct TestDataBuilder {
     package let db: Database
 
     package init(db: Database) { self.db = db }
+
+    @discardableResult
+    package func registerAgent(
+        on app: Application,
+        named name: String,
+        hostname: String? = nil,
+        version: String = "1.0.0",
+        resources: AgentResources = AgentResources(
+            totalCPU: 16,
+            availableCPU: 16,
+            totalMemory: 1 << 34,
+            availableMemory: 1 << 34,
+            totalDisk: 1 << 40,
+            availableDisk: 1 << 40),
+        architecture: CPUArchitecture? = nil,
+        hypervisors: [HypervisorSupport]? = [
+            HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
+        ],
+        networkCapability: NetworkCapability? = .overlay,
+        protocolVersion: Int = WireProtocol.currentVersion,
+        sandboxCapable: Bool? = nil,
+        sandboxNetworkingCapable: Bool? = nil,
+        tpmCapable: Bool? = nil,
+        operatingSystem: OperatingSystem? = nil,
+        hostInfo: HostInfo? = nil,
+        resolverCapable: Bool? = nil,
+        metadataServiceCapable: Bool? = nil,
+        dependencyObservations: [NodeDependencyObservation] = [],
+        trustDomain: String = "strato.local",
+        siteID requestedSiteID: UUID? = nil,
+        organizationScope requestedScope: OrganizationScope? = nil
+    ) async throws -> String {
+        let (scope, siteID) = try await agentPlacement(
+            siteID: requestedSiteID, organizationScope: requestedScope)
+
+        let message = AgentRegisterMessage(
+            agentId: name,
+            hostname: hostname ?? "host-\(name)",
+            version: version,
+            resources: resources,
+            architecture: architecture,
+            hypervisors: hypervisors,
+            networkCapability: networkCapability,
+            protocolVersion: protocolVersion,
+            sandboxCapable: sandboxCapable,
+            sandboxNetworkingCapable: sandboxNetworkingCapable,
+            tpmCapable: tpmCapable,
+            operatingSystem: operatingSystem,
+            hostInfo: hostInfo,
+            resolverCapable: resolverCapable,
+            metadataServiceCapable: metadataServiceCapable,
+            dependencyObservations: dependencyObservations)
+        let id = try await app.agentService.registerAgent(
+            message,
+            identity: AgentIdentity(trustDomain: trustDomain, name: name),
+            siteID: siteID,
+            organizationScope: scope)
+        return id.uuidString
+    }
+
+    package func createAgent(
+        named name: String,
+        trustDomain: String = "strato.local",
+        hostname: String? = nil,
+        version: String = "1.0.0",
+        status: AgentStatus = .online,
+        resources: AgentResources = AgentResources(
+            totalCPU: 16,
+            availableCPU: 16,
+            totalMemory: 1 << 34,
+            availableMemory: 1 << 34,
+            totalDisk: 1 << 40,
+            availableDisk: 1 << 40),
+        architecture: CPUArchitecture? = nil,
+        hypervisors: [HypervisorSupport] = [],
+        networkCapability: NetworkCapability? = nil,
+        sandboxCapable: Bool = false,
+        sandboxNetworkingCapable: Bool = false,
+        tpmCapable: Bool = false,
+        resolverCapable: Bool = false,
+        metadataServiceCapable: Bool = false,
+        dependencyObservations: [NodeDependencyObservation] = [],
+        dependencyObservationsReceivedAt: Date? = nil,
+        lastHeartbeat: Date? = nil,
+        siteID requestedSiteID: UUID? = nil,
+        organizationScope requestedScope: OrganizationScope? = nil
+    ) async throws -> Agent {
+        let (scope, siteID) = try await agentPlacement(
+            siteID: requestedSiteID, organizationScope: requestedScope)
+        let agent = Agent(
+            name: name,
+            trustDomain: trustDomain,
+            hostname: hostname ?? "host-\(name)",
+            version: version,
+            siteID: siteID,
+            status: status,
+            resources: resources,
+            architecture: architecture,
+            hypervisors: hypervisors,
+            networkCapability: networkCapability,
+            sandboxCapable: sandboxCapable,
+            sandboxNetworkingCapable: sandboxNetworkingCapable,
+            tpmCapable: tpmCapable,
+            resolverCapable: resolverCapable,
+            metadataServiceCapable: metadataServiceCapable,
+            dependencyObservations: dependencyObservations,
+            dependencyObservationsReceivedAt: dependencyObservationsReceivedAt,
+            lastHeartbeat: lastHeartbeat)
+        agent.organizationScope = scope
+        try await agent.save(on: db)
+        return agent
+    }
+
+    private func agentPlacement(
+        siteID requestedSiteID: UUID?, organizationScope requestedScope: OrganizationScope?
+    ) async throws -> (OrganizationScope, UUID) {
+        let scope: OrganizationScope
+        if let requestedScope {
+            scope = requestedScope
+        } else if let organizationID = try await Organization.query(on: db)
+            .sort(\.$createdAt)
+            .first()?.id
+        {
+            scope = .organization(organizationID)
+        } else {
+            throw TestSetupError.message("Agent fixture requires an organization")
+        }
+
+        if let requestedSiteID { return (scope, requestedSiteID) }
+
+        guard let organizationID = try await scope.rootOrganizationID(on: db) else {
+            throw TestSetupError.message("Agent fixture scope has no root organization")
+        }
+        if let existing = try await Site.query(on: db)
+            .filter(\.$organization.$id == organizationID)
+            .sort(\.$createdAt)
+            .first()
+        {
+            return (scope, try existing.requireID())
+        }
+        let site = Site(
+            name: "Test Site \(organizationID.uuidString)",
+            organizationScope: .organization(organizationID))
+        try await site.save(on: db)
+        return (scope, try site.requireID())
+    }
 
     package func createUser(
         username: String = "testuser",

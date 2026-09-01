@@ -371,6 +371,18 @@ jobs:
         working-directory: control-plane/web
         run: bun run lint
 
+      - name: Run unit and component tests
+        working-directory: control-plane/web
+        run: bun run test
+
+      - name: Install Playwright Chromium
+        working-directory: control-plane/web
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run browser smoke tests
+        working-directory: control-plane/web
+        run: bun run test:e2e
+
       - name: Build frontend
         working-directory: control-plane/web
         run: bun run build

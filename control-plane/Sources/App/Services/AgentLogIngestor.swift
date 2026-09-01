@@ -7,7 +7,7 @@ import Vapor
 protocol AgentLoggedResourceMessage: Sendable {
     /// Resource kind as it reads in the drop warning ("sandbox", "VM").
     static var resourceKind: String { get }
-    /// Metadata key carrying the resource id in that warning ("sandboxId", "vmId").
+    /// Canonical metadata key carrying the resource ID in that warning.
     static var resourceIDMetadataKey: String { get }
     /// The resource whose ownership is checked before the line is pushed.
     var owningResourceID: String { get }
@@ -15,13 +15,13 @@ protocol AgentLoggedResourceMessage: Sendable {
 
 extension SandboxLogMessage: AgentLoggedResourceMessage {
     static var resourceKind: String { "sandbox" }
-    static var resourceIDMetadataKey: String { "sandboxId" }
+    static var resourceIDMetadataKey: String { LogMetadata.Key.sandboxID }
     var owningResourceID: String { sandboxId }
 }
 
 extension VMLogMessage: AgentLoggedResourceMessage {
     static var resourceKind: String { "VM" }
-    static var resourceIDMetadataKey: String { "vmId" }
+    static var resourceIDMetadataKey: String { LogMetadata.Key.vmID }
     var owningResourceID: String { vmId }
 }
 
@@ -119,7 +119,7 @@ final class AgentLogIngestor<Message: AgentLoggedResourceMessage>: Sendable {
                         "Dropping \(Message.resourceKind) log for a \(Message.resourceKind) not owned by the reporting agent",
                         metadata: [
                             Message.resourceIDMetadataKey: .string(resourceId),
-                            "agentKey": .string(entry.agentKey),
+                            "strato.agent.identity": .string(entry.agentKey),
                         ])
                     continue
                 }

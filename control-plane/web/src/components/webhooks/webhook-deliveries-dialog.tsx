@@ -43,6 +43,8 @@ function statusBadgeClass(status: WebhookDelivery["status"]): string {
       return "bg-emerald-900/30 text-emerald-700 border-transparent";
     case "dead":
       return "bg-red-900/40 text-red-700 border-transparent";
+    case "dropped":
+      return "bg-orange-900/30 text-orange-700 border-transparent";
     default:
       return "bg-amber-900/30 text-amber-700 border-transparent";
   }
@@ -127,8 +129,9 @@ export function WebhookDeliveriesDialog({
         <DialogHeader>
           <DialogTitle>Deliveries — {webhook?.name}</DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Recent delivery attempts, newest first. Pending deliveries retry
-            automatically; this list refreshes every few seconds.
+            Recent delivery records, most recently updated first. Pending
+            deliveries retry automatically; this list refreshes every few
+            seconds.
           </DialogDescription>
         </DialogHeader>
 
@@ -173,7 +176,7 @@ export function WebhookDeliveriesDialog({
               <TableRow className="border-border hover:bg-transparent">
                 <TableHead className="w-8" />
                 <TableHead className="text-muted-foreground font-medium">
-                  Time
+                  Enqueued
                 </TableHead>
                 <TableHead className="text-muted-foreground font-medium">
                   Event
@@ -277,6 +280,9 @@ function DeliveryRows({
             title={
               delivery.status === "pending" && delivery.nextAttemptAt
                 ? `Next attempt ${formatTimestamp(delivery.nextAttemptAt)}`
+                : delivery.status === "dropped"
+                  ? (delivery.lastError ??
+                    "Dropped to enforce this subscription's pending-delivery ceiling")
                 : delivery.status === "succeeded" && delivery.deliveredAt
                   ? `Delivered ${formatTimestamp(delivery.deliveredAt)}`
                   : undefined
@@ -311,6 +317,8 @@ function DeliveryRows({
                   ? "Still pending — retries happen automatically"
                   : !webhookActive
                     ? "Enable the webhook to redeliver"
+                    : delivery.status === "dropped"
+                      ? "Re-enqueue this dropped event"
                     : "Redeliver"
               }
             >

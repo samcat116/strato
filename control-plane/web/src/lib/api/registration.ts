@@ -5,7 +5,7 @@
 // (bootstrap already folded in), so callers just render on
 // `selfRegistrationEnabled`.
 import { api } from "./client";
-import type { RegistrationPolicy } from "@/types/api";
+import type { RegistrationPolicy } from "@/types/api-contracts";
 
 export const registrationApi = {
   policy(signal?: AbortSignal): Promise<RegistrationPolicy> {

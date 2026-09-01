@@ -31,7 +31,6 @@ final class PolicyEndpointTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             // The authorizer tests read back the recorded decision's tier.
             app.iamDecisionLogConfig.recordDecisions = true
 

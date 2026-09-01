@@ -916,7 +916,7 @@ struct ImageController: RouteCollection {
                 "Agent downloading image via SVID mTLS",
                 metadata: [
                     "imageId": .string(imageID.uuidString),
-                    "agent": .string(agent.identity.key),
+                    "strato.agent.identity": .string(agent.identity.key),
                     "organizationId": .string(agent.organizationID?.uuidString ?? "platform"),
                     "artifact": .string(artifactKind.rawValue),
                 ])
@@ -979,7 +979,7 @@ struct ImageController: RouteCollection {
             req.logger.warning(
                 "Image download from an agent identity with no registered agent",
                 metadata: [
-                    "agent": .string(agentName),
+                    "strato.agent.identity": .string(agentName),
                     "imageId": .string(imageID.uuidString),
                 ])
             throw Abort(.forbidden, reason: "Image is not assigned to this agent")
@@ -992,7 +992,7 @@ struct ImageController: RouteCollection {
             req.logger.warning(
                 "Coordination store could not answer an image download grant; allowing the fetch",
                 metadata: [
-                    "agent": .string(agentName),
+                    "strato.agent.identity": .string(agentName),
                     "imageId": .string(imageID.uuidString),
                 ])
             return
@@ -1002,7 +1002,7 @@ struct ImageController: RouteCollection {
             req.logger.warning(
                 "Agent requested an image it has not been assigned",
                 metadata: [
-                    "agent": .string(agentName),
+                    "strato.agent.identity": .string(agentName),
                     "imageId": .string(imageID.uuidString),
                 ])
             throw Abort(.forbidden, reason: "Image is not assigned to this agent")

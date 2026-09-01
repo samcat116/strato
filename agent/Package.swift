@@ -23,7 +23,7 @@ let package = Package(
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.24.0"),
         .package(url: "https://github.com/vapor/websocket-kit.git", from: "2.16.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
-        .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.15.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
         .package(url: "https://github.com/apple/swift-configuration.git", from: "1.2.0"),
         .package(url: "https://github.com/samcat116/swift-toml.git", branch: "master"),
@@ -162,9 +162,11 @@ let package = Package(
         .testTarget(
             name: "StratoAgentTests",
             dependencies: [
+                "StratoAgent",
                 "StratoAgentCore",
                 "StratoAgentSPIFFE",
                 .product(name: "StratoShared", package: "shared"),
+                .product(name: "InMemoryLogging", package: "swift-log"),
                 // A loopback HTTP origin for the artifact-downloader tests.
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
@@ -181,6 +183,9 @@ let package = Package(
                 // Constructing the daemon errors and stat payloads the libvirt
                 // translation layer is asserted against.
                 .product(name: "Libvirt", package: "swift-libvirt"),
+                .product(
+                    name: "SwiftFirecracker", package: "SwiftFirecracker",
+                    condition: .when(platforms: [.linux])),
             ],
             // Golden documents are read from the source tree via #filePath, not
             // from a resource bundle, so SwiftPM should leave them alone.

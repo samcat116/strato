@@ -171,6 +171,12 @@ public struct DesiredSnapshotState: Codable, Sendable {
     /// How to capture the artifact if it is not here yet. Nil means the
     /// defaults for `kind`.
     public let capture: DesiredSnapshotCapture?
+    /// Volume artifacts only: the backend coordinates that own the snapshot.
+    /// This travels independently of the parent volume entry because a Ceph
+    /// snapshot remains deletable from any configured client agent after the
+    /// parent volume has moved off this host. Nil for VM/sandbox artifacts and
+    /// for pre-v54 senders.
+    public let volumeStorage: DesiredVolumeStorage?
     /// Where a copy of the artifact should also exist, if anywhere.
     public let export: DesiredSnapshotExport?
 
@@ -181,6 +187,7 @@ public struct DesiredSnapshotState: Codable, Sendable {
         desiredStatus: DesiredSnapshotStatus,
         generation: Int64,
         capture: DesiredSnapshotCapture? = nil,
+        volumeStorage: DesiredVolumeStorage? = nil,
         export: DesiredSnapshotExport? = nil
     ) {
         self.snapshotId = snapshotId
@@ -189,6 +196,7 @@ public struct DesiredSnapshotState: Codable, Sendable {
         self.desiredStatus = desiredStatus
         self.generation = generation
         self.capture = capture
+        self.volumeStorage = volumeStorage
         self.export = export
     }
 }
@@ -284,7 +292,7 @@ public struct ObservedSnapshotFacts: Codable, Sendable, Equatable {
 }
 
 /// One snapshot artifact's state as actually observed on an agent (STR-150).
-/// The convergence quartet matches `ObservedVMState` — see the doc comments
+/// The convergence metadata matches `ObservedVMState` — see the doc comments
 /// there.
 public struct ObservedSnapshotState: Codable, Sendable {
     public let snapshotId: UUID
@@ -314,6 +322,9 @@ public struct ObservedSnapshotState: Codable, Sendable {
     /// The generation whose convergence produced `lastError` (see
     /// `ObservedVMState.failedGeneration` for why the control plane needs it).
     public let failedGeneration: Int64?
+    /// Retry semantics for `lastError`; see
+    /// `ObservedVMState.failureClassification`.
+    public let failureClassification: ObservedFailureClassification?
 
     public init(
         snapshotId: UUID,
@@ -325,7 +336,8 @@ public struct ObservedSnapshotState: Codable, Sendable {
         observedGeneration: Int64,
         convergencePhase: String? = nil,
         lastError: String? = nil,
-        failedGeneration: Int64? = nil
+        failedGeneration: Int64? = nil,
+        failureClassification: ObservedFailureClassification? = nil
     ) {
         self.snapshotId = snapshotId
         self.kind = kind
@@ -337,5 +349,6 @@ public struct ObservedSnapshotState: Codable, Sendable {
         self.convergencePhase = convergencePhase
         self.lastError = lastError
         self.failedGeneration = failedGeneration
+        self.failureClassification = failureClassification
     }
 }

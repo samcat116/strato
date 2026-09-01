@@ -20,7 +20,6 @@ final class VMMetadataOptOutTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -43,29 +42,11 @@ final class VMMetadataOptOutTests {
         try await app.shutdownForTesting()
     }
 
-    /// Registers an agent at `protocolVersion` and returns its id, so a VM can
-    /// be placed on a host of a chosen vintage.
     private func registerAgent(
         app: Application, named name: String, protocolVersion: Int
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: name,
-            hostname: "host-\(name)",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40),
-            hypervisors: [
-                HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
-            ],
-            protocolVersion: protocolVersion
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let uuid = try await app.agentService.registerAgent(
-            message, agentName: name, siteID: nil,
-            organizationScope: orgID.map { .organization($0) })
-        return uuid.uuidString
+        try await TestDataBuilder(db: app.db).registerAgent(
+            on: app, named: name, protocolVersion: protocolVersion)
     }
 
     private func placeVM(

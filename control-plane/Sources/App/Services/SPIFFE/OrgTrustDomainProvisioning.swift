@@ -34,7 +34,7 @@ enum OrgTrustDomainProvisioning {
 
         let trustDomain = OrgTrustDomain.trustDomain(
             forOrganization: organizationID,
-            platformTrustDomain: configuration.string(.spireTrustDomain)!
+            platformTrustDomain: configuration.requiredString(.spireTrustDomain)
         )
 
         // The derived domain is a truncation of the org UUID, so a collision

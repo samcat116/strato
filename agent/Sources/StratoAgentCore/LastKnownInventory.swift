@@ -25,12 +25,6 @@
 ///   reads. Past the threshold the answer is still served — stale beats empty,
 ///   always — and flagged, so the caller can say so at a level that gets noticed.
 ///
-/// Lives in `StratoAgentCore` rather than beside its caller because its caller
-/// is `LibvirtService`, in the executable target, which no test can import.
-/// Same reasoning as `LibvirtDomain.reservation(from:)`: the sentence worth
-/// asserting is a property of the seam, and it has to be assertable in a package
-/// with no daemon in it.
-///
 /// Holds no cadence policy — the threshold is the caller's to choose, and the
 /// instants are injectable so ageing is assertable without sleeping.
 public struct LastKnownInventory<Value: Sendable>: Sendable {

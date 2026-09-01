@@ -32,7 +32,8 @@ struct AgentAutoUpdateProtocolTests {
         // Nil means "no opinion" — never an instruction to downgrade.
         let noOpinion = """
             {"requestId":"r","timestamp":0,"syncId":"s","vms":[],"sandboxes":[],
-             "networks":[],"networksAuthoritative":true,"tombstones":[],"volumes":[],"snapshots":[]}
+             "networks":[],"networksAuthoritative":true,"tombstones":[],"volumes":[],"snapshots":[],
+             "cephCredentialRevocations":[]}
             """
         let decoded = try decodeJSON(DesiredStateMessage.self, from: noOpinion)
         #expect(decoded.desiredAgentUpdate == nil)

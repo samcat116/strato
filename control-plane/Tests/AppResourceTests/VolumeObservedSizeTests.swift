@@ -27,7 +27,6 @@ final class VolumeObservedSizeTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -56,17 +55,6 @@ final class VolumeObservedSizeTests {
     }
 
     private func registerAgent(app: Application, named name: String) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: name,
-            hostname: "\(name).test",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
-            protocolVersion: WireProtocol.currentVersion
-        )
         guard let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id else {
             throw Abort(.internalServerError, reason: "Volume test organization is missing")
         }
@@ -74,12 +62,12 @@ final class VolumeObservedSizeTests {
             name: "\(name)-site",
             organizationScope: .organization(orgID))
         try await site.save(on: app.db)
-        let uuid = try await app.agentService.registerAgent(
-            message,
-            agentName: name,
+        return try await TestDataBuilder(db: app.db).registerAgent(
+            on: app,
+            named: name,
+            hostname: "\(name).test",
             siteID: try site.requireID(),
             organizationScope: .organization(orgID))
-        return uuid.uuidString
     }
 
     /// A volume whose desired size is `size`, resting at `observedGeneration`.

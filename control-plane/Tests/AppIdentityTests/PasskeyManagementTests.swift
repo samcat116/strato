@@ -62,7 +62,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("list returns only the caller's passkeys")
     func testListScopedToCaller() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let other = try await makeUser(username: "other", on: app.db)
             try await makeCredential(for: testUser, name: "Mine", on: app.db)
@@ -82,7 +82,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("list requires authentication")
     func testListUnauthenticated() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             try await app.test(.GET, "/api/users/me/passkeys") { res in
@@ -95,7 +95,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("rename updates the label")
     func testRename() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let credential = try await makeCredential(for: testUser, on: app.db)
             let cookies = try await sessionCookie(for: testUser, on: app)
@@ -113,7 +113,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("rename rejects an over-long name")
     func testRenameTooLong() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let credential = try await makeCredential(for: testUser, on: app.db)
             let cookies = try await sessionCookie(for: testUser, on: app)
@@ -129,7 +129,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("another user's passkey is not found")
     func testRenameOtherUsersPasskey() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let other = try await makeUser(username: "other", on: app.db)
             let credential = try await makeCredential(for: other, on: app.db)
@@ -148,7 +148,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("deleting the only passkey is refused")
     func testDeleteLastPasskeyRefused() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let credential = try await makeCredential(for: testUser, on: app.db)
             let cookies = try await sessionCookie(for: testUser, on: app)
@@ -166,7 +166,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("deleting a passkey succeeds while another remains")
     func testDeleteWithSpare() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let first = try await makeCredential(for: testUser, name: "First", on: app.db)
             try await makeCredential(for: testUser, name: "Second", on: app.db)
@@ -186,7 +186,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("an OIDC-linked account may remove its last passkey")
     func testDeleteLastPasskeyAllowedForOIDCUser() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let provider = OIDCProvider(
                 organizationID: try testOrganization.requireID(),
@@ -214,7 +214,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("API keys cannot manage passkeys")
     func testAPIKeyCannotMutatePasskeys() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let first = try await makeCredential(for: testUser, on: app.db)
             try await makeCredential(for: testUser, on: app.db)
@@ -237,7 +237,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("begin issues a challenge in the add-passkey namespace")
     func testAddBeginStoresNamespacedChallenge() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let cookies = try await sessionCookie(for: testUser, on: app)
 
@@ -256,7 +256,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("begin is refused past the per-account passkey limit")
     func testAddBeginLimit() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             for index in 0..<PasskeyController.maxPasskeysPerUser {
                 try await makeCredential(for: testUser, name: "key-\(index)", on: app.db)
@@ -273,7 +273,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("a disabled account cannot start an add ceremony")
     func testAddBeginRejectsDisabledAccount() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             testUser.disabledAt = Date()
             try await testUser.save(on: app.db)
@@ -291,7 +291,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("a user can change their own username")
     func testUsernameUpdate() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             try await app.test(.PUT, "/api/users/\(testUser.id!)") { req in
@@ -309,7 +309,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("an invalid username is rejected")
     func testUsernameValidation() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             for invalid in ["ab", "has space", "with@sign", String(repeating: "x", count: 65)] {
@@ -325,7 +325,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("a taken username is rejected")
     func testUsernameConflict() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             _ = try await makeUser(username: "taken", on: app.db)
 
@@ -340,7 +340,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("an invalid email is rejected")
     func testEmailValidation() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             try await app.test(.PUT, "/api/users/\(testUser.id!)") { req in
@@ -354,7 +354,7 @@ final class PasskeyManagementTests: BaseTestCase {
 
     @Test("SCIM-provisioned accounts cannot be edited here")
     func testSCIMProvisionedUpdateForbidden() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             testUser.scimProvisioned = true
             try await testUser.save(on: app.db)

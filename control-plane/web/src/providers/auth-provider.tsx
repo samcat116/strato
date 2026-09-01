@@ -9,7 +9,6 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { authApi } from "@/lib/api/auth";
 import { webAuthnClient, WebAuthnClient } from "@/lib/webauthn";
@@ -29,13 +28,24 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [sessionError, setSessionError] = useState<Error | null>(null);
+export function AuthProvider({
+  children,
+  initialUser,
+  initialError,
+  refreshOnMount,
+}: {
+  children: ReactNode;
+  initialUser: User | null;
+  initialError: string | null;
+  refreshOnMount: boolean;
+}) {
+  const [user, setUser] = useState<User | null>(initialUser);
+  const [isLoading, setIsLoading] = useState(refreshOnMount);
+  const [sessionError, setSessionError] = useState<Error | null>(() =>
+    initialError ? new Error(initialError) : null
+  );
   const [isWebAuthnSupported, setIsWebAuthnSupported] = useState(false);
-  const userIdRef = useRef<string | null>(null);
-  const router = useRouter();
+  const userIdRef = useRef<string | null>(initialUser?.id ?? null);
   const queryClient = useQueryClient();
 
   const adoptUser = useCallback(
@@ -65,16 +75,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [adoptUser]);
 
   useEffect(() => {
-    refresh();
+    if (refreshOnMount) void refresh();
     setIsWebAuthnSupported(WebAuthnClient.isSupported());
-  }, [refresh]);
+  }, [refresh, refreshOnMount]);
 
   const login = async (username?: string | null) => {
     const result = await webAuthnClient.authenticate(username);
     if (result.success) {
       adoptUser(result.user);
       setSessionError(null);
-      router.push("/dashboard");
     } else {
       throw new Error("Authentication failed");
     }
@@ -85,7 +94,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (result.success) {
       adoptUser(result.user);
       setSessionError(null);
-      router.push("/dashboard");
     } else {
       throw new Error("Registration failed");
     }

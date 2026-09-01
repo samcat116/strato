@@ -4,7 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { FolderKanban, Rows3, Search, type LucideIcon } from "lucide-react";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { hierarchyApi } from "@/lib/api/hierarchy";
 import { useAuth, useOrganization } from "@/providers";
@@ -16,6 +21,18 @@ interface PaletteEntry {
   hint: string;
   href: string;
   icon: LucideIcon;
+}
+
+export function movePaletteSelection(
+  current: number,
+  direction: "next" | "previous",
+  itemCount: number
+): number {
+  if (itemCount <= 0) return 0;
+  const bounded = Math.min(Math.max(current, 0), itemCount - 1);
+  return direction === "next"
+    ? Math.min(bounded + 1, itemCount - 1)
+    : Math.max(bounded - 1, 0);
 }
 
 export function CommandPalette() {
@@ -42,7 +59,12 @@ export function CommandPalette() {
   const organizationId = currentOrg?.id;
 
   const normalizedQuery = query.trim();
-  const { data: hierarchySearch } = useQuery({
+  const {
+    data: hierarchySearch,
+    error: hierarchySearchError,
+    isFetching: hierarchySearchFetching,
+    refetch: retryHierarchySearch,
+  } = useQuery({
     queryKey: ["hierarchy-search", organizationId, normalizedQuery],
     queryFn: ({ signal }) => hierarchyApi.search(organizationId!, normalizedQuery, undefined, signal),
     enabled: open && !orgLoading && !!organizationId && normalizedQuery.length >= 2,
@@ -78,6 +100,10 @@ export function CommandPalette() {
       .filter((e) => e.label.toLowerCase().includes(q))
       .slice(0, 12);
   }, [entries, query]);
+  const activeIndex =
+    filtered.length === 0 ? -1 : Math.min(selected, filtered.length - 1);
+  const searchesResources =
+    !!organizationId && normalizedQuery.length >= 2;
 
   const openEntry = (entry: PaletteEntry | undefined) => {
     if (!entry) return;
@@ -109,6 +135,9 @@ export function CommandPalette() {
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="top-[20%] translate-y-0 gap-0 overflow-hidden p-0 sm:max-w-lg">
           <DialogTitle className="sr-only">Search</DialogTitle>
+          <DialogDescription className="sr-only">
+            Search dashboard pages and resources, then choose a result to navigate.
+          </DialogDescription>
           <div className="flex items-center gap-2 border-b border-border px-3">
             <Search className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={1.6} />
             <input
@@ -121,35 +150,55 @@ export function CommandPalette() {
               onKeyDown={(e) => {
                 if (e.key === "ArrowDown") {
                   e.preventDefault();
-                  setSelected((s) => Math.min(s + 1, filtered.length - 1));
+                  setSelected((value) =>
+                    movePaletteSelection(value, "next", filtered.length)
+                  );
                 } else if (e.key === "ArrowUp") {
                   e.preventDefault();
-                  setSelected((s) => Math.max(s - 1, 0));
+                  setSelected((value) =>
+                    movePaletteSelection(value, "previous", filtered.length)
+                  );
                 } else if (e.key === "Enter") {
                   e.preventDefault();
-                  openEntry(filtered[selected]);
+                  openEntry(filtered[activeIndex]);
                 }
               }}
+              role="combobox"
+              aria-label="Search pages and resources"
+              aria-autocomplete="list"
+              aria-expanded="true"
+              aria-controls="command-palette-results"
+              aria-activedescendant={
+                activeIndex >= 0
+                  ? `command-palette-option-${activeIndex}`
+                  : undefined
+              }
               placeholder="Search pages, instances, projects…"
               className="h-11 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
           </div>
-          <div className="max-h-72 overflow-y-auto p-1.5">
-            {filtered.length === 0 ? (
-              <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                No results for &ldquo;{query}&rdquo;
-              </div>
-            ) : (
+          <div className="max-h-72 overflow-y-auto">
+            <div
+              id="command-palette-results"
+              role="listbox"
+              aria-label="Search results"
+              aria-busy={hierarchySearchFetching}
+              className="p-1.5"
+            >
+              {filtered.length > 0 &&
               filtered.map((entry, i) => {
                 const Icon = entry.icon;
                 return (
                   <button
                     key={entry.key}
+                    id={`command-palette-option-${i}`}
+                    role="option"
+                    aria-selected={i === activeIndex}
                     onClick={() => openEntry(entry)}
                     onMouseEnter={() => setSelected(i)}
                     className={cn(
                       "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px]",
-                      i === selected && "bg-accent"
+                      i === activeIndex && "bg-accent"
                     )}
                   >
                     <Icon className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={1.6} />
@@ -159,7 +208,37 @@ export function CommandPalette() {
                     </span>
                   </button>
                 );
-              })
+              })}
+              {filtered.length === 0 && !hierarchySearchFetching && !hierarchySearchError && (
+                <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+                  {normalizedQuery.length > 0 && normalizedQuery.length < 2
+                    ? "Type at least 2 characters to search resources."
+                    : `No results for “${query}”`}
+                </div>
+              )}
+            </div>
+            {searchesResources && hierarchySearchFetching && (
+              <div
+                role="status"
+                className="border-t border-border px-4 py-2 text-xs text-muted-foreground"
+              >
+                Searching resources…
+              </div>
+            )}
+            {searchesResources && hierarchySearchError && (
+              <div
+                role="alert"
+                className="flex items-center justify-between gap-3 border-t border-border px-4 py-2 text-xs text-destructive"
+              >
+                <span>Resource search failed. Page results are still available.</span>
+                <button
+                  type="button"
+                  className="font-medium underline underline-offset-2"
+                  onClick={() => void retryHierarchySearch()}
+                >
+                  Try again
+                </button>
+              </div>
             )}
           </div>
         </DialogContent>

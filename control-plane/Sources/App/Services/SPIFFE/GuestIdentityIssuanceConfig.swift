@@ -18,8 +18,8 @@ struct GuestIdentityIssuanceConfig: Sendable, Equatable {
     static func fromConfiguration(_ configuration: ControlPlaneConfiguration) throws -> Self {
         try GuestIdentityIssuanceConfig(
             allowedAudiences: audiences(rawValue: configuration.string(.guestIdentityAudiences)),
-            defaultTTLSeconds: configuration.int(.guestIdentityJWTTTL)!,
-            maximumTTLSeconds: configuration.int(.guestIdentityJWTMaxTTL)!
+            defaultTTLSeconds: configuration.int(.guestIdentityJWTTTL),
+            maximumTTLSeconds: configuration.int(.guestIdentityJWTMaxTTL)
         )
     }
 

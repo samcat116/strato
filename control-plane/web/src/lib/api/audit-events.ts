@@ -1,12 +1,15 @@
 // Audit event API endpoints (read-only trail)
 
 import { api } from "./client";
-import type { AuditEventListResponse } from "@/types/api";
+import type { AuditEventListResponse } from "@/types/api-contracts";
 
 export interface AuditEventFilters {
   eventType?: string;
   userID?: string;
   organizationID?: string;
+  /** Apply together to scope the trail to one canonical resource. */
+  resourceType?: string;
+  resourceID?: string;
   /** Only events served via the system-admin bypass. */
   adminOnly?: boolean;
   /** ISO8601 timestamps (e.g. 2026-07-09T12:00:00Z). */
@@ -21,6 +24,8 @@ function toParams(filters: AuditEventFilters): Record<string, string> {
   if (filters.eventType) params.eventType = filters.eventType;
   if (filters.userID) params.userID = filters.userID;
   if (filters.organizationID) params.organizationID = filters.organizationID;
+  if (filters.resourceType) params.resourceType = filters.resourceType;
+  if (filters.resourceID) params.resourceID = filters.resourceID;
   if (filters.adminOnly) params.adminOnly = "true";
   if (filters.from) params.from = filters.from;
   if (filters.to) params.to = filters.to;

@@ -2,24 +2,9 @@ import Fluent
 import Foundation
 import Vapor
 
-// IAM phase 7 (issue #484): the write-time ceiling report.
-//
-// On a tier-3 binding write, ask which tier-2 ceilings narrow the grant it
-// creates, and say so in the response. Eval-time enforcement is what makes the
-// ceiling bite — a denial three days later names no cause, and this is where
-// the cause is still in front of the person who created it
-// (docs/architecture/iam.md, "The write-time ceiling report").
-//
-// **It reports; it does not refuse** (STR-110, issue #864). It used to refuse,
-// and the two rules disagreed: the evaluator subtracts the ceilinged actions
-// and leaves the rest of the grant working, while the write-time check refused
-// the whole binding over a single overlap. Since the seeded roles are broad action
-// groups, one `forbid vm:stop` on an organization made `operator`, `editor`
-// and `admin` ungrantable everywhere beneath it — an identical binding was
-// legal to hold and illegal to create. Ceilings only subtract, at both ends.
-//
-// The analysis runs only here, on binding and guardrail writes: rare, and
-// latency-tolerant in a way the request path is not.
+// Reports which tier-2 ceilings narrow a tier-3 binding write. It never refuses
+// the write: the evaluator enforces ceilings by subtracting prohibited actions.
+// Analysis runs only on binding and guardrail writes, where its latency is acceptable.
 
 /// A binding about to be written, as the report sees it.
 ///

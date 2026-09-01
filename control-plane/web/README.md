@@ -23,15 +23,17 @@ stubbed in development, so use an account from the control plane you started.
 | --- | --- |
 | `bun run dev` | Start the development server with API rewrites |
 | `bun run lint` | Run ESLint |
+| `bun run test` | Run Vitest unit and component tests |
+| `bun run test:e2e` | Run Playwright browser smoke tests |
 | `bun run build` | Create the production standalone build |
 | `bun run start` | Serve a completed build on `${PORT:-3000}` |
 | `bun run generate:api-types` | Refresh `src/types/openapi.ts` from the control-plane OpenAPI document |
 
 The generated OpenAPI types are committed. After changing
 `../Sources/App/openapi.yaml`, run `bun run generate:api-types` and include the
-result in the same change. Most endpoint modules still use the hand-maintained
-DTOs in `src/types/api.ts`; new migrations to generated types happen one API
-surface at a time.
+result in the same change. Endpoint modules import `src/types/api-contracts.ts`,
+which binds the API boundary to generated schemas while preserving the
+UI-oriented compatibility shapes in `src/types/api.ts`.
 
 ## Architecture and deployment
 

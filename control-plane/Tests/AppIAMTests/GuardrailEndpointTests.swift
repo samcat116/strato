@@ -24,7 +24,6 @@ final class GuardrailEndpointTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             // This suite is about the API, not the symbolic analysis: with the
             // real analyzer these tests would pass or fail on whether the
             // machine has an SMT solver. The shadowed-bindings report is

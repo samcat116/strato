@@ -2,6 +2,7 @@ import Crypto
 import Fluent
 import Foundation
 import NIOConcurrencyHelpers
+import SQLKit
 import StratoShared
 import Testing
 import Vapor
@@ -333,11 +334,12 @@ struct WebhookSubscriptionAPITests {
         }
     }
 
-    @Test("Delivery history lists newest first")
+    @Test("Delivery history surfaces the most recently changed rows")
     func deliveryHistory() async throws {
         try await withTestApp { app in
             let fixture = try await makeFixture(app)
             let subscription = try await makeSubscription(app, fixture: fixture)
+            var oldest: WebhookDelivery?
             for index in 0..<3 {
                 let delivery = WebhookDelivery(
                     subscriptionID: subscription.id!,
@@ -345,7 +347,12 @@ struct WebhookSubscriptionAPITests {
                     eventType: .webhookTest,
                     payload: "{\"n\":\(index)}")
                 try await delivery.save(on: app.db)
+                if oldest == nil { oldest = delivery }
             }
+            let dropped = try #require(oldest)
+            dropped.status = WebhookDeliveryStatus.dropped.rawValue
+            dropped.lastError = WebhookOutbox.droppedReason(limit: 2)
+            try await dropped.save(on: app.db)
 
             let path =
                 "/api/organizations/\(fixture.organization.id!.uuidString)"
@@ -356,7 +363,8 @@ struct WebhookSubscriptionAPITests {
                 #expect(res.status == .ok)
                 let deliveries = try res.content.decode([WebhookDeliveryResponse].self)
                 #expect(deliveries.count == 2)
-                #expect(deliveries[0].payload == "{\"n\":2}")
+                #expect(deliveries[0].payload == "{\"n\":0}")
+                #expect(deliveries[0].status == "dropped")
             }
         }
     }
@@ -366,6 +374,284 @@ struct WebhookSubscriptionAPITests {
 
 @Suite("Webhook Outbox Tests", .serialized)
 struct WebhookOutboxTests {
+
+    @Test("The pending ceiling drops each subscription's oldest rows independently")
+    func pendingCeilingDropsOldestPerSubscription() async throws {
+        try await withTestApp { app in
+            let fixture = try await makeFixture(app)
+            let first = try await makeSubscription(app, fixture: fixture)
+            let second = try await makeSubscription(app, fixture: fixture)
+
+            for subscription in [first, second] {
+                for index in 0..<3 {
+                    let delivery = WebhookDelivery(
+                        subscriptionID: subscription.id!, eventID: UUID(),
+                        eventType: .webhookTest, payload: "{\"index\":\(index)}")
+                    _ = try await app.db.transaction { tx in
+                        try await WebhookOutbox.enqueue([delivery], pendingLimit: 2, on: tx)
+                    }
+                }
+
+                let rows = try await WebhookDelivery.query(on: app.db)
+                    .filter(\.$subscription.$id == subscription.id!)
+                    .sort(\.$enqueuedAt)
+                    .all()
+                #expect(rows.map(\.statusValue) == [.dropped, .pending, .pending])
+                #expect(rows[0].lastError == WebhookOutbox.droppedReason(limit: 2))
+                #expect(rows[0].attempts == 0)
+            }
+        }
+    }
+
+    @Test("Concurrent admission cannot exceed a subscription's pending ceiling")
+    func concurrentAdmissionHonorsPendingCeiling() async throws {
+        try await withTestApp { app in
+            let fixture = try await makeFixture(app)
+            let subscription = try await makeSubscription(app, fixture: fixture)
+
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for index in 0..<4 {
+                    group.addTask {
+                        let delivery = WebhookDelivery(
+                            subscriptionID: subscription.id!, eventID: UUID(),
+                            eventType: .webhookTest, payload: "{\"index\":\(index)}")
+                        _ = try await app.db.transaction { tx in
+                            try await WebhookOutbox.enqueue([delivery], pendingLimit: 2, on: tx)
+                        }
+                    }
+                }
+                try await group.waitForAll()
+            }
+
+            let rows = try await WebhookDelivery.query(on: app.db).all()
+            #expect(rows.filter { $0.statusValue == .pending }.count == 2)
+            #expect(rows.filter { $0.statusValue == .dropped }.count == 2)
+        }
+    }
+
+    @Test("A legacy retention sweep preserves a newly dropped old delivery")
+    func legacyRetentionPreservesNewDrop() async throws {
+        try await withTestApp { app in
+            let fixture = try await makeFixture(app)
+            let subscription = try await makeSubscription(app, fixture: fixture)
+            let old = WebhookDelivery(
+                subscriptionID: subscription.id!, eventID: UUID(),
+                eventType: .webhookTest, payload: "{\"old\":true}")
+            try await old.save(on: app.db)
+            let recent = WebhookDelivery(
+                subscriptionID: subscription.id!, eventID: UUID(),
+                eventType: .webhookTest, payload: "{\"recent\":true}")
+            try await recent.save(on: app.db)
+
+            let sql = try #require(app.db as? any SQLDatabase)
+            let originalEnqueueTime = Date().addingTimeInterval(
+                -Double(WebhookDeliveryService.historyRetentionDays + 1) * 86_400)
+            try await sql.raw(
+                """
+                UPDATE webhook_deliveries
+                SET created_at = \(bind: originalEnqueueTime),
+                    enqueued_at = \(bind: originalEnqueueTime)
+                WHERE id = \(bind: old.id!)
+                """
+            ).run()
+
+            try await app.db.transaction { tx in
+                try await WebhookOutbox.lockSubscriptions([subscription.id!], on: tx)
+                try await WebhookOutbox.enforcePendingCeiling(
+                    for: [subscription.id!], pendingLimit: 1, on: tx)
+            }
+
+            let dropped = try #require(try await WebhookDelivery.find(old.id, on: app.db))
+            #expect(dropped.statusValue == .dropped)
+            #expect(try #require(dropped.enqueuedAt) < Date().addingTimeInterval(-7 * 86_400))
+            #expect(try #require(dropped.createdAt) > Date().addingTimeInterval(-60))
+            #expect(
+                abs(
+                    try #require(WebhookDeliveryResponse(from: dropped).createdAt)
+                        .timeIntervalSince(originalEnqueueTime)) < 0.01)
+
+            // This is the exact retention predicate used by the previous
+            // release during a rolling deployment.
+            let legacyCutoff = Date().addingTimeInterval(
+                -Double(WebhookDeliveryService.historyRetentionDays) * 86_400)
+            try await sql.raw(
+                """
+                DELETE FROM webhook_deliveries
+                WHERE status <> 'pending'
+                  AND created_at < \(bind: legacyCutoff)
+                """
+            ).run()
+            #expect(try await WebhookDelivery.find(old.id, on: app.db) != nil)
+        }
+    }
+
+    @Test("A manually re-enqueued delivery remains newer than existing pending work")
+    func manualRedeliveryRefreshesQueueOrder() async throws {
+        try await withTestApp { app in
+            let fixture = try await makeFixture(app)
+            let subscription = try await makeSubscription(app, fixture: fixture)
+            let sql = try #require(app.db as? any SQLDatabase)
+            let originalEnqueueTime = Date().addingTimeInterval(-3 * 3_600)
+            let redelivered = WebhookDelivery(
+                subscriptionID: subscription.id!, eventID: UUID(),
+                eventType: .webhookTest, payload: "{\"redelivered\":true}")
+            redelivered.status = WebhookDeliveryStatus.dropped.rawValue
+            redelivered.lastError = WebhookOutbox.droppedReason(limit: 2)
+            try await redelivered.save(on: app.db)
+            try await sql.raw(
+                """
+                UPDATE webhook_deliveries
+                SET enqueued_at = NULL,
+                    created_at = \(bind: originalEnqueueTime)
+                WHERE id = \(bind: redelivered.id!)
+                """
+            ).run()
+
+            for index in 0..<2 {
+                let pending = WebhookDelivery(
+                    subscriptionID: subscription.id!, eventID: UUID(),
+                    eventType: .webhookTest, payload: "{\"pending\":\(index)}")
+                try await pending.save(on: app.db)
+                let pendingCreatedAt = Date().addingTimeInterval(Double(index - 2) * 3_600)
+                try await sql.raw(
+                    """
+                    UPDATE webhook_deliveries
+                    SET created_at = \(bind: pendingCreatedAt)
+                    WHERE id = \(bind: pending.id!)
+                    """
+                ).run()
+            }
+
+            let path =
+                "/api/organizations/\(fixture.organization.id!.uuidString)"
+                + "/webhooks/\(subscription.id!.uuidString)"
+                + "/deliveries/\(redelivered.id!.uuidString)/redeliver"
+            try await app.test(.POST, path) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fixture.apiToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            // Model the next enqueue's ceiling pass, where the manual
+            // redelivery is no longer protected by its original transaction.
+            try await app.db.transaction { tx in
+                try await WebhookOutbox.lockSubscriptions([subscription.id!], on: tx)
+                try await WebhookOutbox.enforcePendingCeiling(
+                    for: [subscription.id!], pendingLimit: 2, on: tx)
+            }
+
+            let rows = try await WebhookDelivery.query(on: app.db).all()
+            #expect(rows.filter { $0.statusValue == .pending }.count == 2)
+            #expect(rows.filter { $0.statusValue == .dropped }.count == 1)
+            let reloaded = try #require(
+                try await WebhookDelivery.find(redelivered.id, on: app.db))
+            #expect(reloaded.statusValue == .pending)
+            #expect(try #require(reloaded.createdAt) > Date().addingTimeInterval(-60))
+            #expect(
+                abs(try #require(reloaded.enqueuedAt).timeIntervalSince(originalEnqueueTime)) < 0.01)
+        }
+    }
+
+    @Test("The ceiling never sheds a claim held by a legacy replica")
+    func pendingCeilingProtectsLegacyClaim() async throws {
+        try await withTestApp { app in
+            let fixture = try await makeFixture(app)
+            let subscription = try await makeSubscription(app, fixture: fixture)
+            let legacyClaim = WebhookDelivery(
+                subscriptionID: subscription.id!, eventID: UUID(),
+                eventType: .webhookTest, payload: "{\"legacyClaim\":true}")
+            legacyClaim.nextAttemptAt = Date().addingTimeInterval(120)
+            legacyClaim.claimedUntil = nil
+            try await legacyClaim.save(on: app.db)
+
+            let due = WebhookDelivery(
+                subscriptionID: subscription.id!, eventID: UUID(),
+                eventType: .webhookTest, payload: "{\"due\":true}")
+            try await due.save(on: app.db)
+
+            try await app.db.transaction { tx in
+                try await WebhookOutbox.lockSubscriptions([subscription.id!], on: tx)
+                try await WebhookOutbox.enforcePendingCeiling(
+                    for: [subscription.id!], pendingLimit: 1, on: tx)
+            }
+
+            let protected = try #require(
+                try await WebhookDelivery.find(legacyClaim.id, on: app.db))
+            let shed = try #require(try await WebhookDelivery.find(due.id, on: app.db))
+            #expect(protected.statusValue == .pending)
+            #expect(shed.statusValue == .dropped)
+        }
+    }
+
+    @Test("The ceiling protects a legacy claim that retains an expired lease marker")
+    func pendingCeilingProtectsMixedVersionClaim() async throws {
+        try await withTestApp { app in
+            let fixture = try await makeFixture(app)
+            let subscription = try await makeSubscription(app, fixture: fixture)
+            let retry = WebhookDelivery(
+                subscriptionID: subscription.id!, eventID: UUID(),
+                eventType: .webhookTest, payload: "{\"retry\":true}")
+            retry.nextAttemptAt = Date().addingTimeInterval(3_600)
+            retry.claimedUntil = Date(timeIntervalSince1970: 0)
+            try await retry.save(on: app.db)
+
+            let due = WebhookDelivery(
+                subscriptionID: subscription.id!, eventID: UUID(),
+                eventType: .webhookTest, payload: "{\"due\":true}")
+            try await due.save(on: app.db)
+
+            try await app.db.transaction { tx in
+                try await WebhookOutbox.lockSubscriptions([subscription.id!], on: tx)
+                try await WebhookOutbox.enforcePendingCeiling(
+                    for: [subscription.id!], pendingLimit: 1, on: tx)
+            }
+
+            let protected = try #require(try await WebhookDelivery.find(retry.id, on: app.db))
+            let shed = try #require(try await WebhookDelivery.find(due.id, on: app.db))
+            #expect(protected.statusValue == .pending)
+            #expect(shed.statusValue == .dropped)
+        }
+    }
+
+    @Test("The ceiling can shed an old future retry after the claim grace period")
+    func pendingCeilingShedsFutureRetryAfterGrace() async throws {
+        try await withTestApp { app in
+            let fixture = try await makeFixture(app)
+            let subscription = try await makeSubscription(app, fixture: fixture)
+            let retry = WebhookDelivery(
+                subscriptionID: subscription.id!, eventID: UUID(),
+                eventType: .webhookTest, payload: "{\"retry\":true}")
+            retry.nextAttemptAt = Date().addingTimeInterval(3_600)
+            try await retry.save(on: app.db)
+
+            let sql = try #require(app.db as? any SQLDatabase)
+            try await sql.raw(
+                """
+                UPDATE webhook_deliveries
+                SET created_at = now() - interval '1 hour',
+                    updated_at = now()
+                        - (\(bind: WebhookDeliveryService.claimLeaseSeconds + 1) * interval '1 second')
+                WHERE id = \(bind: retry.id!)
+                """
+            ).run()
+
+            let due = WebhookDelivery(
+                subscriptionID: subscription.id!, eventID: UUID(),
+                eventType: .webhookTest, payload: "{\"due\":true}")
+            try await due.save(on: app.db)
+
+            try await app.db.transaction { tx in
+                try await WebhookOutbox.lockSubscriptions([subscription.id!], on: tx)
+                try await WebhookOutbox.enforcePendingCeiling(
+                    for: [subscription.id!], pendingLimit: 1, on: tx)
+            }
+
+            let shed = try #require(try await WebhookDelivery.find(retry.id, on: app.db))
+            let retained = try #require(try await WebhookDelivery.find(due.id, on: app.db))
+            #expect(shed.statusValue == .dropped)
+            #expect(retained.statusValue == .pending)
+        }
+    }
 
     @Test("Converging emits operation.completed once, naming the recorded mutation")
     func convergenceTransitionEnqueuesCompletion() async throws {
@@ -591,6 +877,8 @@ private struct HookOrigin {
     let port: Int
     let captured: NIOLockedValueBox<[CapturedRequest]>
     let responseStatus: NIOLockedValueBox<HTTPResponseStatus>
+    let inFlight: NIOLockedValueBox<Int>
+    let maxInFlight: NIOLockedValueBox<Int>
 
     static func start(
         responseForRequest: (@Sendable (CapturedRequest) -> PlannedResponse)? = nil
@@ -602,8 +890,16 @@ private struct HookOrigin {
 
         let captured = NIOLockedValueBox<[CapturedRequest]>([])
         let responseStatus = NIOLockedValueBox<HTTPResponseStatus>(.ok)
+        let inFlight = NIOLockedValueBox<Int>(0)
+        let maxInFlight = NIOLockedValueBox<Int>(0)
 
         origin.post("hook") { req -> Response in
+            let active = inFlight.withLockedValue { count in
+                count += 1
+                return count
+            }
+            maxInFlight.withLockedValue { $0 = max($0, active) }
+            defer { inFlight.withLockedValue { $0 -= 1 } }
             let request = CapturedRequest(
                 body: req.body.string ?? "",
                 signature: req.headers.first(name: "X-Strato-Signature"),
@@ -626,7 +922,8 @@ private struct HookOrigin {
             throw Abort(.internalServerError, reason: "origin did not report a bound port")
         }
         return HookOrigin(
-            app: origin, port: port, captured: captured, responseStatus: responseStatus)
+            app: origin, port: port, captured: captured, responseStatus: responseStatus,
+            inFlight: inFlight, maxInFlight: maxInFlight)
     }
 
     func shutdown() async {
@@ -660,7 +957,7 @@ struct WebhookDeliverySweepTests {
                     payload: try event.encodedPayload())
                 try await delivery.save(on: app.db)
 
-                await app.webhookDelivery.sweepOnce(acquiringLock: false)
+                await app.webhookDelivery.sweepOnce()
 
                 let reloaded = try #require(try await WebhookDelivery.find(delivery.id, on: app.db))
                 #expect(reloaded.statusValue == .succeeded)
@@ -711,7 +1008,7 @@ struct WebhookDeliverySweepTests {
                 try await delivery.save(on: app.db)
 
                 origin.responseStatus.withLockedValue { $0 = .internalServerError }
-                await app.webhookDelivery.sweepOnce(acquiringLock: false)
+                await app.webhookDelivery.sweepOnce()
 
                 var reloaded = try #require(try await WebhookDelivery.find(delivery.id, on: app.db))
                 #expect(reloaded.statusValue == .pending)
@@ -719,13 +1016,14 @@ struct WebhookDeliverySweepTests {
                 #expect(reloaded.responseStatus == 500)
                 #expect(reloaded.lastError?.contains("500") == true)
                 #expect(reloaded.nextAttemptAt > Date())
+                #expect(reloaded.claimedUntil == nil)
 
                 let failingSubscription = try #require(
                     try await WebhookSubscription.find(subscription.id, on: app.db))
                 #expect(failingSubscription.failingSince != nil)
 
                 // Not due yet: an immediate pass must not retry.
-                await app.webhookDelivery.sweepOnce(acquiringLock: false)
+                await app.webhookDelivery.sweepOnce()
                 reloaded = try #require(try await WebhookDelivery.find(delivery.id, on: app.db))
                 #expect(reloaded.attempts == 1)
 
@@ -733,7 +1031,7 @@ struct WebhookDeliverySweepTests {
                 origin.responseStatus.withLockedValue { $0 = .ok }
                 reloaded.nextAttemptAt = Date()
                 try await reloaded.save(on: app.db)
-                await app.webhookDelivery.sweepOnce(acquiringLock: false)
+                await app.webhookDelivery.sweepOnce()
 
                 reloaded = try #require(try await WebhookDelivery.find(delivery.id, on: app.db))
                 #expect(reloaded.statusValue == .succeeded)
@@ -743,6 +1041,106 @@ struct WebhookDeliverySweepTests {
                 let recovered = try #require(
                     try await WebhookSubscription.find(subscription.id, on: app.db))
                 #expect(recovered.failingSince == nil)
+            }
+        } catch {
+            await origin.shutdown()
+            throw error
+        }
+        await origin.shutdown()
+    }
+
+    @Test("A missing signing-secret key blocks without consuming attempts or auto-disable budget")
+    func missingEncryptionKeyIsNonPunitive() async throws {
+        let origin = try await HookOrigin.start()
+        do {
+            try await withTestApp { app in
+                let fixture = try await makeFixture(app)
+                let openingService = SecretsEncryptionService(
+                    key: try SecretsEncryptionService.parseKey(
+                        String(repeating: "cd", count: 32)))
+                app.secretsEncryption = SecretsEncryptionService(
+                    key: try SecretsEncryptionService.parseKey(
+                        String(repeating: "ab", count: 32)))
+                let subscription = try await makeSubscription(
+                    app, fixture: fixture,
+                    url: "http://127.0.0.1:\(origin.port)/hook")
+                subscription.signingSecret = try openingService.encrypt("whsec_blocked")
+                let originalFailingSince = Date().addingTimeInterval(-86_400 * 4)
+                subscription.failingSince = originalFailingSince
+                try await subscription.save(on: app.db)
+
+                let delivery = WebhookDelivery(
+                    subscriptionID: subscription.id!, eventID: UUID(),
+                    eventType: .webhookTest, payload: "{}")
+                try await delivery.save(on: app.db)
+
+                await app.webhookDelivery.sweepOnce()
+
+                var blocked = try #require(
+                    try await WebhookDelivery.find(delivery.id, on: app.db))
+                #expect(blocked.statusValue == .pending)
+                #expect(blocked.attempts == 0)
+                #expect(blocked.lastAttemptAt == nil)
+                #expect(blocked.lastError?.contains("does not have") == true)
+                #expect(origin.captured.withLockedValue { $0.isEmpty })
+                let unchangedSubscription = try #require(
+                    try await WebhookSubscription.find(subscription.id, on: app.db))
+                #expect(unchangedSubscription.isActive)
+                #expect(unchangedSubscription.disabledReason == nil)
+                #expect(
+                    abs(
+                        try #require(unchangedSubscription.failingSince)
+                            .timeIntervalSince(originalFailingSince)) < 0.01)
+
+                // Restoring the key is sufficient: make the pending row due and
+                // the ordinary sweep delivers it without a manual redelivery.
+                app.secretsEncryption = openingService
+                blocked.nextAttemptAt = Date()
+                try await blocked.save(on: app.db)
+                await app.webhookDelivery.sweepOnce()
+
+                blocked = try #require(
+                    try await WebhookDelivery.find(delivery.id, on: app.db))
+                #expect(blocked.statusValue == .succeeded)
+                #expect(blocked.attempts == 1)
+                #expect(origin.captured.withLockedValue { $0.count } == 1)
+            }
+        } catch {
+            await origin.shutdown()
+            throw error
+        }
+        await origin.shutdown()
+    }
+
+    @Test("Malformed signing-secret ciphertext fails without starting an HTTP attempt")
+    func malformedEncryptionCiphertextIsNotHTTPAttempt() async throws {
+        let origin = try await HookOrigin.start()
+        do {
+            try await withTestApp { app in
+                let fixture = try await makeFixture(app)
+                app.secretsEncryption = SecretsEncryptionService(
+                    key: try SecretsEncryptionService.parseKey(
+                        String(repeating: "ab", count: 32)))
+                let subscription = try await makeSubscription(
+                    app, fixture: fixture,
+                    url: "http://127.0.0.1:\(origin.port)/hook")
+                subscription.signingSecret = "enc:v2:not-a-key-id:not-base64"
+                try await subscription.save(on: app.db)
+
+                let delivery = WebhookDelivery(
+                    subscriptionID: subscription.id!, eventID: UUID(),
+                    eventType: .webhookTest, payload: "{}")
+                try await delivery.save(on: app.db)
+
+                await app.webhookDelivery.sweepOnce()
+
+                let failed = try #require(
+                    try await WebhookDelivery.find(delivery.id, on: app.db))
+                #expect(failed.statusValue == .pending)
+                #expect(failed.attempts == 1)
+                #expect(failed.lastAttemptAt != nil)
+                #expect(failed.lastError?.contains("malformed") == true)
+                #expect(origin.captured.withLockedValue { $0.isEmpty })
             }
         } catch {
             await origin.shutdown()
@@ -768,7 +1166,7 @@ struct WebhookDeliverySweepTests {
                 try await delivery.save(on: app.db)
 
                 origin.responseStatus.withLockedValue { $0 = .badGateway }
-                await app.webhookDelivery.sweepOnce(acquiringLock: false)
+                await app.webhookDelivery.sweepOnce()
 
                 let reloaded = try #require(try await WebhookDelivery.find(delivery.id, on: app.db))
                 #expect(reloaded.statusValue == .dead)
@@ -801,7 +1199,7 @@ struct WebhookDeliverySweepTests {
                 try await delivery.save(on: app.db)
 
                 origin.responseStatus.withLockedValue { $0 = .internalServerError }
-                await app.webhookDelivery.sweepOnce(acquiringLock: false)
+                await app.webhookDelivery.sweepOnce()
 
                 let disabled = try #require(
                     try await WebhookSubscription.find(subscription.id, on: app.db))
@@ -847,7 +1245,7 @@ struct WebhookDeliverySweepTests {
                 // subscription, reproducing the cross-pass overlap that can
                 // happen when a sweep outlives the distributed lock TTL.
                 let failingSweep = Task {
-                    await app.webhookDelivery.sweepOnce(acquiringLock: false)
+                    await app.webhookDelivery.sweepOnce()
                 }
                 let waitDeadline = ContinuousClock.now.advanced(by: .seconds(2))
                 while origin.captured.withLockedValue({ $0.isEmpty }),
@@ -862,8 +1260,8 @@ struct WebhookDeliverySweepTests {
                     eventType: .webhookTest, payload: "{\"outcome\":\"succeeds\"}")
                 success.nextAttemptAt = Date().addingTimeInterval(-1)
                 try await success.save(on: app.db)
-                await app.webhookDelivery.sweepOnce(acquiringLock: false)
-                await failingSweep.value
+                await app.webhookDelivery.sweepOnce()
+                _ = await failingSweep.value
 
                 let reloaded = try #require(
                     try await WebhookSubscription.find(subscription.id, on: app.db))
@@ -879,15 +1277,17 @@ struct WebhookDeliverySweepTests {
         await origin.shutdown()
     }
 
-    @Test("A pass claims only the deliveries it can start inside the lease")
-    func claimDoesNotOutrunFanOutCapacity() async throws {
-        let origin = try await HookOrigin.start()
+    @Test("A pass keeps claiming due deliveries beyond the concurrency limit")
+    func drainsDueQueueBeyondFanOutCapacity() async throws {
+        let origin = try await HookOrigin.start { _ in
+            HookOrigin.PlannedResponse(.ok, delay: .milliseconds(50))
+        }
         do {
             try await withTestApp { app in
                 let fixture = try await makeFixture(app)
                 let subscription = try await makeSubscription(
                     app, fixture: fixture, url: "http://127.0.0.1:\(origin.port)/hook")
-                let deliveryCount = WebhookDeliveryService.maxConcurrentDeliveries + 1
+                let deliveryCount = WebhookDeliveryService.claimBatchSize + 1
                 for index in 0..<deliveryCount {
                     let delivery = WebhookDelivery(
                         subscriptionID: subscription.id!, eventID: UUID(),
@@ -896,22 +1296,254 @@ struct WebhookDeliverySweepTests {
                     try await delivery.save(on: app.db)
                 }
 
-                await app.webhookDelivery.sweepOnce(acquiringLock: false)
+                await app.webhookDelivery.sweepOnce()
 
-                let afterFirstPass = try await WebhookDelivery.query(on: app.db).all()
+                let afterPass = try await WebhookDelivery.query(on: app.db).all()
                 #expect(
                     origin.captured.withLockedValue { $0.count }
-                        == WebhookDeliveryService.maxConcurrentDeliveries)
+                        == deliveryCount)
                 #expect(
-                    afterFirstPass.filter { $0.statusValue == .succeeded }.count
+                    afterPass.allSatisfy { $0.statusValue == .succeeded })
+                #expect(
+                    origin.maxInFlight.withLockedValue { $0 }
                         == WebhookDeliveryService.maxConcurrentDeliveries)
-                let unclaimed = try #require(afterFirstPass.first { $0.statusValue == .pending })
-                #expect(unclaimed.attempts == 0)
-                #expect(unclaimed.nextAttemptAt <= Date())
+            }
+        } catch {
+            await origin.shutdown()
+            throw error
+        }
+        await origin.shutdown()
+    }
 
-                await app.webhookDelivery.sweepOnce(acquiringLock: false)
-                let afterSecondPass = try await WebhookDelivery.query(on: app.db).all()
-                #expect(afterSecondPass.allSatisfy { $0.statusValue == .succeeded })
+    @Test("A busy organization cannot exclude another organization from the first window")
+    func fairClaimStartsQuietOrganizationInFirstWindow() async throws {
+        let origin = try await HookOrigin.start { _ in
+            HookOrigin.PlannedResponse(.ok, delay: .milliseconds(100))
+        }
+        do {
+            try await withTestApp { app in
+                let fixture = try await makeFixture(app)
+                let url = "http://127.0.0.1:\(origin.port)/hook"
+                for index in 0..<WebhookDeliveryService.claimBatchSize {
+                    let busy = WebhookSubscription(
+                        organizationID: fixture.organization.id!, projectID: nil,
+                        name: "busy-\(index)", url: url,
+                        eventTypes: [.webhookTest],
+                        signingSecret: try app.secretsEncryption.encrypt("whsec_busy"),
+                        createdByID: fixture.user.id!)
+                    try await busy.save(on: app.db)
+                    let delivery = WebhookDelivery(
+                        subscriptionID: busy.id!, eventID: UUID(),
+                        eventType: .webhookTest,
+                        payload: "{\"subscription\":\"busy\",\"index\":\(index)}")
+                    delivery.nextAttemptAt = Date().addingTimeInterval(-2)
+                    try await delivery.save(on: app.db)
+                }
+
+                let builder = TestDataBuilder(db: app.db)
+                let quietOrganization = try await builder.createOrganization(name: "Quiet Org")
+                let quiet = WebhookSubscription(
+                    organizationID: quietOrganization.id!, projectID: nil,
+                    name: "quiet", url: url,
+                    eventTypes: [.webhookTest],
+                    signingSecret: try app.secretsEncryption.encrypt("whsec_quiet"),
+                    createdByID: fixture.user.id!)
+                try await quiet.save(on: app.db)
+                let quietDelivery = WebhookDelivery(
+                    subscriptionID: quiet.id!, eventID: UUID(),
+                    eventType: .webhookTest,
+                    payload: "{\"subscription\":\"quiet\"}")
+                quietDelivery.nextAttemptAt = Date().addingTimeInterval(-1)
+                try await quietDelivery.save(on: app.db)
+
+                await app.webhookDelivery.sweepOnce()
+
+                let firstWindow = origin.captured.withLockedValue {
+                    Array($0.prefix(WebhookDeliveryService.maxConcurrentDeliveries))
+                }
+                #expect(firstWindow.contains { $0.body.contains("\"quiet\"") })
+                #expect(
+                    origin.captured.withLockedValue { $0.count }
+                        == WebhookDeliveryService.claimBatchSize + 1)
+            }
+        } catch {
+            await origin.shutdown()
+            throw error
+        }
+        await origin.shutdown()
+    }
+
+    @Test("The pass budget stops another claim batch without abandoning claimed work")
+    func passBudgetStopsBetweenBatches() async throws {
+        let origin = try await HookOrigin.start()
+        do {
+            try await withTestApp { app in
+                let fixture = try await makeFixture(app)
+                let subscription = try await makeSubscription(
+                    app, fixture: fixture, url: "http://127.0.0.1:\(origin.port)/hook")
+                for index in 0...WebhookDeliveryService.claimBatchSize {
+                    let delivery = WebhookDelivery(
+                        subscriptionID: subscription.id!, eventID: UUID(),
+                        eventType: .webhookTest, payload: "{\"index\":\(index)}")
+                    try await delivery.save(on: app.db)
+                }
+
+                let service = WebhookDeliveryService(app: app, passBudgetSecondsOverride: 0)
+                let disposition = await service.sweepOnce()
+
+                #expect(disposition == .budgetExhausted)
+                let rows = try await WebhookDelivery.query(on: app.db).all()
+                #expect(rows.filter { $0.statusValue == .succeeded }.count == 16)
+                #expect(rows.filter { $0.statusValue == .pending }.count == 1)
+            }
+        } catch {
+            await origin.shutdown()
+            throw error
+        }
+        await origin.shutdown()
+    }
+
+    @Test("A claim advances past another replica's locked subscription prefix")
+    func claimSkipsLockedSubscriptionPrefix() async throws {
+        try await withTestApp { app in
+            let fixture = try await makeFixture(app)
+            let subscription = try await makeSubscription(app, fixture: fixture)
+            let deliveryCount = WebhookDeliveryService.claimBatchSize * 2
+            for index in 0..<deliveryCount {
+                let delivery = WebhookDelivery(
+                    subscriptionID: subscription.id!, eventID: UUID(),
+                    eventType: .webhookTest, payload: "{\"index\":\(index)}")
+                delivery.nextAttemptAt = Date().addingTimeInterval(-1)
+                try await delivery.save(on: app.db)
+            }
+
+            struct LockedDelivery: Decodable { let id: UUID }
+            let claimed = try await app.db.transaction { tx in
+                let sql = try #require(tx as? any SQLDatabase)
+                let locked = try await sql.raw(
+                    """
+                    SELECT id
+                    FROM webhook_deliveries
+                    WHERE subscription_id = \(bind: subscription.id!)
+                      AND status = 'pending'
+                      AND next_attempt_at <= now()
+                    ORDER BY next_attempt_at, created_at, id
+                    LIMIT \(bind: WebhookDeliveryService.claimBatchSize)
+                    FOR UPDATE SKIP LOCKED
+                    """
+                ).all(decoding: LockedDelivery.self)
+                #expect(locked.count == WebhookDeliveryService.claimBatchSize)
+
+                let claimed = try await app.webhookDelivery.claimDueDeliveries(on: app.db)
+                #expect(Set(locked.map(\.id)).isDisjoint(with: claimed.map(\.id)))
+                return claimed
+            }
+            #expect(claimed.count == WebhookDeliveryService.claimBatchSize)
+        }
+    }
+
+    @Test("Concurrent replica-like passes scale fan-out without duplicate posts")
+    func concurrentPassesClaimDisjointRows() async throws {
+        let firstOrigin = try await HookOrigin.start { _ in
+            HookOrigin.PlannedResponse(.ok, delay: .milliseconds(200))
+        }
+        let secondOrigin = try await HookOrigin.start { _ in
+            HookOrigin.PlannedResponse(.ok, delay: .milliseconds(200))
+        }
+        do {
+            try await withTestApp { app in
+                let fixture = try await makeFixture(app)
+                let subscriptions = [
+                    try await makeSubscription(
+                        app, fixture: fixture,
+                        url: "http://127.0.0.1:\(firstOrigin.port)/hook"),
+                    try await makeSubscription(
+                        app, fixture: fixture,
+                        url: "http://127.0.0.1:\(secondOrigin.port)/hook"),
+                ]
+                let deliveryCount = WebhookDeliveryService.claimBatchSize * 2
+                for index in 0..<deliveryCount {
+                    let delivery = WebhookDelivery(
+                        subscriptionID: subscriptions[index % subscriptions.count].id!,
+                        eventID: UUID(),
+                        eventType: .webhookTest, payload: "{\"index\":\(index)}")
+                    try await delivery.save(on: app.db)
+                }
+
+                async let first = app.webhookDelivery.sweepOnce()
+                async let second = app.webhookDelivery.sweepOnce()
+                _ = await (first, second)
+
+                let eventIDs =
+                    firstOrigin.captured.withLockedValue { $0.compactMap(\.eventID) }
+                    + secondOrigin.captured.withLockedValue { $0.compactMap(\.eventID) }
+                #expect(eventIDs.count == deliveryCount)
+                #expect(Set(eventIDs).count == deliveryCount)
+                #expect(
+                    firstOrigin.maxInFlight.withLockedValue { $0 }
+                        + secondOrigin.maxInFlight.withLockedValue { $0 }
+                        > WebhookDeliveryService.maxConcurrentDeliveries)
+                let rows = try await WebhookDelivery.query(on: app.db).all()
+                #expect(rows.allSatisfy { $0.statusValue == .succeeded })
+            }
+        } catch {
+            await firstOrigin.shutdown()
+            await secondOrigin.shutdown()
+            throw error
+        }
+        await firstOrigin.shutdown()
+        await secondOrigin.shutdown()
+    }
+
+    @Test("A legacy drainer cannot reclaim a row leased by a new replica")
+    func newClaimIsVisibleToLegacyDrainer() async throws {
+        let origin = try await HookOrigin.start { _ in
+            HookOrigin.PlannedResponse(.ok, delay: .milliseconds(300))
+        }
+        do {
+            try await withTestApp { app in
+                let fixture = try await makeFixture(app)
+                let subscription = try await makeSubscription(
+                    app, fixture: fixture, url: "http://127.0.0.1:\(origin.port)/hook")
+                let delivery = WebhookDelivery(
+                    subscriptionID: subscription.id!, eventID: UUID(),
+                    eventType: .webhookTest, payload: "{}")
+                try await delivery.save(on: app.db)
+
+                let sweep = Task { await app.webhookDelivery.sweepOnce() }
+                let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+                while origin.captured.withLockedValue({ $0.isEmpty }),
+                    ContinuousClock.now < deadline
+                {
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                #expect(!origin.captured.withLockedValue { $0.isEmpty })
+
+                struct LegacyClaim: Decodable { let id: UUID }
+                let sql = try #require(app.db as? any SQLDatabase)
+                let legacyClaims = try await sql.raw(
+                    """
+                    WITH due AS MATERIALIZED (
+                        SELECT id
+                        FROM webhook_deliveries
+                        WHERE status = \(bind: WebhookDeliveryStatus.pending.rawValue)
+                          AND next_attempt_at <= now()
+                        ORDER BY next_attempt_at
+                        LIMIT \(bind: WebhookDeliveryService.maxConcurrentDeliveries)
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    UPDATE webhook_deliveries AS delivery
+                    SET next_attempt_at = now()
+                        + (\(bind: WebhookDeliveryService.claimLeaseSeconds) * interval '1 second')
+                    FROM due
+                    WHERE delivery.id = due.id
+                    RETURNING delivery.id
+                    """
+                ).all(decoding: LegacyClaim.self)
+
+                #expect(legacyClaims.isEmpty)
+                _ = await sweep.value
+                #expect(origin.captured.withLockedValue { $0.count } == 1)
             }
         } catch {
             await origin.shutdown()
@@ -935,7 +1567,7 @@ struct WebhookDeliverySweepTests {
                 payload: "{}")
             try await delivery.save(on: app.db)
 
-            await app.webhookDelivery.sweepOnce(acquiringLock: false)
+            await app.webhookDelivery.sweepOnce()
 
             let reloaded = try #require(try await WebhookDelivery.find(delivery.id, on: app.db))
             #expect(reloaded.statusValue == .dead)

@@ -1,7 +1,10 @@
-import { Badge } from "@/components/ui/badge";
+import {
+  StatusBadge,
+  type StatusBadgeConfig,
+} from "@/components/ui/status-badge";
 import type { AgentStatus } from "@/types/api";
 
-const statusConfig: Record<AgentStatus, { label: string; className: string }> = {
+const statusConfig: Record<AgentStatus, StatusBadgeConfig> = {
   online: {
     label: "Online",
     className: "bg-green-500/20 text-green-600 border-green-500/30",
@@ -21,11 +24,5 @@ const statusConfig: Record<AgentStatus, { label: string; className: string }> = 
 };
 
 export function AgentStatusBadge({ status }: { status: AgentStatus }) {
-  const config = statusConfig[status] || statusConfig.offline;
-
-  return (
-    <Badge variant="outline" className={config.className}>
-      {config.label}
-    </Badge>
-  );
+  return <StatusBadge status={status} config={statusConfig} />;
 }

@@ -5,7 +5,7 @@ import type {
   APIKey,
   CreateAPIKeyRequest,
   CreateAPIKeyResponse,
-} from "@/types/api";
+} from "@/types/api-contracts";
 
 export const apiKeysApi = {
   list(signal?: AbortSignal): Promise<APIKey[]> {

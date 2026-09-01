@@ -20,7 +20,6 @@ final class GuardrailWriteReportTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             app.guardrailAnalyzer = SymCCGuardrailAnalyzer(solverPath: solverPath()!)
             try await test(app)
         } catch {

@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { LoginForm } from "@/components/auth";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/providers";
+import { resolvePostLoginPath } from "@/lib/post-login-route";
 
 export default function LoginPage() {
   const { isAuthenticated, isLoading, sessionError, refresh } = useAuth();
@@ -12,7 +13,8 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      router.replace("/dashboard");
+      const requested = new URLSearchParams(window.location.search).get("next");
+      router.replace(resolvePostLoginPath(requested, true));
     }
   }, [isAuthenticated, isLoading, router]);
 
@@ -40,7 +42,9 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
-      <LoginForm />
+      <Suspense fallback={<div className="text-muted-foreground">Loading sign in...</div>}>
+        <LoginForm />
+      </Suspense>
     </div>
   );
 }
