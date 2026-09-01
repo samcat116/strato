@@ -21,8 +21,13 @@ struct VMExecSessionManagerTests {
         private var waiters: [CheckedContinuation<String?, any Error>] = []
         private(set) var writes: [Data] = []
         private(set) var isClosed = false
+        private let firstCloseGate: SuspensionGate?
+        private var firstCloseWasGated = false
 
-        init(lines: [String?] = []) { self.lines = lines }
+        init(lines: [String?] = [], firstCloseGate: SuspensionGate? = nil) {
+            self.lines = lines
+            self.firstCloseGate = firstCloseGate
+        }
 
         func write(_ data: Data) async throws {
             guard !isClosed else { throw HostVsockConnectionError.notConnected }
@@ -46,6 +51,10 @@ struct VMExecSessionManagerTests {
         }
 
         func close() async {
+            if let firstCloseGate, !firstCloseWasGated {
+                firstCloseWasGated = true
+                await firstCloseGate.wait()
+            }
             guard !isClosed else { return }
             isClosed = true
             let current = waiters
@@ -458,6 +467,44 @@ struct VMExecSessionManagerTests {
         #expect(snapshot.truncated)
         #expect(events.all == [.started, .closed(reason: "command deadline passed")])
         #expect(await connection.isClosed)
+    }
+
+    @Test("a recorded exit decoded while close is pending remains authoritative")
+    func recordedExitWinsCloseRace() async throws {
+        let closeGate = SuspensionGate()
+        let connection = FakeConnection(
+            lines: [#"{"type":"exec_started","nonce":"boot-1"}"#],
+            firstCloseGate: closeGate)
+        let manager = manager(connection: connection)
+        let events = Recorder<SandboxExecEvent>()
+        try await manager.startExec(
+            placement: placement(), sessionId: "recorded-command", sessionKind: .recorded,
+            request: request(tty: false), placementIsCurrent: { true },
+            events: { events.append($0) })
+
+        let close = Task {
+            await manager.closeExec(
+                sessionId: "recorded-command", reason: "command deadline passed")
+        }
+        #expect(await eventually { await closeGate.isWaiting })
+
+        await connection.enqueue(
+            #"{"type":"exec_exit","nonce":"boot-1","exit_code":23}"#)
+        #expect(
+            await eventually {
+                await manager.recordedSessionSnapshot(sessionId: "recorded-command")?.status
+                    == .exited
+            })
+
+        await closeGate.release()
+        await close.value
+        let snapshot = try #require(
+            await manager.recordedSessionSnapshot(sessionId: "recorded-command"))
+        #expect(snapshot.status == .exited)
+        #expect(snapshot.exitCode == 23)
+        #expect(snapshot.reason == nil)
+        #expect(!snapshot.truncated)
+        #expect(events.all == [.started, .exited(code: 23)])
     }
 
     @Test("an interactive disconnect does not invalidate a recorded handshake")

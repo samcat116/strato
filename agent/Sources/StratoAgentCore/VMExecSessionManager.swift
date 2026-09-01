@@ -364,11 +364,11 @@ public actor VMExecSessionManager {
         guard let session = sessions[sessionId] else { return }
         externallyClosingSessions.insert(sessionId)
         await session.connection.close()
+        externallyClosingSessions.remove(sessionId)
         // Keep the route installed while close suspends so a readerOutput
         // already decoded by the guest reader can still enter the bounded
         // recorded capture. readerEnded may remove it first.
         guard let session = sessions.removeValue(forKey: sessionId) else { return }
-        externallyClosingSessions.remove(sessionId)
         session.reader?.cancel()
         if session.sessionKind == .recorded {
             let terminal = SandboxExecEvent.closed(reason: reason)
@@ -386,8 +386,8 @@ public actor VMExecSessionManager {
         for (sessionId, session) in interactive {
             externallyClosingSessions.insert(sessionId)
             await session.connection.close()
-            guard let session = sessions.removeValue(forKey: sessionId) else { continue }
             externallyClosingSessions.remove(sessionId)
+            guard let session = sessions.removeValue(forKey: sessionId) else { continue }
             session.reader?.cancel()
             session.events(.closed(reason: reason))
         }
@@ -408,8 +408,8 @@ public actor VMExecSessionManager {
         for (sessionId, session) in current {
             externallyClosingSessions.insert(sessionId)
             await session.connection.close()
-            guard let session = sessions.removeValue(forKey: sessionId) else { continue }
             externallyClosingSessions.remove(sessionId)
+            guard let session = sessions.removeValue(forKey: sessionId) else { continue }
             session.reader?.cancel()
             let terminal = SandboxExecEvent.closed(reason: reason)
             if session.sessionKind == .recorded {
@@ -483,8 +483,13 @@ public actor VMExecSessionManager {
 
     private func readerEnded(sessionId: String, terminal: SandboxExecEvent) async {
         // An explicit close owns the terminal event and keeps the route alive
-        // until any output decoded before the channel close is captured.
-        guard !externallyClosingSessions.contains(sessionId) else { return }
+        // until any output decoded before the channel close is captured. A
+        // recorded exit already supplied by the guest remains authoritative.
+        if externallyClosingSessions.contains(sessionId) {
+            guard case .exited = terminal,
+                sessions[sessionId]?.sessionKind == .recorded
+            else { return }
+        }
         guard let session = sessions.removeValue(forKey: sessionId) else { return }
         await session.connection.close()
         if session.sessionKind == .recorded {
