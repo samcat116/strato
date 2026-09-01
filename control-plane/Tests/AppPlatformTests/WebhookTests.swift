@@ -501,7 +501,7 @@ struct WebhookOutboxTests {
             try await sql.raw(
                 """
                 UPDATE webhook_deliveries
-                SET enqueued_at = \(bind: originalEnqueueTime),
+                SET enqueued_at = NULL,
                     created_at = \(bind: originalEnqueueTime)
                 WHERE id = \(bind: redelivered.id!)
                 """

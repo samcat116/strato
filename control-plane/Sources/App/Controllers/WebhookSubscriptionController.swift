@@ -238,6 +238,7 @@ struct WebhookSubscriptionController: RouteCollection {
             // the queue so a later ceiling pass does not immediately shed the
             // redelivery as the oldest pending row. `enqueued_at` remains the
             // immutable timestamp returned by the delivery API.
+            delivery.enqueuedAt = delivery.enqueuedAt ?? delivery.createdAt
             delivery.createdAt = requeuedAt
             delivery.claimedUntil = nil
             delivery.lastAttemptAt = nil
