@@ -11,7 +11,7 @@ public actor CephRBDStorageBackend: CephStorageBackend {
     public static let defaultRBDPath = "/usr/bin/rbd"
     public static let defaultVirshPath = "/usr/bin/virsh"
     public static let defaultClientRoot = "/var/lib/strato/ceph"
-    public static let imagePrefix = "strato-volume-"
+    public static let imagePrefix = CephVolumeStorage.imagePrefix
     public static let snapshotPrefix = "strato-snapshot-"
     private static let importImagePrefix = "strato-import-"
     private static let cloneImagePrefix = "strato-clone-"
@@ -58,7 +58,7 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         guard let id = UUID(uuidString: volumeId) else {
             throw StorageBackendError.createFailed("volume id '\(volumeId)' is not a UUID")
         }
-        return imagePrefix + id.uuidString.lowercased()
+        return CephVolumeStorage.imageName(volumeId: id)
     }
 
     public nonisolated static func snapshotName(snapshotId: String) throws -> String {

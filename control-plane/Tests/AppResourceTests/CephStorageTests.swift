@@ -758,7 +758,8 @@ final class CephStorageTests {
             let volume = try #require(placed)
             #expect(volume.reconcilerAgentId == original)
             let attachment = DiskAttachment.rbd(
-                pool: "rbd", image: "firecracker-snapshot-source", namespace: "project-a",
+                pool: "rbd", image: CephVolumeStorage.imageName(volumeId: id),
+                namespace: "project-a",
                 user: "project-a", monEndpoints: cluster.monEndpoints,
                 clusterId: clusterID, credentialId: credentialID,
                 configPath:
@@ -902,7 +903,8 @@ final class CephStorageTests {
 
             // RBD/libvirt uses the cephx user without the `client.` prefix.
             let attachment = DiskAttachment.rbd(
-                pool: desiredStorage.pool, image: volumeID.uuidString,
+                pool: desiredStorage.pool,
+                image: CephVolumeStorage.imageName(volumeId: volumeID),
                 namespace: desiredStorage.namespace,
                 user: String(desiredStorage.clientName.dropFirst("client.".count)),
                 monEndpoints: desiredStorage.monEndpoints,
@@ -911,6 +913,32 @@ final class CephStorageTests {
                 configPath:
                     "/var/lib/strato/ceph/\(desiredStorage.clusterId.uuidString.lowercased())/\(desiredStorage.credentialId.uuidString.lowercased())/ceph.conf"
             )
+            let wrongVolumeAttachment = DiskAttachment.rbd(
+                pool: desiredStorage.pool,
+                image: CephVolumeStorage.imageName(
+                    volumeId: UUID(uuidString: "99999999-8888-4777-8666-555555555555")!),
+                namespace: desiredStorage.namespace,
+                user: String(desiredStorage.clientName.dropFirst("client.".count)),
+                monEndpoints: desiredStorage.monEndpoints,
+                clusterId: desiredStorage.clusterId,
+                credentialId: desiredStorage.credentialId,
+                configPath:
+                    "/var/lib/strato/ceph/\(desiredStorage.clusterId.uuidString.lowercased())/\(desiredStorage.credentialId.uuidString.lowercased())/ceph.conf"
+            )
+            await #expect(throws: Abort.self) {
+                try await fixture.app.observedStateApplier.apply(
+                    report(
+                        agentId: agentA,
+                        volumes: [
+                            ObservedVolumeState(
+                                volumeId: volumeID, present: true,
+                                attachment: wrongVolumeAttachment,
+                                observedGeneration: 1)
+                        ]))
+            }
+            let rejected = try #require(await Volume.find(volumeID, on: fixture.app.db))
+            #expect(rejected.diskAttachment == nil)
+
             _ = try await fixture.app.observedStateApplier.apply(
                 report(
                     agentId: agentA,

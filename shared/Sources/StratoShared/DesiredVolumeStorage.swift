@@ -17,6 +17,15 @@ public enum CephMessengerMode: String, Codable, Equatable, Sendable {
 /// identity to replace that material atomically and to derive durable local and
 /// libvirt references without treating the secret contents as an identifier.
 public struct CephVolumeStorage: Codable, Equatable, Sendable {
+    /// RBD images are named from their Strato volume identity. Both sides of
+    /// the reconciliation boundary use this helper so an observation cannot
+    /// redirect a volume row to another image in the same project namespace.
+    public static let imagePrefix = "strato-volume-"
+
+    public static func imageName(volumeId: UUID) -> String {
+        imagePrefix + volumeId.uuidString.lowercased()
+    }
+
     /// Strato's stable identity for the external or managed Ceph cluster.
     public let clusterId: UUID
     /// Ceph's own cluster identity, written into the generated `ceph.conf`.

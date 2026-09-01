@@ -1382,11 +1382,7 @@ struct ObservedStateApplier {
                 poolName == volumePool?.cephPoolName,
                 namespace == volumePool?.cephNamespace,
                 clusterID == volumePool?.$cephCluster.id,
-                !imageName.isEmpty,
-                !imageName.contains("/"),
-                imageName.allSatisfy({
-                    !$0.isWhitespace && !$0.isNewline && $0 != "," && $0 != "="
-                }),
+                imageName == CephVolumeStorage.imageName(volumeId: volumeID),
                 let cluster = try await CephCluster.find(clusterID, on: db),
                 monEndpoints == cluster.monEndpoints,
                 configPath

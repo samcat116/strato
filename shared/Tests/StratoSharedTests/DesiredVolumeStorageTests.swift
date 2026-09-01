@@ -20,6 +20,14 @@ struct DesiredVolumeStorageTests {
             messengerMode: .secure)
     }
 
+    @Test("Ceph image names are deterministic from the volume identity")
+    func cephImageName() {
+        let volumeID = UUID(uuidString: "99999999-8888-4777-8666-555555555555")!
+        #expect(
+            CephVolumeStorage.imageName(volumeId: volumeID)
+                == "strato-volume-99999999-8888-4777-8666-555555555555")
+    }
+
     @Test("Local storage has a payload-free tagged representation")
     func localWireShape() throws {
         let storage = DesiredVolumeStorage.local
