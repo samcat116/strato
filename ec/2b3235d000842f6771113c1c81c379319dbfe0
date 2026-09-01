@@ -1,0 +1,19 @@
+control-plane/Tests/AppIdentityTests/UserControllerTests.swift
+  s_bd67073331cbe0::t_2ae49388c32d3f 348-359
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "ec2b3235d000842f6771113c1c81c379319dbfe0",
+  "prompts": {},
+  "sessions": {
+    "s_bd67073331cbe0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2d63a8f9-ada9-44c9-9928-c6955658bdbf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
