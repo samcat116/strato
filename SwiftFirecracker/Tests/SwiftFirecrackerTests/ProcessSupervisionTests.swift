@@ -292,4 +292,88 @@ struct ProcessSupervisionTests {
         #expect(!FirecrackerClient.argvCarriesVMId(["firecracker", "--id"], vmId: "vm-1"))
         #expect(!FirecrackerClient.argvCarriesVMId([], vmId: "vm-1"))
     }
+
+    @Test("managed process matching requires Firecracker or jailer argv")
+    func managedProcessMatching() {
+        #expect(
+            FirecrackerClient.vmIDForManagedProcess(
+                arguments: ["/usr/bin/firecracker", "--api-sock", "/run/fc.sock", "--id", "vm-1"])
+                == "vm-1")
+        #expect(
+            FirecrackerClient.vmIDForManagedProcess(
+                arguments: [
+                    "/usr/bin/jailer", "--id", "vm-2", "--exec-file", "/usr/bin/firecracker",
+                    "--uid", "100000", "--gid", "100000", "--chroot-base-dir", "/srv/jailer",
+                ]) == "vm-2")
+        #expect(
+            FirecrackerClient.vmIDForManagedProcess(
+                arguments: ["/custom/vmm", "--api-sock", "/run/fc.sock", "--id=vm-3"])
+                == "vm-3")
+
+        // An unrelated program using its own `--id` option must never become
+        // a signal target merely because the value happens to match a VM id.
+        #expect(
+            FirecrackerClient.vmIDForManagedProcess(
+                arguments: ["/usr/bin/other-service", "--id", "vm-1"]) == nil)
+        #expect(
+            FirecrackerClient.vmIDForManagedProcess(
+                arguments: ["/usr/bin/firecracker", "--id"]) == nil)
+    }
+
+    @Test("proc stat parser handles spaces and parentheses in command names")
+    func procStatStartTimeParsing() {
+        let fieldsThroughStartTime = [
+            "S", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14",
+            "15", "16", "17", "18", "987654321",
+        ]
+        let stat = "4321 (firecracker worker (1)) " + fieldsThroughStartTime.joined(separator: " ")
+        #expect(FirecrackerClient.parseProcStartTime(stat) == 987_654_321)
+        #expect(FirecrackerClient.parseProcStartTime("4321 malformed") == nil)
+    }
+
+    @Test("proc status parser returns the effective uid")
+    func procStatusEffectiveUIDParsing() {
+        let status = """
+            Name:\tfirecracker
+            Uid:\t1000\t1879048192\t1000\t1879048192
+            Gid:\t1000\t1879048192\t1000\t1879048192
+            """
+        #expect(FirecrackerClient.parseEffectiveUID(status) == 1_879_048_192)
+        #expect(FirecrackerClient.parseEffectiveUID("Name:\tfirecracker\n") == nil)
+    }
+
+    @Test("public process inventory records expose the host identity")
+    func processInfoValue() {
+        let info = FirecrackerClient.VMProcessInfo(vmId: "vm-1", pid: 42, effectiveUID: 100_000)
+        #expect(info.vmId == "vm-1")
+        #expect(info.pid == 42)
+        #expect(info.effectiveUID == 100_000)
+
+        let host = FirecrackerClient.HostProcessInfo(pid: 43, effectiveUID: 1_879_048_192)
+        #expect(host.pid == 43)
+        #expect(host.effectiveUID == 1_879_048_192)
+    }
+
+    #if os(Linux)
+    @Test("effective-uid inventory does not depend on process argv")
+    func effectiveUIDInventoryFindsCurrentProcess() async throws {
+        let uid = UInt32(Glibc.geteuid())
+        let client = FirecrackerClient()
+        let processes = try await client.discoverHostProcesses(
+            effectiveUIDsIn: uid..<(uid + 1))
+
+        #expect(processes.contains { $0.pid == Glibc.getpid() })
+        await #expect(throws: FirecrackerError.self) {
+            try await client.confirmNoHostProcess(effectiveUID: uid)
+        }
+    }
+
+    @Test("jail-root inventory uses the kernel root link rather than argv")
+    func jailRootInventoryFindsCurrentProcess() async {
+        let client = FirecrackerClient()
+        await #expect(throws: FirecrackerError.self) {
+            try await client.confirmNoHostProcess(inJailRoot: "/")
+        }
+    }
+    #endif
 }

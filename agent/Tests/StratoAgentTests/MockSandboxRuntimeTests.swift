@@ -87,6 +87,21 @@ struct MockSandboxRuntimeTests {
         }
     }
 
+    @Test("A non-jailing runtime deletes a sandbox without a jail uid")
+    func uidlessDeletion() async throws {
+        let runtime: any SandboxRuntimeService = makeRuntime()
+        #expect(!runtime.requiresJailUID)
+
+        try await runtime.createSandbox(
+            sandboxId: "sb-uidless", spec: makeSpec(), registryCredential: nil,
+            networkAttachments: [])
+        try await runtime.deleteSandbox(sandboxId: "sb-uidless", jailUID: nil)
+
+        await #expect(throws: SandboxRuntimeError.self) {
+            try await runtime.getSandboxStatus(sandboxId: "sb-uidless")
+        }
+    }
+
     @Test("Operations are idempotent at the already-satisfied level")
     func idempotency() async throws {
         let runtime = makeRuntime()
@@ -132,6 +147,21 @@ struct MockSandboxRuntimeTests {
         #expect(adopted == .running)
         let observed = try await runtime.getSandboxStatus(sandboxId: "sb-1")
         #expect(observed == .running)
+    }
+
+    @Test("Recorded-uid adoption and deletion remain available through the runtime protocol")
+    func recordedUIDLifecycle() async throws {
+        let runtime: any SandboxRuntimeService = makeRuntime()
+
+        let adopted = try await runtime.adoptSandbox(
+            sandboxId: "sb-legacy", spec: makeSpec(), jailUID: 100_123)
+        #expect(adopted == .running)
+        #expect(try await runtime.getSandboxStatus(sandboxId: "sb-legacy") == .running)
+
+        try await runtime.deleteSandbox(sandboxId: "sb-legacy", jailUID: 100_123)
+        await #expect(throws: SandboxRuntimeError.self) {
+            try await runtime.getSandboxStatus(sandboxId: "sb-legacy")
+        }
     }
 
     @Test("A networked spec is accepted and its attachment recorded (issue STR-100)")

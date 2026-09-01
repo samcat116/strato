@@ -357,7 +357,8 @@ public struct AgentConfig {
     /// Base directory for per-sandbox chroots. Defaults to `<vm_storage_dir>/jailer`
     /// (each jail holds a full writable rootfs copy, so it belongs on VM storage).
     public let sandboxJailerChrootDir: String?
-    /// First uid/gid of the per-sandbox uid range (65536 ids). Default 100000.
+    /// First uid/gid of the per-sandbox uid range (65536 ids). Default
+    /// 0x70000000 (1879048192).
     public let sandboxJailerUidBase: UInt32?
     /// Warm start (issue #426): provision new sandboxes by restoring a
     /// per-(image, machine shape) template snapshot instead of cold-booting.
@@ -709,9 +710,11 @@ public struct AgentConfig {
         let sandboxJailerChrootDir = try await values.string("sandbox_jailer_chroot_dir")
         let sandboxJailerUidBase: UInt32?
         if let uidBase = try await values.int("sandbox_jailer_uid_base") {
-            guard uidBase > 0, uidBase <= Int(UInt32.max) - Int(SandboxJailerConfig.uidCount) else {
+            guard uidBase >= Int(Self.minimumSandboxJailerUidBase),
+                uidBase <= Int(SandboxJailerConfig.maximumUIDBase)
+            else {
                 throw AgentConfigError.invalidConfiguration(
-                    "sandbox_jailer_uid_base must be a positive uid with room for a \(SandboxJailerConfig.uidCount)-id range, got \(uidBase)"
+                    "sandbox_jailer_uid_base must be at least \(Self.minimumSandboxJailerUidBase) with room for a \(SandboxJailerConfig.uidCount)-id range, got \(uidBase)"
                 )
             }
             sandboxJailerUidBase = UInt32(uidBase)
@@ -1284,10 +1287,22 @@ public struct AgentConfig {
         vmStoragePath + "/jailer"
     }
 
-    /// Default first uid of the per-sandbox uid/gid range: 100000, clear of
-    /// system and login users on stock hosts (shared with the systemd-nspawn
-    /// container range, which a Firecracker hypervisor host does not use).
-    public static let defaultSandboxJailerUidBase: UInt32 = 100_000
+    /// Lowest configurable jail uid/gid base. The first 65536 ids include the
+    /// conventional system, login, nobody, and dynamic-user bands; exact host
+    /// ownership and subordinate delegations are checked by `HostPreflight`.
+    public static let minimumSandboxJailerUidBase: UInt32 = SandboxJailerConfig.minimumUIDBase
+
+    /// The implicit base used by builds before STR-290. Kept solely so a
+    /// manifest entry without a persisted jail uid can adopt the identity its
+    /// already-created jail actually used after the default changes.
+    public static let legacySandboxJailerUidBase: UInt32 = 100_000
+
+    /// Default first uid of the per-sandbox uid/gid range. 0x70000000 starts
+    /// immediately above systemd-nspawn's conventional automatic allocation
+    /// band and above the shadow suite's default subordinate-id band, while
+    /// remaining below the signed 32-bit boundary. Host preflight remains the
+    /// authority for the actual machine.
+    public static let defaultSandboxJailerUidBase: UInt32 = 0x7000_0000
 
     /// Default hypervisor type (platform-specific)
     /// Linux defaults to QEMU, but can be configured to use Firecracker

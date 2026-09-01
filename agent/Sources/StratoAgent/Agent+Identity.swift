@@ -179,6 +179,7 @@ extension Agent {
         // the host fact it checks for is meaningless to a mock backend, and
         // withholding it would make simulated fleets unusable for scale-testing
         // Windows-shaped placement.
+        var hostPreflightReport: HostPreflight.Report? = nil
         var tpmAvailable = isSimulationMode
         if isSimulationMode {
             hypervisors = simulatedHypervisorSupport()
@@ -192,6 +193,7 @@ extension Agent {
             let libvirt = await probeLibvirt()
             let preflight = runHostPreflight(
                 libvirt: libvirt, tpmSupport: await probeTPMSupport(libvirt: libvirt))
+            hostPreflightReport = preflight
             tpmAvailable = preflight.tpmAvailable
             logHostPreflight(preflight)
             // The domain builder refuses a `<tpm>` element this host cannot
@@ -224,6 +226,18 @@ extension Agent {
                 )
             }
         }
+
+        // The identity range gates only jailed sandboxes, never trusted
+        // Firecracker VMs. Refresh on every registration so fixing the host's
+        // passwd/group/subordinate-id reservations recovers capability without
+        // restarting the agent.
+        if sandboxJailerMode == .required {
+            sandboxJailerUIDRangeBlockedReason =
+                hostPreflightReport?.sandboxJailerUIDRangeFailureDetail
+        } else {
+            sandboxJailerUIDRangeBlockedReason = nil
+        }
+        await sandboxRuntime?.updateJailerBlockedReason(sandboxJailCreationBlockedReason)
         let networkCapability = currentNetworkCapability()
 
         // Sandbox runtime: probed on the same cadence, gated on Firecracker
@@ -253,7 +267,7 @@ extension Agent {
             sandboxProbe = SandboxRuntimeProbe.probe(
                 firecracker: hypervisors.first { $0.type == .firecracker },
                 guestImagePath: sandboxGuestImagePath,
-                jailerBlockedReason: sandboxJailerBlockedReason,
+                jailerBlockedReason: sandboxJailCreationBlockedReason,
                 jailsNewSandboxes: sandboxJailNewSandboxes,
                 networkCapability: networkCapability
             )

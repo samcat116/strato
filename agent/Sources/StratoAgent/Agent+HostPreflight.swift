@@ -59,13 +59,27 @@ extension Agent {
     ) -> HostPreflight.Report {
         #if os(Linux)
         let firecrackerSocketDirectory: String? = firecrackerSocketDir
+        let firecrackerPIDFDSupport: HostPreflight.FirecrackerPIDFDSupport? = {
+            switch FirecrackerClient.probePIDFDSupport() {
+            case .available:
+                return .available
+            case .unavailable(let reason):
+                return .unavailable(reason)
+            case .unsupportedPlatform(let reason):
+                return .unsupportedPlatform(reason)
+            }
+        }()
         let qemuFirmwareDescriptorPath: String? = "/usr/share/qemu/firmware"
         let vhostVsock: HostPreflight.VhostVsockSupport = .device(path: "/dev/vhost-vsock")
+        let sandboxJailerUIDRange: HostPreflight.SandboxJailerUIDRangeInputs? =
+            sandboxJailerUIDRangeInputs()
         #else
         let firecrackerSocketDirectory: String? = nil
+        let firecrackerPIDFDSupport: HostPreflight.FirecrackerPIDFDSupport? = nil
         let qemuFirmwareDescriptorPath: String? = nil
         let vhostVsock: HostPreflight.VhostVsockSupport = .unsupportedPlatform(
             "virtio-vsock for QEMU is not supported on this platform")
+        let sandboxJailerUIDRange: HostPreflight.SandboxJailerUIDRangeInputs? = nil
         #endif
 
         // Mirror the driver's firmware resolution so the preflight reports
@@ -88,6 +102,7 @@ extension Agent {
                 imageCachePath: imageCachePath ?? ImageCacheService.defaultCachePath,
                 qemuImgPath: FileSystemStorageBackend.defaultQemuImgPath,
                 firecrackerSocketDirectory: firecrackerSocketDirectory,
+                firecrackerPIDFDSupport: firecrackerPIDFDSupport,
                 firmwarePath: resolvedFirmwarePath,
                 tpmSupport: tpmSupport,
                 qemuFirmwareDescriptorPath: qemuFirmwareDescriptorPath,
@@ -95,8 +110,32 @@ extension Agent {
                 vhostVsock: vhostVsock,
                 ovnMode: effectiveNetworkMode == .ovn,
                 ovnNBConnection: ovnNorthbound ?? "unix:/var/run/ovn/ovnnb_db.sock",
-                ovnNBTLSFilePaths: ovnNorthboundTLS?.configuredFilePaths ?? []
+                ovnNBTLSFilePaths: ovnNorthboundTLS?.configuredFilePaths ?? [],
+                sandboxJailerUIDRange: sandboxJailerUIDRange
             ))
+    }
+
+    /// Snapshot the four host identity databases for the pure range-overlap
+    /// check. Missing passwd/group files fail closed; missing subuid/subgid
+    /// files mean no file-backed subordinate delegation and are accepted by
+    /// `HostPreflight`.
+    func sandboxJailerUIDRangeInputs() -> HostPreflight.SandboxJailerUIDRangeInputs {
+        HostPreflight.SandboxJailerUIDRangeInputs(
+            mode: sandboxJailerMode,
+            uidBase: sandboxJailerUidBase,
+            passwd: hostIdentityFile(at: "/etc/passwd"),
+            group: hostIdentityFile(at: "/etc/group"),
+            subuid: hostIdentityFile(at: "/etc/subuid"),
+            subgid: hostIdentityFile(at: "/etc/subgid"))
+    }
+
+    func hostIdentityFile(at path: String) -> HostPreflight.HostIdentityFile {
+        guard FileManager.default.fileExists(atPath: path) else { return .missing }
+        do {
+            return .contents(try String(contentsOfFile: path, encoding: .utf8))
+        } catch {
+            return .unreadable(error.localizedDescription)
+        }
     }
 
     /// Logs every failed preflight check with its remediation — gating

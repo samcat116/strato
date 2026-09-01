@@ -112,6 +112,45 @@ struct FirecrackerAdoptionTests {
         let confirmed = try await client.waitForVMExit(vmId: vmId, timeout: .milliseconds(0))
         #expect(!confirmed)
     }
+
+    #if !os(Linux)
+    @Test("fallback cleanup retries a retained tracked teardown")
+    func fallbackCleanupRetriesTrackedTeardown() async throws {
+        let dir = try makeSocketDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let vmId = "retry-tracked"
+        let socketPath = FirecrackerClient.socketPath(socketDirectory: dir, vmId: vmId)
+
+        let server = try FakeFirecrackerAPIServer(socketPath: socketPath, state: "Running")
+        server.start()
+        defer { server.stop() }
+
+        let client = makeClient(socketDirectory: dir)
+        _ = try await client.adoptVM(vmId: vmId)
+
+        // Non-Linux process inspection fails after the manager disconnects,
+        // leaving the tracked entry in place exactly like a transient Linux
+        // inspection or signal failure would.
+        do {
+            try await client.destroyVM(vmId: vmId)
+            Issue.record("expected tracked teardown to require Linux process inspection")
+        } catch FirecrackerError.processInspectionFailed {
+        } catch {
+            Issue.record("unexpected first teardown error: \(error)")
+        }
+
+        do {
+            try await client.destroyUntrackedVM(vmId: vmId)
+            Issue.record("expected retry to reach the unavailable process inspection")
+        } catch FirecrackerError.processInspectionFailed {
+            // The fallback retried the retained tracked teardown.
+        } catch FirecrackerError.vmAlreadyRunning {
+            Issue.record("fallback rejected the retained tracked teardown instead of retrying it")
+        } catch {
+            Issue.record("unexpected fallback teardown error: \(error)")
+        }
+    }
+    #endif
 }
 
 /// Minimal stand-in for Firecracker's HTTP-over-Unix-socket API. Serves a fixed

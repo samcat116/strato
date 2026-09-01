@@ -142,7 +142,8 @@ one deliberate asymmetry:
   contain the runtime driver (`SandboxRuntimeProbe.runtimeBuilt` — true now
   that #421's runtime ships; a runtime-less agent would silently ignore
   desired sandboxes), Firecracker must be usable (binary + KVM, from the hypervisor
-  probe), **and** the sandbox guest base image (#419) must be present at
+  probe, including working `pidfd_open` and `pidfd_send_signal` process
+  supervision), **and** the sandbox guest base image (#419) must be present at
   `sandbox_guest_image_path` (default `/var/lib/strato/sandbox/guest`) — so
   the capability lights up exactly when a runtime-carrying agent has the
   artifacts installed on a capable host.
@@ -278,10 +279,14 @@ Sandboxes run **untrusted** workloads by definition, so their VMM processes
 get a hardening barrier VMs (operator-trusted workloads) don't: Firecracker's
 own [jailer](https://github.com/firecracker-microvm/firecracker/blob/main/docs/jailer.md)
 (#425). `SwiftFirecracker` grew `JailerOptions` and jail-aware spawn/adopt/destroy
-in `FirecrackerClient`; the runtime derives everything per sandbox from a pure
-`SandboxJailPlan` (`StratoAgentCore/SandboxJail.swift`), so create, adoption
-after an agent restart, and teardown always agree on the layout with nothing
-persisted.
+in `FirecrackerClient`; the runtime derives deterministic paths per sandbox
+from a pure `SandboxJailPlan` (`StratoAgentCore/SandboxJail.swift`). The plan
+requires an explicitly allocated uid/gid. Durable assignments are stored in
+`VMManifestEntry.jailUID` and reserved before runtime construction after an
+agent restart, so create, adoption, and teardown use the same identity as well
+as the same layout. Warm templates lease from the same allocator and persist a
+small identity sidecar because they are intentionally absent from the workload
+manifest.
 
 **The barrier.** Each sandbox's Firecracker is spawned via
 `jailer --id <sandboxId> --exec-file firecracker --uid/--gid ... --netns ...`:
@@ -297,11 +302,18 @@ persisted.
   the jailed process under `run/`; the host dials them through the chroot
   prefix. Snapshot files follow the same rule: staged into, and
   loaded from, in-jail paths. Teardown removes the whole jail subtree.
-- **Privilege drop**: each sandbox runs as its own uid/gid, derived
-  statelessly as `sandbox_jailer_uid_base + (FNV-1a-64(sandboxId) % 65536)` —
-  stable across restarts, no allocation state. Writable artifacts are chowned
-  to it; a slot collision between two sandboxes (rare at 2^16) weakens only
-  their mutual isolation, never the host boundary.
+- **Privilege drop**: each sandbox runs as its own uid/gid, leased from the
+  host's 65,536-id sandbox range by a forward-walking allocator. The assignment
+  is persisted in the workload manifest, and every readable or quarantined
+  manifest claim is reserved again before new creates after a restart. A freed
+  uid is not the allocator's next candidate, and exhaustion refuses the create
+  instead of sharing an identity. Writable artifacts are chowned to the
+  assignment. A pre-allocation manifest with no `jailUID` adopts the owner of
+  its surviving jail tree when available, or reproduces the historical hash
+  assignment as a fallback, then persists that uid before it can be used. A
+  duplicate legacy claim poisons the shared uid against new allocation; each
+  already-existing jail can still be adopted and torn down using its recorded
+  identity so the upgrade does not strand it.
 - **Network namespace**: every jailed sandbox gets a dedicated netns
   (`strato-sbx-<id>`, created with `ip netns add`) which the jailer enters via
   `--netns` — a compromised VMM sees no host interfaces at all. A network-free
@@ -310,7 +322,7 @@ persisted.
   (STR-100). The wiring recipe — and why the TAP is created inside the
   namespace rather than moved in (the measured STR-99 failure) — is owned by
   [Sandbox NICs](./networking.md#sandbox-nics); the jail-specific detail is
-  that the TAP is created owned by the sandbox's derived uid, because the
+  that the TAP is created owned by the sandbox's allocated uid, because the
   jailer drops `CAP_NET_ADMIN` before Firecracker's `TUNSETIFF`.
 - **Seccomp**: Firecracker installs its own default seccomp filters
   unconditionally; the jailer adds no flag for it and the agent never passes
@@ -330,10 +342,16 @@ cgroup is set (vCPU count already bounds compute; host fairness is the kernel
 scheduler's job). Cgroup-v1 hosts get the rest of the barrier and one warning.
 
 **Policy: `sandbox_jailer_mode`.** `auto` (default) jails when the host can —
-agent running as root and the jailer binary present (it ships in the
+agent running as root, the jailer binary present (it ships in the
 Firecracker release tarball; `task install-firecracker` and the agent's
-default binary probe both know it) — and otherwise logs a prominent warning
-and runs unjailed, keeping dev hosts working. `required` is the production
+default binary probe both know it), and the `ip` tool available — and otherwise
+logs a prominent warning and runs unjailed, keeping dev hosts working.
+Preflight also checks the complete configured uid/gid range against every uid
+in `/etc/passwd`, every gid in `/etc/group`, and every delegation in
+`/etc/subuid` and `/etc/subgid`. An overlap is an advisory failure in `auto`,
+which retains the other jailer barriers but prominently warns that uid-based
+filesystem isolation is not trustworthy, and a gating failure in `required`.
+`required` is the production
 posture: if the jailer is unusable the agent **does not advertise the sandbox
 capability** (the probe reports why) and the runtime refuses creates, because
 silently running untrusted workloads unjailed on a host that demanded
@@ -343,14 +361,19 @@ deletion unmanaged.
 `disabled` is the debugging escape hatch. Related knobs:
 `sandbox_jailer_binary_path`, `sandbox_jailer_chroot_dir` (default
 `<vm_storage_dir>/jailer` — each jail holds a full writable rootfs copy, so
-it belongs on VM storage), `sandbox_jailer_uid_base` (default 100000).
+it belongs on VM storage), `sandbox_jailer_uid_base` (default 1879048192,
+`0x70000000`; minimum 65536, with room for the full range). Operators must
+reserve the whole range in host account-management policy so a future account
+or subordinate-id allocation cannot claim it.
 
 **Adoption across config changes.** Orphan re-adoption always probes both
 socket layouts (in-jail first, then flat), so a running sandbox survives an
 operator flipping the jailer on or off between agent lives — the process
 keeps whatever barrier it was born with until it is deleted (jailed PIDs are
 rediscovered by the `--id` argument, since every jail shares the same
-in-chroot `--api-sock` path). VMs (the
+in-chroot `--api-sock` path). A persisted `jailUID` remains authoritative even
+if the configured allocation range changes, so an existing jail is never
+silently re-owned during adoption. VMs (the
 `FirecrackerService` path) remain unjailed for now; extending the barrier to
 them is future work.
 

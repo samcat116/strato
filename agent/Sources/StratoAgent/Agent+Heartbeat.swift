@@ -165,7 +165,7 @@ extension Agent {
 
         // Retry a manifest that could not be *read*, so a host quarantined by a
         // transient cause recovers on its own (STR-138).
-        retryManifestLoadIfQuarantined()
+        await retryManifestLoadIfQuarantined()
 
         // Retry a failed manifest write so a transient disk error can't leave the
         // on-disk manifest permanently behind the in-memory VM records.

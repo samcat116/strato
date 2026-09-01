@@ -472,7 +472,8 @@ extension Agent {
     /// every heartbeat (each write covers the full VM set, so one success
     /// heals all missed updates). The stale manifest only matters if the agent
     /// restarts before a retry succeeds.
-    func persistManifest() {
+    @discardableResult
+    func persistManifest() -> Bool {
         // Never write over a manifest we could not read (STR-138). The first
         // write after a failed load is what turns "unreadable, but the bytes
         // are still there" into an unrecoverable loss — and what it would
@@ -486,7 +487,7 @@ extension Agent {
                     "path": .string(failure.path),
                     "preservedCopy": .string(failure.preservedCopyPath ?? "none"),
                 ])
-            return
+            return false
         }
 
         // One flat map for every workload kind; ids cannot collide across kinds
@@ -498,7 +499,9 @@ extension Agent {
         // routing field is what a build that understands them needs, and this
         // one rewriting it in a shape it prefers would destroy that.
         capacityManifestRevision &+= 1
-        manifestPersistFailed = !manifestStore.save(manifest, preserving: quarantinedWorkloads)
+        let saved = manifestStore.save(manifest, preserving: quarantinedWorkloads)
+        manifestPersistFailed = !saved
+        return saved
     }
 
     /// Fold a manifest read into the agent's view of the host.
@@ -508,15 +511,31 @@ extension Agent {
     /// loaded manifest names what a previous incarnation was running, and an
     /// unreadable one means the contents are unknown — which must never be
     /// spelled the same way as "empty".
-    func applyManifestLoad(_ load: ManifestLoad) {
+    func applyManifestLoad(_ load: ManifestLoad) async {
         switch load {
         case .fresh:
             manifestReadFailure = nil
 
-        case .loaded(let entries, let quarantined):
+        case .loaded(var entries, let quarantined):
             manifestReadFailure = nil
+            sandboxJailUIDRecoveryBlockedReason = nil
             quarantinedWorkloads = quarantined
+            // STR-290 migration: a nil jailUID on an entry with no recorded
+            // creation mode is an old manifest, not an invitation to allocate
+            // a different identity. Explicitly unjailed entries keep nil.
+            // Recover a surviving jail's owner when possible; otherwise replay
+            // the exact historical hash base (including the retired 100000
+            // default), then persist it before any new sandbox can be created.
+            var adoptedLegacyJailUIDs: [String: UInt32] = [:]
+            for id in entries.keys.sorted() {
+                guard let entry = entries[id], entry.needsLegacyJailUIDAdoption,
+                    let uid = legacyJailUID(for: id)
+                else { continue }
+                entries[id] = entry.recordingJailUID(uid)
+                adoptedLegacyJailUIDs[id] = uid
+            }
             reserveVsockCIDs(entries: entries, quarantined: quarantined)
+            await reserveSandboxJailUIDs(entries: entries, quarantined: quarantined)
             // Anything already managed by *this* incarnation stays managed: a
             // recovery re-read must not demote live workloads to orphans.
             var recovered: [String] = []
@@ -533,10 +552,160 @@ extension Agent {
                     "Found \(recovered.count) workload(s) managed before restart; their processes are now unmanaged but their resources stay reserved",
                     metadata: ["workloadIds": .string(recovered.sorted().joined(separator: ","))])
             }
+            if !adoptedLegacyJailUIDs.isEmpty {
+                if persistManifest() {
+                    logger.warning(
+                        "Adopted and persisted legacy sandbox jail UID assignments",
+                        metadata: [
+                            "sandboxIds": .string(adoptedLegacyJailUIDs.keys.sorted().joined(separator: ",")),
+                            "assignments": .string(
+                                adoptedLegacyJailUIDs.keys.sorted().map {
+                                    "\($0)=\(adoptedLegacyJailUIDs[$0]!)"
+                                }.joined(separator: ",")),
+                        ])
+                } else {
+                    logger.error(
+                        "Could not persist adopted legacy sandbox jail UIDs; their in-memory reservations remain held and new creates will fail until the manifest is writable"
+                    )
+                }
+            }
 
         case .unreadable(let failure):
             // The store has already logged this loudly and preserved a copy.
             manifestReadFailure = failure
+        }
+    }
+
+    /// Recover the identity an older build actually used. Filesystem ownership
+    /// outranks configuration because an operator may have changed the base;
+    /// the old hash is the fallback for an unjailed/dead sandbox with no jail
+    /// tree left to inspect.
+    func legacyJailUID(for sandboxId: String) -> UInt32? {
+        let jailDirectory = SandboxJailPlan.jailDirectory(
+            sandboxId: sandboxId,
+            chrootBaseDir: sandboxJailerChrootDir,
+            firecrackerBinaryPath: firecrackerBinaryPath)
+        for path in [
+            jailDirectory + "/root",
+            jailDirectory + "/root/rootfs.ext4",
+            jailDirectory + "/root/config.img",
+        ] {
+            let attributes: [FileAttributeKey: Any]
+            do {
+                attributes = try FileManager.default.attributesOfItem(atPath: path)
+            } catch {
+                guard !Self.isFileNotFound(error) else { continue }
+                let reason =
+                    "could not inspect legacy jail ownership at \(path): \(error.localizedDescription)"
+                sandboxJailUIDRecoveryBlockedReason = reason
+                logger.error(
+                    "Cannot recover a legacy sandbox jail UID without guessing",
+                    metadata: [
+                        "strato.sandbox.id": .string(sandboxId),
+                        "path": .string(path),
+                        "error": .string(error.localizedDescription),
+                    ])
+                return nil
+            }
+            if let owner = attributes[.ownerAccountID] as? NSNumber,
+                owner.uint64Value > 0, owner.uint64Value < UInt64(UInt32.max)
+            {
+                return owner.uint32Value
+            }
+        }
+        do {
+            return try SandboxJailPlan.legacyUID(
+                sandboxId: sandboxId, uidBase: legacySandboxJailerUidBase)
+        } catch {
+            logger.error(
+                "Cannot recover a legacy sandbox jail UID",
+                metadata: [
+                    "strato.sandbox.id": .string(sandboxId),
+                    "legacyUIDBase": .stringConvertible(legacySandboxJailerUidBase),
+                    "error": .string(error.localizedDescription),
+                ])
+            return nil
+        }
+    }
+
+    static func isFileNotFound(_ error: any Error) -> Bool {
+        var current: any Error = error
+        while true {
+            let candidate = current as NSError
+            if candidate.domain == NSCocoaErrorDomain,
+                candidate.code == NSFileNoSuchFileError
+                    || candidate.code == NSFileReadNoSuchFileError
+            {
+                return true
+            }
+            if candidate.domain == NSPOSIXErrorDomain,
+                candidate.code == POSIXErrorCode.ENOENT.rawValue
+            {
+                return true
+            }
+            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
+                return false
+            }
+            current = underlying
+        }
+    }
+
+    /// Restore the whole host UID namespace before any create. Quarantined
+    /// entries participate because their process may still be running even
+    /// though this build cannot route it; legacy quarantined sandboxes cannot
+    /// be rewritten without violating verbatim quarantine, so their recovered
+    /// claim is held in memory on every start.
+    func reserveSandboxJailUIDs(
+        entries: [String: VMManifestEntry], quarantined: [String: QuarantinedManifestEntry]
+    ) async {
+        for refusal in sandboxJailUIDs.reserveAll(entries: entries, quarantined: quarantined) {
+            logSandboxJailUIDRefusal(
+                sandboxId: refusal.sandboxId, uid: refusal.uid, reason: refusal.reason)
+        }
+
+        var claims: [(id: String, uid: UInt32)] =
+            entries.compactMap { id, entry in entry.jailUID.map { (id, $0) } }
+            + quarantined.compactMap { id, entry in entry.jailUID.map { (id, $0) } }
+        for (id, entry) in quarantined where entry.needsLegacyJailUIDAdoption {
+            guard let uid = legacyJailUID(for: id) else { continue }
+            claims.append((id, uid))
+            let result = sandboxJailUIDs.reserve(uid, for: id)
+            if case .reserved = result { continue }
+            if case .unchanged = result { continue }
+            logSandboxJailUIDRefusal(sandboxId: id, uid: uid, reason: result)
+        }
+
+        // On the initial load the concrete runtime does not exist yet and
+        // receives `sandboxJailUIDs` by value during construction. This branch
+        // covers a later recovery read after an unreadable manifest.
+        if let sandboxRuntime {
+            for claim in claims.sorted(by: { $0.id < $1.id }) {
+                _ = await sandboxRuntime.reserveJailUID(claim.uid, for: claim.id)
+            }
+        }
+    }
+
+    func logSandboxJailUIDRefusal(
+        sandboxId: String, uid: UInt32, reason: SandboxJailUIDReservation
+    ) {
+        switch reason {
+        case .conflict(let holder):
+            logger.error(
+                "Two sandbox manifest claims share one jail UID; the identity remains poisoned until every claimant is removed, and each sandbox must be re-created with its own allocation",
+                metadata: [
+                    "jailUID": .stringConvertible(uid),
+                    "holder": .string(holder),
+                    "strato.sandbox.id": .string(sandboxId),
+                ])
+        case .notAssignable:
+            logger.error(
+                "Ignoring an unusable root or uid_t(-1) sandbox jail manifest claim",
+                metadata: [
+                    "jailUID": .stringConvertible(uid),
+                    "strato.sandbox.id": .string(sandboxId),
+                ])
+        case .reserved, .unchanged:
+            break
         }
     }
 
@@ -606,12 +775,12 @@ extension Agent {
     /// somebody deleted it. Accepting that would hand every running guest's
     /// capacity straight back to the scheduler, so deciding this host is empty
     /// stays a deliberate act — restart the agent.
-    func retryManifestLoadIfQuarantined() {
+    func retryManifestLoadIfQuarantined() async {
         guard manifestReadFailure != nil else { return }
         let load = manifestStore.load()
         guard case .loaded = load else { return }
 
-        applyManifestLoad(load)
+        await applyManifestLoad(load)
         logger.warning(
             "VM manifest became readable again; this host is no longer quarantined and will converge and advertise capacity normally"
         )

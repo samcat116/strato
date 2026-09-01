@@ -33,6 +33,8 @@ import SwiftFirecracker
 /// consistent with the manifest-based, state-independent reservation model.
 /// Cold-boot stop (releasing memory) is future work.
 actor FirecrackerSandboxRuntime: SandboxRuntimeService {
+    nonisolated let requiresJailUID: Bool
+
     let logger: Logger
     let client: FirecrackerClient
     let imageService: SandboxImageService
@@ -48,15 +50,27 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// after the operator flips the mode — a running process keeps the
     /// barrier it was born with.
     let jailerConfig: SandboxJailerConfig
+    /// The one host-global identity namespace shared by durable sandboxes and
+    /// transient warm templates. Seeded from the manifest before construction;
+    /// every plan below reads its explicit assignment from here.
+    var jailUIDs: SandboxJailUIDAllocator
+    /// A release is honored only after strict process and artifact cleanup has
+    /// completed in this actor life.
+    var jailUIDReleaseReady: Set<String> = []
+    /// Hash base used only to identify debris left by a build that predates
+    /// persisted/allocated jail UIDs.
+    let legacyJailerUIDBase: UInt32
     /// Whether newly created sandboxes get the jailer barrier
     /// (`sandbox_jailer_mode` resolution — see `SandboxJailerMode`).
     let jailNewSandboxes: Bool
+    /// Keeps direct Firecracker processes out of the host jail UID namespace.
+    let jailUIDPolicy: SandboxJailUIDPolicy
     /// Non-nil when `sandbox_jailer_mode = "required"` is unmet on this host:
     /// creating a sandbox is refused (running one unjailed is not an option),
     /// while everything an *existing* sandbox needs — adoption, status, stop,
     /// delete — keeps working, since none of it spawns a new jailer. Without
     /// this, jailed orphans would outlive their deletion unmanaged.
-    let jailerBlockedReason: String?
+    var jailerBlockedReason: String?
     /// Moves exported snapshot artifacts between this host and control-plane
     /// object storage over SVID mTLS (issue #428). Nil when SPIFFE is not
     /// configured — snapshot export and cross-agent restore/fork then fail
@@ -99,8 +113,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     static let warmBuildRetryInterval: TimeInterval = 15 * 60
     /// One-shot sweep of template debris left by a crash mid-build (template
     /// microVMs are deliberately not in the manifest, so ordinary orphan
-    /// recovery never finds them). Runs on the first create.
+    /// recovery never finds them). Runs before the first UID lease.
     var warmTemplateSweepDone = false
+    var warmTemplateSweepTask: Task<Void, Error>?
 
     /// Whether this host's Firecracker can repoint a restored network device
     /// at a different host TAP (STR-104), resolved once per agent life from
@@ -255,6 +270,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         guestImagePath: String,
         firecrackerBinaryPath: String,
         jailer: SandboxJailerConfig,
+        jailUIDAllocator: SandboxJailUIDAllocator,
+        legacyJailerUIDBase: UInt32,
         jailNewSandboxes: Bool,
         jailerBlockedReason: String? = nil,
         warmStartEnabled: Bool = true,
@@ -269,7 +286,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         self.guestImagePath = guestImagePath
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.jailerConfig = jailer
+        self.jailUIDs = jailUIDAllocator
+        self.legacyJailerUIDBase = legacyJailerUIDBase
         self.jailNewSandboxes = jailNewSandboxes
+        self.jailUIDPolicy = SandboxJailUIDPolicy(jailsNewSandboxes: jailNewSandboxes)
+        self.requiresJailUID = jailNewSandboxes
         self.jailerBlockedReason = jailerBlockedReason
         self.snapshotTransfer = snapshotTransfer
         // Unjailed warm start cannot work (see `warmStartActive`); requesting
@@ -295,6 +316,70 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 "jailed": .stringConvertible(jailNewSandboxes),
                 "warmStart": .stringConvertible(warmStartActive),
             ])
+    }
+
+    // MARK: - SandboxRuntimeService jail identities
+
+    func leaseJailUID(for sandboxId: String) async throws -> SandboxJailUIDLease? {
+        jailUIDReleaseReady.remove(sandboxId)
+        guard jailUIDPolicy.requiresLease else { return nil }
+        try await ensureWarmTemplateSweep()
+        return try jailUIDPolicy.lease(for: sandboxId, from: &jailUIDs)
+    }
+
+    func commitJailUID(_ lease: SandboxJailUIDLease) async {
+        jailUIDs.commit(lease)
+    }
+
+    func rollBackJailUID(_ lease: SandboxJailUIDLease) async {
+        jailUIDs.rollBack(lease)
+    }
+
+    func reserveJailUID(_ uid: UInt32, for sandboxId: String) async -> SandboxJailUIDReservation {
+        jailUIDReleaseReady.remove(sandboxId)
+        return jailUIDs.reserve(uid, for: sandboxId)
+    }
+
+    func releaseJailUID(for sandboxId: String) async throws {
+        guard jailUIDReleaseReady.contains(sandboxId) else {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "refusing to release sandbox jail uid without proven process and artifact cleanup")
+        }
+        let releasedUID = jailUIDs.release(sandboxId)
+        guard releasedUID != nil || !requiresJailUID else {
+            throw SandboxRuntimeError.jailIdentityUnavailable(
+                "allocator has no jail uid claim for sandbox \(sandboxId)")
+        }
+        jailUIDReleaseReady.remove(sandboxId)
+    }
+
+    func prepareJailUIDRelease(for sandboxId: String, jailUID: UInt32?) async throws {
+        let plan = try jailUID.map { try jailPlan(for: sandboxId, recordedUID: $0) }
+        do {
+            try await client.destroyVM(vmId: sandboxId)
+        } catch FirecrackerError.vmNotFound {
+            // A restart or pre-registration create failure has no client entry.
+        }
+        try await client.destroyUntrackedVM(vmId: sandboxId)
+
+        if let plan {
+            try await client.confirmNoHostProcess(inJailRoot: plan.jailRoot)
+        }
+        if let jailUID, jailUIDs.isExclusive(jailUID, to: sandboxId) {
+            try await client.confirmNoHostProcess(effectiveUID: jailUID)
+        }
+
+        try removePathForJailUIDRelease(
+            sandboxDirectory(sandboxId), description: "sandbox storage")
+        if let plan {
+            try await removeJailArtifactsForUIDRelease(plan)
+        }
+        sandboxes.removeValue(forKey: sandboxId)
+        jailUIDReleaseReady.insert(sandboxId)
+    }
+
+    func updateJailerBlockedReason(_ reason: String?) async {
+        jailerBlockedReason = reason
     }
 
     /// In-flight import downloads, keyed by snapshot id, so a fork fan-out

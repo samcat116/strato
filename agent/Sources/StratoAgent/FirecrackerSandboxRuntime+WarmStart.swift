@@ -75,7 +75,15 @@ extension FirecrackerSandboxRuntime {
             ])
 
         var vm: ProvisionedMicroVM?
+        var lease: SandboxJailUIDLease?
+        var stagingDirectory: String?
         do {
+            let templateLease = try jailUIDs.lease(for: templateId)
+            lease = templateLease
+            // Templates are absent from the workload manifest, so this tiny
+            // durable record is their restart-survival identity.
+            try persistWarmTemplateUID(templateLease.uid, templateId: templateId)
+
             let nonce = UUID().uuidString
             let configDrive = SandboxConfigDrive(
                 sandboxId: templateId,
@@ -138,34 +146,29 @@ extension FirecrackerSandboxRuntime {
             try await provisioned.manager.pause()
 
             let staging = try warmCache.makeStagingDirectory()
-            do {
-                try await captureSnapshot(
-                    manager: provisioned.manager, jail: provisioned.jail,
-                    memoryTarget: staging + "/" + WarmSandboxSnapshotCache.memoryFile,
-                    vmstateTarget: staging + "/" + WarmSandboxSnapshotCache.vmstateFile)
-                // The template's rootfs AS OF the snapshot: the held guest
-                // has it mounted, so restores must clone exactly these bytes
-                // (the pristine image would no longer match the page cache).
-                try await reflinkCopy(
-                    from: provisioned.rootfsPath,
-                    to: staging + "/" + WarmSandboxSnapshotCache.rootfsFile)
-                let info = try await provisioned.manager.getInstanceInfo()
-                let meta = WarmSandboxSnapshotCache.Meta(
-                    templateId: templateId,
-                    templateNonce: nonce,
-                    imageDigest: key.imageDigest,
-                    guestVersion: key.guestVersion,
-                    firecrackerVersion: info.vmlinuxVersion,
-                    createdAtUnixSeconds: Int64(Date().timeIntervalSince1970))
-                try JSONEncoder().encode(meta).write(
-                    to: URL(fileURLWithPath: staging + "/" + WarmSandboxSnapshotCache.metaFile))
-            } catch {
-                try? FileManager.default.removeItem(atPath: staging)
-                throw error
-            }
+            stagingDirectory = staging
+            try await captureSnapshot(
+                manager: provisioned.manager, jail: provisioned.jail,
+                memoryTarget: staging + "/" + WarmSandboxSnapshotCache.memoryFile,
+                vmstateTarget: staging + "/" + WarmSandboxSnapshotCache.vmstateFile)
+            try await reflinkCopy(
+                from: provisioned.rootfsPath,
+                to: staging + "/" + WarmSandboxSnapshotCache.rootfsFile)
+            let info = try await provisioned.manager.getInstanceInfo()
+            let meta = WarmSandboxSnapshotCache.Meta(
+                templateId: templateId,
+                templateNonce: nonce,
+                imageDigest: key.imageDigest,
+                guestVersion: key.guestVersion,
+                firecrackerVersion: info.vmlinuxVersion,
+                createdAtUnixSeconds: Int64(Date().timeIntervalSince1970))
+            try JSONEncoder().encode(meta).write(
+                to: URL(fileURLWithPath: staging + "/" + WarmSandboxSnapshotCache.metaFile))
             try warmCache.publish(stagingDirectory: staging, for: key)
+            stagingDirectory = nil
 
-            await teardownWarmTemplate(templateId: templateId, vm: vm)
+            try await teardownWarmTemplate(templateId: templateId, vm: vm, lease: lease)
+            lease = nil
             warmBuildFailures.removeValue(forKey: key.directoryName)
             // The sweep walks and deletes multi-GB entries; run it off the
             // actor so it cannot stall sandbox operations. Sweep twice: once
@@ -189,14 +192,41 @@ extension FirecrackerSandboxRuntime {
                     "buildMillis": .stringConvertible(Int(Date().timeIntervalSince(started) * 1000)),
                 ])
         } catch {
+            let buildError = error
+            var stagingCleanupError: (any Error)?
+            if let stagingDirectory {
+                do {
+                    try removeItemIfPresent(atPath: stagingDirectory)
+                } catch {
+                    stagingCleanupError = error
+                    logger.error(
+                        "Warm-template staging cleanup is incomplete; retaining its jail UID",
+                        metadata: [
+                            "templateId": .string(templateId),
+                            "stagingDirectory": .string(stagingDirectory),
+                            "error": .string(error.localizedDescription),
+                        ])
+                }
+            }
             warmBuildFailures[key.directoryName] = Date()
             logger.warning(
                 "Warm-start template build failed; sandboxes for this image cold-boot until a later retry",
                 metadata: [
                     "warmKey": .string(key.directoryName),
-                    "error": .string(error.localizedDescription),
+                    "error": .string(buildError.localizedDescription),
                 ])
-            await teardownWarmTemplate(templateId: templateId, vm: vm)
+            do {
+                try await teardownWarmTemplate(
+                    templateId: templateId, vm: vm, lease: lease,
+                    releaseUID: stagingCleanupError == nil)
+            } catch {
+                logger.error(
+                    "Warm-template cleanup is incomplete; retaining its jail UID",
+                    metadata: [
+                        "templateId": .string(templateId),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
         }
     }
 
@@ -218,9 +248,8 @@ extension FirecrackerSandboxRuntime {
             throw SandboxRuntimeError.warmStartFailed(
                 "the `ip` tool (iproute2) was not found on this host")
         }
-        let plan = SandboxJailPlan(
-            sandboxId: templateId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
-        // Same derivation as a real sandbox's NIC, so the leak sweep's
+        let plan = try jailPlan(for: templateId)
+        // Same layout as a real sandbox's NIC, so the leak sweep's
         // namespace removal is all the cleanup this ever needs.
         let tapName = sandboxNICDeviceNames(sandboxId: templateId, nicIndex: 0).tap
         try await createNetns(plan.netnsName)
@@ -254,63 +283,230 @@ extension FirecrackerSandboxRuntime {
         ]
     }
 
-    /// Remove template debris a crash mid-build left behind: destroy any
-    /// still-running template microVM (best-effort adopt-then-destroy — the
-    /// self-describing `warm-template-` id prefix is what makes this safe
-    /// without manifest bookkeeping), then its jail, storage, and socket
-    /// leftovers. Templates are jailed-only, so only the jail layout is
-    /// probed for live processes.
-    func sweepLeakedWarmTemplates() async {
-        let fileManager = FileManager.default
-        // Staging directories abandoned by a crash are excluded from the
-        // budget sweep, so this is their only cleanup path — and it must not
-        // age-gate: this call runs synchronously before this method's first
-        // suspension, and the sweep precedes any template build this process
-        // can start (first create, before maybeStartWarmTemplateBuild), so
-        // no staging directory can be live here regardless of age. A restart
-        // shortly after a crash would otherwise skip the debris forever.
-        warmCache.removeAbandonedStaging(olderThan: 0)
-        var leaked: Set<String> = []
-        if let names = try? fileManager.contentsOfDirectory(atPath: sandboxStoragePath) {
-            leaked.formUnion(names.filter { $0.hasPrefix("warm-template-") })
+    static let warmTemplateUIDFile = "jail-uid"
+
+    func warmTemplateUIDPath(_ templateId: String) -> String {
+        sandboxDirectory(templateId) + "/" + Self.warmTemplateUIDFile
+    }
+
+    func persistWarmTemplateUID(_ uid: UInt32, templateId: String) throws {
+        let directory = sandboxDirectory(templateId)
+        let directoryAlreadyExisted = FileManager.default.fileExists(atPath: directory)
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        if !directoryAlreadyExisted {
+            try synchronizeDirectory(atPath: sandboxStoragePath)
         }
+        let path = warmTemplateUIDPath(templateId)
+        try Data("\(uid)\n".utf8).write(to: URL(fileURLWithPath: path), options: .atomic)
+        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+        try handle.synchronize()
+        try handle.close()
+        try synchronizeDirectory(atPath: directory)
+    }
+
+    func synchronizeDirectory(atPath path: String) throws {
+        let descriptor = Glibc.open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "could not open warm-template directory \(path) for synchronization: "
+                    + String(cString: strerror(errno)))
+        }
+        var descriptorIsOpen = true
+        defer {
+            if descriptorIsOpen { _ = Glibc.close(descriptor) }
+        }
+        guard Glibc.fsync(descriptor) == 0 else {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "could not synchronize warm-template directory \(path): "
+                    + String(cString: strerror(errno)))
+        }
+        let closeResult = Glibc.close(descriptor)
+        descriptorIsOpen = false
+        guard closeResult == 0 else {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "could not close synchronized warm-template directory \(path): "
+                    + String(cString: strerror(errno)))
+        }
+    }
+
+    static func isFileNotFound(_ error: any Error) -> Bool {
+        var current: any Error = error
+        while true {
+            let candidate = current as NSError
+            if candidate.domain == NSCocoaErrorDomain,
+                candidate.code == NSFileNoSuchFileError
+                    || candidate.code == NSFileReadNoSuchFileError
+            {
+                return true
+            }
+            if candidate.domain == NSPOSIXErrorDomain,
+                candidate.code == POSIXErrorCode.ENOENT.rawValue
+            {
+                return true
+            }
+            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
+                return false
+            }
+            current = underlying
+        }
+    }
+
+    func directoryContentsIfPresent(atPath path: String) throws -> [String] {
+        do {
+            return try FileManager.default.contentsOfDirectory(atPath: path)
+        } catch  where Self.isFileNotFound(error) {
+            return []
+        } catch {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "could not inspect warm-template cleanup root \(path): "
+                    + error.localizedDescription)
+        }
+    }
+
+    func recoveredWarmTemplateUID(
+        _ templateId: String, processEffectiveUID: UInt32?
+    ) throws -> UInt32 {
+        do {
+            let raw = try String(
+                contentsOfFile: warmTemplateUIDPath(templateId), encoding: .utf8)
+            guard
+                let uid = UInt32(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+                uid != 0, uid != UInt32.max
+            else {
+                throw SandboxRuntimeError.jailIdentityUnavailable(
+                    "leaked warm template \(templateId) has an invalid jail UID sidecar")
+            }
+            return uid
+        } catch  where Self.isFileNotFound(error) {
+            // A pre-STR-290 build has no sidecar; inspect artifacts/processes.
+        } catch let error as SandboxRuntimeError {
+            throw error
+        } catch {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "could not read jail UID sidecar for leaked warm template \(templateId): "
+                    + error.localizedDescription)
+        }
+
+        let jailDirectory = SandboxJailPlan.jailDirectory(
+            sandboxId: templateId, chrootBaseDir: jailerConfig.chrootBaseDir,
+            firecrackerBinaryPath: firecrackerBinaryPath)
+        for path in [jailDirectory + "/root", jailDirectory + "/root/rootfs.ext4"] {
+            let attributes: [FileAttributeKey: Any]
+            do {
+                attributes = try FileManager.default.attributesOfItem(atPath: path)
+            } catch  where Self.isFileNotFound(error) {
+                continue
+            } catch {
+                throw SandboxRuntimeError.jailSetupFailed(
+                    "could not inspect ownership of leaked warm template artifact \(path): "
+                        + error.localizedDescription)
+            }
+            if let owner = attributes[.ownerAccountID] as? NSNumber,
+                owner.uint64Value > 0, owner.uint64Value < UInt64(UInt32.max)
+            {
+                return owner.uint32Value
+            }
+        }
+        if let processEffectiveUID {
+            guard processEffectiveUID != 0, processEffectiveUID != UInt32.max else {
+                throw SandboxRuntimeError.jailIdentityUnavailable(
+                    "leaked warm template \(templateId) is running under unusable uid \(processEffectiveUID)")
+            }
+            return processEffectiveUID
+        }
+        return try SandboxJailPlan.legacyUID(
+            sandboxId: templateId, uidBase: legacyJailerUIDBase)
+    }
+
+    func ensureWarmTemplateSweep() async throws {
+        if warmTemplateSweepDone { return }
+        if let task = warmTemplateSweepTask {
+            try await task.value
+            return
+        }
+        let task = Task { try await self.sweepLeakedWarmTemplates() }
+        warmTemplateSweepTask = task
+        do {
+            try await task.value
+            warmTemplateSweepDone = true
+            warmTemplateSweepTask = nil
+        } catch {
+            warmTemplateSweepTask = nil
+            throw error
+        }
+    }
+
+    /// Remove template debris a crash mid-build left behind. The recovered UID
+    /// is reserved before the socket is touched and released only after process
+    /// death is established.
+    func sweepLeakedWarmTemplates() async throws {
+        for failure in warmCache.removeAbandonedStaging(olderThan: 0) {
+            logger.warning(
+                "Abandoned warm-template staging cleanup failed; sandbox creation will continue",
+                metadata: ["path": .string(failure.path), "error": .string(failure.reason)])
+        }
+        var leaked: Set<String> = []
+        let storageNames = try directoryContentsIfPresent(atPath: sandboxStoragePath)
+        leaked.formUnion(storageNames.filter { $0.hasPrefix("warm-template-") })
         let jailBase =
             jailerConfig.chrootBaseDir + "/" + (firecrackerBinaryPath as NSString).lastPathComponent
-        if let names = try? fileManager.contentsOfDirectory(atPath: jailBase) {
-            leaked.formUnion(names.filter { $0.hasPrefix("warm-template-") })
-        }
-        // The namespace of a NIC-shaped template (STR-104), which is the
-        // *first* artifact its build creates — before the jail root or the
-        // storage directory the two scans above look at. A crash in that
-        // window leaves a namespace with no other trace of the template, and
-        // template ids are random and never retried, so nothing else would
-        // ever reap it.
-        if let names = try? fileManager.contentsOfDirectory(atPath: SandboxJailPlan.netnsDirectory) {
-            leaked.formUnion(
-                names.compactMap(SandboxJailPlan.sandboxId(fromNetnsName:))
-                    .filter { $0.hasPrefix("warm-template-") })
+        let jailNames = try directoryContentsIfPresent(atPath: jailBase)
+        leaked.formUnion(jailNames.filter { $0.hasPrefix("warm-template-") })
+        let netnsNames = try directoryContentsIfPresent(atPath: SandboxJailPlan.netnsDirectory)
+        leaked.formUnion(
+            netnsNames.compactMap(SandboxJailPlan.sandboxId(fromNetnsName:))
+                .filter { $0.hasPrefix("warm-template-") })
+
+        let processes = try await client.discoverVMProcesses(idPrefix: "warm-template-")
+        leaked.formUnion(processes.map(\.vmId))
+        var processUIDs: [String: Set<UInt32>] = [:]
+        for process in processes {
+            guard let effectiveUID = process.effectiveUID else { continue }
+            if effectiveUID != 0, effectiveUID != UInt32.max {
+                processUIDs[process.vmId, default: []].insert(effectiveUID)
+            }
         }
         for templateId in leaked.sorted() {
             logger.warning(
                 "Sweeping leaked warm-template artifacts from a previous agent life",
                 metadata: ["templateId": .string(templateId)])
-            let plan = SandboxJailPlan(
-                sandboxId: templateId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
-            let socketPath = JailerOptions.socketPath(
-                chrootBaseDir: jailerConfig.chrootBaseDir,
-                firecrackerBinaryPath: firecrackerBinaryPath,
-                vmId: templateId)
-            if fileManager.fileExists(atPath: socketPath),
-                (try? await client.adoptVM(
-                    vmId: templateId,
-                    jail: JailerOptions(
-                        jailerBinaryPath: jailerConfig.jailerBinaryPath,
-                        chrootBaseDir: jailerConfig.chrootBaseDir,
-                        uid: plan.uid, gid: plan.gid))) != nil
-            {
-                try? await client.destroyVM(vmId: templateId)
+            let liveUIDs = processUIDs[templateId, default: []]
+            guard liveUIDs.count <= 1 else {
+                throw SandboxRuntimeError.jailIdentityUnavailable(
+                    "leaked warm template \(templateId) has processes under multiple jail UIDs: "
+                        + liveUIDs.sorted().map(String.init).joined(separator: ", "))
             }
-            await teardownWarmTemplate(templateId: templateId, vm: nil)
+            let uid = try recoveredWarmTemplateUID(
+                templateId, processEffectiveUID: liveUIDs.first)
+            let reservation = jailUIDs.reserve(uid, for: templateId)
+            if case .notAssignable = reservation {
+                throw SandboxRuntimeError.jailIdentityUnavailable(
+                    "leaked warm template \(templateId) records unusable uid 0")
+            }
+            if case .conflict(let holder) = reservation {
+                logger.error(
+                    "A leaked warm template shares a sandbox jail UID; keeping the UID poisoned until the template is gone",
+                    metadata: [
+                        "templateId": .string(templateId),
+                        "jailUID": .stringConvertible(uid),
+                        "holder": .string(holder),
+                    ])
+            }
+            let plan = try jailPlan(for: templateId, recordedUID: uid)
+            try await destroyLeakedWarmTemplateProcess(templateId, plan: plan)
+            try removeWarmTemplateArtifacts(templateId, plan: plan)
+            _ = jailUIDs.release(templateId)
+        }
+        let rangeEnd = jailerConfig.uidBase + SandboxJailerConfig.uidCount
+        let rangeProcesses = try await client.discoverHostProcesses(
+            effectiveUIDsIn: jailerConfig.uidBase..<rangeEnd)
+        let unexplained = rangeProcesses.filter { process in
+            jailUIDs.holder(of: process.effectiveUID) == nil
+        }
+        guard unexplained.isEmpty else {
+            throw SandboxRuntimeError.jailIdentityUnavailable(
+                "configured jail UID range contains unclaimed live process(es): "
+                    + unexplained.map { "\($0.pid)@\($0.effectiveUID)" }.joined(separator: ", "))
         }
         // The previous life may also have left the cache over budget (its
         // post-publish sweeps could have been cut short); re-enforce once,
@@ -323,20 +519,132 @@ extension FirecrackerSandboxRuntime {
         }
     }
 
-    /// Best-effort teardown of a template microVM and its staging artifacts.
+    func destroyLeakedWarmTemplateProcess(
+        _ templateId: String, plan: SandboxJailPlan
+    ) async throws {
+        let socketPath = JailerOptions.socketPath(
+            chrootBaseDir: jailerConfig.chrootBaseDir,
+            firecrackerBinaryPath: firecrackerBinaryPath,
+            vmId: templateId)
+        if FileManager.default.fileExists(atPath: socketPath) {
+            do {
+                _ = try await client.adoptVM(
+                    vmId: templateId,
+                    jail: JailerOptions(
+                        jailerBinaryPath: jailerConfig.jailerBinaryPath,
+                        chrootBaseDir: jailerConfig.chrootBaseDir,
+                        uid: plan.uid, gid: plan.gid))
+                try await client.destroyVM(vmId: templateId)
+            } catch {
+                logger.warning(
+                    "Could not destroy leaked warm template through its API socket; scanning processes",
+                    metadata: [
+                        "templateId": .string(templateId),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
+        }
+        do {
+            try await client.destroyUntrackedVM(vmId: templateId)
+        } catch {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "could not prove leaked warm template \(templateId) is gone: "
+                    + error.localizedDescription)
+        }
+        try await client.confirmNoHostProcess(inJailRoot: plan.jailRoot)
+        if jailUIDs.isExclusive(plan.uid, to: templateId) {
+            try await client.confirmNoHostProcess(effectiveUID: plan.uid)
+        }
+    }
+
+    func removeWarmTemplateArtifacts(_ templateId: String, plan: SandboxJailPlan) throws {
+        try removeItemIfPresent(atPath: plan.jailDirectory)
+        let cgroupDirectory = JailerOptions.cgroupDirectory(
+            firecrackerBinaryPath: firecrackerBinaryPath, vmId: templateId)
+        if rmdir(cgroupDirectory) != 0, errno != ENOENT {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "could not remove leaked warm-template cgroup \(cgroupDirectory): "
+                    + String(cString: strerror(errno)))
+        }
+        if umount2(plan.netnsPath, Int32(MNT_DETACH)) != 0,
+            errno != ENOENT, errno != EINVAL
+        {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "could not unmount leaked warm-template namespace \(plan.netnsPath): "
+                    + String(cString: strerror(errno)))
+        }
+        if unlink(plan.netnsPath) != 0, errno != ENOENT {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "could not remove leaked warm-template namespace \(plan.netnsPath): "
+                    + String(cString: strerror(errno)))
+        }
+        try removeItemIfPresent(atPath: sandboxDirectory(templateId))
+        try removeItemIfPresent(atPath: vsockUDSPath(templateId))
+    }
+
+    func removeItemIfPresent(atPath path: String) throws {
+        do {
+            try FileManager.default.removeItem(atPath: path)
+        } catch  where Self.isFileNotFound(error) {
+            return
+        } catch {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "could not remove warm-template artifact \(path): "
+                    + error.localizedDescription)
+        }
+    }
+
+    /// Teardown of a template microVM and its staging artifacts.
     /// The jail layout is derived from the template id rather than trusting
     /// `vm`: a provisioning failure leaves `vm` nil with a partially staged
     /// jail, and — template ids being random, never retried — nothing else
     /// would ever clean it this agent life (the leak sweep already ran).
-    func teardownWarmTemplate(templateId: String, vm: ProvisionedMicroVM?) async {
-        try? await client.destroyVM(vmId: templateId)
-        let plan =
-            vm?.jail
-            ?? SandboxJailPlan(
-                sandboxId: templateId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
-        await removeJailArtifacts(plan)
-        removeArtifacts(templateId)
-        try? FileManager.default.removeItem(atPath: vsockUDSPath(templateId))
+    func teardownWarmTemplate(
+        templateId: String, vm: ProvisionedMicroVM?, lease: SandboxJailUIDLease?,
+        releaseUID: Bool = true
+    ) async throws {
+        var trackedDestroyError: (any Error)?
+        do {
+            try await client.destroyVM(vmId: templateId)
+        } catch {
+            trackedDestroyError = error
+        }
+        do {
+            try await client.destroyUntrackedVM(vmId: templateId)
+        } catch {
+            let trackedContext =
+                trackedDestroyError.map {
+                    " (tracked destroy also failed: \($0.localizedDescription))"
+                } ?? ""
+            throw SandboxRuntimeError.jailSetupFailed(
+                "could not prove warm template \(templateId) is gone: "
+                    + error.localizedDescription + trackedContext)
+        }
+
+        let plan: SandboxJailPlan
+        if let jailedPlan = vm?.jail {
+            plan = jailedPlan
+        } else if let lease {
+            plan = try jailPlan(for: templateId, recordedUID: lease.uid)
+        } else if jailUIDs.uid(for: templateId) != nil {
+            plan = try jailPlan(for: templateId)
+        } else {
+            try removeItemIfPresent(atPath: sandboxDirectory(templateId))
+            try removeItemIfPresent(atPath: vsockUDSPath(templateId))
+            return
+        }
+        try await client.confirmNoHostProcess(inJailRoot: plan.jailRoot)
+        if jailUIDs.isExclusive(plan.uid, to: templateId) {
+            try await client.confirmNoHostProcess(effectiveUID: plan.uid)
+        }
+        try removeWarmTemplateArtifacts(templateId, plan: plan)
+        if releaseUID {
+            if let lease {
+                jailUIDs.rollBack(lease)
+            } else {
+                _ = jailUIDs.release(templateId)
+            }
+        }
     }
 
     /// `stat(2)` size of a file, 0 when unreadable (sizes are advisory —

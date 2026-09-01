@@ -27,6 +27,12 @@ configured for SPIRE (see [Enrolling a node](#enrolling-a-node)).
 
 The [install script](#one-command-install) installs and configures all of it.
 
+Firecracker hosts additionally require Linux kernel 5.3 or newer. Process
+supervision requires `pidfd_open` and
+`pidfd_send_signal`. A custom service sandbox must allow both system calls.
+The agent checks them on every registration and does not advertise Firecracker
+or sandbox capability when the kernel or service policy blocks them.
+
 **Why 11.5.** VM checkpoints are internal snapshots of a running domain, and
 libvirt could not take those of a UEFI guest at all before 10.9. 10.10 fixed
 revert and inactive-delete not accounting for the qcow2 NVRAM varstore, and

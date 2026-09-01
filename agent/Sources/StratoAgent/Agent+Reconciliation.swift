@@ -276,18 +276,42 @@ extension Agent: ReconcileActuator {
             throw SandboxRuntimeError.sandboxNotFound(item.id)
         }
 
+        // Jailed adoption is allowed only with the durable identity this
+        // process was created under. An explicitly unjailed entry has no host
+        // identity to reserve and must remain usable after restart.
+        let jailUID = entry.jailUID
+        if entry.jailerUsed != false {
+            guard let jailUID else {
+                throw SandboxRuntimeError.jailIdentityUnavailable(
+                    "sandbox \(item.id) has no persisted jail uid/gid assignment")
+            }
+            switch await runtime.reserveJailUID(jailUID, for: item.id) {
+            case .reserved, .unchanged:
+                break
+            case .conflict(let holder):
+                // Both processes may already exist under this legacy collision.
+                // Keep the uid poisoned against every new create, but use the
+                // manifest value to reconnect this particular existing jail.
+                logger.warning(
+                    "Re-adopting a legacy sandbox whose jail uid/gid is duplicated",
+                    metadata: [
+                        "strato.sandbox.id": .string(item.id),
+                        "uid": .stringConvertible(jailUID),
+                        "otherSandboxId": .string(holder),
+                    ])
+            case .notAssignable:
+                throw SandboxRuntimeError.jailIdentityUnavailable(
+                    "manifest uid/gid \(jailUID) is not a usable jail identity")
+            }
+        }
+
         let status: SandboxStatus
         do {
-            status = try await runtime.adoptSandbox(sandboxId: item.id, spec: spec)
+            status = try await runtime.adoptSandbox(
+                sandboxId: item.id, spec: spec, jailUID: jailUID)
         } catch SandboxRuntimeError.adoptionTargetGone(let reason) {
-            // The orphan's Firecracker process is gone, so there is nothing to
-            // re-attach — but its artifacts persist and create is idempotent, so
-            // a fresh create rebuilds the same sandbox in the "exists, not
-            // running" state. The next sync plans any remaining power-state
-            // steps from `.stopped`. Requires the desired entry (present for an
-            // orphan the control plane still wants); without it, re-adoption
-            // simply failed.
             guard item.desiredSandbox != nil else { throw SandboxRuntimeError.sandboxNotFound(item.id) }
+            try await runtime.prepareJailUIDRelease(for: item.id, jailUID: jailUID)
             logger.warning(
                 "Orphaned sandbox has no live process; re-creating it from the desired entry",
                 metadata: ["strato.sandbox.id": .string(item.id), "reason": .string(reason)])

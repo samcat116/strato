@@ -23,6 +23,11 @@ extension FirecrackerSandboxRuntime {
             return
         }
 
+        guard !requiresJailUID || jailUIDs.uid(for: sandboxId) != nil else {
+            throw SandboxRuntimeError.jailIdentityUnavailable(
+                "sandbox \(sandboxId) has no exclusive allocation; persist a fresh jailUID before creating it")
+        }
+
         // The jailer is required but unusable: creating this sandbox would
         // mean running an untrusted workload unjailed, which `required`
         // forbids. (Normally unreachable — the capability is dark — but a
@@ -34,17 +39,6 @@ extension FirecrackerSandboxRuntime {
         logger.info(
             "Creating sandbox",
             metadata: ["strato.sandbox.id": .string(sandboxId), "image": .string(spec.image)])
-
-        // Once per agent life: clear template debris a crash mid-build left
-        // behind (templates are invisible to manifest-driven orphan
-        // recovery). Deliberately NOT gated on `warmStartActive`: a previous
-        // life may have built templates before the operator disabled warm
-        // start — often *because* of a problem — and disabling the feature
-        // must not strand its leftovers.
-        if !warmTemplateSweepDone {
-            warmTemplateSweepDone = true
-            await sweepLeakedWarmTemplates()
-        }
 
         // User checkpoint fork (issue #427): unlike a warm template this
         // snapshot already contains a running workload, so restore, rotate its
@@ -324,6 +318,28 @@ extension FirecrackerSandboxRuntime {
         let manager: FirecrackerManager
     }
 
+    /// Build a jail plan only from an exclusive allocator assignment. This is
+    /// the structural seam that keeps path construction from smuggling the old
+    /// hash-derived identity back into create/adopt/restore call sites.
+    func jailPlan(for sandboxId: String) throws -> SandboxJailPlan {
+        guard let uid = jailUIDs.uid(for: sandboxId) else {
+            throw SandboxRuntimeError.jailIdentityUnavailable(
+                "sandbox \(sandboxId) has no exclusive manifest-backed uid/gid assignment")
+        }
+        return try SandboxJailPlan(
+            sandboxId: sandboxId, jailUID: uid, config: jailerConfig,
+            firecrackerBinaryPath: firecrackerBinaryPath)
+    }
+
+    /// Cleanup/adoption of a legacy warm-template leak has an identity from
+    /// its durable sidecar (or the pre-allocation hash fallback), but no
+    /// manifest workload entry. Keep that exceptional input explicit.
+    func jailPlan(for sandboxId: String, recordedUID: UInt32) throws -> SandboxJailPlan {
+        try SandboxJailPlan(
+            sandboxId: sandboxId, jailUID: recordedUID, config: jailerConfig,
+            firecrackerBinaryPath: firecrackerBinaryPath)
+    }
+
     /// Stage a microVM's artifacts and spawn + fully configure its
     /// Firecracker process, leaving it in `Not started`. The cold-boot
     /// staging path, shared between sandbox creation and warm-template
@@ -348,9 +364,7 @@ extension FirecrackerSandboxRuntime {
         var jailOptions: JailerOptions?
 
         if jailNewSandboxes {
-            let jailer = jailerConfig
-            let plan = SandboxJailPlan(
-                sandboxId: vmId, config: jailer, firecrackerBinaryPath: firecrackerBinaryPath)
+            let plan = try self.jailPlan(for: vmId)
             jailPlan = plan
             // This id is being created fresh, so anything already under its
             // jail is a stale leftover from a crashed previous life.
@@ -531,8 +545,7 @@ extension FirecrackerSandboxRuntime {
         let tapName = try sandboxTAPName(networkAttachments)
         let overrides = try await requiredNetworkOverrides(
             forTAP: tapName, operation: "warm-starting a networked sandbox")
-        let plan = SandboxJailPlan(
-            sandboxId: sandboxId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
+        let plan = try jailPlan(for: sandboxId)
         do {
             try? FileManager.default.removeItem(atPath: plan.jailDirectory)
             try FileManager.default.createDirectory(
@@ -647,8 +660,7 @@ extension FirecrackerSandboxRuntime {
                     : "the snapshot was captured with a network device, so the fork must have a NIC")
         }
 
-        let plan = SandboxJailPlan(
-            sandboxId: sandboxId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
+        let plan = try jailPlan(for: sandboxId)
         do {
             try? FileManager.default.removeItem(atPath: plan.jailDirectory)
             try FileManager.default.createDirectory(
@@ -1090,6 +1102,11 @@ extension FirecrackerSandboxRuntime {
     }
 
     func deleteSandbox(sandboxId: String) async throws {
+        let recordedUID = sandboxes[sandboxId]?.jail?.uid ?? jailUIDs.uid(for: sandboxId)
+        try await deleteSandbox(sandboxId: sandboxId, jailUID: recordedUID)
+    }
+
+    func deleteSandbox(sandboxId: String, jailUID: UInt32?) async throws {
         // A delete interleaving with a checkpoint/restore (actor reentrancy
         // across their awaits) could tear the sandbox down mid-sequence and
         // leave the restore's freshly spawned process untracked. Refuse as
@@ -1105,23 +1122,19 @@ extension FirecrackerSandboxRuntime {
         // line the assembler is holding.
         await closeExecSessions(sandboxId: sandboxId, reason: "sandbox deleted")
         await stopLogFollow(sandboxId: sandboxId, retire: true)
-        // Tear the Firecracker process down (idempotent — a sandbox whose
-        // process the client no longer tracks throws, which we ignore), then
-        // remove the per-sandbox artifacts. The client removes a jailed
-        // sandbox's chroot subtree itself, but a delete can also arrive for a
-        // sandbox this runtime never tracked (crash leftovers): sweep the
-        // derived jail layout best-effort so netns and chroot never leak.
-        try? await client.destroyVM(vmId: sandboxId)
-        removeArtifacts(sandboxId)
-        let plan =
-            sandboxes[sandboxId]?.jail
-            ?? SandboxJailPlan(
-                sandboxId: sandboxId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
-        await removeJailArtifacts(plan)
-        sandboxes.removeValue(forKey: sandboxId)
+        // The caller may release the durable UID immediately after this
+        // returns, so teardown is deliberately not best effort.
+        try await prepareJailUIDRelease(for: sandboxId, jailUID: jailUID)
     }
 
     func adoptSandbox(sandboxId: String, spec: SandboxSpec) async throws -> SandboxStatus {
+        try await adoptSandbox(
+            sandboxId: sandboxId, spec: spec, jailUID: jailUIDs.uid(for: sandboxId))
+    }
+
+    func adoptSandbox(
+        sandboxId: String, spec: SandboxSpec, jailUID: UInt32?
+    ) async throws -> SandboxStatus {
         if let managed = sandboxes[sandboxId] {
             // A replayed sync can race adoption; if already managed, adoption is
             // satisfied only after a running guest has passed the strict
@@ -1159,8 +1172,11 @@ extension FirecrackerSandboxRuntime {
             firecrackerBinaryPath: firecrackerBinaryPath,
             vmId: sandboxId)
         if FileManager.default.fileExists(atPath: jailedSocketPath) {
-            let plan = SandboxJailPlan(
-                sandboxId: sandboxId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
+            guard let jailUID else {
+                throw SandboxRuntimeError.jailIdentityUnavailable(
+                    "sandbox \(sandboxId) has a jailed API socket but no recorded uid/gid")
+            }
+            let plan = try jailPlan(for: sandboxId, recordedUID: jailUID)
             candidates.append(
                 (
                     plan,
@@ -1176,6 +1192,8 @@ extension FirecrackerSandboxRuntime {
             candidates.append((nil, nil, flatSocketPath))
         }
         guard !candidates.isEmpty else {
+            try await confirmNoSandboxProcessBeforeReportingGone(
+                sandboxId, jailUID: jailUID)
             throw SandboxRuntimeError.adoptionTargetGone(
                 "sandbox \(sandboxId) has no Firecracker API socket at \(flatSocketPath) nor inside its jail")
         }
@@ -1202,8 +1220,9 @@ extension FirecrackerSandboxRuntime {
             }
         }
         guard let (manager, info, jailPlan) = adoption else {
-            // Every candidate socket is dead. The Agent re-creates from the
-            // desired entry in that case.
+            // An absent or unconnectable socket is not process-death proof.
+            try await confirmNoSandboxProcessBeforeReportingGone(
+                sandboxId, jailUID: jailUID)
             throw SandboxRuntimeError.adoptionTargetGone(
                 "sandbox \(sandboxId) has no live Firecracker API socket: \(lastError?.localizedDescription ?? "unknown error")"
             )

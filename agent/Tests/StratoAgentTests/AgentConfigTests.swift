@@ -447,7 +447,7 @@ struct AgentConfigTests {
     @Test("A uid base without room for the per-sandbox range is rejected")
     func invalidSandboxJailerUidBaseRejected() async throws {
         try await withTempDirectory { tempDirectory in
-            for bad in ["0", "-5", "4294967295"] {
+            for bad in ["0", "-5", "65535", "4294901760", "4294967295"] {
                 let tomlContent = """
                     control_plane_url = "ws://localhost:8080/agent/ws"
                     sandbox_jailer_uid_base = \(bad)
@@ -458,6 +458,23 @@ struct AgentConfigTests {
                 await #expect(throws: AgentConfigError.self) {
                     try await loadConfig(from: configPath)
                 }
+            }
+        }
+    }
+
+    @Test("The jailer uid base accepts the configured floor and highest non-wrapping range")
+    func sandboxJailerUidBaseBoundariesAccepted() async throws {
+        try await withTempDirectory { tempDirectory in
+            for accepted in ["65536", "4294901759"] {
+                let tomlContent = """
+                    control_plane_url = "ws://localhost:8080/agent/ws"
+                    sandbox_jailer_uid_base = \(accepted)
+                    """
+                let configPath = tempDirectory.appendingPathComponent("config.toml").path
+                try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+                let config = try await loadConfig(from: configPath)
+                #expect(config.sandboxJailerUidBase == UInt32(accepted))
             }
         }
     }
@@ -502,7 +519,9 @@ struct AgentConfigTests {
         #expect(
             AgentConfig.defaultSandboxJailerChrootDir(vmStoragePath: "/var/lib/strato/vms")
                 == "/var/lib/strato/vms/jailer")
-        #expect(AgentConfig.defaultSandboxJailerUidBase == 100_000)
+        #expect(AgentConfig.minimumSandboxJailerUidBase == 65_536)
+        #expect(AgentConfig.legacySandboxJailerUidBase == 100_000)
+        #expect(AgentConfig.defaultSandboxJailerUidBase == 0x7000_0000)
     }
 
     // MARK: - TOML Loading Tests

@@ -8,6 +8,8 @@ public enum FirecrackerError: Error, Sendable {
 
     case vmAlreadyRunning(String)
 
+    case vmTeardownInProgress(String)
+
     case httpError(statusCode: Int, message: String)
 
     case connectionFailed(String)
@@ -24,6 +26,12 @@ public enum FirecrackerError: Error, Sendable {
 
     case processSpawnFailed(String)
 
+    case processInspectionFailed(String)
+
+    case processSignalFailed(String)
+
+    case processExitUnconfirmed(String)
+
     case invalidState(current: String, expected: String)
 
 }
@@ -37,6 +45,8 @@ extension FirecrackerError: LocalizedError {
             return "VM not found: \(id)"
         case .vmAlreadyRunning(let id):
             return "VM is already running: \(id)"
+        case .vmTeardownInProgress(let id):
+            return "VM teardown is already in progress: \(id)"
         case .httpError(let statusCode, let message):
             return "HTTP error \(statusCode): \(message)"
         case .connectionFailed(let message):
@@ -53,6 +63,12 @@ extension FirecrackerError: LocalizedError {
             return "Firecracker binary not found or not executable at: \(path)"
         case .processSpawnFailed(let message):
             return "Failed to spawn Firecracker process: \(message)"
+        case .processInspectionFailed(let message):
+            return "Failed to inspect Firecracker processes: \(message)"
+        case .processSignalFailed(let message):
+            return "Failed to signal Firecracker process: \(message)"
+        case .processExitUnconfirmed(let message):
+            return "Could not confirm Firecracker process exit: \(message)"
         case .invalidState(let current, let expected):
             return "Invalid VM state: current=\(current), expected=\(expected)"
         }

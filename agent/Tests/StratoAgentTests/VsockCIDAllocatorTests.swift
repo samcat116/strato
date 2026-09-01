@@ -281,7 +281,7 @@ struct VsockCIDAllocatorTests {
     private func quarantinedEntry(cid: UInt32?) -> QuarantinedManifestEntry {
         QuarantinedManifestEntry(
             kind: .vm, hypervisorTypeRawValue: "libvirt", cpus: 1, memoryBytes: 1024, diskBytes: 0,
-            vsockCID: cid, reason: "test", raw: .null)
+            vsockCID: cid, jailUID: nil, reason: "test", raw: .null)
     }
 
     /// Both halves of a manifest read are claimed: a quarantined workload may

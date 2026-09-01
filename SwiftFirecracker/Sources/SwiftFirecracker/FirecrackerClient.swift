@@ -2,6 +2,7 @@ import Foundation
 import Logging
 
 #if os(Linux)
+import CLinuxPidfd
 import Glibc
 #elseif canImport(Darwin)
 import Darwin
@@ -10,11 +11,49 @@ import Darwin
 /// Client for spawning and managing Firecracker processes
 /// Handles the full lifecycle including process creation, socket management, and cleanup
 public actor FirecrackerClient {
+    public enum PIDFDSupport: Sendable, Equatable {
+        case available
+        case unavailable(String)
+        case unsupportedPlatform(String)
+    }
+
+    /// One live Firecracker or jailer process discovered in the Linux process
+    /// table. `effectiveUID` is the second value from `/proc/<pid>/status`'s
+    /// `Uid:` row — the host identity the process is actually running as.
+    public struct VMProcessInfo: Sendable, Equatable {
+        public let vmId: String
+        public let pid: Int32
+        public let effectiveUID: UInt32?
+
+        public init(vmId: String, pid: Int32, effectiveUID: UInt32?) {
+            self.vmId = vmId
+            self.pid = pid
+            self.effectiveUID = effectiveUID
+        }
+    }
+
+    /// Kernel-owned process identity used to prove that an allocated jail UID
+    /// is no longer executing anything, even if a compromised VMM rewrote its
+    /// mutable argv after an agent restart.
+    public struct HostProcessInfo: Sendable, Equatable {
+        public let pid: Int32
+        public let effectiveUID: UInt32
+
+        public init(pid: Int32, effectiveUID: UInt32) {
+            self.pid = pid
+            self.effectiveUID = effectiveUID
+        }
+    }
+
     private let firecrackerBinaryPath: String
     private let socketDirectory: String
     private let logger: Logger
 
     private var runningVMs: [String: RunningVM] = [:]
+    /// VM ids held across teardown's suspension points. Without this gate,
+    /// actor reentrancy would let a create/adopt start after a clean final
+    /// `/proc` scan but before the destroying call returns to its caller.
+    private var destroyingVMIds: Set<String> = []
 
     /// How a tracked PID was identified, so it can be re-verified immediately
     /// before a signal is delivered.
@@ -30,16 +69,40 @@ public actor FirecrackerClient {
         case vmId(String)
         /// Discovered by the `--api-sock <path>` argument pair (unjailed VMs).
         case socketPath(String)
+        /// A process observed at a specific Linux `/proc/<pid>/stat` start
+        /// time. Once established, this stays valid even if the process execs
+        /// and changes argv; pid reuse produces a different start time.
+        case processStartTime(UInt64)
 
         /// Whether `pid` still names the process this identity was resolved
         /// from. Returns false on any doubt — a missing or unreadable
         /// `/proc/<pid>/cmdline` means the process is gone or not ours.
         func matches(pid: Int32) -> Bool {
+            (try? checkedMatches(pid: pid)) ?? false
+        }
+
+        /// Throwing identity check for teardown. Unlike `matches`, an
+        /// unreadable process entry is not collapsed into "gone": callers
+        /// releasing isolation resources need proof of exit, not best effort.
+        func checkedMatches(pid: Int32) throws -> Bool {
             #if os(Linux)
-            guard let data = FileManager.default.contents(atPath: "/proc/\(pid)/cmdline") else {
+            if case .processStartTime(let expectedStartTime) = self {
+                guard let stat = try FirecrackerClient.readProcFile("/proc/\(pid)/stat") else {
+                    return false
+                }
+                guard
+                    let startTime = FirecrackerClient.parseProcStartTime(
+                        String(decoding: stat, as: UTF8.self))
+                else {
+                    throw FirecrackerError.processInspectionFailed(
+                        "could not revalidate start time for tracked pid \(pid)")
+                }
+                return startTime == expectedStartTime
+            }
+            guard let data = try FirecrackerClient.readProcFile("/proc/\(pid)/cmdline") else {
                 return false
             }
-            let args = data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
+            let args = FirecrackerClient.parseCommandLine(data)
             switch self {
             case .vmId(let id):
                 guard let argv0 = args.first,
@@ -51,9 +114,12 @@ public actor FirecrackerClient {
                     return false
                 }
                 return args[i + 1] == path
+            case .processStartTime:
+                preconditionFailure("handled before reading cmdline")
             }
             #else
-            return false
+            throw FirecrackerError.processInspectionFailed(
+                "the Linux /proc process table is unavailable on this platform")
             #endif
         }
     }
@@ -62,14 +128,12 @@ public actor FirecrackerClient {
     private struct RunningVM {
         /// The child process, when this client spawned it. `nil` for a VM
         /// re-adopted after an agent restart, whose process this client never
-        /// spawned and can only reach by signalling `adoptedPID`.
+        /// spawned and can only reach through `adoptedProcess`.
         let process: Process?
-        /// PID of a re-adopted Firecracker process, discovered from `/proc` at
-        /// adoption time. `nil` for spawned VMs (use `process` instead).
-        let adoptedPID: Int32?
-        /// How `adoptedPID` was identified, for re-verification before
-        /// signalling. `nil` when there is no adopted pid to signal.
-        let pidIdentity: PIDIdentity?
+        /// Kernel handle for a Firecracker process this client did not spawn.
+        /// The same pidfd is retained from discovery through TERM, wait, and
+        /// KILL, so PID recycling can never redirect a teardown signal.
+        let adoptedProcess: PinnedProcess?
         /// Fires when a spawned child exits, so teardown can suspend instead of
         /// blocking a thread in `waitUntilExit()`. `nil` for adopted VMs.
         let exitLatch: ExitLatch?
@@ -87,6 +151,24 @@ public actor FirecrackerClient {
         /// cleans it up itself. `nil` for unjailed VMs.
         let cgroupDirectory: String?
         let manager: FirecrackerManager
+    }
+
+    /// A kernel-pinned process identity. The descriptor, not the reusable PID,
+    /// is the authority for signalling and exit observation.
+    private final class PinnedProcess: @unchecked Sendable {
+        let pid: Int32
+        let pidfd: Int32
+
+        init(pid: Int32, pidfd: Int32) {
+            self.pid = pid
+            self.pidfd = pidfd
+        }
+
+        deinit {
+            #if os(Linux)
+            _ = Glibc.close(pidfd)
+            #endif
+        }
     }
 
     /// The deterministic API socket path for an **unjailed** VM, shared by
@@ -125,6 +207,28 @@ public actor FirecrackerClient {
         self.logger = logger
     }
 
+    /// Probes both pidfd syscalls process supervision relies on. Signal zero
+    /// checks the retained descriptor without delivering a signal, so this is
+    /// safe to run on every agent registration and catches service seccomp
+    /// policy independently of the host kernel version.
+    public nonisolated static func probePIDFDSupport() -> PIDFDSupport {
+        #if os(Linux)
+        let descriptor = swift_firecracker_pidfd_open(getpid())
+        guard descriptor >= 0 else {
+            let savedErrno = errno
+            return .unavailable("pidfd_open failed with errno \(savedErrno)")
+        }
+        defer { _ = Glibc.close(descriptor) }
+        guard swift_firecracker_pidfd_send_signal(descriptor, 0) == 0 else {
+            let savedErrno = errno
+            return .unavailable("pidfd_send_signal failed with errno \(savedErrno)")
+        }
+        return .available
+        #else
+        return .unsupportedPlatform("pidfds are available only on Linux")
+        #endif
+    }
+
     /// Creates a new microVM with the given configuration
     /// Returns a FirecrackerManager connected to the new VM
     public func createVM(
@@ -149,6 +253,9 @@ public actor FirecrackerClient {
         vmId: String, jail: JailerOptions?,
         httpAPIMaxPayloadSize: Int? = nil
     ) async throws -> FirecrackerManager {
+        guard !destroyingVMIds.contains(vmId) else {
+            throw FirecrackerError.vmTeardownInProgress(vmId)
+        }
         // Check if VM already exists
         guard runningVMs[vmId] == nil else {
             throw FirecrackerError.vmAlreadyRunning(vmId)
@@ -247,7 +354,7 @@ public actor FirecrackerClient {
         // pid instead (the same discovery re-adoption uses), or destroy would
         // silently skip termination and leak a privileged process.
         var trackedProcess: Process? = process
-        var trackedPID: Int32?
+        var pinnedProcess: PinnedProcess?
         if parentExitsOnSuccess {
             trackedProcess = nil
         }
@@ -285,11 +392,14 @@ public actor FirecrackerClient {
             if let trackedProcess, trackedProcess.isRunning {
                 trackedProcess.terminate()
                 await exitLatch.wait(upTo: .seconds(5))
-            } else if parentExitsOnSuccess, let pid = await Self.offActor({ Self.discoverPID(vmId: vmId) }) {
-                let identity = PIDIdentity.vmId(vmId)
-                if identity.matches(pid: pid) {
-                    Self.terminate(pid: pid)
-                    await Self.waitForExit(pid: pid, identity: identity, timeout: .seconds(5))
+            } else if parentExitsOnSuccess,
+                let pid = await Self.offActor({ Self.discoverPID(vmId: vmId) }),
+                let pinned = try? await Self.offActorThrowing({
+                    try Self.pinProcess(pid: pid, identity: .vmId(vmId))
+                })
+            {
+                if (try? await Self.signal(pinned, signal: SIGTERM, vmId: vmId)) == true {
+                    _ = try? await Self.waitForExit(pinned, timeout: .seconds(5))
                 }
             }
             throw error
@@ -298,10 +408,23 @@ public actor FirecrackerClient {
         // Discover the forked VMM's pid only once the API answers — before
         // that the jailer may not have exec'd Firecracker yet.
         if parentExitsOnSuccess {
-            trackedPID = await Self.offActor { Self.discoverPID(vmId: vmId) }
-            if trackedPID == nil {
-                logger.error(
-                    "Could not resolve the jailed VMM pid after spawn; the process will survive destroy",
+            if let pid = await Self.offActor({ Self.discoverPID(vmId: vmId) }) {
+                do {
+                    pinnedProcess = try await Self.offActorThrowing {
+                        try Self.pinProcess(pid: pid, identity: .vmId(vmId))
+                    }
+                } catch {
+                    logger.warning(
+                        "Could not open a stable process handle for the jailed VMM; teardown will use the fail-closed process-table sweep",
+                        metadata: [
+                            "strato.vm.id": "\(vmId)",
+                            "error": "\(error.localizedDescription)",
+                        ])
+                }
+            }
+            if pinnedProcess == nil {
+                logger.warning(
+                    "Could not retain the jailed VMM pidfd after spawn; teardown will use the fail-closed process-table sweep",
                     metadata: ["strato.vm.id": "\(vmId)"])
             }
         }
@@ -309,8 +432,7 @@ public actor FirecrackerClient {
         // Store VM info
         runningVMs[vmId] = RunningVM(
             process: trackedProcess,
-            adoptedPID: trackedPID,
-            pidIdentity: trackedPID.map { _ in .vmId(vmId) },
+            adoptedProcess: pinnedProcess,
             exitLatch: trackedProcess.map { _ in exitLatch },
             drains: drains,
             socketPath: socketPath,
@@ -390,6 +512,9 @@ public actor FirecrackerClient {
     public func adoptVM(
         vmId: String, jail: JailerOptions?
     ) async throws -> (manager: FirecrackerManager, info: InstanceInfo) {
+        guard !destroyingVMIds.contains(vmId) else {
+            throw FirecrackerError.vmTeardownInProgress(vmId)
+        }
         if let existing = runningVMs[vmId] {
             // Already managed (a replayed sync can race adoption): just report
             // the current instance info against the live manager.
@@ -411,15 +536,30 @@ public actor FirecrackerClient {
 
         // Learn the surviving process's PID so it can still be terminated on
         // delete despite this client never having spawned it.
-        let pidIdentity: PIDIdentity = jail != nil ? .vmId(vmId) : .socketPath(socketPath)
+        let fallbackPIDIdentity: PIDIdentity = jail != nil ? .vmId(vmId) : .socketPath(socketPath)
         let pid = await Self.offActor {
             jail != nil ? Self.discoverPID(vmId: vmId) : Self.discoverPID(socketPath: socketPath)
+        }
+        var pinnedProcess: PinnedProcess?
+        if let pid {
+            do {
+                pinnedProcess = try await Self.offActorThrowing {
+                    try Self.pinProcess(pid: pid, identity: fallbackPIDIdentity)
+                }
+            } catch {
+                logger.warning(
+                    "Could not open a stable process handle for the adopted VMM; teardown will use the fail-closed process-table sweep",
+                    metadata: [
+                        "strato.vm.id": "\(vmId)",
+                        "pid": "\(pid)",
+                        "error": "\(error.localizedDescription)",
+                    ])
+            }
         }
 
         runningVMs[vmId] = RunningVM(
             process: nil,
-            adoptedPID: pid,
-            pidIdentity: pid.map { _ in pidIdentity },
+            adoptedProcess: pinnedProcess,
             exitLatch: nil,
             // An adopted VM's pipes belong to the process that spawned it,
             // which is gone; there is nothing for this client to drain.
@@ -470,12 +610,8 @@ public actor FirecrackerClient {
             return !process.isRunning
         }
 
-        guard let pid = vm.adoptedPID, let identity = vm.pidIdentity else {
-            return false
-        }
-        guard identity.matches(pid: pid) else { return true }
-        await Self.waitForExit(pid: pid, identity: identity, timeout: timeout)
-        return !identity.matches(pid: pid)
+        guard let adoptedProcess = vm.adoptedProcess else { return false }
+        return try await Self.waitForExit(adoptedProcess, timeout: timeout)
     }
 
     /// Destroys a VM and cleans up resources
@@ -483,6 +619,10 @@ public actor FirecrackerClient {
         guard let vm = runningVMs[vmId] else {
             throw FirecrackerError.vmNotFound(vmId)
         }
+        guard destroyingVMIds.insert(vmId).inserted else {
+            throw FirecrackerError.vmTeardownInProgress(vmId)
+        }
+        defer { _ = destroyingVMIds.remove(vmId) }
 
         logger.info("Destroying VM", metadata: ["strato.vm.id": "\(vmId)"])
 
@@ -510,33 +650,62 @@ public actor FirecrackerClient {
                         Self.forceKill(pid: process.processIdentifier)
                         await latch.wait(upTo: .seconds(5))
                     }
+                } else {
+                    throw FirecrackerError.processExitUnconfirmed(
+                        "VM \(vmId) has a live child process but no exit latch")
+                }
+                guard !process.isRunning else {
+                    throw FirecrackerError.processExitUnconfirmed(
+                        "VM \(vmId) process \(process.processIdentifier) remained live after SIGKILL")
                 }
             }
-        } else if let pid = vm.adoptedPID, let identity = vm.pidIdentity {
-            // Re-verify before every signal. The pid was resolved at spawn or
-            // adoption time; if the VMM has since exited and the host recycled
-            // its pid, signalling blind would kill an unrelated process — and
-            // the SIGKILL escalation below would make that unrecoverable.
-            if identity.matches(pid: pid) {
-                Self.terminate(pid: pid)
-                await Self.waitForExit(pid: pid, identity: identity, timeout: .seconds(5))
+        } else if let adoptedProcess = vm.adoptedProcess {
+            // The pidfd was opened and validated when this process was
+            // discovered. Keep using that same kernel handle through TERM,
+            // wait, and KILL; reopening from a numeric pid here would restore
+            // the PID-reuse race this handle exists to close.
+            if try await Self.signal(adoptedProcess, signal: SIGTERM, vmId: vmId) {
+                var exited = try await Self.waitForExit(
+                    adoptedProcess, timeout: .seconds(5))
                 // Escalate rather than leak. A `--new-pid-ns` VMM is pid 1 of
                 // its namespace, and the kernel drops an ancestor's SIGTERM to
                 // a namespace init unless that process installed a handler —
                 // SIGKILL is always delivered, and takes the namespace with it.
-                if identity.matches(pid: pid) {
+                if !exited {
                     logger.warning(
                         "VMM ignored SIGTERM; escalating to SIGKILL",
-                        metadata: ["strato.vm.id": "\(vmId)", "pid": "\(pid)"])
-                    Self.forceKill(pid: pid)
-                    await Self.waitForExit(pid: pid, identity: identity, timeout: .seconds(5))
+                        metadata: [
+                            "strato.vm.id": "\(vmId)",
+                            "pid": "\(adoptedProcess.pid)",
+                        ])
+                    _ = try await Self.signal(adoptedProcess, signal: SIGKILL, vmId: vmId)
+                    exited = try await Self.waitForExit(
+                        adoptedProcess, timeout: .seconds(5))
+                }
+                guard exited else {
+                    throw FirecrackerError.processExitUnconfirmed(
+                        "VM \(vmId) process \(adoptedProcess.pid) remained live after SIGKILL")
                 }
             } else {
                 logger.info(
-                    "Tracked VMM pid no longer names this VM; skipping termination",
-                    metadata: ["strato.vm.id": "\(vmId)", "pid": "\(pid)"])
+                    "Tracked VMM pidfd already reports exit; skipping termination",
+                    metadata: [
+                        "strato.vm.id": "\(vmId)",
+                        "pid": "\(adoptedProcess.pid)",
+                    ])
+            }
+            guard try await Self.waitForExit(adoptedProcess, timeout: .zero) else {
+                throw FirecrackerError.processExitUnconfirmed(
+                    "VM \(vmId) process \(adoptedProcess.pid) is still live")
             }
         }
+
+        // The remembered child or adopted pid is not sufficient proof for a
+        // jailed VM: the jailer can fork, exec, or outlive the particular pid
+        // originally observed. Scan for every exact `--id` match, terminate
+        // identities that are still the processes we inspected, and require a
+        // clean second scan before any artifacts or tracking are removed.
+        try await terminateDiscoveredVMProcesses(vmId: vmId)
 
         // Stop draining only after the process is gone, so nothing it wrote on
         // the way out can block it.
@@ -576,7 +745,113 @@ public actor FirecrackerClient {
         logger.info("VM destroyed", metadata: ["strato.vm.id": "\(vmId)"])
     }
 
+    /// Terminates a Firecracker/jailer process that may not be present in this
+    /// client's in-memory tracking (for example, a failed spawn or an orphan
+    /// left by an agent restart). A retained entry means a prior tracked
+    /// teardown failed, so retry that authoritative path before falling back
+    /// to process discovery. The exact `--id` value, managed-process argv
+    /// shape, and Linux process start time are all revalidated before a signal
+    /// is sent. Success means a final `/proc` scan found no matching process.
+    public func destroyUntrackedVM(vmId: String) async throws {
+        if runningVMs[vmId] != nil {
+            try await destroyVM(vmId: vmId)
+            return
+        }
+        guard destroyingVMIds.insert(vmId).inserted else {
+            throw FirecrackerError.vmTeardownInProgress(vmId)
+        }
+        defer { _ = destroyingVMIds.remove(vmId) }
+        try await terminateDiscoveredVMProcesses(vmId: vmId)
+    }
+
+    /// Returns every live Firecracker or jailer process whose exact `--id`
+    /// value begins with `idPrefix`. Inspection fails closed if `/proc` or a
+    /// visible process entry cannot be read reliably.
+    public func discoverVMProcesses(idPrefix: String) async throws -> [VMProcessInfo] {
+        try await Self.offActorThrowing {
+            let snapshots = try Self.scanVMProcesses(idPrefix: idPrefix)
+            defer { Self.closePIDFDs(snapshots) }
+            return snapshots.map(\.info)
+        }
+    }
+
+    /// Returns every host process whose kernel-reported effective uid lies in
+    /// `range`. Unlike VM discovery, this does not trust argv at all.
+    public func discoverHostProcesses(
+        effectiveUIDsIn range: Range<UInt32>
+    ) async throws -> [HostProcessInfo] {
+        try await Self.offActorThrowing {
+            let snapshots = try Self.scanHostProcesses(effectiveUIDsIn: range)
+            defer { Self.closePIDFDs(snapshots) }
+            return snapshots.map(\.info)
+        }
+    }
+
+    /// Fails unless no process still executes under `effectiveUID`. Callers
+    /// use this only for an exclusively claimed jail identity; a legacy
+    /// duplicate remains poisoned instead of requiring its live peer to exit.
+    public func confirmNoHostProcess(effectiveUID: UInt32) async throws {
+        let upperBound = effectiveUID.addingReportingOverflow(1)
+        guard !upperBound.overflow else {
+            throw FirecrackerError.processInspectionFailed(
+                "cannot inspect the invalid terminal uid_t value")
+        }
+        let remaining = try await Self.offActorThrowing {
+            try Self.scanHostProcesses(
+                effectiveUIDsIn: effectiveUID..<upperBound.partialValue)
+        }
+        defer { Self.closePIDFDs(remaining) }
+        guard remaining.isEmpty else {
+            throw FirecrackerError.processExitUnconfirmed(
+                "host uid \(effectiveUID) still has process ids "
+                    + remaining.map { String($0.info.pid) }.joined(separator: ", "))
+        }
+    }
+
+    /// Fails unless no process remains rooted in this jail. `/proc/<pid>/root`
+    /// is kernel-owned and continues to identify a deleted chroot as
+    /// `<path> (deleted)`, so an argv-rewriting VMM cannot hide from a
+    /// target-specific legacy-duplicate cleanup.
+    public func confirmNoHostProcess(inJailRoot jailRoot: String) async throws {
+        let remaining = try await Self.offActorThrowing {
+            try Self.scanHostProcesses(inJailRoot: jailRoot)
+        }
+        defer { Self.closePIDFDs(remaining) }
+        guard remaining.isEmpty else {
+            throw FirecrackerError.processExitUnconfirmed(
+                "jail root \(jailRoot) still has process ids "
+                    + remaining.map { String($0.info.pid) }.joined(separator: ", "))
+        }
+    }
+
     // MARK: - Adopted-process helpers
+
+    /// A `/proc` snapshot strong enough to reject a recycled pid before a
+    /// signal is sent. Linux field 22 (`starttime`) is stable for the lifetime
+    /// of a process even when its argv later changes.
+    private struct VMProcessSnapshot: Sendable {
+        let info: VMProcessInfo
+        let startTime: UInt64
+        let pidfd: Int32
+    }
+
+    private struct HostProcessSnapshot: Sendable {
+        let info: HostProcessInfo
+        let startTime: UInt64
+        let pidfd: Int32
+    }
+
+    private static func closePIDFDs(_ snapshots: [VMProcessSnapshot]) {
+        #if os(Linux)
+        for snapshot in snapshots { _ = Glibc.close(snapshot.pidfd) }
+        #endif
+    }
+
+    private static func closePIDFDs(_ snapshots: [HostProcessSnapshot]) {
+        #if os(Linux)
+        for snapshot in snapshots { _ = Glibc.close(snapshot.pidfd) }
+        #endif
+    }
 
     /// Runs a `/proc` scan off the actor.
     ///
@@ -587,6 +862,549 @@ public actor FirecrackerClient {
     /// trade for releasing the actor.
     private static func offActor<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
         await Task.detached(priority: .userInitiated) { work() }.value
+    }
+
+    /// Throwing counterpart to `offActor`, used by fail-closed `/proc`
+    /// inspection. Errors must reach the caller rather than collapsing to an
+    /// empty process list, because "could not inspect" is not proof of exit.
+    private static func offActorThrowing<T: Sendable>(
+        _ work: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        try await Task.detached(priority: .userInitiated) { try work() }.value
+    }
+
+    /// Terminates the exact process identities currently carrying `vmId`,
+    /// then proves no managed process with that id remains. A process that
+    /// appears after the first scan is not signalled — it was not one of the
+    /// inspected identities — but it still makes confirmation fail closed.
+    private func terminateDiscoveredVMProcesses(vmId: String) async throws {
+        let discovered = try await Self.offActorThrowing {
+            try Self.scanExactVMProcesses(vmId: vmId)
+        }
+        defer { Self.closePIDFDs(discovered) }
+
+        if !discovered.isEmpty {
+            try await Self.signal(discovered, signal: SIGTERM, vmId: vmId)
+            var survivors = try await Self.waitForExit(discovered, timeout: .seconds(5))
+
+            if !survivors.isEmpty {
+                logger.warning(
+                    "Firecracker processes ignored SIGTERM; escalating to SIGKILL",
+                    metadata: [
+                        "strato.vm.id": "\(vmId)",
+                        "pids": "\(survivors.map { String($0.info.pid) }.joined(separator: ","))",
+                    ])
+                try await Self.signal(survivors, signal: SIGKILL, vmId: vmId)
+                survivors = try await Self.waitForExit(survivors, timeout: .seconds(5))
+            }
+
+            guard survivors.isEmpty else {
+                throw FirecrackerError.processExitUnconfirmed(
+                    "VM \(vmId) still has process ids "
+                        + survivors.map { String($0.info.pid) }.joined(separator: ", "))
+            }
+        }
+
+        let remaining = try await Self.offActorThrowing {
+            try Self.scanExactVMProcesses(vmId: vmId)
+        }
+        defer { Self.closePIDFDs(remaining) }
+        guard remaining.isEmpty else {
+            throw FirecrackerError.processExitUnconfirmed(
+                "VM \(vmId) still has process ids "
+                    + remaining.map { String($0.info.pid) }.joined(separator: ", "))
+        }
+    }
+
+    /// Revalidates a process snapshot immediately before signalling. The
+    /// Linux start time closes the pid-reuse gap left by argv matching alone.
+    private static func signal(
+        _ snapshots: [VMProcessSnapshot], signal: Int32, vmId: String
+    ) async throws {
+        try await offActorThrowing {
+            #if os(Linux)
+            for snapshot in snapshots {
+                if swift_firecracker_pidfd_send_signal(snapshot.pidfd, signal) != 0,
+                    errno != ESRCH
+                {
+                    let savedErrno = errno
+                    throw FirecrackerError.processSignalFailed(
+                        "signal \(signal) to VM \(vmId) pid \(snapshot.info.pid) failed "
+                            + "with errno \(savedErrno)")
+                }
+            }
+            #else
+            throw FirecrackerError.processInspectionFailed(
+                "process signalling is only supported on Linux")
+            #endif
+        }
+    }
+
+    /// Signals a remembered process through the pidfd retained at discovery.
+    private static func signal(
+        _ process: PinnedProcess, signal: Int32, vmId: String
+    ) async throws -> Bool {
+        try await offActorThrowing {
+            #if os(Linux)
+            guard try !pidfdHasExited(process.pidfd) else { return false }
+            if swift_firecracker_pidfd_send_signal(process.pidfd, signal) != 0,
+                errno != ESRCH
+            {
+                let savedErrno = errno
+                throw FirecrackerError.processSignalFailed(
+                    "signal \(signal) to VM \(vmId) pid \(process.pid) failed with errno \(savedErrno)")
+            }
+            return true
+            #else
+            throw FirecrackerError.processInspectionFailed(
+                "process signalling is only supported on Linux")
+            #endif
+        }
+    }
+
+    /// Opens the process handle before validating mutable `/proc` metadata.
+    /// If the numeric PID recycles between discovery and this call, the
+    /// supplied identity cannot validate the replacement through the pinned
+    /// handle's lifetime and no handle is returned.
+    private static func pinProcess(pid: Int32, identity: PIDIdentity) throws -> PinnedProcess? {
+        #if os(Linux)
+        guard let pidfd = try openPIDFD(pid: pid) else { return nil }
+        var transferred = false
+        defer {
+            if !transferred { _ = Glibc.close(pidfd) }
+        }
+        guard try !pidfdHasExited(pidfd) else { return nil }
+        guard try identity.checkedMatches(pid: pid) else { return nil }
+        guard try !pidfdHasExited(pidfd) else { return nil }
+        transferred = true
+        return PinnedProcess(pid: pid, pidfd: pidfd)
+        #else
+        throw FirecrackerError.processInspectionFailed(
+            "pidfd process handles are only supported on Linux")
+        #endif
+    }
+
+    private static func openPIDFD(pid: Int32) throws -> Int32? {
+        #if os(Linux)
+        let descriptor = swift_firecracker_pidfd_open(pid)
+        guard descriptor >= 0 else {
+            let savedErrno = errno
+            if savedErrno == ESRCH || savedErrno == ENOENT { return nil }
+            throw FirecrackerError.processInspectionFailed(
+                "pidfd_open for pid \(pid) failed with errno \(savedErrno)")
+        }
+        return descriptor
+        #else
+        throw FirecrackerError.processInspectionFailed(
+            "pidfd process handles are only supported on Linux")
+        #endif
+    }
+
+    private static func pidfdHasExited(_ descriptor: Int32) throws -> Bool {
+        #if os(Linux)
+        var descriptorState = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+        let result = Glibc.poll(&descriptorState, 1, 0)
+        guard result >= 0 else {
+            let savedErrno = errno
+            throw FirecrackerError.processInspectionFailed(
+                "poll on pidfd \(descriptor) failed with errno \(savedErrno)")
+        }
+        return result > 0
+            && descriptorState.revents & Int16(POLLIN | POLLHUP | POLLERR) != 0
+        #else
+        throw FirecrackerError.processInspectionFailed(
+            "pidfd process handles are only supported on Linux")
+        #endif
+    }
+
+    /// Waits for all inspected identities to disappear. Cancellation returns
+    /// the identities still live so teardown fails closed instead of claiming
+    /// success from an interrupted observation.
+    private static func waitForExit(
+        _ snapshots: [VMProcessSnapshot], timeout: Duration
+    ) async throws -> [VMProcessSnapshot] {
+        let deadline = ContinuousClock.now + timeout
+        var survivors = snapshots
+        while ContinuousClock.now < deadline {
+            survivors = try await offActorThrowing {
+                try snapshots.filter { try !pidfdHasExited($0.pidfd) }
+            }
+            if survivors.isEmpty { return [] }
+            do {
+                try await Task.sleep(for: .milliseconds(100))
+            } catch {
+                return survivors
+            }
+        }
+        return try await offActorThrowing {
+            try snapshots.filter { try !pidfdHasExited($0.pidfd) }
+        }
+    }
+
+    /// Waits on the same process handle retained at discovery. A cancelled or
+    /// expired wait returns false unless the pidfd itself already reports
+    /// exit, so callers cannot mistake interruption for a cleanup proof.
+    private static func waitForExit(
+        _ process: PinnedProcess, timeout: Duration
+    ) async throws -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while true {
+            let exited = try await offActorThrowing {
+                try pidfdHasExited(process.pidfd)
+            }
+            if exited { return true }
+            if ContinuousClock.now >= deadline { return false }
+            do {
+                try await Task.sleep(for: .milliseconds(100))
+            } catch {
+                return try await offActorThrowing {
+                    try pidfdHasExited(process.pidfd)
+                }
+            }
+        }
+    }
+
+    /// Scans Linux `/proc` for Firecracker or jailer processes. The directory
+    /// and every visible cmdline must be readable: silently treating a denied
+    /// entry as absent would make an untrusted workload's uid reusable while
+    /// its VMM may still be alive.
+    private static func scanVMProcesses(idPrefix: String) throws -> [VMProcessSnapshot] {
+        #if os(Linux)
+        let entries: [String]
+        do {
+            entries = try FileManager.default.contentsOfDirectory(atPath: "/proc")
+        } catch {
+            throw FirecrackerError.processInspectionFailed(
+                "could not enumerate /proc: \(error.localizedDescription)")
+        }
+
+        var matches: [VMProcessSnapshot] = []
+        var transferringPIDFDOwnership = false
+        defer {
+            if !transferringPIDFDOwnership { closePIDFDs(matches) }
+        }
+        for entry in entries {
+            guard let pid = Int32(entry), pid > 0 else { continue }
+            guard let pidfd = try openPIDFD(pid: pid) else { continue }
+            var retainPIDFD = false
+            defer {
+                if !retainPIDFD { _ = Glibc.close(pidfd) }
+            }
+            guard try !pidfdHasExited(pidfd) else { continue }
+            guard let stat = try readProcFile("/proc/\(entry)/stat") else { continue }
+            guard let startTime = parseProcStartTime(String(decoding: stat, as: UTF8.self)) else {
+                throw FirecrackerError.processInspectionFailed(
+                    "could not parse start time for pid \(pid)")
+            }
+            guard let commandLine = try readProcFile("/proc/\(entry)/cmdline") else {
+                continue
+            }
+            let arguments = parseCommandLine(commandLine)
+            guard let vmId = vmIDForManagedProcess(arguments: arguments), vmId.hasPrefix(idPrefix)
+            else { continue }
+
+            guard let status = try readProcFile("/proc/\(entry)/status") else { continue }
+            guard let effectiveUID = parseEffectiveUID(String(decoding: status, as: UTF8.self)) else {
+                throw FirecrackerError.processInspectionFailed(
+                    "could not parse effective uid for matching pid \(pid)")
+            }
+            guard let confirmedStat = try readProcFile("/proc/\(entry)/stat") else { continue }
+            guard
+                let confirmedStartTime = parseProcStartTime(
+                    String(decoding: confirmedStat, as: UTF8.self))
+            else {
+                throw FirecrackerError.processInspectionFailed(
+                    "could not re-parse start time for matching pid \(pid)")
+            }
+            guard confirmedStartTime == startTime else { continue }
+
+            let snapshot = VMProcessSnapshot(
+                info: VMProcessInfo(vmId: vmId, pid: pid, effectiveUID: effectiveUID),
+                startTime: startTime, pidfd: pidfd)
+            // The pidfd was opened before any mutable metadata was read. If it
+            // is still live now, `/proc/<pid>` could not have recycled to a
+            // different process between those reads.
+            guard try !pidfdHasExited(pidfd) else { continue }
+            matches.append(snapshot)
+            retainPIDFD = true
+        }
+        transferringPIDFDOwnership = true
+        return matches.sorted { $0.info.pid < $1.info.pid }
+        #else
+        throw FirecrackerError.processInspectionFailed(
+            "the Linux /proc process table is unavailable on this platform")
+        #endif
+    }
+
+    private static func scanExactVMProcesses(vmId: String) throws -> [VMProcessSnapshot] {
+        let candidates = try scanVMProcesses(idPrefix: vmId)
+        var matches: [VMProcessSnapshot] = []
+        for candidate in candidates {
+            if candidate.info.vmId == vmId {
+                matches.append(candidate)
+            } else {
+                #if os(Linux)
+                _ = Glibc.close(candidate.pidfd)
+                #endif
+            }
+        }
+        return matches
+    }
+
+    /// Scans the kernel-owned effective uid field for every visible process.
+    /// A process that exits during the scan is ignored; every other read or
+    /// parse failure is uncertainty and therefore fails the release proof.
+    private static func scanHostProcesses(
+        effectiveUIDsIn range: Range<UInt32>
+    ) throws -> [HostProcessSnapshot] {
+        #if os(Linux)
+        let entries: [String]
+        do {
+            entries = try FileManager.default.contentsOfDirectory(atPath: "/proc")
+        } catch {
+            throw FirecrackerError.processInspectionFailed(
+                "could not enumerate /proc: \(error.localizedDescription)")
+        }
+
+        var matches: [HostProcessSnapshot] = []
+        var transferringPIDFDOwnership = false
+        defer {
+            if !transferringPIDFDOwnership { closePIDFDs(matches) }
+        }
+        for entry in entries {
+            guard let pid = Int32(entry), pid > 0 else { continue }
+            guard let pidfd = try openPIDFD(pid: pid) else { continue }
+            var retainPIDFD = false
+            defer {
+                if !retainPIDFD { _ = Glibc.close(pidfd) }
+            }
+            guard try !pidfdHasExited(pidfd) else { continue }
+            guard let initialStat = try readProcFile("/proc/\(entry)/stat") else { continue }
+            guard
+                let startTime = parseProcStartTime(
+                    String(decoding: initialStat, as: UTF8.self))
+            else {
+                throw FirecrackerError.processInspectionFailed(
+                    "could not parse start time for pid \(pid)")
+            }
+            guard let status = try readProcFile("/proc/\(entry)/status") else { continue }
+            guard
+                let effectiveUID = parseEffectiveUID(
+                    String(decoding: status, as: UTF8.self))
+            else {
+                throw FirecrackerError.processInspectionFailed(
+                    "could not parse effective uid for pid \(pid)")
+            }
+            guard range.contains(effectiveUID) else { continue }
+            guard let confirmedStat = try readProcFile("/proc/\(entry)/stat") else { continue }
+            guard
+                parseProcStartTime(String(decoding: confirmedStat, as: UTF8.self))
+                    == startTime
+            else { continue }
+            let snapshot = HostProcessSnapshot(
+                info: HostProcessInfo(pid: pid, effectiveUID: effectiveUID),
+                startTime: startTime, pidfd: pidfd)
+            guard try !pidfdHasExited(pidfd) else { continue }
+            matches.append(snapshot)
+            retainPIDFD = true
+        }
+        transferringPIDFDOwnership = true
+        return matches.sorted { $0.info.pid < $1.info.pid }
+        #else
+        throw FirecrackerError.processInspectionFailed(
+            "the Linux /proc process table is unavailable on this platform")
+        #endif
+    }
+
+    private static func scanHostProcesses(
+        inJailRoot jailRoot: String
+    ) throws -> [HostProcessSnapshot] {
+        #if os(Linux)
+        let entries: [String]
+        do {
+            entries = try FileManager.default.contentsOfDirectory(atPath: "/proc")
+        } catch {
+            throw FirecrackerError.processInspectionFailed(
+                "could not enumerate /proc: \(error.localizedDescription)")
+        }
+        // `/proc/<pid>/root` reports the kernel-resolved path. Resolve a
+        // symlinked chroot base too, or string comparison could miss the very
+        // process this release proof is meant to find.
+        let normalizedRoot =
+            URL(fileURLWithPath: jailRoot).resolvingSymlinksInPath().standardizedFileURL.path
+        let deletedRoot = normalizedRoot + " (deleted)"
+        var matches: [HostProcessSnapshot] = []
+        var transferringPIDFDOwnership = false
+        defer {
+            if !transferringPIDFDOwnership { closePIDFDs(matches) }
+        }
+        for entry in entries {
+            guard let pid = Int32(entry), pid > 0 else { continue }
+            guard let pidfd = try openPIDFD(pid: pid) else { continue }
+            var retainPIDFD = false
+            defer {
+                if !retainPIDFD { _ = Glibc.close(pidfd) }
+            }
+            guard try !pidfdHasExited(pidfd) else { continue }
+            guard let initialStat = try readProcFile("/proc/\(entry)/stat") else { continue }
+            guard
+                let startTime = parseProcStartTime(
+                    String(decoding: initialStat, as: UTF8.self))
+            else {
+                throw FirecrackerError.processInspectionFailed(
+                    "could not parse start time for pid \(pid)")
+            }
+            guard let processRoot = try readProcLink("/proc/\(entry)/root") else {
+                continue
+            }
+            guard processRoot == normalizedRoot || processRoot == deletedRoot else {
+                continue
+            }
+            guard let status = try readProcFile("/proc/\(entry)/status") else { continue }
+            guard
+                let effectiveUID = parseEffectiveUID(
+                    String(decoding: status, as: UTF8.self))
+            else {
+                throw FirecrackerError.processInspectionFailed(
+                    "could not parse effective uid for pid \(pid)")
+            }
+            guard try !pidfdHasExited(pidfd) else { continue }
+            matches.append(
+                HostProcessSnapshot(
+                    info: HostProcessInfo(pid: pid, effectiveUID: effectiveUID),
+                    startTime: startTime, pidfd: pidfd))
+            retainPIDFD = true
+        }
+        transferringPIDFDOwnership = true
+        return matches.sorted { $0.info.pid < $1.info.pid }
+        #else
+        throw FirecrackerError.processInspectionFailed(
+            "the Linux /proc process table is unavailable on this platform")
+        #endif
+    }
+
+    /// Reads one procfs file. A disappearing process is a normal `nil`; all
+    /// other failures are inspection errors and therefore fail closed.
+    private static func readProcFile(_ path: String) throws -> Data? {
+        #if os(Linux)
+        let descriptor = Glibc.open(path, O_RDONLY | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            let savedErrno = errno
+            if savedErrno == ENOENT || savedErrno == ESRCH { return nil }
+            throw FirecrackerError.processInspectionFailed(
+                "could not open \(path) (errno \(savedErrno))")
+        }
+        defer { _ = Glibc.close(descriptor) }
+
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = buffer.withUnsafeMutableBytes { bytes in
+                Glibc.read(descriptor, bytes.baseAddress, bytes.count)
+            }
+            if count > 0 {
+                data.append(contentsOf: buffer.prefix(count))
+            } else if count == 0 {
+                return data
+            } else if errno != EINTR {
+                let savedErrno = errno
+                throw FirecrackerError.processInspectionFailed(
+                    "could not read \(path) (errno \(savedErrno))")
+            }
+        }
+        #else
+        throw FirecrackerError.processInspectionFailed(
+            "the Linux /proc process table is unavailable on this platform")
+        #endif
+    }
+
+    /// Reads one procfs symlink without following it. A disappearing process
+    /// is normal; permission and I/O failures are not proof of absence.
+    private static func readProcLink(_ path: String) throws -> String? {
+        #if os(Linux)
+        var buffer = [CChar](repeating: 0, count: 65_536)
+        let count = path.withCString { pointer in
+            Glibc.readlink(pointer, &buffer, buffer.count - 1)
+        }
+        guard count >= 0 else {
+            let savedErrno = errno
+            if savedErrno == ENOENT || savedErrno == ESRCH { return nil }
+            throw FirecrackerError.processInspectionFailed(
+                "could not read \(path) (errno \(savedErrno))")
+        }
+        guard count < buffer.count - 1 else {
+            throw FirecrackerError.processInspectionFailed(
+                "procfs link \(path) exceeded the inspection buffer")
+        }
+        return buffer.withUnsafeBytes { bytes in
+            String(decoding: bytes.prefix(Int(count)), as: UTF8.self)
+        }
+        #else
+        throw FirecrackerError.processInspectionFailed(
+            "the Linux /proc process table is unavailable on this platform")
+        #endif
+    }
+
+    private static func processStillMatches(_ snapshot: VMProcessSnapshot) throws -> Bool {
+        try processStillMatches(pid: snapshot.info.pid, startTime: snapshot.startTime)
+    }
+
+    private static func processStillMatches(pid: Int32, startTime expectedStartTime: UInt64) throws -> Bool {
+        guard let stat = try readProcFile("/proc/\(pid)/stat") else { return false }
+        guard let observedStartTime = parseProcStartTime(String(decoding: stat, as: UTF8.self)) else {
+            throw FirecrackerError.processInspectionFailed(
+                "could not revalidate start time for pid \(pid)")
+        }
+        return observedStartTime == expectedStartTime
+    }
+
+    static func parseCommandLine(_ data: Data) -> [String] {
+        data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    /// Extracts an id only from argv that has a Firecracker/jailer executable
+    /// name or its characteristic option shape. This prevents an arbitrary
+    /// process that merely happens to use an `--id` flag from being signalled.
+    static func vmIDForManagedProcess(arguments: [String]) -> String? {
+        guard let executable = arguments.first else { return nil }
+        let basename = URL(fileURLWithPath: executable).lastPathComponent.lowercased()
+        let recognizedName =
+            basename == "firecracker" || basename.hasPrefix("firecracker-")
+            || basename == "jailer" || basename.hasPrefix("jailer-")
+        let firecrackerShape = arguments.contains("--api-sock")
+        let jailerShape =
+            arguments.contains("--exec-file") && arguments.contains("--uid")
+            && arguments.contains("--gid") && arguments.contains("--chroot-base-dir")
+        guard recognizedName || firecrackerShape || jailerShape else { return nil }
+
+        if let index = arguments.firstIndex(of: "--id"), index + 1 < arguments.count {
+            return arguments[index + 1]
+        }
+        return arguments.first(where: { $0.hasPrefix("--id=") }).map {
+            String($0.dropFirst("--id=".count))
+        }
+    }
+
+    /// Parses Linux `/proc/<pid>/stat` field 22. The command name in field 2
+    /// may contain spaces or parentheses, so fields are counted only after its
+    /// final closing parenthesis.
+    static func parseProcStartTime(_ stat: String) -> UInt64? {
+        guard let closeParenthesis = stat.lastIndex(of: ")") else { return nil }
+        let fields = stat[stat.index(after: closeParenthesis)...].split { $0.isWhitespace }
+        guard fields.count > 19 else { return nil }
+        return UInt64(fields[19])
+    }
+
+    /// Parses the effective uid (the second numeric value) from Linux
+    /// `/proc/<pid>/status`.
+    static func parseEffectiveUID(_ status: String) -> UInt32? {
+        for line in status.split(whereSeparator: \.isNewline) {
+            let fields = line.split { $0.isWhitespace }
+            if fields.first == "Uid:", fields.count >= 3 {
+                return UInt32(fields[2])
+            }
+        }
+        return nil
     }
 
     /// Finds the PID of the Firecracker process bound to `socketPath` by
@@ -674,21 +1492,6 @@ public actor FirecrackerClient {
     // that made signalling by remembered pid unsafe. Use
     // `PIDIdentity.matches(pid:)`, which confirms the process is still the VMM
     // it was resolved from.
-
-    /// Waits (bounded, cancellation-aware) for a signalled process to leave the
-    /// process table. Probes with the identity check rather than `kill(pid, 0)`
-    /// so a recycled pid reads as "exited" instead of "still alive".
-    static func waitForExit(pid: Int32, identity: PIDIdentity, timeout: Duration) async {
-        let deadline = ContinuousClock.now + timeout
-        while ContinuousClock.now < deadline {
-            if !identity.matches(pid: pid) { return }
-            do {
-                try await Task.sleep(for: .milliseconds(100))
-            } catch {
-                return  // cancelled — stop rather than spin
-            }
-        }
-    }
 
     /// Connects to a freshly spawned VM's API socket, retrying with backoff
     /// until it answers or the budget elapses.

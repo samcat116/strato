@@ -264,6 +264,97 @@ extension FirecrackerSandboxRuntime {
         _ = unlink(plan.netnsPath)
     }
 
+    /// The release-grade variant of jail cleanup. Every failure keeps the
+    /// manifest claim alive instead of handing the identity to another tenant.
+    func removeJailArtifactsForUIDRelease(_ plan: SandboxJailPlan) async throws {
+        try removePathForJailUIDRelease(plan.jailDirectory, description: "sandbox jail")
+
+        let cgroup = JailerOptions.cgroupDirectory(
+            firecrackerBinaryPath: firecrackerBinaryPath, vmId: plan.sandboxId)
+        if rmdir(cgroup) != 0, errno != ENOENT {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "could not remove cgroup \(cgroup) before releasing uid/gid \(plan.uid): "
+                    + String(cString: strerror(errno)))
+        }
+
+        if try pathExistsWithoutFollowingSymlinks(plan.netnsPath) {
+            if umount2(plan.netnsPath, Int32(MNT_DETACH)) != 0,
+                errno != ENOENT, errno != EINVAL
+            {
+                throw SandboxRuntimeError.jailSetupFailed(
+                    "could not unmount network namespace \(plan.netnsPath): "
+                        + String(cString: strerror(errno)))
+            }
+            if unlink(plan.netnsPath) != 0, errno != ENOENT {
+                throw SandboxRuntimeError.jailSetupFailed(
+                    "could not remove network namespace \(plan.netnsPath): "
+                        + String(cString: strerror(errno)))
+            }
+        }
+    }
+
+    func removePathForJailUIDRelease(_ path: String, description: String) throws {
+        guard try pathExistsWithoutFollowingSymlinks(path) else { return }
+        do {
+            try FileManager.default.removeItem(atPath: path)
+        } catch {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "could not remove \(description) at \(path) before releasing its uid/gid: "
+                    + error.localizedDescription)
+        }
+        guard try !pathExistsWithoutFollowingSymlinks(path) else {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "\(description) still exists at \(path) after removal")
+        }
+    }
+
+    func pathExistsWithoutFollowingSymlinks(_ path: String) throws -> Bool {
+        var info = stat()
+        if lstat(path, &info) == 0 { return true }
+        if errno == ENOENT { return false }
+        throw SandboxRuntimeError.jailSetupFailed(
+            "could not inspect \(path) before releasing a sandbox uid/gid: "
+                + String(cString: strerror(errno)))
+    }
+
+    func confirmNoSandboxProcessBeforeReportingGone(
+        _ sandboxId: String, jailUID: UInt32?
+    ) async throws {
+        let processes: [FirecrackerClient.VMProcessInfo]
+        do {
+            processes = try await client.discoverVMProcesses(idPrefix: sandboxId)
+        } catch {
+            throw SandboxRuntimeError.jailSetupFailed(
+                "could not prove whether sandbox \(sandboxId) still has a host process: "
+                    + error.localizedDescription)
+        }
+        let exact = processes.filter { $0.vmId == sandboxId }
+        guard exact.isEmpty else {
+            let pids = exact.map { String($0.pid) }.joined(separator: ", ")
+            throw SandboxRuntimeError.jailSetupFailed(
+                "sandbox \(sandboxId) still has host process(es) \(pids), but its API socket is unavailable")
+        }
+        if let jailUID {
+            let plan = try jailPlan(for: sandboxId, recordedUID: jailUID)
+            do {
+                try await client.confirmNoHostProcess(inJailRoot: plan.jailRoot)
+            } catch {
+                throw SandboxRuntimeError.jailSetupFailed(
+                    "sandbox \(sandboxId) still has a process rooted in its jail: "
+                        + error.localizedDescription)
+            }
+        }
+        if let jailUID, jailUIDs.isExclusive(jailUID, to: sandboxId) {
+            do {
+                try await client.confirmNoHostProcess(effectiveUID: jailUID)
+            } catch {
+                throw SandboxRuntimeError.jailSetupFailed(
+                    "sandbox \(sandboxId) still has an unidentifiable process under uid \(jailUID): "
+                        + error.localizedDescription)
+            }
+        }
+    }
+
     // MARK: - Paths
 
     func sandboxDirectory(_ sandboxId: String) -> String {

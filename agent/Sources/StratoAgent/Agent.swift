@@ -349,7 +349,24 @@ actor Agent {
     let sandboxJailerBinaryPath: String
     let sandboxJailerChrootDir: String
     let sandboxJailerUidBase: UInt32
+    /// Base used only to reconstruct manifests written before jailUID was
+    /// persisted. This remains the old default when the current allocation
+    /// default moves, unless the operator explicitly configured a base.
+    let legacySandboxJailerUidBase: UInt32
     var sandboxJailerBlockedReason: String?
+    /// Live host-range failure under `required`, refreshed by preflight on
+    /// every registration and checked again on the create path.
+    var sandboxJailerUIDRangeBlockedReason: String?
+    /// A legacy manifest entry had no persisted UID and its existing jail
+    /// ownership could not be inspected. Guessing would reserve the wrong
+    /// identity, so every new create stays blocked until a later manifest
+    /// reload can prove the old assignment.
+    var sandboxJailUIDRecoveryBlockedReason: String?
+    var sandboxJailCreationBlockedReason: String? {
+        sandboxJailerBlockedReason
+            ?? sandboxJailerUIDRangeBlockedReason
+            ?? sandboxJailUIDRecoveryBlockedReason
+    }
     // The resolved jail layout, built unconditionally at start() — even an
     // unjailed agent needs it to tear down jailed leftovers from a previous
     // life. Nil only when this build/host has no sandbox runtime at all.
@@ -358,6 +375,10 @@ actor Agent {
     // the jail's network namespace, so without the barrier there is nowhere to
     // put it and networked specs are refused (issue STR-100).
     var sandboxJailNewSandboxes = false
+    /// Bootstrap copy populated from the manifest before the Firecracker
+    /// runtime exists. The runtime receives this complete namespace and owns
+    /// subsequent sandbox/template leases.
+    var sandboxJailUIDs: SandboxJailUIDAllocator
     // Warm start (issue #426): provision sandboxes from per-image template
     // snapshots when possible. Default on; warm failures cold-boot.
     let sandboxWarmStart: Bool
@@ -450,6 +471,7 @@ actor Agent {
         sandboxJailerBinaryPath: String = "/usr/local/bin/jailer",
         sandboxJailerChrootDir: String = "/var/lib/strato/vms/jailer",
         sandboxJailerUidBase: UInt32 = AgentConfig.defaultSandboxJailerUidBase,
+        legacySandboxJailerUidBase: UInt32? = nil,
         sandboxWarmStart: Bool = true,
         sandboxWarmCacheMaxSizeBytes: Int64? = nil,
         hypervisorType: HypervisorType = .qemu,
@@ -487,6 +509,8 @@ actor Agent {
         self.sandboxJailerBinaryPath = sandboxJailerBinaryPath
         self.sandboxJailerChrootDir = sandboxJailerChrootDir
         self.sandboxJailerUidBase = sandboxJailerUidBase
+        self.legacySandboxJailerUidBase = legacySandboxJailerUidBase ?? sandboxJailerUidBase
+        self.sandboxJailUIDs = SandboxJailUIDAllocator(uidBase: sandboxJailerUidBase)
         self.sandboxWarmStart = sandboxWarmStart
         self.sandboxWarmCacheMaxSizeBytes = sandboxWarmCacheMaxSizeBytes
         self.hypervisorType = hypervisorType

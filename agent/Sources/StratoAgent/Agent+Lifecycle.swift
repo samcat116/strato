@@ -32,7 +32,7 @@ extension Agent {
         // These workloads are not re-adopted here — the reconciler re-adopts them
         // when the backend supports it — but they stay routable to the backend that
         // owns them and keep reserving capacity until deleted or re-created.
-        applyManifestLoad(manifestStore.load())
+        await applyManifestLoad(manifestStore.load())
         applySnapshotInventory(snapshotRecordStore.load())
 
         // Simulation mode drives no real network backend. `NetworkOrchestrator`
@@ -285,13 +285,20 @@ extension Agent {
                 // previous life; the resolution only decides whether *new*
                 // sandboxes get the barrier.
                 let isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
-                let jailerConfig = SandboxJailerConfig(
+                let jailerConfig = try SandboxJailerConfig(
                     jailerBinaryPath: sandboxJailerBinaryPath,
                     chrootBaseDir: sandboxJailerChrootDir,
                     uidBase: sandboxJailerUidBase,
                     ipBinaryPath: SandboxJailerResolver.resolveIPBinaryPath(isExecutable: isExecutable),
                     tcBinaryPath: SandboxJailerResolver.resolveTCBinaryPath(isExecutable: isExecutable))
                 sandboxJailerConfig = jailerConfig
+                let jailUIDRangeCheck = HostPreflight.checkSandboxJailerUIDRange(
+                    sandboxJailerUIDRangeInputs())
+                if sandboxJailerMode == .required, !jailUIDRangeCheck.passed {
+                    sandboxJailerUIDRangeBlockedReason =
+                        jailUIDRangeCheck.detail
+                        ?? "the configured sandbox jail uid/gid range is not isolated"
+                }
                 var jailNewSandboxes = false
                 switch SandboxJailerResolver.resolve(
                     mode: sandboxJailerMode,
@@ -307,6 +314,18 @@ extension Agent {
                             "jailerBinaryPath": .string(sandboxJailerBinaryPath),
                             "chrootBaseDir": .string(sandboxJailerChrootDir),
                         ])
+                    if !jailUIDRangeCheck.passed, sandboxJailerMode == .auto {
+                        // Auto keeps its advisory semantics: retain the other
+                        // jailer barriers instead of dropping the whole jail,
+                        // while stating plainly that UID isolation is weak.
+                        logger.warning(
+                            "Sandbox jail uid/gid range overlaps a host identity; UID-BASED FILESYSTEM ISOLATION IS NOT TRUSTWORTHY. Reserve a clean range or set sandbox_jailer_mode = \"required\" to refuse creates.",
+                            metadata: [
+                                "reason": .string(
+                                    jailUIDRangeCheck.detail
+                                        ?? "the configured range overlaps a host identity")
+                            ])
+                    }
                 case .unjailed(let reason):
                     if let reason {
                         logger.warning(
@@ -356,8 +375,10 @@ extension Agent {
                     guestImagePath: sandboxGuestImagePath,
                     firecrackerBinaryPath: firecrackerBinaryPath,
                     jailer: jailerConfig,
+                    jailUIDAllocator: sandboxJailUIDs,
+                    legacyJailerUIDBase: legacySandboxJailerUidBase,
                     jailNewSandboxes: jailNewSandboxes,
-                    jailerBlockedReason: sandboxJailerBlockedReason,
+                    jailerBlockedReason: sandboxJailCreationBlockedReason,
                     warmStartEnabled: sandboxWarmStart,
                     warmCacheBudgetBytes: sandboxWarmCacheMaxSizeBytes,
                     snapshotTransfer: snapshotTransfer
@@ -693,6 +714,7 @@ extension Agent {
         managedSandboxes.removeAll()
         orphanedSandboxes.removeAll()
         vsockCIDs = VsockCIDAllocator()
+        sandboxJailUIDs = SandboxJailUIDAllocator(uidBase: sandboxJailerUidBase)
 
         logger.info("Agent stopped")
 
