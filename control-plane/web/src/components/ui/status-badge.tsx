@@ -18,10 +18,10 @@ const unknownConfig: StatusBadgeConfig = {
 };
 
 /**
- * Status badge shared by VMs, sandboxes, volumes and snapshots: a per-kind
- * config map picks the label and colors, and — when a `resourceId` is given —
- * an in-flight mutation on that resource overrides the status with the
- * mutation's verb, pulsing until the watcher sees a terminal state.
+ * Status badge shared by VMs, sandboxes, volumes, snapshots, agents and images:
+ * a per-kind config map picks the label and colors, and — when a `resourceId`
+ * is given — an in-flight mutation on that resource overrides the status with
+ * the mutation's verb, pulsing until the watcher sees a terminal state.
  */
 export function StatusBadge<Status extends string>({
   status,
