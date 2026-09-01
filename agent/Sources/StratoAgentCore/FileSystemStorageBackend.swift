@@ -2,6 +2,12 @@ import Foundation
 import Logging
 import StratoShared
 
+#if os(Linux)
+import Glibc
+#else
+import Darwin
+#endif
+
 /// Runs a subprocess to completion. Injectable so tests can stub qemu-img.
 public typealias SubprocessRunner =
     @Sendable (_ executableURL: URL, _ arguments: [String]) async throws -> ProcessResult
@@ -25,6 +31,8 @@ public actor FileSystemStorageBackend: StorageBackend {
     private let imageSource: (any ImageSource)?
     private let runSubprocess: SubprocessRunner
     private let enumerateVolumeStore: @Sendable (String) throws -> [String]
+    private let copyItem: @Sendable (String, String) throws -> Void
+    private let publishItem: @Sendable (String, String) throws -> Void
 
     /// Default storage path for volumes (platform-specific)
     public static var defaultStoragePath: String {
@@ -56,6 +64,10 @@ public actor FileSystemStorageBackend: StorageBackend {
         enumerateVolumeStore: @escaping @Sendable (String) throws -> [String] = {
             try FileManager.default.contentsOfDirectory(atPath: $0)
         },
+        copyItem: @escaping @Sendable (String, String) throws -> Void = {
+            try FileManager.default.copyItem(atPath: $0, toPath: $1)
+        },
+        publishItem: (@Sendable (String, String) throws -> Void)? = nil,
         runSubprocess: @escaping SubprocessRunner = { try await ProcessRunner.run(executableURL: $0, arguments: $1) }
     ) {
         self.logger = logger
@@ -64,6 +76,11 @@ public actor FileSystemStorageBackend: StorageBackend {
         self.imageSource = imageSource
         self.runSubprocess = runSubprocess
         self.enumerateVolumeStore = enumerateVolumeStore
+        self.copyItem = copyItem
+        self.publishItem =
+            publishItem ?? {
+                try DurableFileWriter().publish(stagingPath: $0, to: $1)
+            }
 
         // Ensure storage directory exists
         do {
@@ -223,7 +240,7 @@ public actor FileSystemStorageBackend: StorageBackend {
 
         do {
             if sourceFormat == format.rawValue {
-                try FileManager.default.copyItem(atPath: sourcePath, toPath: stagingPath)
+                try copyItem(sourcePath, stagingPath)
             } else {
                 // Source and target formats differ — convert instead of copying,
                 // so e.g. a qcow2 image really becomes a raw disk.
@@ -250,10 +267,14 @@ public actor FileSystemStorageBackend: StorageBackend {
 
             // Flush the complete disk before publishing it, then flush the
             // directory entry before reporting success.
-            try DurableFileWriter().publish(stagingPath: stagingPath, to: path)
+            try publishItem(stagingPath, path)
         } catch {
             try? FileManager.default.removeItem(atPath: stagingPath)
-            throw error
+            guard Self.isInsufficientDiskSpace(error) else { throw error }
+            throw StorageBackendError.insufficientDiskSpace(
+                "materializing \(path) ran out of space on the filesystem backing "
+                    + "\(destinationDirectory). Free disk space or inodes, then retry. "
+                    + "Underlying error: \(String(describing: error))")
         }
 
         logger.info(
@@ -672,6 +693,35 @@ public actor FileSystemStorageBackend: StorageBackend {
             }
             if candidate.domain == NSPOSIXErrorDomain,
                 candidate.code == POSIXErrorCode.ENOENT.rawValue
+            {
+                return true
+            }
+            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
+                return false
+            }
+            current = underlying
+        }
+    }
+
+    /// Copy and durable-publication failures can surface as direct POSIX
+    /// errors, Cocoa wrappers, or the durable writer's typed POSIX error.
+    private static func isInsufficientDiskSpace(_ error: Error) -> Bool {
+        var current: any Error = error
+        while true {
+            if let durableError = current as? DurableFileWriteError,
+                durableError.errorNumber == ENOSPC
+            {
+                return true
+            }
+
+            let candidate = current as NSError
+            if candidate.domain == NSPOSIXErrorDomain,
+                candidate.code == POSIXErrorCode.ENOSPC.rawValue
+            {
+                return true
+            }
+            if candidate.domain == NSCocoaErrorDomain,
+                candidate.code == CocoaError.Code.fileWriteOutOfSpace.rawValue
             {
                 return true
             }

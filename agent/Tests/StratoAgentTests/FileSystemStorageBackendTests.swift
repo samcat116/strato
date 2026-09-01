@@ -157,6 +157,12 @@ struct FileSystemStorageBackendTests {
         imageSource: (any ImageSource)? = nil,
         enumerateVolumeStore: @escaping @Sendable (String) throws -> [String] = {
             try FileManager.default.contentsOfDirectory(atPath: $0)
+        },
+        copyItem: @escaping @Sendable (String, String) throws -> Void = {
+            try FileManager.default.copyItem(atPath: $0, toPath: $1)
+        },
+        publishItem: @escaping @Sendable (String, String) throws -> Void = {
+            try DurableFileWriter().publish(stagingPath: $0, to: $1)
         }
     ) -> FileSystemStorageBackend {
         FileSystemStorageBackend(
@@ -165,6 +171,8 @@ struct FileSystemStorageBackendTests {
             qemuImgPath: "/fake/qemu-img",
             imageSource: imageSource,
             enumerateVolumeStore: enumerateVolumeStore,
+            copyItem: copyItem,
+            publishItem: publishItem,
             runSubprocess: { executable, arguments in
                 await recorder.record(executable: executable, arguments: arguments)
             }
@@ -314,6 +322,67 @@ struct FileSystemStorageBackendTests {
         let subcommands = await recorder.invocations.map { $0.arguments.first }
         #expect(!subcommands.contains("convert"))
         #expect(FileManager.default.contents(atPath: target) == Data("image-bytes".utf8))
+    }
+
+    @Test func materializeDiskCopyENOSPCIsBlocked() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let sourcePath = "\(root)/cached-image.qcow2"
+        FileManager.default.createFile(atPath: sourcePath, contents: Data("image-bytes".utf8))
+
+        let recorder = SubprocessRecorder()
+        await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "qcow2"))
+        let backend = makeBackend(
+            root: root, recorder: recorder, imageSource: StaticImageSource(path: sourcePath),
+            copyItem: { _, _ in throw POSIXError(.ENOSPC) })
+        let target = "\(root)/vms/vm-full/disk.qcow2"
+
+        do {
+            _ = try await backend.materializeDisk(at: target, from: makeImageInfo(), format: .qcow2)
+            Issue.record("expected insufficientDiskSpace")
+        } catch let error as StorageBackendError {
+            guard case .insufficientDiskSpace = error else {
+                Issue.record("expected insufficientDiskSpace, got \(error)")
+                return
+            }
+            #expect(error.failureClassification == .blocked)
+        } catch {
+            Issue.record("expected insufficientDiskSpace, got \(error)")
+        }
+        #expect(!FileManager.default.fileExists(atPath: target))
+        #expect(!FileManager.default.fileExists(atPath: target + ".partial"))
+    }
+
+    @Test func materializeDiskPublishENOSPCIsBlocked() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let sourcePath = "\(root)/cached-image.qcow2"
+        FileManager.default.createFile(atPath: sourcePath, contents: Data("image-bytes".utf8))
+
+        let recorder = SubprocessRecorder()
+        await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "qcow2"))
+        let backend = makeBackend(
+            root: root, recorder: recorder, imageSource: StaticImageSource(path: sourcePath),
+            publishItem: { stagingPath, _ in
+                throw DurableFileWriteError(
+                    operation: "synchronize", path: stagingPath, errorNumber: ENOSPC)
+            })
+        let target = "\(root)/vms/vm-publish-full/disk.qcow2"
+
+        do {
+            _ = try await backend.materializeDisk(at: target, from: makeImageInfo(), format: .qcow2)
+            Issue.record("expected insufficientDiskSpace")
+        } catch let error as StorageBackendError {
+            guard case .insufficientDiskSpace = error else {
+                Issue.record("expected insufficientDiskSpace, got \(error)")
+                return
+            }
+            #expect(error.failureClassification == .blocked)
+        } catch {
+            Issue.record("expected insufficientDiskSpace, got \(error)")
+        }
+        #expect(!FileManager.default.fileExists(atPath: target))
+        #expect(!FileManager.default.fileExists(atPath: target + ".partial"))
     }
 
     @Test func materializeDiskCopiesReadOnlySource() async throws {
