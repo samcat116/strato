@@ -1,0 +1,29 @@
+control-plane/Sources/App/Controllers/DNSController.swift
+  s_54bd923d657c30::t_55f475405f4d38 308,361
+control-plane/Sources/App/Services/DNSZoneService.swift
+  s_54bd923d657c30::t_55f475405f4d38 152,170,347
+control-plane/Tests/AppPlatformTests/DNSZoneTests.swift
+  s_54bd923d657c30::t_e6de575f9616a4 17-20,681-684,686-714,717-724,727-735,738-742,1198-1231,1234-1241,1244-1253,1255
+  s_54bd923d657c30::t_c39868ba47885e 685,715-716,1232-1233
+  s_54bd923d657c30::t_36d0cc769261e4 725-726,736-737,1242-1243
+  s_54bd923d657c30::t_c4affc655003c0 1254
+  s_54bd923d657c30::t_c6378ea6244bed 1256
+control-plane/Sources/App/Models/DNSRecord.swift
+  s_54bd923d657c30::t_55f475405f4d38 20-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "cb7d4d19d98b487f6cf160cab6211cce9ecbb328",
+  "prompts": {},
+  "sessions": {
+    "s_54bd923d657c30": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ae2-ace8-7050-92f7-f02d8f6039ff",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
