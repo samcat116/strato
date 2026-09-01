@@ -2,10 +2,13 @@ agent/Tests/StratoAgentTests/CloudInitUserDataDocumentTests.swift
   s_a08da5d54f9fb3::t_b0386358305da9 19-51,130-151
   s_9f7fc43caa62d9::t_d4401641871b0d 152
   s_a08da5d54f9fb3::t_2a1443ebc27524 97-98,100-105
+  s_a08da5d54f9fb3::t_e938614c9fa51a 106-108,153-160,162
+  s_a08da5d54f9fb3::t_7cb8e2fbbdbbc1 161
 docs/architecture/agent.md
   s_a08da5d54f9fb3::t_f0e620956af107 637-643
 agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
   s_a08da5d54f9fb3::t_57c0be150036a2 422-425,427-431,460-463,549-552,559-567,570-572
+  s_a08da5d54f9fb3::t_e938614c9fa51a 568-569
 ---
 {
   "schema_version": "authorship/3.0.0",
