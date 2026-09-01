@@ -1358,8 +1358,6 @@ export type OperationResourceKind =
 
 export interface Operation {
   id: string;
-  /** @deprecated Legacy alias for `resourceId`; use `resourceKind`/`resourceId`. */
-  vmId?: string;
   /** Discriminates the kind of resource targeted by the operation. */
   resourceKind: OperationResourceKind;
   /** The targeted resource's id. */

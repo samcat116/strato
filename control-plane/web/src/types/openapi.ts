@@ -5551,12 +5551,6 @@ export interface components {
         ResourceOperation: {
             /** Format: uuid */
             id?: string;
-            /**
-             * Format: uuid
-             * @deprecated
-             * @description Deprecated compatibility alias equal to `resourceId`; it remains populated during its deprecation cycle, but clients must use `resourceKind`/`resourceId` instead.
-             */
-            vmId?: string;
             resourceKind: components["schemas"]["OperationResourceKind"];
             /** Format: uuid */
             resourceId: string;
